@@ -1,0 +1,104 @@
+package dev.kpetriv.sprout.core.designsystem.theme
+
+import android.os.Build
+import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.ColorScheme
+import androidx.compose.material3.LocalMinimumInteractiveComponentSize
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Shapes
+import androidx.compose.material3.Typography
+import androidx.compose.material3.dynamicDarkColorScheme
+import androidx.compose.material3.dynamicLightColorScheme
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.ReadOnlyComposable
+import androidx.compose.runtime.remember
+import androidx.compose.ui.platform.LocalContext
+import dev.kpetriv.sprout.core.model.KidUiTier
+
+// Corner radius of each Material shape slot relative to TierTokens.cornerRadius (the medium slot).
+// Strictly increasing, so the shape scale stays monotonic for every tier.
+private const val EXTRA_SMALL_SHAPE_FACTOR = 0.25f
+private const val SMALL_SHAPE_FACTOR = 0.5f
+private const val LARGE_SHAPE_FACTOR = 1.5f
+private const val EXTRA_LARGE_SHAPE_FACTOR = 2f
+
+/**
+ * Sprout's Material 3 theme with standard (parent) sizing: [TierTokens.Sapling], no kid tier.
+ * Kid-mode UI additionally wraps itself in [ProvideKidTier].
+ *
+ * @param dynamicColor use the wallpaper palette on Android 12+. Off by default so the brand colours stay.
+ */
+@Composable
+fun SproutTheme(
+    darkTheme: Boolean = isSystemInDarkTheme(),
+    dynamicColor: Boolean = false,
+    content: @Composable () -> Unit,
+) {
+    val colorScheme = when {
+        dynamicColor && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S -> {
+            val context = LocalContext.current
+            if (darkTheme) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
+        }
+
+        darkTheme -> SproutDarkColors
+
+        else -> SproutLightColors
+    }
+    TierScaledMaterialTheme(colorScheme = colorScheme, tokens = TierTokens.Sapling, content = content)
+}
+
+/**
+ * Enters kid mode for [content]: provides [LocalKidTier] and rescales type, shapes and minimum touch
+ * targets to the tier's [TierTokens]. Use inside [SproutTheme]; colours are inherited from it.
+ */
+@Composable
+fun ProvideKidTier(tier: KidUiTier, content: @Composable () -> Unit) {
+    CompositionLocalProvider(LocalKidTier provides tier) {
+        TierScaledMaterialTheme(
+            colorScheme = MaterialTheme.colorScheme,
+            tokens = TierTokens.forTier(tier),
+            content = content,
+        )
+    }
+}
+
+@Composable
+private fun TierScaledMaterialTheme(colorScheme: ColorScheme, tokens: TierTokens, content: @Composable () -> Unit) {
+    val typography = remember(tokens) { Typography().scaledBy(tokens.typeScale) }
+    val shapes = remember(tokens) { tokens.toShapes() }
+
+    CompositionLocalProvider(LocalTierTokens provides tokens) {
+        MaterialTheme(colorScheme = colorScheme, typography = typography, shapes = shapes) {
+            // Inside MaterialTheme so nothing it provides can override the tier's touch target.
+            CompositionLocalProvider(
+                LocalMinimumInteractiveComponentSize provides tokens.minTouchTarget,
+                content = content,
+            )
+        }
+    }
+}
+
+/** Material's five shape slots scaled from the tier's [TierTokens.cornerRadius]. */
+internal fun TierTokens.toShapes(): Shapes = Shapes(
+    extraSmall = RoundedCornerShape(cornerRadius * EXTRA_SMALL_SHAPE_FACTOR),
+    small = RoundedCornerShape(cornerRadius * SMALL_SHAPE_FACTOR),
+    medium = RoundedCornerShape(cornerRadius),
+    large = RoundedCornerShape(cornerRadius * LARGE_SHAPE_FACTOR),
+    extraLarge = RoundedCornerShape(cornerRadius * EXTRA_LARGE_SHAPE_FACTOR),
+)
+
+/** Accessors for Sprout-specific theme values, alongside MaterialTheme's. */
+object SproutTheme {
+    /** The kid's tier. Kid mode only: throws outside [ProvideKidTier], so parent screens must not read it. */
+    val kidTier: KidUiTier
+        @Composable
+        @ReadOnlyComposable
+        get() = LocalKidTier.current
+
+    val tierTokens: TierTokens
+        @Composable
+        @ReadOnlyComposable
+        get() = LocalTierTokens.current
+}

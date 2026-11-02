@@ -1,0 +1,45 @@
+# Detekt overrides on top of the default config (buildUponDefaultConfig = true).
+# Formatting is ktlint's job; this file only tunes code-smell rules.
+
+complexity:
+  LongMethod:
+    ignoreAnnotated: ['Composable']
+  LongParameterList:
+    ignoreDefaultParameters: true
+    ignoreAnnotated: ['Composable']
+  TooManyFunctions:
+    ignorePrivate: true
+    ignoreAnnotatedFunctions: ['Preview']
+
+naming:
+  FunctionNaming:
+    ignoreAnnotated: ['Composable']
+  TopLevelPropertyNaming:
+    constantPattern: '[A-Z][A-Za-z0-9_]*'
+  MatchingDeclarationName:
+    active: true
+
+style:
+  MagicNumber:
+    ignorePropertyDeclaration: true
+    ignoreCompanionObjectPropertyDeclaration: true
+    ignoreAnnotated: ['Preview']
+    excludes: ['**/test/**', '**/androidTest/**', '**/benchmark/**']
+  UnusedPrivateMember:
+    ignoreAnnotated: ['Preview']
+  MaxLineLength:
+    maxLineLength: 120
+  ForbiddenComment:
+    active: true
+  # Logging goes through Timber with a PII-safe release tree; android.util.Log is not allowed.
+  ForbiddenImport:
+    active: true
+    imports:
+      - value: 'android.util.Log'
+        reason: 'Use Timber; the release tree drops everything below WARN.'
+  WildcardImport:
+    active: true
+
+potential-bugs:
+  UnsafeCallOnNullableType:
+    active: true

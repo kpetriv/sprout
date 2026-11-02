@@ -1,0 +1,11 @@
+{
+  "model": "fable",
+  "effortLevel": "high",
+  "env": {
+    "CLAUDE_CODE_SUBAGENT_MODEL": "opus",
+    "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": "60"
+  },
+  "modelSettings": {
+    "claude-opus-5-5": { "effortLevel": "high" }
+  }
+}

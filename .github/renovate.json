@@ -1,0 +1,63 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "config:recommended",
+    "helpers:pinGitHubActionDigests"
+  ],
+  "timezone": "Europe/London",
+  "schedule": ["before 6am on monday"],
+  "prConcurrentLimit": 5,
+  "labels": ["dependencies"],
+  "gitIgnoredAuthors": ["41898282+github-actions[bot]@users.noreply.github.com"],
+  "packageRules": [
+    {
+      "description": "Kotlin toolchain: compiler, Compose compiler plugin and KSP move together.",
+      "groupName": "Kotlin",
+      "matchPackageNames": [
+        "org.jetbrains.kotlin:**",
+        "org.jetbrains.kotlin.**",
+        "com.google.devtools.ksp**"
+      ]
+    },
+    {
+      "description": "Android Gradle Plugin, Lint and the com.android.* plugins.",
+      "groupName": "Android Gradle Plugin",
+      "matchPackageNames": ["com.android.**"]
+    },
+    {
+      "description": "AndroidX, Compose BOM and AndroidX Gradle plugins.",
+      "groupName": "AndroidX",
+      "matchPackageNames": ["androidx.**"]
+    },
+    {
+      "description": "Hilt / Dagger.",
+      "groupName": "Hilt",
+      "matchPackageNames": ["com.google.dagger:**", "com.google.dagger.**"]
+    },
+    {
+      "description": "Firebase BoM and the google-services plugin.",
+      "groupName": "Firebase",
+      "matchPackageNames": ["com.google.firebase:**", "com.google.gms**"]
+    },
+    {
+      "description": "Static analysis tooling.",
+      "groupName": "Static analysis",
+      "matchPackageNames": [
+        "io.gitlab.arturbosch.detekt**",
+        "org.jlleitschuh.gradle**",
+        "com.pinterest.ktlint**",
+        "org.owasp.dependencycheck**"
+      ]
+    },
+    {
+      "description": "Detekt 1.23 runs on its own Kotlin 2.0.21 compiler (detektKotlin); it moves only with Detekt.",
+      "matchPackageNames": ["org.jetbrains.kotlin:kotlin-compiler-embeddable"],
+      "enabled": false
+    },
+    {
+      "description": "GitHub Actions, pinned by commit SHA.",
+      "groupName": "GitHub Actions",
+      "matchManagers": ["github-actions"]
+    }
+  ]
+}

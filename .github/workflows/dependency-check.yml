@@ -1,0 +1,124 @@
+# OWASP Dependency-Check over every module's dependencies. Kept out of ci.yml because the NVD
+# download is slow; runs weekly, on demand, and on PRs that change dependency versions.
+name: Dependency-Check
+
+on:
+  schedule:
+    - cron: '0 5 * * 1' # Mondays 05:00 UTC, after Renovate's weekly batch is opened.
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - gradle/libs.versions.toml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dependency-check-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  analyze:
+    name: OWASP Dependency-Check
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      security-events: write # upload SARIF to code scanning
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # The NVD key (repository secret NVD_API_KEY) is optional for the workflow but required by the scan:
+      # Dependency-Check 13 cannot download NVD data without one. If it is missing the scan is skipped
+      # with a warning instead of failing. PRs from forks get no secrets and take the same path.
+      - name: Check for NVD API key
+        id: nvd
+        env:
+          NVD_API_KEY: ${{ secrets.NVD_API_KEY }}
+        run: |
+          if [ -n "$NVD_API_KEY" ]; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            echo "::warning title=Dependency-Check skipped::NVD_API_KEY secret is not set; skipping the scan."
+          fi
+
+      - name: Set up JDK 17
+        if: steps.nvd.outputs.available == 'true'
+        uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Gradle
+        if: steps.nvd.outputs.available == 'true'
+        uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c # v6.4.1
+        with:
+          cache-read-only: ${{ github.ref != 'refs/heads/main' }}
+
+      # The vulnerability database lives outside Gradle's caches; restore the newest copy and save a
+      # fresh one after every run so each scan only downloads the delta.
+      - name: Cache vulnerability database
+        if: steps.nvd.outputs.available == 'true'
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.gradle/dependency-check-data
+          key: dependency-check-data-${{ github.run_id }}
+          restore-keys: dependency-check-data-
+
+      - name: Update vulnerability database
+        if: steps.nvd.outputs.available == 'true'
+        env:
+          NVD_API_KEY: ${{ secrets.NVD_API_KEY }}
+        run: ./gradlew :app:dependencyCheckUpdate --no-daemon --no-configuration-cache
+
+      # One analysis per module (build-logic applies the plugin everywhere). --continue scans every module
+      # before failing; --no-parallel keeps the analyses from contending for the shared database.
+      - name: Dependency-Check (fails on CVSS >= 7)
+        if: steps.nvd.outputs.available == 'true'
+        env:
+          NVD_API_KEY: ${{ secrets.NVD_API_KEY }}
+        run: ./gradlew dependencyCheckAnalyze --continue --no-parallel --no-daemon --no-configuration-cache
+
+      # Code scanning rejects several runs of one tool in a single upload, so fold the per-module reports
+      # into one run. Artifact indexes are module-local and are dropped; each result keeps its file URI.
+      - name: Merge SARIF reports
+        if: always() && steps.nvd.outputs.available == 'true'
+        id: sarif
+        run: |
+          mapfile -t reports < <(find . -path '*/build/reports/dependency-check-report.sarif' -not -path './build-logic/*' | sort)
+          if [ "${#reports[@]}" -eq 0 ]; then
+            echo "No SARIF reports were produced."
+            exit 0
+          fi
+          jq -s '. as $all | {
+            "$schema": $all[0]["$schema"],
+            version: $all[0].version,
+            runs: [{
+              tool: { driver: ($all[0].runs[0].tool.driver
+                | .rules = ([$all[].runs[].tool.driver.rules[]] | unique_by(.id))) },
+              results: ([$all[].runs[].results[]
+                | del(.locations[]?.physicalLocation.artifactLocation.index)] | unique)
+            }]
+          }' "${reports[@]}" > dependency-check.sarif
+          echo "file=dependency-check.sarif" >> "$GITHUB_OUTPUT"
+
+      - name: Upload SARIF to code scanning
+        if: always() && steps.sarif.outputs.file != ''
+        uses: github/codeql-action/upload-sarif@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
+        with:
+          sarif_file: ${{ steps.sarif.outputs.file }}
+          category: dependency-check
+
+      - name: Upload HTML reports
+        if: always() && steps.nvd.outputs.available == 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: dependency-check-reports
+          path: '**/build/reports/dependency-check-report.html'
+          if-no-files-found: ignore
+          retention-days: 30

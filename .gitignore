@@ -1,0 +1,35 @@
+# Gradle / build
+.gradle/
+build/
+**/build/
+.kotlin/
+local.properties
+captures/
+*.apk
+*.aab
+*.ap_
+*.dex
+
+# IDE
+.idea/
+*.iml
+.DS_Store
+.vscode/
+
+# Secrets: never commit
+google-services.json
+*.jks
+*.keystore
+*-service-account*.json
+*.p12
+.env
+.env.*
+functions/.runtimeconfig.json
+
+# Claude local overrides
+.claude/settings.local.json
+
+# Test output
+**/out/
+**/reports/
+**/screenshots/diff/

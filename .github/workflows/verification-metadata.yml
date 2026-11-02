@@ -1,0 +1,66 @@
+# Keeps gradle/verification-metadata.xml in step with Renovate's dependency bumps. Without this every
+# Renovate PR fails CI, because the new artifacts have no recorded checksums.
+#
+# The regenerated checksums are trust-on-first-use: review the metadata diff in the Renovate PR
+# (new components should match the version bump, nothing else) before merging.
+name: Verification metadata
+
+on:
+  push:
+    branches:
+      - 'renovate/**'
+
+permissions: {}
+
+concurrency:
+  group: verification-metadata-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  update:
+    name: Regenerate verification metadata
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: write # push the regenerated metadata back to the Renovate branch
+
+    steps:
+      # Credentials are kept (persist-credentials defaults to true) because the last step pushes.
+      # No third-party code runs after checkout except Gradle and the build scripts of this repo.
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: true
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c # v6.4.1
+        with:
+          cache-read-only: true
+
+      # `help` alone only records configuration-time artifacts; aapt2, the KSP compiler and the Detekt,
+      # ktlint and Lint tool classpaths are resolved when their tasks run, so run the same tasks as CI.
+      - name: Regenerate checksums
+        run: >-
+          ./gradlew --write-verification-metadata sha256
+          help build detekt lint test
+          --no-configuration-cache --no-daemon
+
+      # Pushes made with GITHUB_TOKEN do not trigger other workflows, so this cannot loop; it also means
+      # CI does not re-run on this commit by itself. Renovate's next rebase (or a manual re-run) does that.
+      - name: Commit if changed
+        run: |
+          if git diff --quiet -- gradle/verification-metadata.xml; then
+            echo "Verification metadata is up to date."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add gradle/verification-metadata.xml
+          git commit -m "Update Gradle verification metadata"
+          git push origin "HEAD:${GITHUB_REF_NAME}"

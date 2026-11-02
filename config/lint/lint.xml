@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Shared Android Lint configuration, applied to every module by the build-logic convention plugins. -->
+<lint>
+  <!-- Every check in the Security category fails the build. -->
+  <issue id="Security" severity="error" />
+
+  <!-- Dependency and toolchain upgrades are Renovate's job, not Lint's. -->
+  <issue id="GradleDependency" severity="ignore" />
+  <issue id="NewerVersionAvailable" severity="ignore" />
+  <issue id="AndroidGradlePluginVersion" severity="ignore" />
+</lint>

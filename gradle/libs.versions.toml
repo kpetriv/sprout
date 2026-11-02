@@ -1,0 +1,154 @@
+# Sprout version catalog. Pinned to the latest stable releases on 2026-11-02.
+# Renovate (.github/renovate.json) proposes grouped updates weekly.
+
+[versions]
+# Build toolchain
+agp = "9.5.0"
+kotlin = "2.4.21"
+ksp = "2.3.13"
+androidCompileSdk = "37"
+androidTargetSdk = "37"
+androidMinSdk = "28"
+
+# Static analysis
+# Detekt 1.23.x is the latest stable line. It runs on its own embedded Kotlin compiler (detektKotlin below),
+# which is pinned to the Kotlin it was built against and must not follow the project's Kotlin; StaticAnalysis.kt
+# forces it onto the detekt configuration. Move to Detekt 2.x (which tracks current Kotlin) once it is stable.
+detekt = "1.23.8"
+detektKotlin = "2.0.21"
+ktlintGradle = "14.2.0"
+# Referenced by the ktlint-cli library below so Renovate tracks it; the ktlint Gradle plugin runs this version.
+ktlint = "1.8.0"
+# OWASP Dependency-Check, applied to every module by build-logic; run by .github/workflows/dependency-check.yml.
+dependencyCheck = "13.0.0"
+
+# AndroidX
+androidxActivity = "1.13.0"
+androidxCore = "1.19.1"
+androidxLifecycle = "2.11.0"
+androidxNavigation3 = "1.2.0"
+androidxHilt = "1.4.0"
+androidxRoom = "2.8.5"
+androidxGlance = "1.2.0"
+androidxBenchmark = "1.5.0"
+androidxBaselineProfile = "1.5.0"
+androidxProfileInstaller = "1.4.1"
+androidxTestRunner = "1.7.0"
+androidxTestExtJunit = "1.3.0"
+androidxUiAutomator = "2.4.0"
+composeBom = "2026.09.00"
+
+# Kotlin libraries
+kotlinxCoroutines = "1.11.0"
+kotlinxSerialization = "1.12.0"
+
+# DI, backend, testing
+hilt = "2.60.1"
+firebaseBom = "35.1.0"
+googleServices = "4.5.0"
+junit4 = "4.13.2"
+turbine = "1.2.1"
+robolectric = "4.17"
+roborazzi = "1.77.0"
+timber = "5.0.1"
+
+[libraries]
+androidx-activity-compose = { module = "androidx.activity:activity-compose", version.ref = "androidxActivity" }
+androidx-core-ktx = { module = "androidx.core:core-ktx", version.ref = "androidxCore" }
+androidx-lifecycle-runtime-compose = { module = "androidx.lifecycle:lifecycle-runtime-compose", version.ref = "androidxLifecycle" }
+androidx-lifecycle-viewmodel-compose = { module = "androidx.lifecycle:lifecycle-viewmodel-compose", version.ref = "androidxLifecycle" }
+androidx-lifecycle-viewmodel-navigation3 = { module = "androidx.lifecycle:lifecycle-viewmodel-navigation3", version.ref = "androidxLifecycle" }
+androidx-navigation3-runtime = { module = "androidx.navigation3:navigation3-runtime", version.ref = "androidxNavigation3" }
+androidx-navigation3-ui = { module = "androidx.navigation3:navigation3-ui", version.ref = "androidxNavigation3" }
+androidx-hilt-lifecycle-viewmodel-compose = { module = "androidx.hilt:hilt-lifecycle-viewmodel-compose", version.ref = "androidxHilt" }
+androidx-room-runtime = { module = "androidx.room:room-runtime", version.ref = "androidxRoom" }
+androidx-room-ktx = { module = "androidx.room:room-ktx", version.ref = "androidxRoom" }
+androidx-room-compiler = { module = "androidx.room:room-compiler", version.ref = "androidxRoom" }
+androidx-room-testing = { module = "androidx.room:room-testing", version.ref = "androidxRoom" }
+androidx-glance-appwidget = { module = "androidx.glance:glance-appwidget", version.ref = "androidxGlance" }
+androidx-glance-material3 = { module = "androidx.glance:glance-material3", version.ref = "androidxGlance" }
+androidx-profileinstaller = { module = "androidx.profileinstaller:profileinstaller", version.ref = "androidxProfileInstaller" }
+androidx-benchmark-macro-junit4 = { module = "androidx.benchmark:benchmark-macro-junit4", version.ref = "androidxBenchmark" }
+androidx-test-runner = { module = "androidx.test:runner", version.ref = "androidxTestRunner" }
+androidx-test-ext-junit = { module = "androidx.test.ext:junit", version.ref = "androidxTestExtJunit" }
+androidx-test-uiautomator = { module = "androidx.test.uiautomator:uiautomator", version.ref = "androidxUiAutomator" }
+
+androidx-compose-bom = { module = "androidx.compose:compose-bom", version.ref = "composeBom" }
+androidx-compose-foundation = { module = "androidx.compose.foundation:foundation" }
+androidx-compose-material3 = { module = "androidx.compose.material3:material3" }
+androidx-compose-runtime = { module = "androidx.compose.runtime:runtime" }
+androidx-compose-ui = { module = "androidx.compose.ui:ui" }
+androidx-compose-ui-test-junit4 = { module = "androidx.compose.ui:ui-test-junit4" }
+androidx-compose-ui-test-manifest = { module = "androidx.compose.ui:ui-test-manifest" }
+androidx-compose-ui-tooling = { module = "androidx.compose.ui:ui-tooling" }
+androidx-compose-ui-tooling-preview = { module = "androidx.compose.ui:ui-tooling-preview" }
+
+kotlinx-coroutines-core = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core", version.ref = "kotlinxCoroutines" }
+kotlinx-coroutines-android = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-android", version.ref = "kotlinxCoroutines" }
+kotlinx-coroutines-test = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-test", version.ref = "kotlinxCoroutines" }
+kotlinx-serialization-core = { module = "org.jetbrains.kotlinx:kotlinx-serialization-core", version.ref = "kotlinxSerialization" }
+kotlinx-serialization-json = { module = "org.jetbrains.kotlinx:kotlinx-serialization-json", version.ref = "kotlinxSerialization" }
+kotlin-test-junit = { module = "org.jetbrains.kotlin:kotlin-test-junit", version.ref = "kotlin" }
+
+hilt-android = { module = "com.google.dagger:hilt-android", version.ref = "hilt" }
+hilt-compiler = { module = "com.google.dagger:hilt-android-compiler", version.ref = "hilt" }
+hilt-android-testing = { module = "com.google.dagger:hilt-android-testing", version.ref = "hilt" }
+
+# Firebase: declared for core/sync-firebase (M3). The google-services plugin is not applied yet.
+firebase-bom = { module = "com.google.firebase:firebase-bom", version.ref = "firebaseBom" }
+firebase-auth = { module = "com.google.firebase:firebase-auth" }
+firebase-firestore = { module = "com.google.firebase:firebase-firestore" }
+firebase-storage = { module = "com.google.firebase:firebase-storage" }
+firebase-functions = { module = "com.google.firebase:firebase-functions" }
+firebase-appcheck-playintegrity = { module = "com.google.firebase:firebase-appcheck-playintegrity" }
+firebase-appcheck-debug = { module = "com.google.firebase:firebase-appcheck-debug" }
+
+junit4 = { module = "junit:junit", version.ref = "junit4" }
+turbine = { module = "app.cash.turbine:turbine", version.ref = "turbine" }
+robolectric = { module = "org.robolectric:robolectric", version.ref = "robolectric" }
+roborazzi = { module = "io.github.takahirom.roborazzi:roborazzi", version.ref = "roborazzi" }
+roborazzi-compose = { module = "io.github.takahirom.roborazzi:roborazzi-compose", version.ref = "roborazzi" }
+roborazzi-junit-rule = { module = "io.github.takahirom.roborazzi:roborazzi-junit-rule", version.ref = "roborazzi" }
+timber = { module = "com.jakewharton.timber:timber", version.ref = "timber" }
+
+# Only for the detekt configuration (see detektKotlin above).
+detekt-kotlin-compiler = { module = "org.jetbrains.kotlin:kotlin-compiler-embeddable", version.ref = "detektKotlin" }
+# Not a dependency of any module: it gives Renovate a coordinate for the ktlint version the ktlint plugin runs.
+ktlint-cli = { module = "com.pinterest.ktlint:ktlint-cli", version.ref = "ktlint" }
+
+# Build-logic (convention plugins) compile-time dependencies
+android-gradlePlugin = { module = "com.android.tools.build:gradle", version.ref = "agp" }
+kotlin-gradlePlugin = { module = "org.jetbrains.kotlin:kotlin-gradle-plugin", version.ref = "kotlin" }
+compose-gradlePlugin = { module = "org.jetbrains.kotlin:compose-compiler-gradle-plugin", version.ref = "kotlin" }
+ksp-gradlePlugin = { module = "com.google.devtools.ksp:com.google.devtools.ksp.gradle.plugin", version.ref = "ksp" }
+detekt-gradlePlugin = { module = "io.gitlab.arturbosch.detekt:detekt-gradle-plugin", version.ref = "detekt" }
+ktlint-gradlePlugin = { module = "org.jlleitschuh.gradle:ktlint-gradle", version.ref = "ktlintGradle" }
+dependencyCheck-gradlePlugin = { module = "org.owasp:dependency-check-gradle", version.ref = "dependencyCheck" }
+roborazzi-gradlePlugin = { module = "io.github.takahirom.roborazzi:roborazzi-gradle-plugin", version.ref = "roborazzi" }
+
+[plugins]
+android-application = { id = "com.android.application", version.ref = "agp" }
+android-library = { id = "com.android.library", version.ref = "agp" }
+android-test = { id = "com.android.test", version.ref = "agp" }
+kotlin-jvm = { id = "org.jetbrains.kotlin.jvm", version.ref = "kotlin" }
+kotlin-compose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
+kotlin-serialization = { id = "org.jetbrains.kotlin.plugin.serialization", version.ref = "kotlin" }
+ksp = { id = "com.google.devtools.ksp", version.ref = "ksp" }
+hilt = { id = "com.google.dagger.hilt.android", version.ref = "hilt" }
+room = { id = "androidx.room", version.ref = "androidxRoom" }
+baselineprofile = { id = "androidx.baselineprofile", version.ref = "androidxBaselineProfile" }
+detekt = { id = "io.gitlab.arturbosch.detekt", version.ref = "detekt" }
+ktlint = { id = "org.jlleitschuh.gradle.ktlint", version.ref = "ktlintGradle" }
+dependency-check = { id = "org.owasp.dependencycheck", version.ref = "dependencyCheck" }
+roborazzi = { id = "io.github.takahirom.roborazzi", version.ref = "roborazzi" }
+# Declared only; applied in M3 once google-services.json is injected from CI secrets.
+google-services = { id = "com.google.gms.google-services", version.ref = "googleServices" }
+
+# Convention plugins (build-logic)
+sprout-android-application = { id = "sprout.android.application" }
+sprout-android-library = { id = "sprout.android.library" }
+sprout-android-library-compose = { id = "sprout.android.library.compose" }
+sprout-android-feature = { id = "sprout.android.feature" }
+sprout-android-test = { id = "sprout.android.test" }
+sprout-jvm-library = { id = "sprout.jvm.library" }
+sprout-hilt = { id = "sprout.hilt" }
