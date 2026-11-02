@@ -3,7 +3,9 @@
 
 [versions]
 # Build toolchain
-agp = "9.5.0"
+# Keep AGP within what the installed Android Studio supports (2026.2.1 "Rabbit 1" tops out at 9.4.x);
+# a newer AGP builds fine on the CLI but Studio refuses to sync.
+agp = "9.4.1"
 kotlin = "2.4.21"
 ksp = "2.3.13"
 androidCompileSdk = "37"

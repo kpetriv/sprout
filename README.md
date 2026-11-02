@@ -92,7 +92,7 @@ No data leaves the device for AI in v1, and the privacy policy says so.
 
 ## Build and run
 
-Requirements: JDK 17 (enough for Gradle 9.8.2, AGP 9.5.0, and Kotlin 2.4.21) and the Android SDK with the API 37 platform. The app targets API 37 and runs on Android 9 (API 28, minSdk) and later. Use the Gradle wrapper; no global Gradle install is needed.
+Requirements: JDK 17 (enough for Gradle 9.8.2, AGP 9.4.1, and Kotlin 2.4.21) and the Android SDK with the API 37 platform. The app targets API 37 and runs on Android 9 (API 28, minSdk) and later. Use the Gradle wrapper; no global Gradle install is needed.
 
 ```
 ./gradlew build                 # compile everything

@@ -36,7 +36,7 @@ Forces:
 
 **Navigation 3.** `androidx.navigation3` 1.2.0: `NavDisplay` renders a back stack created with `rememberNavBackStack`, destinations are `@Serializable` `NavKey` entries, and each entry gets its own ViewModel scope through `lifecycle-viewmodel-navigation3`. Rationale: the back stack is plain state the app owns, which fits the single-`StateFlow` model and makes the role switch and lock screen ordinary stack edits instead of graph tricks. Type-safe Navigation Compose was the fallback and is not used.
 
-**SDK levels: minSdk 28, compileSdk and targetSdk 37.** API 28 is the floor because it brings hardware-backed Keystore with StrongBox and the `BiometricPrompt` API, which the security model (ADR-0003) relies on for device keys and the parent gate. The toolchain is Gradle 9.8.2, AGP 9.5.0, and Kotlin 2.4.21; JDK 17 is sufficient to build.
+**SDK levels: minSdk 28, compileSdk and targetSdk 37.** API 28 is the floor because it brings hardware-backed Keystore with StrongBox and the `BiometricPrompt` API, which the security model (ADR-0003) relies on for device keys and the parent gate. The toolchain is Gradle 9.8.2, AGP 9.4.1, and Kotlin 2.4.21; JDK 17 is sufficient to build.
 
 ## Alternatives considered
 
