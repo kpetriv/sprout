@@ -1,6 +1,6 @@
 # ADR-0002: Ledger as a signed, append-only event stream
 
-- **Status:** Accepted
+- **Status:** Accepted; amended 2026-11-02 after the M1 review (see [Amendments](#amendments-m1-review-2026-11-02) and [ADR-0004](0004-parent-authorisation-and-device-identity.md))
 - **Date:** 2026-11-02
 - **Milestone:** M0 (implemented in M1)
 
@@ -91,3 +91,67 @@ The module is pure Kotlin (ADR-0001) and tested with property-style tests: arbit
 - Canonical encoding must be stable forever; changing it breaks every existing hash. The encoding is versioned in the event envelope from day one.
 - The no-negative invariant is checked against the local view. Two offline debits can each pass locally and together overdraw. Resolution on merge: the later debit by total order is flagged and a parent-visible compensating event is proposed, never silently dropped. This is tested in the convergence suite.
 - Storage grows without bound. At realistic household volumes this is kilobytes per kid per year; compaction (signed snapshots) is deferred until measured otherwise.
+
+## Amendments (M1 review, 2026-11-02)
+
+These refine the decision above without reversing it; they were made before any real events existed, so no migration is needed. Where they conflict with the text above, they win. Signature domain separation, duplicate `eventId` handling, lamport bounds, and the parent signature are decided in [ADR-0004](0004-parent-authorisation-and-device-identity.md).
+
+### Canonical form comes from the stored document
+
+The canonical encoding is computed from the **JSON tree of the stored document**, not by re-serialising the decoded Kotlin class:
+
+1. Parse the stored (or received) event JSON into a tree.
+2. Remove `envelope.hash`, `envelope.signature`, and (from schema version 2) `envelope.parentSignature`.
+3. Write the rest as compact JSON with object keys sorted by UTF-16 code unit at every depth, arrays in order, minimal string escaping, plain decimal integers, UTF-8 (the rules already in `CanonicalEncoder`).
+
+Re-serialising the Kotlin class would drop any field the running app version does not know. An event written by a newer schema version would then hash differently on an older device and be quarantined as tampered. Working from the tree keeps unknown fields inside the hashed and signed bytes, so they survive verification. For the same reason, **decoding ignores unknown keys**: an older app reads the fields it knows and verifies the whole document.
+
+When the app creates an event, it serialises the class once, and that JSON is both what is stored and what is canonicalised.
+
+### Amount bound: `maxAmount`
+
+Every amount in an event (`amount`, `minutesUsed`, `principal`) satisfies `|amount| ≤ maxAmount`, where `maxAmount = 10^12` minor units (ten billion pounds, or about 1.9 million years of minutes). A `ManualAdjustment` is bounded in absolute value. An event outside the bound breaks a static rule.
+
+The bound is far above any household amount and far below `Long.MAX_VALUE` (about 9.2 × 10^18), so a single event cannot get near overflow on its own, and it takes millions of maximal events to reach it.
+
+### Overflow is a per-event anomaly; projection never throws
+
+`Money` arithmetic throws `ArithmeticException` on overflow rather than wrapping. Projection catches that per event: an event whose postings would overflow any balance (or the daily game total) is **excluded and recorded as an `InvalidEvent` anomaly**, and folding continues with the next event. Projection never throws because of event content. Otherwise one poisoned event, which a rooted kid device or a forged remote event could produce, would make every balance in the household unreadable on every device (threat model T19).
+
+### Daily game cap: reject, never clamp
+
+A `GamePlayed` whose amount would take the kid's credited total for that `playedOn` date and currency above `LedgerPolicy.dailyGameCapFor(currency)` is rejected as a whole:
+
+- at local validation, it is refused with `DailyCapExceeded` and never written;
+- when projecting merged streams (two offline devices each within the cap, together over it), the event that crosses the cap in total order is excluded entirely and reported as a `DailyCapExceeded` anomaly.
+
+It is never partially credited. Clamping would credit an amount that no signed event states, so the balance would no longer be the plain sum of signed amounts.
+
+### Account kinds
+
+Accounts are one per (kid, currency, kind), with kind `MAIN` or `SAVINGS`. A `Currency.Minutes` account is always `MAIN`; savings accounts are fiat only. Which events may post where:
+
+| Event | Fiat `MAIN` | Fiat `SAVINGS` | Minutes (`MAIN`) |
+|---|---|---|---|
+| `ChoreRewarded`, `AllowancePaid`, `GamePlayed` | Credit | No | Credit |
+| `RewardPurchased` | Debit | No | Debit |
+| `TransferToSavings` | Debit (source) | Credit (destination) | No |
+| `InterestAccrued` | No | Credit | No |
+| `TimeBankStarted`, `TimeBankStopped` | No | No | Yes (stop debits) |
+| `ManualAdjustment` | Credit or debit | Credit or debit | Credit or debit |
+| `OverdraftCompensated` | Credit | Credit | Credit |
+
+`TransferToSavings` moves between two different accounts of the same kid and currency. Every account an event touches must belong to the envelope's kid and match the event's currency. A violation is a static rule failure: refused locally, `InvalidEvent` when projecting.
+
+### Updated invariants
+
+The invariant list above now reads:
+
+1. No negative balances: a debit that would take an account below zero is rejected locally. `TimeBankStopped` is exempt (the minutes were already used); merged offline debits that overdraw are recorded as `OverdraftDetected` and resolved by a parent's `OverdraftCompensated`.
+2. Amounts are strictly positive and at most `maxAmount`; a `ManualAdjustment` is non-zero with absolute value at most `maxAmount`.
+3. `GamePlayed` credits respect a per-kid, per-date, per-currency daily cap; over-cap events are rejected, never clamped.
+4. Only the parent may author `ChoreRewarded`, `AllowancePaid`, `ManualAdjustment`, `InterestAccrued`, and `OverdraftCompensated`. In M1 this is a client-side check on the self-declared `authorRole`; from schema version 2 these events carry a parent signature that receivers verify (ADR-0004).
+5. `eventId` is unique: the same id with the same content hash is a no-op, the same id with a different hash is a conflicting duplicate and neither copy is applied (ADR-0004). Lamport is strictly increasing per author.
+6. Events are immutable once written.
+7. Events post only to accounts of their own kid, in their own currency, of a kind the table above allows.
+8. Free-text fields (`ManualAdjustment.reason`, `OverdraftCompensated.note`) are at most 200 characters and are redacted from `toString`. They leave the device in plaintext from M3 (the ledger is signed, not encrypted; ADR-0003) and are listed in [PRIVACY.md](../PRIVACY.md).

@@ -1,9 +1,14 @@
 package dev.kpetriv.sprout.core.domainledger
 
+import kotlinx.serialization.Serializable
+import kotlin.jvm.JvmInline
+
 /**
  * An amount in minor units (pence, cents) or whole minutes, depending on the account's [Currency].
  * Never floating point. Arithmetic throws [ArithmeticException] on overflow instead of wrapping.
+ * Serialises as a bare JSON integer.
  */
+@Serializable
 @JvmInline
 value class Money(val minorUnits: Long) : Comparable<Money> {
     operator fun plus(other: Money): Money {
@@ -24,9 +29,14 @@ value class Money(val minorUnits: Long) : Comparable<Money> {
         return Money(result)
     }
 
+    /** The negation. Throws [ArithmeticException] for [Long.MIN_VALUE], which has no positive counterpart. */
+    operator fun unaryMinus(): Money = ZERO - this
+
     override fun compareTo(other: Money): Int = minorUnits.compareTo(other.minorUnits)
 
     val isNegative: Boolean get() = minorUnits < 0
+
+    val isPositive: Boolean get() = minorUnits > 0
 
     companion object {
         val ZERO = Money(0)

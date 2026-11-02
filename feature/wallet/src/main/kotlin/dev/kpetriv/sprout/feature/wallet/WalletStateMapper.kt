@@ -1,0 +1,158 @@
+package dev.kpetriv.sprout.feature.wallet
+
+import dev.kpetriv.sprout.core.domainledger.Account
+import dev.kpetriv.sprout.core.domainledger.AccountKind
+import dev.kpetriv.sprout.core.domainledger.AllowancePaid
+import dev.kpetriv.sprout.core.domainledger.Balance
+import dev.kpetriv.sprout.core.domainledger.ChoreRewarded
+import dev.kpetriv.sprout.core.domainledger.Currency
+import dev.kpetriv.sprout.core.domainledger.GamePlayed
+import dev.kpetriv.sprout.core.domainledger.InterestAccrued
+import dev.kpetriv.sprout.core.domainledger.LedgerEvent
+import dev.kpetriv.sprout.core.domainledger.ManualAdjustment
+import dev.kpetriv.sprout.core.domainledger.Money
+import dev.kpetriv.sprout.core.domainledger.MovesValue
+import dev.kpetriv.sprout.core.domainledger.OverdraftCompensated
+import dev.kpetriv.sprout.core.domainledger.RewardPurchased
+import dev.kpetriv.sprout.core.domainledger.TimeBankStopped
+import dev.kpetriv.sprout.core.domainledger.TransferToSavings
+import dev.kpetriv.sprout.core.model.Kid
+import dev.kpetriv.sprout.core.model.KidUiTier
+import dev.kpetriv.sprout.core.ui.AmountDirection
+import dev.kpetriv.sprout.core.ui.BalanceJarDefaults
+import dev.kpetriv.sprout.core.ui.MoneyFormatter
+
+/** What the data sources currently say about one kid. */
+internal data class WalletSnapshot(
+    val kid: Kid,
+    val accounts: List<Account>,
+    val balances: List<Balance>,
+    val events: List<LedgerEvent>,
+    val anomaliesCount: Int,
+)
+
+/** Screen-local state the data sources do not own. */
+internal data class WalletLocalState(
+    val filter: EventCategory? = null,
+    val adjustment: AdjustmentUi? = null,
+    val message: WalletMessage? = null,
+)
+
+/** Pure mapping from ledger data to [WalletUiState]; no Android, no coroutines. */
+internal class WalletStateMapper(private val formatter: MoneyFormatter) {
+    fun ready(snapshot: WalletSnapshot, local: WalletLocalState, mode: WalletMode): WalletUiState.Ready {
+        val tier = snapshot.kid.uiTier
+        val balances = balances(snapshot.accounts, snapshot.balances, tier)
+        val main = balances.firstOrNull { it.kind == AccountKind.MAIN && it.currency is Currency.Fiat }
+        val coins = main?.let { MoneyFormatter.wholeCoins(it.amount, it.currency as Currency.Fiat) } ?: 0L
+        val events = snapshot.events.mapNotNull(::eventUi)
+        val filter = local.filter.takeIf { tier == KidUiTier.SAPLING }
+        return WalletUiState.Ready(
+            kid = snapshot.kid,
+            tier = tier,
+            balances = balances,
+            coins = coins,
+            jarLevel = BalanceJarDefaults.levelFor(coins),
+            savingsGoal = savingsGoal(balances, tier),
+            events = if (filter == null) events else events.filter { it.category == filter },
+            filter = filter,
+            availableFilters = EventCategory.entries.filter { category -> events.any { it.category == category } },
+            interestEarned = interestEarned(snapshot.events),
+            anomaliesCount = snapshot.anomaliesCount,
+            isParentView = mode == WalletMode.PARENT,
+            canAdjust = mode == WalletMode.PARENT && main != null,
+            adjustment = local.adjustment,
+            message = local.message,
+        )
+    }
+
+    private fun balances(accounts: List<Account>, balances: List<Balance>, tier: KidUiTier): List<BalanceUi> {
+        val byAccount = balances.associateBy { it.accountId }
+        return accounts.sortedBy(::displayOrder).map { account ->
+            val amount = byAccount[account.id]?.amount ?: Money.ZERO
+            BalanceUi(
+                accountId = account.id,
+                kind = account.kind,
+                currency = account.currency,
+                amount = amount,
+                formatted = formatter.format(amount, account.currency),
+                kidFormatted = formatter.formatForTier(amount, account.currency, tier),
+            )
+        }
+    }
+
+    private fun displayOrder(account: Account): Int = when {
+        account.kind == AccountKind.MAIN && account.currency is Currency.Fiat -> 0
+        account.kind == AccountKind.MAIN -> 1
+        else -> 2
+    }
+
+    private fun savingsGoal(balances: List<BalanceUi>, tier: KidUiTier): SavingsGoalUi? =
+        balances.firstOrNull { it.kind == AccountKind.SAVINGS }?.let { savings ->
+            SavingsGoalUi(
+                savedText = formatter.formatForTier(savings.amount, savings.currency, tier),
+                targetText = null,
+                progress = 0f,
+            )
+        }
+
+    /** Sum of [InterestAccrued] in the loaded events, per currency; null when there is none. */
+    private fun interestEarned(events: List<LedgerEvent>): String? = events
+        .filterIsInstance<InterestAccrued>()
+        .groupBy { it.currency }
+        .map { (currency, interest) ->
+            formatter.format(interest.fold(Money.ZERO) { sum, e -> sum + e.amount }, currency)
+        }
+        .takeIf { it.isNotEmpty() }
+        ?.joinToString(" + ")
+
+    companion object {
+        private const val SPROUT_HISTORY = 10
+        private const val SAPLING_HISTORY = 100
+        private const val PARENT_SEEDLING_HISTORY = 10
+
+        /**
+         * How many events each tier lists. A Seedling kid sees no history; a parent looking at a Seedling wallet
+         * gets a short recent-activity list.
+         */
+        fun eventLimitFor(tier: KidUiTier, mode: WalletMode): Int = when (tier) {
+            KidUiTier.SEEDLING -> if (mode == WalletMode.PARENT) PARENT_SEEDLING_HISTORY else 0
+            KidUiTier.SPROUT -> SPROUT_HISTORY
+            KidUiTier.SAPLING -> SAPLING_HISTORY
+        }
+
+        /** A history row for [event], or null for events that move no value (a time bank start). */
+        fun eventUi(event: LedgerEvent): EventUi? {
+            if (event !is MovesValue) return null
+            val amount = event.amount
+            return EventUi(
+                eventId = event.eventId.value,
+                category = categoryOf(event),
+                direction = when {
+                    event is TransferToSavings -> AmountDirection.MOVE
+                    event is RewardPurchased || event is TimeBankStopped || amount.isNegative -> AmountDirection.OUT
+                    else -> AmountDirection.IN
+                },
+                amount = if (amount.isNegative) -amount else amount,
+                currency = event.currency,
+                note = when (event) {
+                    is ManualAdjustment -> event.reason
+                    is OverdraftCompensated -> event.note
+                    else -> null
+                },
+                createdAt = event.envelope.createdAt,
+            )
+        }
+
+        private fun categoryOf(event: MovesValue): EventCategory = when (event) {
+            is ChoreRewarded -> EventCategory.CHORES
+            is AllowancePaid -> EventCategory.ALLOWANCE
+            is GamePlayed -> EventCategory.GAMES
+            is RewardPurchased -> EventCategory.SHOP
+            is TransferToSavings -> EventCategory.SAVINGS
+            is InterestAccrued -> EventCategory.INTEREST
+            is TimeBankStopped -> EventCategory.SCREEN_TIME
+            is ManualAdjustment, is OverdraftCompensated -> EventCategory.ADJUSTMENT
+        }
+    }
+}

@@ -1,8 +1,11 @@
 package dev.kpetriv.sprout.core.model
 
+import kotlinx.serialization.Serializable
+
 /**
  * How kid-mode screens present the same data. Suggested from the kid's age; a parent can override it.
  */
+@Serializable
 enum class KidUiTier {
     /** Roughly ages 5 to 7: pictures, whole numbers, big touch targets. */
     SEEDLING,

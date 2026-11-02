@@ -14,6 +14,11 @@ android {
         versionName = "0.1.0"
     }
 
+    // BuildConfig.DEBUG gates the TEMPORARY demo-household seeding (HouseholdBootstrap) to debug builds.
+    buildFeatures {
+        buildConfig = true
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = true
@@ -33,6 +38,7 @@ baselineProfile {
 
 dependencies {
     implementation(projects.core.common)
+    implementation(projects.core.database)
     implementation(projects.core.designsystem)
     implementation(projects.core.model)
     implementation(projects.core.ui)
@@ -51,11 +57,17 @@ dependencies {
     implementation(libs.androidx.activity.compose)
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.compose.material3)
+    implementation(libs.androidx.hilt.lifecycle.viewmodel.compose)
+    implementation(libs.androidx.lifecycle.runtime.compose)
     implementation(libs.androidx.lifecycle.viewmodel.navigation3)
     implementation(libs.androidx.navigation3.runtime)
     implementation(libs.androidx.navigation3.ui)
     implementation(libs.androidx.profileinstaller)
     implementation(libs.kotlinx.serialization.core)
+
+    testImplementation(testFixtures(projects.core.time))
+    testImplementation(libs.kotlinx.coroutines.test)
+    testImplementation(libs.turbine)
 
     baselineProfile(projects.benchmark)
 }

@@ -110,7 +110,7 @@ Each milestone ends with green CI and a tagged build.
 | Milestone | Scope | Status |
 |---|---|---|
 | M0 Scaffold | Build logic, version catalog, module skeleton, Hilt, theme and tier tokens, CI, Renovate, ADRs, threat model | In progress |
-| M1 Ledger core and crypto | Event-sourced ledger with hash chain, Keystore keys and signing, SQLCipher Room, outbox, audit log, wallet (3 tiers) | Planned |
+| M1 Ledger core and crypto | Event-sourced ledger with hash chain, Keystore keys and signing, SQLCipher Room, outbox, audit log, wallet (3 tiers) | Done |
 | M2 Chores, rewards, tiers | Parent CRUD, kid today and shop (3 tiers), submit/approve, allowance, savings and interest, PIN/biometric lock | Planned |
 | M3 Sync and identity | Sync engine, Firebase transport, App Check, Credential Manager, Cloud Functions, Firestore rules and emulator tests, device registry, controls matrix | Planned |
 | M4 Chat and time bank | E2EE threads, key rotation, Seedling presets and voice notes, time bank with foreground notification | Planned |
