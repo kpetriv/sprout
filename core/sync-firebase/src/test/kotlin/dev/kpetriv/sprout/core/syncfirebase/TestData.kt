@@ -2,6 +2,7 @@ package dev.kpetriv.sprout.core.syncfirebase
 
 import dev.kpetriv.sprout.core.model.DeviceId
 import dev.kpetriv.sprout.core.model.HouseholdId
+import dev.kpetriv.sprout.core.model.Role
 import dev.kpetriv.sprout.core.model.UserId
 import dev.kpetriv.sprout.core.sync.DocTypes
 import dev.kpetriv.sprout.core.sync.DocumentEnvelope
@@ -89,4 +90,8 @@ object TestData {
             put("validFromLamport", validFrom)
         },
     )
+
+    /** A signed-in parent whose fresh claims name [hid] (null: the claim was removed). */
+    fun member(hid: HouseholdId? = HID): AuthState =
+        AuthState.SignedIn(UserId(UID), isAnonymous = false, claims = Claims(hid, Role.PARENT, kidId = null))
 }

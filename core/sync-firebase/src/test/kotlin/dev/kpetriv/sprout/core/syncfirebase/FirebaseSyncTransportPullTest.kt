@@ -27,10 +27,14 @@ class FirebaseSyncTransportPullTest {
     private val foreground = MutableStateFlow(true)
     private var hid: HouseholdId? = HID
 
+    /** What a forced token refresh returns; a member of [HID] by default. */
+    private var refreshed: AuthState? = TestData.member()
+
     private fun transport(pageSize: Int = FirebaseSyncTransport.PAGE_SIZE) = FirebaseSyncTransport(
         firestore = firestore,
         household = { hid },
         foreground = foreground,
+        authProbe = { refreshed },
         pageSize = pageSize,
         batchSize = FirebaseSyncTransport.MAX_BATCH_WRITES,
         callTimeoutMs = 5_000,
@@ -155,31 +159,58 @@ class FirebaseSyncTransportPullTest {
     }
 
     @Test
-    fun `parent keys map to the registry and their signed envelopes to documents`() = runTest {
-        val key = TestData.parentKeyDocument()
-        transport().push(emptyList(), listOf(key))
-        val path = "households/h1/parentKeys/${key.docId}"
-        firestore.docs[path] = firestore.docs.getValue(path) + ("revokedAtLamport" to 40L)
+    fun `server-registered parent keys come back as registry entries only`() = runTest {
+        val fingerprint = "c".repeat(64)
+        firestore.seed(
+            "households/h1/parentKeys/$fingerprint",
+            mapOf(
+                "publicKey" to "AAAA",
+                "uid" to TestData.UID,
+                "deviceId" to TestData.DEVICE,
+                "validFromLamport" to 7L,
+                "registeredAt" to ServerTime(1, 0),
+                "attestation" to "STRONGBOX",
+                "revokedAtLamport" to 40L,
+            ),
+        )
 
         val page = transport().pull(SyncCursor.START)
 
         val registered = page.parentKeys.single()
-        assertEquals(key.docId, registered.fingerprint)
+        assertEquals(fingerprint, registered.fingerprint)
         assertEquals(7, registered.validFromLamport)
         assertEquals(40L, registered.revokedAtLamport)
         assertEquals(TestData.DEVICE, registered.deviceId.value)
-        assertEquals(listOf(key), page.documents)
+        assertEquals(emptyList(), page.documents)
         assertTrue(transport().pull(page.next).parentKeys.isEmpty())
     }
 
     @Test
-    fun `a refused read while the household is unreadable means the household is gone`() = runTest {
+    fun `a bare refused read while the household is unreadable is transient`() = runTest {
         firestore.queryFailure = FirestoreCode.PERMISSION_DENIED
         firestore.readFailures["households/h1"] = FirestoreCode.PERMISSION_DENIED
 
         val failure = assertFailsWith<SyncException> { transport().pull(SyncCursor.START) }
 
-        assertEquals(SyncError.HouseholdGone, failure.error)
+        assertEquals(SyncError.Transient(), failure.error)
+    }
+
+    @Test
+    fun `a refused read is household gone with positive evidence only`() = runTest {
+        firestore.queryFailure = FirestoreCode.PERMISSION_DENIED
+        firestore.readFailures["households/h1"] = FirestoreCode.PERMISSION_DENIED
+
+        suspend fun pullError() = assertFailsWith<SyncException> { transport().pull(SyncCursor.START) }.error
+
+        refreshed = AuthState.UserGone
+        assertEquals(SyncError.HouseholdGone, pullError())
+
+        refreshed = TestData.member(hid = null)
+        assertEquals(SyncError.HouseholdGone, pullError())
+
+        // A refresh that cannot be made (offline) is no evidence.
+        refreshed = null
+        assertEquals(SyncError.Transient(), pullError())
     }
 
     @Test
@@ -231,7 +262,7 @@ class FirebaseSyncTransportPullTest {
             override fun listen(path: String, latestOnly: Boolean) =
                 kotlinx.coroutines.flow.flow<Unit> { throw FirestoreFailure(FirestoreCode.PERMISSION_DENIED) }
         }
-        val transport = FirebaseSyncTransport(failing, { HID }, foreground, 10, 10, 5_000)
+        val transport = FirebaseSyncTransport(failing, { HID }, foreground, { refreshed }, 10, 10, 5_000)
 
         transport.changes().test {
             assertEquals(SyncError.Permanent("permission-denied"), (awaitError() as SyncException).error)

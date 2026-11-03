@@ -13,7 +13,9 @@ import javax.inject.Singleton
 import kotlin.io.encoding.Base64
 
 /**
- * Typed wrappers for the household callables (M3 §1, `functions/src/index.ts`), all in [FirebaseConfig.region].
+ * Typed wrappers for the household callables (M3 §1, `server/src/index.ts`), at [FirebaseConfig.functionsEndpoint].
+ * The privileged ones carry a device proof (`callerDeviceId` or `deviceId`, and `signature`): the calling device's
+ * signature over the bytes [DeviceProof] builds (D-M3-34).
  *
  * Requests and responses are kotlinx-serialised data classes converted to plain maps at the SDK boundary. Every call
  * returns a [Result] whose failure is a [FunctionsException]; public keys, attestation certificates and signatures
@@ -57,9 +59,16 @@ class HouseholdFunctions @Inject constructor(private val invoker: CallableInvoke
             ApprovedDevice.serializer(),
         ).map { }
 
-    /** A single-use 8-character code (10 minutes) that links a kid device to [kidId]. Never log it. */
-    suspend fun createLinkCode(kidId: KidId): Result<LinkCode> =
-        call(CREATE_LINK_CODE, CreateLinkCodeRequest(kidId), CreateLinkCodeRequest.serializer(), LinkCode.serializer())
+    /**
+     * A single-use 8-character code (10 minutes) that links a kid device to [kidId]. Never log it. [signature] is
+     * this ACTIVE parent device's ([callerDeviceId]) signature over [DeviceProof.createLinkCodePayload].
+     */
+    suspend fun createLinkCode(kidId: KidId, callerDeviceId: DeviceId, signature: ByteArray): Result<LinkCode> = call(
+        CREATE_LINK_CODE,
+        CreateLinkCodeRequest(kidId, callerDeviceId, Base64.Default.encode(signature)),
+        CreateLinkCodeRequest.serializer(),
+        LinkCode.serializer(),
+    )
 
     /** Redeems a link code from an anonymous kid session; then refresh the claims. */
     suspend fun redeemLinkCode(code: String, key: DeviceKeyRegistration): Result<RedeemedLink> = call(
@@ -69,26 +78,77 @@ class HouseholdFunctions @Inject constructor(private val invoker: CallableInvoke
         RedeemedLink.serializer(),
     )
 
-    /** Revokes [deviceId] (T7); [callerDeviceId] is this device, which cannot revoke itself. */
-    suspend fun revokeDevice(deviceId: DeviceId, callerDeviceId: DeviceId): Result<RevokedDevice> = call(
+    /**
+     * Revokes [deviceId] (T7); [callerDeviceId] is this device, which cannot revoke itself, and [signature] its
+     * signature over [DeviceProof.revokeDevicePayload] of [deviceId].
+     */
+    suspend fun revokeDevice(
+        deviceId: DeviceId,
+        callerDeviceId: DeviceId,
+        signature: ByteArray,
+    ): Result<RevokedDevice> = call(
         REVOKE_DEVICE,
-        RevokeDeviceRequest(deviceId, callerDeviceId),
+        RevokeDeviceRequest(deviceId, callerDeviceId, Base64.Default.encode(signature)),
         RevokeDeviceRequest.serializer(),
         RevokedDevice.serializer(),
     )
 
-    /** The household's data as one JSON bundle (D-M3-7); `resource-exhausted` when it is too large. */
-    suspend fun exportHousehold(): Result<JsonObject> =
-        call(EXPORT_HOUSEHOLD, EmptyRequest(), EmptyRequest.serializer(), JsonObject.serializer(), BULK_TIMEOUT_MS)
+    /**
+     * The household's data as one JSON bundle (D-M3-7); `resource-exhausted` when it is too large. [signature] is
+     * [callerDeviceId]'s signature over [DeviceProof.exportHouseholdPayload].
+     */
+    suspend fun exportHousehold(callerDeviceId: DeviceId, signature: ByteArray): Result<JsonObject> = call(
+        EXPORT_HOUSEHOLD,
+        ProvenRequest(callerDeviceId, Base64.Default.encode(signature)),
+        ProvenRequest.serializer(),
+        JsonObject.serializer(),
+        BULK_TIMEOUT_MS,
+    )
 
-    /** Deletes the household and every member's account; [confirmation] must be the household id. */
-    suspend fun deleteHousehold(confirmation: HouseholdId): Result<Unit> = call(
+    /**
+     * Deletes the household and every member's account; [confirmation] must be the household id, the caller must
+     * have signed in within the last 5 minutes, and [signature] is [callerDeviceId]'s signature over
+     * [DeviceProof.deleteHouseholdPayload].
+     */
+    suspend fun deleteHousehold(
+        confirmation: HouseholdId,
+        callerDeviceId: DeviceId,
+        signature: ByteArray,
+    ): Result<Unit> = call(
         DELETE_HOUSEHOLD,
-        DeleteHouseholdRequest(confirmation),
+        DeleteHouseholdRequest(confirmation, callerDeviceId, Base64.Default.encode(signature)),
         DeleteHouseholdRequest.serializer(),
         DeletedHousehold.serializer(),
         BULK_TIMEOUT_MS,
     ).map { }
+
+    /**
+     * Registers a parent authorisation key with the server (D-M3-34; clients cannot write `parentKeys`): [publicKey]
+     * is its X.509 SPKI DER, [attestationChain] its Keystore attestation (leaf first; null where the key has none,
+     * accepted only by a backend that allows unattested keys), [deviceId] this ACTIVE parent device and [signature]
+     * its signature over [DeviceProof.registerParentKeyPayload]. The server sets `validFromLamport`; pass the result
+     * to `HouseholdPolicyRepository.recordServerRegisteredKey`. Registering the same key again from the same device
+     * returns the stored registration.
+     */
+    suspend fun registerParentKey(
+        publicKey: ByteArray,
+        attestationChain: List<ByteArray>?,
+        deviceId: DeviceId,
+        signature: ByteArray,
+    ): Result<ParentKeyRegistration> {
+        val key = DeviceKeyRegistration(publicKey, attestationChain)
+        return call(
+            REGISTER_PARENT_KEY,
+            RegisterParentKeyRequest(
+                key.publicKeyBase64(),
+                key.attestationChainBase64(),
+                deviceId,
+                Base64.Default.encode(signature),
+            ),
+            RegisterParentKeyRequest.serializer(),
+            ParentKeyRegistration.serializer(),
+        )
+    }
 
     @Suppress("SwallowedException") // A decoding message may quote response data; only the code is kept.
     private suspend fun <Req, Res> call(
@@ -119,6 +179,7 @@ class HouseholdFunctions @Inject constructor(private val invoker: CallableInvoke
         const val APPROVE_DEVICE: String = "approveDevice"
         const val CREATE_LINK_CODE: String = "createLinkCode"
         const val REDEEM_LINK_CODE: String = "redeemLinkCode"
+        const val REGISTER_PARENT_KEY: String = "registerParentKey"
         const val REVOKE_DEVICE: String = "revokeDevice"
         const val EXPORT_HOUSEHOLD: String = "exportHousehold"
         const val DELETE_HOUSEHOLD: String = "deleteHousehold"

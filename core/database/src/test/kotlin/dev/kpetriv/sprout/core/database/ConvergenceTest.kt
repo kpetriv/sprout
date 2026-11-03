@@ -8,9 +8,9 @@ import dev.kpetriv.sprout.core.domainhousehold.ChoreReward
 import dev.kpetriv.sprout.core.domainhousehold.Reward
 import dev.kpetriv.sprout.core.domainledger.AllowancePaid
 import dev.kpetriv.sprout.core.domainledger.Currency
+import dev.kpetriv.sprout.core.domainledger.DeviceStatus
 import dev.kpetriv.sprout.core.domainledger.Money
 import dev.kpetriv.sprout.core.domainledger.QuarantineReason
-import dev.kpetriv.sprout.core.domainledger.RegisteredParentKey
 import dev.kpetriv.sprout.core.model.AccountId
 import dev.kpetriv.sprout.core.model.CalendarDate
 import dev.kpetriv.sprout.core.model.ChoreId
@@ -24,6 +24,7 @@ import dev.kpetriv.sprout.core.sync.FakeBackend
 import dev.kpetriv.sprout.core.sync.FakeSyncClock
 import dev.kpetriv.sprout.core.sync.FakeSyncTransport
 import dev.kpetriv.sprout.core.sync.SyncEngine
+import dev.kpetriv.sprout.core.sync.SyncError
 import dev.kpetriv.sprout.core.sync.SyncReport
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.runTest
@@ -33,6 +34,7 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
+import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -74,10 +76,8 @@ class ConvergenceTest {
         backend.registerDevice(kid.registered())
         parent.addKid(KID_X.value)
         parent.registerParentKey()
-        val key = parent.database.parentKeyDao().all().single()
-        backend.addParentKey(
-            RegisteredParentKey(key.fingerprint, key.publicKey, key.uid, key.deviceId, key.validFromLamport, null),
-        )
+        // registerParentKey on the server (D-M3-34): the key reaches the other devices through the registry only.
+        parent.serverRegisteredKeys().forEach(backend::addParentKey)
         parent.chores.upsert(
             Chore(
                 id = bed,
@@ -154,21 +154,65 @@ class ConvergenceTest {
         household()
         approvedChore()
         val money = with(kid) { kid.accounts.accountsFor(KID_X).first().money() }
-        // The kid device signs an allowance as a "parent", with no parent signature, and pushes it itself.
+        // The kid device signs an allowance as a "parent", with no parent signature. The rules refuse it from a kid
+        // member, so it can only reach the server through a rules bug or a compromised server.
         val forged = kid.craft(KID_X, money.id, role = Role.PARENT) {
             AllowancePaid(it, kid.gbp, Money(10_000), "weekly", "2026-W45")
         }
         val pushed = kidTransport.push(listOf(forged), emptyList())
-        assertEquals(1, pushed.accepted.size, "the backend cannot check roles inside an event")
+        assertEquals(FakeBackend.PERMISSION_DENIED, (pushed.rejected.single().second as SyncError.Permanent).code)
+        backend.injectEvent(forged)
 
         val report = parentEngine.synced()
+        kidEngine.synced()
 
         assertEquals(1, report.quarantined)
         val rejected = parent.ledger.observeQuarantined().first().single()
         assertEquals(kid.deviceId, rejected.authorDeviceId)
         assertEquals(QuarantineReason.ROLE_NOT_ALLOWED.name, rejected.reason)
         assertEquals(Money(150), balances(parent)[money.id])
+        // The kid device refuses its own forgery the same way when it pulls it back.
+        assertEquals(
+            QuarantineReason.ROLE_NOT_ALLOWED.name,
+            kid.ledger.observeQuarantined().first().single().reason,
+        )
         assertEquals(balances(kid), balances(parent))
+    }
+
+    @Test
+    fun anEventRefusedByTheBackendBlocksTheKidsOutboxUntilTheDeviceIsApprovedAgain() = runTest {
+        household()
+        approvedChore()
+        // The kid device is back to PENDING on the server (D-M3-33): the rules refuse everything it writes.
+        backend.setStatus(kid.deviceId, DeviceStatus.Pending)
+        assertIs<PurchaseResult.Purchased>(kid.purchase(KID_X, screenTime))
+
+        val refused = kidEngine.syncOnce()
+
+        assertTrue(refused.rejections.isNotEmpty())
+        assertTrue(refused.rejections.all { it.blocking && it.code == FakeBackend.PERMISSION_DENIED })
+        kid.outbox.auditRejections(refused.rejections)
+        val blocked = assertNotNull(kid.outbox.observeBlocked().first())
+        assertEquals(refused.rejections.minOf { it.seq }, blocked.seq)
+        assertEquals(FakeBackend.PERMISSION_DENIED, blocked.code)
+        val audited = kid.database.auditLogDao().all().count { it.action == AuditAction.SYNC_REJECTED }
+        assertEquals(refused.rejections.size, audited)
+
+        // Offered again an hour later and refused again: still blocked, not audited again.
+        clock.advanceBy(SyncEngine.EVENT_REJECTION_RETRY_MS)
+        kid.outbox.auditRejections(kidEngine.syncOnce().rejections)
+        assertEquals(audited, kid.database.auditLogDao().all().count { it.action == AuditAction.SYNC_REJECTED })
+        assertEquals(blocked, kid.outbox.observeBlocked().first())
+
+        // Approved again: the next attempt goes through, nothing blocks, and both devices agree.
+        backend.approve(kid.deviceId)
+        clock.advanceBy(SyncEngine.EVENT_REJECTION_RETRY_MS)
+        kidEngine.synced()
+        assertNull(kid.outbox.observeBlocked().first())
+        parentEngine.synced()
+        assertEquals(balances(kid), balances(parent))
+        val minutes = with(kid) { kid.accounts.accountsFor(KID_X).first().minutes() }
+        assertEquals(Money(30), balances(parent)[minutes.id])
     }
 
     @Test

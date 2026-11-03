@@ -175,10 +175,33 @@ class HouseholdRepositoriesTest {
         assertEquals(replaced, policies.observe().first())
         val audit = database.auditLogDao().all().filter { it.action == AuditAction.PARENT_KEY_REGISTERED }
         assertEquals(2, audit.size)
-        // M3: the policy is a synced document and each key a parent_key document named by its fingerprint.
+        // M3: the policy is a synced document; keys are registered by the server (D-M3-34), never queued as
+        // documents, and kept locally so this device verifies its own parent signatures before the first pull.
         assertEquals(1, documents(DocTypes.HOUSEHOLD_POLICY).size)
-        assertEquals(2, documents(DocTypes.PARENT_KEY).size)
+        assertEquals(0, documents(DocTypes.PARENT_KEY).size)
         assertEquals(2, database.parentKeyDao().all().size)
+    }
+
+    @Test
+    fun theServerRegistrationSetsTheKeysValidFromLamportAndMovesTheClockUpToIt() = runTest {
+        household.policies.ensure(household.gbp)
+        val key = byteArrayOf(1, 2, 3)
+        household.policies.registerParentKey(key)
+        val fingerprint = database.parentKeyDao().all().single().fingerprint
+        val before = database.deviceStateDao().get()!!.lamport
+
+        assertTrue(household.policies.recordServerRegisteredKey(fingerprint, validFromLamport = before + 40))
+
+        assertEquals(before + 40, database.parentKeyDao().get(fingerprint)?.validFromLamport)
+        // The next local write gets the server's validFromLamport: a parent signature made now is covered.
+        assertEquals(before + 39, database.deviceStateDao().get()?.lamport)
+        val audit = database.auditLogDao().all().filter { it.action == AuditAction.PARENT_KEY_REGISTERED }
+        assertEquals(listOf(false, true), audit.map { it.detailsJson.contains("\"server\":true") })
+        // An unknown fingerprint changes nothing; an earlier lamport never moves the clock back.
+        assertFalse(household.policies.recordServerRegisteredKey("0".repeat(64), 7))
+        assertTrue(household.policies.recordServerRegisteredKey(fingerprint, validFromLamport = 2))
+        assertEquals(before + 39, database.deviceStateDao().get()?.lamport)
+        assertEquals(0, documents(DocTypes.PARENT_KEY).size)
     }
 
     @Test

@@ -74,22 +74,34 @@ interface HouseholdPolicyRepository {
     suspend fun ensure(fiatCurrency: Currency.Fiat): HouseholdPolicy
 
     /**
-     * Registers [publicKeyDer] (X.509 SPKI DER of the parent authentication key) and turns
+     * Registers [publicKeyDer] (X.509 SPKI DER of the parent authentication key) **locally** and turns
      * `requireParentSignature` on. The signature is required from the next lamport this device will use, so parent
      * events written before the key existed stay valid; re-registering (a new key after a biometric enrolment change)
-     * keeps the original from-lamport.
+     * keeps the original from-lamport. The policy document is republished with `requireParentSignature` on.
      *
-     * The key is also published as a `parent_key` document (fingerprint, public key, uid, device, `validFromLamport`
-     * = the next lamport) so other devices can verify this device's parent signatures (M3 §1), and the policy
-     * document is republished with `requireParentSignature` on.
+     * Other devices learn the key only from the server registry: the app registers it with the `registerParentKey`
+     * callable (D-M3-34; clients cannot write `parentKeys`) and then calls [recordServerRegisteredKey]. The local
+     * `parent_keys` row written here (valid from the next local lamport) only lets this device verify its own parent
+     * signatures before the first registry pull. No `parent_key` document is queued.
      */
     suspend fun registerParentKey(publicKeyDer: ByteArray): HouseholdPolicy
+
+    /**
+     * Records the server's registration of the parent key [fingerprint] (the `registerParentKey` callable's response,
+     * D-M3-34): the local `parent_keys` row takes the server's [validFromLamport], and this device's clock moves up so
+     * the next local lamport is at least [validFromLamport] (bounded by `maxLamportJump`): a parent signature made
+     * after this call is covered by the key on every device. Audited `PARENT_KEY_REGISTERED`. Returns false (and does
+     * nothing) when no local key has that fingerprint.
+     *
+     * The default does nothing (test fakes); the Room repository implements it.
+     */
+    suspend fun recordServerRegisteredKey(fingerprint: String, validFromLamport: Long): Boolean = false
 }
 
 /**
  * [HouseholdPolicyRepository] on Room. The fiat currency and `requireParentSignature` are the synced
- * `household_policy` document (docId = household id); the registered parent key is this device's own and is
- * published as a `parent_key` document.
+ * `household_policy` document (docId = household id); the registered parent key is this device's own and reaches
+ * other devices through the server registry (`registerParentKey`, D-M3-34), never as a document.
  */
 class RoomHouseholdPolicyRepository @Inject constructor(
     private val database: SproutDatabase,
@@ -118,25 +130,11 @@ class RoomHouseholdPolicyRepository @Inject constructor(
             val validFrom = writes.peekLamport()
             val from = current.parentSignatureFromLamport ?: validFrom
             val fingerprint = JvmSha256Hasher.sha256(publicKeyDer).toHex()
-            val key = DocumentPayloads.ParentKeyPayload(
-                fingerprint,
-                publicKeyDer,
-                author.uid,
-                author.deviceId,
-                validFrom,
-            )
-            val keyLamport = writes.nextLamport(author.deviceId)
-            writes.record(
-                author,
-                DocTypes.PARENT_KEY,
-                fingerprint,
-                keyLamport,
-                DocumentPayloads.parentKey(key),
-                AuditAction.PARENT_KEY_REGISTERED,
-            ) {
+            writes.auditOnly(author, AuditAction.PARENT_KEY_REGISTERED, fingerprint) {
                 put("fromLamport", from)
                 put("validFromLamport", validFrom)
                 put("replacedKey", current.hasParentKey)
+                put("server", false)
             }
             database.parentKeyDao().upsert(
                 ParentKeyEntity(
@@ -159,6 +157,29 @@ class RoomHouseholdPolicyRepository @Inject constructor(
                     createdAtEpochMs = current.createdAt.toEpochMilliseconds(),
                 ),
             ).toDomain()
+        }
+    }
+
+    override suspend fun recordServerRegisteredKey(fingerprint: String, validFromLamport: Long): Boolean {
+        require(validFromLamport >= 0) { "validFromLamport must not be negative" }
+        val author = authors.currentAuthor()
+        return writes.transaction {
+            val keys = database.parentKeyDao()
+            val key = keys.get(fingerprint)
+            if (key == null || key.deviceId != author.deviceId) {
+                false
+            } else {
+                keys.upsert(key.copy(validFromLamport = validFromLamport))
+                // The next local lamport must be covered by the key everywhere: at least validFromLamport.
+                val current = writes.peekLamport() - 1
+                val target = minOf(validFromLamport - 1, current + LedgerPolicy.DEFAULT_MAX_LAMPORT_JUMP)
+                if (target > current) database.advanceDeviceLamport(author.deviceId, target)
+                writes.auditOnly(author, AuditAction.PARENT_KEY_REGISTERED, fingerprint) {
+                    put("validFromLamport", validFromLamport)
+                    put("server", true)
+                }
+                true
+            }
         }
     }
 

@@ -60,21 +60,55 @@ interface LedgerInboxDao {
     @Query("DELETE FROM ledger_inbox WHERE eventId = :eventId AND hash = :hash")
     suspend fun delete(eventId: EventId, hash: String): Int
 
+    /** Sets why a held row is (still) held. */
+    @Query("UPDATE ledger_inbox SET reason = :reason WHERE eventId = :eventId AND hash = :hash")
+    suspend fun updateReason(eventId: EventId, hash: String, reason: String)
+
     @Query("SELECT COUNT(*) FROM ledger_inbox")
     suspend fun count(): Int
+
+    @Query("SELECT COUNT(*) FROM ledger_inbox WHERE authorDeviceId = :authorDeviceId")
+    suspend fun countFor(authorDeviceId: DeviceId): Int
+
+    /** The [limit] oldest rows of [authorDeviceId] (first received, then lowest lamport). */
+    @Query(
+        """
+        SELECT * FROM ledger_inbox WHERE authorDeviceId = :authorDeviceId
+        ORDER BY receivedAtEpochMs, lamport, eventId, hash LIMIT :limit
+        """,
+    )
+    suspend fun oldestFor(authorDeviceId: DeviceId, limit: Int): List<LedgerInboxEntity>
 }
 
-/** Pulled documents refused for a lamport too far ahead. */
+/** Pulled documents held for an unknown or pending author device, or refused for a lamport too far ahead. */
 @Dao
 interface DocumentInboxDao {
     @Upsert
     suspend fun upsert(document: DocumentInboxEntity)
+
+    @Query("SELECT * FROM document_inbox WHERE docType = :docType AND docId = :docId")
+    suspend fun get(docType: String, docId: String): DocumentInboxEntity?
 
     @Query("SELECT * FROM document_inbox ORDER BY receivedAtEpochMs, docType, docId")
     suspend fun all(): List<DocumentInboxEntity>
 
     @Query("DELETE FROM document_inbox WHERE docType = :docType AND docId = :docId")
     suspend fun delete(docType: String, docId: String): Int
+
+    @Query("SELECT COUNT(*) FROM document_inbox")
+    suspend fun count(): Int
+
+    @Query("SELECT COUNT(*) FROM document_inbox WHERE authorDeviceId = :authorDeviceId")
+    suspend fun countFor(authorDeviceId: DeviceId): Int
+
+    /** The [limit] oldest rows of [authorDeviceId]. */
+    @Query(
+        """
+        SELECT * FROM document_inbox WHERE authorDeviceId = :authorDeviceId
+        ORDER BY receivedAtEpochMs, docType, docId LIMIT :limit
+        """,
+    )
+    suspend fun oldestFor(authorDeviceId: DeviceId, limit: Int): List<DocumentInboxEntity>
 }
 
 /** Per-collection pull positions. */

@@ -27,6 +27,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
+import kotlin.test.assertTrue
 
 /**
  * Every migration in [Migrations.ALL] runs against a database created at the old version from its exported schema,
@@ -176,6 +177,59 @@ class MigrationTest {
         } finally {
             database.close()
         }
+    }
+
+    @Test
+    fun migration3To4AddsTheHoldColumnsAndKeepsTheHeldRows() = runTest {
+        helper.createDatabase(TEST_DB, 3).use { db ->
+            db.insertRow(
+                "ledger_inbox",
+                "eventId" to chore.eventId.value,
+                "hash" to chore.envelope.hash,
+                "payloadJson" to "{}",
+                "authorDeviceId" to chore.envelope.authorDeviceId.value,
+                "lamport" to 1L,
+                "receivedAtEpochMs" to receivedAt,
+            )
+            db.insertRow(
+                "document_inbox",
+                "docType" to "reward",
+                "docId" to "treat",
+                "envelopeJson" to "{}",
+                "reason" to "LAMPORT_TOO_FAR_AHEAD",
+                "receivedAtEpochMs" to receivedAt,
+            )
+        }
+
+        helper.runMigrationsAndValidate(TEST_DB, 4, true, Migrations.MIGRATION_3_4).use { db ->
+            db.query("SELECT eventId, reason FROM ledger_inbox").use { cursor ->
+                cursor.moveToFirst()
+                assertEquals(chore.eventId.value, cursor.getString(0))
+                assertTrue(cursor.isNull(1))
+            }
+            db.query("SELECT reason, authorDeviceId FROM document_inbox").use { cursor ->
+                cursor.moveToFirst()
+                assertEquals("LAMPORT_TOO_FAR_AHEAD", cursor.getString(0))
+                assertTrue(cursor.isNull(1))
+            }
+        }
+
+        val database = Room.databaseBuilder(RuntimeEnvironment.getApplication(), SproutDatabase::class.java, TEST_DB)
+            .addMigrations(*Migrations.ALL)
+            .build()
+        try {
+            assertNull(database.ledgerInboxDao().all().single().reason)
+            assertNull(database.documentInboxDao().all().single().authorDeviceId)
+        } finally {
+            database.close()
+        }
+    }
+
+    @Test
+    fun migration1To4KeepsTheM1Rows() = runTest {
+        helper.createDatabase(TEST_DB, 1).use { db -> insertVersion1Rows(db, chore) }
+
+        helper.runMigrationsAndValidate(TEST_DB, 4, true, *Migrations.ALL).close()
     }
 
     @Test

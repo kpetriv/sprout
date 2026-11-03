@@ -15,6 +15,14 @@ sealed interface AuthState {
      * [claims] are the custom claims set by Cloud Functions; empty until the user joins a household.
      */
     data class SignedIn(val uid: UserId, val isAnonymous: Boolean, val claims: Claims) : AuthState
+
+    /**
+     * The Firebase account is gone: deleted or disabled (`FirebaseAuthInvalidUserException` with `USER_NOT_FOUND` or
+     * `USER_DISABLED` from an ID-token read). The household was deleted or, for a kid device, the device was revoked:
+     * positive evidence for [dev.kpetriv.sprout.core.sync.SyncError.HouseholdGone] (M3 §6). A merely expired or
+     * revoked session is not this: it signs in again.
+     */
+    data object UserGone : AuthState
 }
 
 /**

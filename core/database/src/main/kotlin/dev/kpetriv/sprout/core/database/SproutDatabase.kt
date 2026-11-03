@@ -144,7 +144,10 @@ abstract class SproutDatabase : RoomDatabase() {
          * 3 (M3): device registry mirror (`devices`, `parent_keys`), held events and documents (`ledger_inbox`,
          * `document_inbox`), pull cursors, the session, author/signature/tombstone columns on every synced document,
          * `ledger_events.ingestedAtEpochMs` and `anomalies.appliedCopyJson`. See [Migrations.MIGRATION_2_3].
+         *
+         * 4 (M3 fix pass): `ledger_inbox.reason` and `document_inbox.authorDeviceId` for held events and documents
+         * (D-M3-31). See [Migrations.MIGRATION_3_4].
          */
-        const val VERSION: Int = 3
+        const val VERSION: Int = 4
     }
 }

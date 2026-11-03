@@ -8,6 +8,7 @@ import dev.kpetriv.sprout.core.database.entity.AuditAction
 import dev.kpetriv.sprout.core.database.entity.AuditLogEntity
 import dev.kpetriv.sprout.core.database.entity.BalanceEntity
 import dev.kpetriv.sprout.core.database.entity.EventOrigin
+import dev.kpetriv.sprout.core.database.entity.HouseholdPolicyEntity
 import dev.kpetriv.sprout.core.database.entity.LedgerEventEntity
 import dev.kpetriv.sprout.core.database.entity.LedgerInboxEntity
 import dev.kpetriv.sprout.core.database.entity.OutboxEntity
@@ -20,6 +21,7 @@ import dev.kpetriv.sprout.core.domainledger.DeviceRegistry
 import dev.kpetriv.sprout.core.domainledger.EventId
 import dev.kpetriv.sprout.core.domainledger.HashChain
 import dev.kpetriv.sprout.core.domainledger.IngestOrdering
+import dev.kpetriv.sprout.core.domainledger.IngestPlan
 import dev.kpetriv.sprout.core.domainledger.Ledger
 import dev.kpetriv.sprout.core.domainledger.LedgerAnomaly
 import dev.kpetriv.sprout.core.domainledger.LedgerEvent
@@ -186,25 +188,33 @@ class RoomLedgerRepository internal constructor(
 
     /**
      * Ingests pulled event documents (`LedgerJson` trees) in one transaction, under the device clock's lock:
-     * 1. [RemoteEventVerifier] (registry, [check], the policy's lamport bound) checks each document. A refused one is
-     *    stored `quarantined` with the [QuarantineReason] name and its raw tree as `payloadJson` (evidence) when it
-     *    decodes, and audited `LEDGER_EVENT_QUARANTINED`; a document too broken to decode is audited only.
+     * 1. [RemoteEventVerifier] (registry, [check], the lamport bound and the household's **synced**
+     *    `requireParentSignature`, see [remotePolicy]) checks each document. A refused one is stored `quarantined`
+     *    with the [QuarantineReason] name and its raw tree as `payloadJson` (evidence) when it decodes, and audited
+     *    `LEDGER_EVENT_QUARANTINED`; a document too broken to decode is audited only. One the verifier holds (author
+     *    device unknown or PENDING, D-M3-31) goes to `ledger_inbox` with that reason and is verified again on every
+     *    later ingest and [retryHeld].
      * 2. Events already stored under the same `(eventId, hash)` are duplicates and skipped.
      * 3. [IngestOrdering.plan] orders the rest together with the events held in `ledger_inbox`, from each author's
-     *    stored chain head. Events that do not link yet go to (or stay in) `ledger_inbox`.
+     *    stored chain heads, and detects forks against the stored chains ([LedgerEventDao.branchHashes]). Every
+     *    forked branch is quarantined `FORKED_CHAIN` (audited): the batch's, the stored ones the plan reports with
+     *    every stored descendant, and held events descending from a forked branch; the caches are then rebuilt
+     *    without them. Events that do not link yet go to (or stay in) `ledger_inbox` ([HELD_CHAIN_GAP]).
      * 4. Each applicable event, in order: a different event under a stored eventId is kept as conflict evidence
      *    (`LEDGER_EVENT_CONFLICT`); otherwise [LedgerRules.validate] runs against the projection before it. A valid
      *    event is stored (`origin = REMOTE`, `ingestedAtEpochMs`, no outbox row, audit `LEDGER_EVENT_INGESTED` with
-     *    ids only). An event naming an account this device does not know yet is held. An event breaking a rule that
-     *    does not depend on what was applied before it (role, amounts, currency, ownership, account kind, text, period
-     *    key, interest terms) is stored quarantined with the violations and audited `LEDGER_EVENT_QUARANTINED`, and its
-     *    author's later events in the batch are held behind it. An event that only breaks an order-dependent rule
+     *    ids only). An event naming an account this device does not know yet is held ([HELD_UNKNOWN_ACCOUNT]).
+     *    An event breaking a rule that does not depend on what was applied before it (role, amounts, currency,
+     *    ownership, account kind, text, period key, interest terms, too many causes) is stored quarantined with the
+     *    violations and audited `LEDGER_EVENT_QUARANTINED`, and its author's later events in the batch are held behind
+     *    it ([HELD_AUTHOR_BLOCKED]). An event that only breaks an order-dependent rule
      *    (funds, daily cap, time bank, period claim, grant) is stored like a valid one: whether it applies is decided
      *    by the projection, identically on every device, so replicas converge whatever order events arrive in.
      * 5. The device clock observes the highest lamport stored (bounded by `maxLamportJump`), and the balances and
      *    anomalies caches are rebuilt.
      *
-     * `held` in the report counts the events of [jsons] that were held.
+     * `held` in the report counts the events of [jsons] that were newly held. `ledger_inbox` keeps at most
+     * [MAX_HELD_PER_AUTHOR] rows per author device (the oldest are dropped and audited `HELD_DROPPED`).
      */
     suspend fun ingest(jsons: List<JsonObject>): EventApplyReport {
         val check = bindLocalCheck()
@@ -504,8 +514,11 @@ class RoomLedgerRepository internal constructor(
         return LedgerJson.json.encodeToString(JsonObject.serializer(), details)
     }
 
-    /** One pulled document waiting to be ingested; [heldKey] is set when it came from `ledger_inbox`. */
-    private class Incoming(val json: JsonObject, val heldKey: Pair<EventId, String>?)
+    /**
+     * One pulled document waiting to be ingested; [heldKey] (and the row's [heldReason]) are set when it came from
+     * `ledger_inbox`.
+     */
+    private class Incoming(val json: JsonObject, val heldKey: Pair<EventId, String>?, val heldReason: String? = null)
 
     /** Running totals of one ingest. */
     private class IngestTally {
@@ -524,24 +537,26 @@ class RoomLedgerRepository internal constructor(
         val localMax = deviceClock.current()
         val now = clock.now().toEpochMilliseconds()
         val tally = IngestTally()
-        val verifier = RemoteEventVerifier(registry, this.check, active.policy)
+        val synced = database.householdPolicyDao().get()
+        val verifier = RemoteEventVerifier(registry, this.check, remotePolicy(active.policy, synced))
         // Held events first, so a held event pulled again is a duplicate of its inbox row.
         val incoming = heldIncoming(now, tally) + jsons.map { Incoming(it, null) }
         val ok = LinkedHashMap<Pair<EventId, String>, Pair<VerifiedRemote.Ok, Incoming>>()
         for (item in incoming) {
             when (val verified = verifier.verify(item.json, localMax)) {
                 is VerifiedRemote.Quarantined -> {
-                    dropHeld(item)
-                    storeRefused(item.json, verified, now, tally)
+                    val waitForPolicy = synced == null && verified.reason in POLICY_DEPENDENT &&
+                        LedgerJson.decodeOrNull(item.json)?.envelope?.authorRole == Role.PARENT
+                    if (waitForPolicy) {
+                        holdTree(item, HELD_POLICY_UNKNOWN, now, tally)
+                    } else {
+                        dropHeld(item)
+                        storeRefused(item.json, verified, now, tally)
+                    }
                 }
 
-                // Compile fix only (core/domain-ledger M3 review): keeps the previous behaviour, a quarantine. The
-                // data-layer follow-up keeps held events in ledger_inbox and retries them instead.
-                is VerifiedRemote.Held -> {
-                    dropHeld(item)
-                    val refused = with(verified) { VerifiedRemote.Quarantined(eventId, hash, authorDeviceId, reason) }
-                    storeRefused(item.json, refused, now, tally)
-                }
+                // The author device is not known yet or still pending (D-M3-31): wait for the registry.
+                is VerifiedRemote.Held -> holdTree(item, verified.reason.name, now, tally)
 
                 is VerifiedRemote.Ok -> accept(verified, item, ok, tally)
             }
@@ -555,6 +570,16 @@ class RoomLedgerRepository internal constructor(
         }
         return tally.report()
     }
+
+    /**
+     * The policy pulled events are verified under (D-M3-32): the household's **synced** `requireParentSignature`
+     * (the `household_policy` row, which the applier keeps equal to the `household_policy` document). Until that row
+     * exists the strict value applies, and a parent event that only the no-biometric exemption could let through is
+     * held rather than quarantined ([HELD_POLICY_UNKNOWN]), so the outcome never depends on whether the policy
+     * document happened to arrive first.
+     */
+    private fun remotePolicy(local: LedgerPolicy, synced: HouseholdPolicyEntity?): LedgerPolicy =
+        local.copy(requireParentSignature = synced?.requireParentSignature ?: true)
 
     /** Step 2 of [ingest]: a verified event already stored is a duplicate; the rest wait for planning in [ok]. */
     private suspend fun accept(
@@ -572,7 +597,10 @@ class RoomLedgerRepository internal constructor(
         }
     }
 
-    /** Steps 3 to 5 of [ingest] for the verified, not yet stored events in [ok]. */
+    /**
+     * Steps 3 to 5 of [ingest] for the verified, not yet stored events in [ok]: plan (forks first), quarantine the
+     * forked branches (stored ones and their stored descendants included), then apply in order.
+     */
     private suspend fun applyPlanned(
         ok: Map<Pair<EventId, String>, Pair<VerifiedRemote.Ok, Incoming>>,
         check: LocalEventCheck.Bound,
@@ -580,20 +608,68 @@ class RoomLedgerRepository internal constructor(
         now: Long,
         tally: IngestTally,
     ) {
+        val batch = ok.values.map { it.first.event }
+        val authors = batch.map { it.envelope.authorDeviceId }.toSet()
+        val plan = plan(batch, authors)
+        val storedForked = quarantineForkedStored(plan.forkedStored, authors, now)
+        val (forkedHeld, held) = forkedDescendants(plan.forked, plan.held)
+        for (event in plan.forked + forkedHeld) {
+            val (verified, item) = ok.getValue(event.eventId to event.envelope.hash)
+            dropHeld(item)
+            storeRemote(event, verified.json, now, FORKED, AuditAction.LEDGER_EVENT_QUARANTINED)
+            tally.quarantined++
+        }
+        // After the stored branches were quarantined, so neither they nor anything derived from them is folded.
         val folded = ArrayList(loadVerified(check, active).events)
-        val heads = ok.values.map { it.first.event.envelope.authorDeviceId }.toSet().associateWith { author ->
+        applyInOrder(plan.apply, ok, folded, active, now, tally)
+        held.forEach { event ->
+            val (verified, item) = ok.getValue(event.eventId to event.envelope.hash)
+            hold(event, verified.json, item, HELD_CHAIN_GAP, now, tally)
+        }
+        if (tally.applied > 0 || storedForked > 0) refreshCaches(project(folded, active), folded)
+    }
+
+    /**
+     * [IngestOrdering.plan] for [batch] (by [authors]) from the stored chain heads and the stored branches it may
+     * fork.
+     */
+    private suspend fun plan(batch: List<LedgerEvent>, authors: Set<DeviceId>): IngestPlan {
+        val heads = authors.associateWith { author ->
             events.headHash(author)?.let { hash -> StreamHead(hash, events.maxLamportFor(author) ?: 0) }
         }
-        val plan = IngestOrdering.plan(ok.values.map { it.first.event }, heads::get)
+        // Every (author, prevHash) the plan can ask about is one of the batch's own links.
+        val links = batch.map { it.envelope.authorDeviceId to it.envelope.prevHash }.toSet()
+        val branches = links.associateWith { (author, prevHash) ->
+            events.branchHashes(author, prevHash, FORKED, INVARIANT_QUARANTINE).toSet()
+        }
+        return IngestOrdering.plan(batch, heads::get) { author, prevHash -> branches[author to prevHash].orEmpty() }
+    }
+
+    /**
+     * Step 4 for the [planned] events in order, folding each stored one into [folded]. After an author's first event
+     * that is not stored, its later ones are held behind it ([HELD_AUTHOR_BLOCKED]).
+     */
+    @Suppress("LongParameterList") // The plan, its sources, the running fold and the tally.
+    private suspend fun applyInOrder(
+        planned: List<LedgerEvent>,
+        ok: Map<Pair<EventId, String>, Pair<VerifiedRemote.Ok, Incoming>>,
+        folded: MutableList<LedgerEvent>,
+        active: ActivePolicy,
+        now: Long,
+        tally: IngestTally,
+    ) {
         var projection = project(folded, active)
         val blocked = HashSet<DeviceId>()
-        for (event in plan.apply) {
+        for (event in planned) {
             val (verified, item) = ok.getValue(event.eventId to event.envelope.hash)
             val author = event.envelope.authorDeviceId
-            val outcome = if (author in blocked) RemoteOutcome.Held else applyRemote(verified, projection, now)
+            val outcome = when (author) {
+                in blocked -> RemoteOutcome.Held(HELD_AUTHOR_BLOCKED)
+                else -> applyRemote(verified, projection, now)
+            }
             if (outcome !is RemoteOutcome.Stored) blocked += author
             when (outcome) {
-                RemoteOutcome.Held -> hold(verified, item, now, tally)
+                is RemoteOutcome.Held -> hold(event, verified.json, item, outcome.reason, now, tally)
 
                 RemoteOutcome.Quarantined -> {
                     dropHeld(item)
@@ -609,11 +685,73 @@ class RoomLedgerRepository internal constructor(
                 }
             }
         }
-        plan.held.forEach { event ->
-            val (verified, item) = ok.getValue(event.eventId to event.envelope.hash)
-            hold(verified, item, now, tally)
+    }
+
+    /**
+     * Quarantines the stored events [IngestOrdering.plan] found on a forked branch ([forkedStored] hashes) and every
+     * stored event of the same author descending from them, as [QuarantineReason.FORKED_CHAIN], with an audit row
+     * each (D-M3-31). Rows already quarantined keep their reason. Returns how many rows were newly quarantined; the
+     * caller rebuilds the caches.
+     */
+    private suspend fun quarantineForkedStored(forkedStored: Set<String>, authors: Set<DeviceId>, now: Long): Int {
+        if (forkedStored.isEmpty()) return 0
+        var count = 0
+        for (author in authors) {
+            var level = events.byHashes(author, forkedStored.toList())
+            val seen = HashSet<String>()
+            while (level.isNotEmpty()) {
+                val fresh = level.filter { seen.add(it.hash) }
+                fresh.filterNot { it.quarantined }.forEach { row ->
+                    quarantineForked(row, now)
+                    count++
+                }
+                level = if (fresh.isEmpty()) emptyList() else events.childrenOf(author, fresh.map { it.hash })
+            }
         }
-        if (tally.applied > 0) refreshCaches(project(folded, active), folded)
+        return count
+    }
+
+    private suspend fun quarantineForked(row: LedgerEventEntity, now: Long) {
+        events.quarantine(row.eventId, row.hash, FORKED)
+        auditRemote(AuditAction.LEDGER_EVENT_QUARANTINED, row.authorUid, row.authorDeviceId, row.eventId.value, now) {
+            put("type", row.type)
+            put("hash", row.hash)
+            put("kidId", row.kidId.value)
+            put("accountId", row.accountId.value)
+            put("lamport", row.lamport)
+            put("role", row.authorRole.name)
+            put("reason", FORKED)
+        }
+    }
+
+    /**
+     * Splits [held] into the events that descend (by `prevHash`, transitively) from a forked branch, which are
+     * quarantined with it, and the rest, which stay held. A forked branch is one of [forked] or a stored row of the
+     * same author already quarantined as [QuarantineReason.FORKED_CHAIN]; without this, an event extending a
+     * quarantined branch would wait in the inbox forever (the stored head no longer includes that branch).
+     */
+    private suspend fun forkedDescendants(
+        forked: List<LedgerEvent>,
+        held: List<LedgerEvent>,
+    ): Pair<List<LedgerEvent>, List<LedgerEvent>> {
+        if (held.isEmpty()) return emptyList<LedgerEvent>() to held
+        val branches = HashMap<DeviceId, MutableSet<String>>()
+        suspend fun branchesOf(author: DeviceId): MutableSet<String> =
+            branches.getOrPut(author) { events.quarantinedHashes(author, FORKED).toHashSet() }
+        for (event in forked) branchesOf(event.envelope.authorDeviceId) += event.envelope.hash
+        val descendants = ArrayList<LedgerEvent>()
+        var remaining = held
+        while (true) {
+            val (found, rest) = remaining.partition { event ->
+                val prevHash = event.envelope.prevHash
+                prevHash != null && prevHash in branchesOf(event.envelope.authorDeviceId)
+            }
+            if (found.isEmpty()) break
+            found.forEach { branchesOf(it.envelope.authorDeviceId) += it.envelope.hash }
+            descendants += found
+            remaining = rest
+        }
+        return descendants to remaining
     }
 
     /** Removes [item] from `ledger_inbox` if it came from there. */
@@ -639,14 +777,14 @@ class RoomLedgerRepository internal constructor(
             tally.quarantined++
             null
         } else {
-            Incoming(json, row.eventId to row.hash)
+            Incoming(json, row.eventId to row.hash, row.reason)
         }
     }
 
     private sealed interface RemoteOutcome {
         data class Stored(val conflict: Boolean) : RemoteOutcome
 
-        data object Held : RemoteOutcome
+        data class Held(val reason: String) : RemoteOutcome
 
         data object Quarantined : RemoteOutcome
     }
@@ -661,7 +799,7 @@ class RoomLedgerRepository internal constructor(
         }
         val violations = (LedgerRules.validate(event, before) as? ValidationResult.Invalid)?.violations.orEmpty()
         return when {
-            violations.any { it is Violation.UnknownAccount } -> RemoteOutcome.Held
+            violations.any { it is Violation.UnknownAccount } -> RemoteOutcome.Held(HELD_UNKNOWN_ACCOUNT)
 
             violations.any { !it.isOrderDependent() } -> {
                 val reason = INVARIANT_QUARANTINE + violations.joinToString(",") { it::class.simpleName.orEmpty() }
@@ -676,21 +814,62 @@ class RoomLedgerRepository internal constructor(
         }
     }
 
-    /** Keeps [verified] in `ledger_inbox` (a no-op when it is already there). */
-    private suspend fun hold(verified: VerifiedRemote.Ok, incoming: Incoming, now: Long, tally: IngestTally) {
-        if (incoming.heldKey != null) return
-        val envelope = verified.event.envelope
+    /**
+     * Holds a document the verifier could not decide yet ([reason]); it decoded (the verifier only holds or
+     * policy-holds decodable trees), so its ids come from the decoded envelope.
+     */
+    private suspend fun holdTree(item: Incoming, reason: String, now: Long, tally: IngestTally) {
+        val event = LedgerJson.decodeOrNull(item.json) ?: return
+        hold(event, item.json, item, reason, now, tally)
+    }
+
+    /**
+     * Keeps [event] (its pulled [tree]) in `ledger_inbox` with [reason]. A row already there keeps its place and
+     * gets the new reason; a new row may push its author over [MAX_HELD_PER_AUTHOR], and then that author's oldest
+     * rows are dropped (audited [AuditAction.HELD_DROPPED]).
+     */
+    @Suppress("LongParameterList") // The held row's fields and the running tally.
+    private suspend fun hold(
+        event: LedgerEvent,
+        tree: JsonObject,
+        incoming: Incoming,
+        reason: String,
+        now: Long,
+        tally: IngestTally,
+    ) {
+        val envelope = event.envelope
+        if (incoming.heldKey != null) {
+            if (incoming.heldReason != reason) inbox.updateReason(envelope.eventId, envelope.hash, reason)
+            return
+        }
         val inserted = inbox.insertIfAbsent(
             LedgerInboxEntity(
                 eventId = envelope.eventId,
                 hash = envelope.hash,
-                payloadJson = LedgerJson.json.encodeToString(JsonObject.serializer(), verified.json),
+                payloadJson = LedgerJson.json.encodeToString(JsonObject.serializer(), tree),
                 authorDeviceId = envelope.authorDeviceId,
                 lamport = envelope.lamport,
                 receivedAtEpochMs = now,
+                reason = reason,
             ),
         )
-        if (inserted != NOT_INSERTED) tally.newlyHeld++ else tally.duplicates++
+        if (inserted == NOT_INSERTED) {
+            tally.duplicates++
+            return
+        }
+        tally.newlyHeld++
+        val excess = inbox.countFor(envelope.authorDeviceId) - MAX_HELD_PER_AUTHOR
+        if (excess > 0) {
+            for (row in inbox.oldestFor(envelope.authorDeviceId, excess)) {
+                inbox.delete(row.eventId, row.hash)
+                auditRemote(AuditAction.HELD_DROPPED, LocalTrial.PARENT, row.authorDeviceId, row.eventId.value, now) {
+                    put("kind", "event")
+                    put("hash", row.hash)
+                    put("lamport", row.lamport)
+                    row.reason?.let { put("reason", it) }
+                }
+            }
+        }
     }
 
     /**
@@ -800,6 +979,32 @@ class RoomLedgerRepository internal constructor(
 
         /** Prefix of the quarantine reason of a pulled event that broke an order-independent ledger rule. */
         const val INVARIANT_QUARANTINE: String = "invariant violated: "
+
+        /** Most rows `ledger_inbox` keeps per author device; beyond it the oldest are dropped (audited). */
+        const val MAX_HELD_PER_AUTHOR: Int = 500
+
+        /** `ledger_inbox.reason`: the event does not link to its author's stored chain yet (a gap before it). */
+        const val HELD_CHAIN_GAP: String = "CHAIN_GAP"
+
+        /** `ledger_inbox.reason`: the event names an account this device does not know yet. */
+        const val HELD_UNKNOWN_ACCOUNT: String = "UNKNOWN_ACCOUNT"
+
+        /** `ledger_inbox.reason`: an earlier event of the same author in this ingest was quarantined or held. */
+        const val HELD_AUTHOR_BLOCKED: String = "AUTHOR_BLOCKED"
+
+        /**
+         * `ledger_inbox.reason`: a parent event without a valid parent signature, and the synced household policy
+         * (whether this household requires one, D-M3-32) has not arrived yet.
+         */
+        const val HELD_POLICY_UNKNOWN: String = "POLICY_UNKNOWN"
+
+        private val FORKED = QuarantineReason.FORKED_CHAIN.name
+
+        /** Verifier outcomes the household's synced `requireParentSignature` can change. */
+        private val POLICY_DEPENDENT = setOf(
+            QuarantineReason.PARENT_SIGNATURE_MISSING,
+            QuarantineReason.PARENT_SIGNATURE_INVALID,
+        )
 
         private const val UNKNOWN_REASON = "unknown"
         private const val UNKNOWN_TARGET = "unknown"

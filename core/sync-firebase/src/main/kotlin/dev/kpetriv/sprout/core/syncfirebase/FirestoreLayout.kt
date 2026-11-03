@@ -9,7 +9,7 @@ import dev.kpetriv.sprout.core.sync.DocTypes
  * ```
  * households/{hid}
  *   devices/{deviceId}         registry, written by Cloud Functions
- *   parentKeys/{fingerprint}   registry; parent_key documents are stored here
+ *   parentKeys/{fingerprint}   registry, written by the server only (registerParentKey, D-M3-34)
  *   events/{eventId}           ledger events, create-only; a conflicting copy goes to events/{eventId}__{hash}
  *   kids/{docId}, accounts/…   one collection per document type (see [collectionOf])
  * ```
@@ -44,8 +44,8 @@ object FirestoreLayout {
     fun collectionOf(docType: String): String? = collectionByDocType[docType]
 
     /**
-     * The plain document collections (every type except [DocTypes.PARENT_KEY], which lives in [PARENT_KEYS]) in
-     * [DocTypes.applyOrder], paired with their type.
+     * The plain document collections (every type except [DocTypes.PARENT_KEY]: parent keys are registry entries in
+     * [PARENT_KEYS], never synced as documents) in [DocTypes.applyOrder], paired with their type.
      */
     val documentCollections: List<Pair<String, String>> = DocTypes.all
         .filter { it != DocTypes.PARENT_KEY }

@@ -38,20 +38,31 @@ import javax.inject.Singleton
  * by reading the server copy: an event already stored under the same hash, or a document whose server copy beats or
  * equals this one ([ConflictResolver]), is accepted (pushes are idempotent); an event whose id is taken by a
  * different hash is stored as the conflicting copy `events/{eventId}__{hash}`; anything else is
- * `Permanent("permission-denied")`. A refusal while `households/{hid}` itself is unreadable means the household or
- * this member is gone ([SyncError.HouseholdGone]).
+ * `Permanent("permission-denied")`. Parent keys are never pushed: the server registers them (`registerParentKey`,
+ * D-M3-34) and the rules refuse client writes, so a `parent_key` document is `Permanent("unsupported")` unsent.
+ *
+ * **Household gone** needs positive evidence ([membership]), because a bare `PERMISSION_DENIED` also follows a
+ * revoked session (sign in again), a rules deploy or a clock skew: the account is gone ([AuthState.UserGone] from a
+ * forced ID-token refresh), the `hid` claim is gone after that refresh, or this device's own `devices/{deviceId}` entry
+ * reads `REVOKED`. Then [SyncError.HouseholdGone]. A refusal while `households/{hid}` is readable is the item's own
+ * (permanent); an unreadable household without such evidence is [SyncError.Transient].
  *
  * **Pull** reads the registry in full (devices and parent keys are small and change in place, so their cursor is a
  * digest of the collection), then each document collection in [DocTypes.applyOrder], then events, each by
- * `(serverReceivedAt, document id)` after its cursor, [pageSize] per collection.
+ * `(serverReceivedAt, document id)` after its cursor, [pageSize] per collection. Parent keys come back as registry
+ * entries only.
  *
  * **Changes** come from snapshot listeners, open only while [foreground] is true.
  */
 @Singleton
-class FirebaseSyncTransport internal constructor(
+@Suppress("TooManyFunctions") // Push, pull, changes and the membership check.
+class FirebaseSyncTransport
+@Suppress("LongParameterList")
+internal constructor(
     private val firestore: FirestoreFacade,
     private val household: HouseholdScope,
     private val foreground: Flow<Boolean>,
+    private val authProbe: AuthProbe,
     private val pageSize: Int,
     private val batchSize: Int,
     private val callTimeoutMs: Long,
@@ -62,7 +73,8 @@ class FirebaseSyncTransport internal constructor(
         firestore: FirestoreFacade,
         household: HouseholdScope,
         @AppForeground foreground: Flow<Boolean>,
-    ) : this(firestore, household, foreground, PAGE_SIZE, MAX_BATCH_WRITES, CALL_TIMEOUT_MS)
+        authProbe: AuthProbe,
+    ) : this(firestore, household, foreground, authProbe, PAGE_SIZE, MAX_BATCH_WRITES, CALL_TIMEOUT_MS)
 
     init {
         require(pageSize > 0) { "pageSize must be positive" }
@@ -119,14 +131,23 @@ class FirebaseSyncTransport internal constructor(
             }
 
             failure in ITEM_LEVEL_CODES -> {
-                if (failure == FirestoreCode.PERMISSION_DENIED && householdGone(hid)) {
-                    throw SyncException(SyncError.HouseholdGone)
+                val denied = failure == FirestoreCode.PERMISSION_DENIED
+                when (if (denied) membership(hid) else Membership.READABLE) {
+                    Membership.GONE -> throw SyncException(SyncError.HouseholdGone)
+
+                    // Nothing says which item is at fault, or that any is: retry the whole push later.
+                    Membership.UNCONFIRMED -> {
+                        chunk.forEach { rejected += it.id to SyncError.Transient() }
+                        false
+                    }
+
+                    Membership.READABLE -> settleOneByOne(hid, chunk, accepted, rejected)
                 }
-                settleOneByOne(hid, chunk, accepted, rejected)
             }
 
             else -> {
-                val error = syncErrorOf(failure)
+                val error = unauthenticatedOrGone(failure)
+                if (error == SyncError.HouseholdGone) throw SyncException(error)
                 chunk.forEach { rejected += it.id to error }
                 false
             }
@@ -198,11 +219,7 @@ class FirebaseSyncTransport internal constructor(
     @Suppress("ReturnCount")
     private suspend fun resolveRefusedDocument(item: PendingWrite.Document): ItemOutcome {
         val stored = readOrOutcome(item.path) { return it } ?: return ItemOutcome.Rejected(PERMISSION_DENIED)
-        val server = if (item.envelope.docType == DocTypes.PARENT_KEY) {
-            StoredShapes.parentKeyEnvelopeOf(stored.data)
-        } else {
-            StoredShapes.documentOf(stored.data)
-        }
+        val server = StoredShapes.documentOf(stored.data)
         val serverWins = server != null &&
             ConflictResolver.resolve(StoredDocument.of(server), item.envelope) == ConflictResolver.Decision.Ignore
         return if (serverWins) ItemOutcome.Accepted else ItemOutcome.Rejected(PERMISSION_DENIED)
@@ -242,10 +259,10 @@ class FirebaseSyncTransport internal constructor(
 
             envelope.householdId != hid -> return Either.Rejected(id to SyncError.Permanent(WRONG_HOUSEHOLD))
 
-            envelope.signature == null -> return Either.Rejected(id to SyncError.Permanent(UNSIGNED))
+            // Server-registered only (D-M3-34): the rules refuse a client write to parentKeys.
+            envelope.docType == DocTypes.PARENT_KEY -> return Either.Rejected(id to SyncError.Permanent(UNSUPPORTED))
 
-            envelope.docType == DocTypes.PARENT_KEY -> StoredShapes.parentKeyFields(envelope)
-                ?: return Either.Rejected(id to SyncError.Permanent(MALFORMED))
+            envelope.signature == null -> return Either.Rejected(id to SyncError.Permanent(UNSIGNED))
 
             else -> StoredShapes.documentFields(envelope)
         }
@@ -297,12 +314,6 @@ class FirebaseSyncTransport internal constructor(
         val parentKeys = if (keysDigest == cursor.perCollection[FirestoreLayout.PARENT_KEYS]) {
             emptyList()
         } else {
-            documents += keyDocs.mapNotNull { doc ->
-                StoredShapes.parentKeyEnvelopeOf(doc.data)?.takeIf {
-                    it.docType == DocTypes.PARENT_KEY &&
-                        it.docId == doc.id
-                }
-            }
             keyDocs.mapNotNull(StoredShapes::parentKeyOf)
         }
         next[FirestoreLayout.PARENT_KEYS] = keysDigest
@@ -380,22 +391,77 @@ class FirebaseSyncTransport internal constructor(
         failure.code
     }
 
+    /** What a refusal says about this member's place in household [HouseholdId] ([membership]). */
+    private enum class Membership {
+        /** Positive evidence that the household or this member is gone: wipe. */
+        GONE,
+
+        /** `households/{hid}` is readable: the member is fine and the refusal is about the item. */
+        READABLE,
+
+        /** Unreadable, but nothing proves the member is gone (a revoked session, a rules change, offline). */
+        UNCONFIRMED,
+    }
+
     /**
-     * Whether the household is gone for this member: `households/{hid}` does not exist or is no longer readable
-     * (deleted household, revoked membership). An inconclusive check (offline) is not "gone".
+     * Decides what a `PERMISSION_DENIED` means, from positive evidence only:
+     * 1. a forced ID-token refresh ([AuthProbe]) says the account was deleted or disabled ([AuthState.UserGone]), or
+     *    the refreshed claims no longer name [hid] (the `hid` claim was removed);
+     * 2. this device's own `devices/{deviceId}` entry ([HouseholdScope.currentDeviceId]) reads `REVOKED`;
+     * then [Membership.GONE]. Otherwise [Membership.READABLE] when `households/{hid}` can be read, else
+     * [Membership.UNCONFIRMED]. A check that cannot be made (offline, refresh failed) is not evidence.
      */
-    private suspend fun householdGone(hid: HouseholdId): Boolean = try {
-        call { get(FirestoreLayout.household(hid)) } == null
-    } catch (failure: FirestoreFailure) {
-        failure.code == FirestoreCode.PERMISSION_DENIED || failure.code == FirestoreCode.NOT_FOUND
+    private suspend fun membership(hid: HouseholdId): Membership {
+        val auth = authProbe.refreshedState()
+        val gone = when (auth) {
+            AuthState.UserGone -> true
+            is AuthState.SignedIn -> auth.claims.hid != hid
+            AuthState.SignedOut, null -> false
+        }
+        return when {
+            gone || ownDeviceRevoked(hid) -> Membership.GONE
+            householdReadable(hid) -> Membership.READABLE
+            else -> Membership.UNCONFIRMED
+        }
+    }
+
+    private suspend fun ownDeviceRevoked(hid: HouseholdId): Boolean {
+        val deviceId = household.currentDeviceId() ?: return false
+        return try {
+            call { get(FirestoreLayout.document(hid, FirestoreLayout.DEVICES, deviceId.value)) }
+                ?.data?.get("status") == REVOKED
+        } catch (expected: FirestoreFailure) {
+            false
+        }
+    }
+
+    private suspend fun householdReadable(hid: HouseholdId): Boolean = try {
+        call { get(FirestoreLayout.household(hid)) } != null
+    } catch (expected: FirestoreFailure) {
+        false
     }
 
     private suspend fun readErrorOf(hid: HouseholdId, code: FirestoreCode): SyncError = when (code) {
-        FirestoreCode.PERMISSION_DENIED, FirestoreCode.NOT_FOUND ->
-            if (householdGone(hid)) SyncError.HouseholdGone else syncErrorOf(code)
+        FirestoreCode.PERMISSION_DENIED, FirestoreCode.NOT_FOUND -> when (membership(hid)) {
+            Membership.GONE -> SyncError.HouseholdGone
+            Membership.READABLE -> syncErrorOf(code)
+            Membership.UNCONFIRMED -> SyncError.Transient()
+        }
 
-        else -> syncErrorOf(code)
+        else -> unauthenticatedOrGone(code)
     }
+
+    /**
+     * [syncErrorOf], except that `UNAUTHENTICATED` from an account that a forced refresh finds deleted or disabled
+     * ([AuthState.UserGone]) is [SyncError.HouseholdGone]: a deleted household deletes its members' accounts, so
+     * their tokens stop refreshing before any rule is evaluated.
+     */
+    private suspend fun unauthenticatedOrGone(code: FirestoreCode): SyncError =
+        if (code == FirestoreCode.UNAUTHENTICATED && authProbe.refreshedState() == AuthState.UserGone) {
+            SyncError.HouseholdGone
+        } else {
+            syncErrorOf(code)
+        }
 
     companion object {
         /** Firestore allows 500 writes per batch; 400 leaves room (M3 §5). */
@@ -411,6 +477,11 @@ class FirebaseSyncTransport internal constructor(
         const val WRONG_HOUSEHOLD: String = "wrong-household"
         const val UNKNOWN_DOC_TYPE: String = "unknown-doc-type"
         const val UNSIGNED: String = "unsigned"
+
+        /** A `parent_key` document: parent keys are registered by the server only (D-M3-34). */
+        const val UNSUPPORTED: String = "unsupported"
+
+        private const val REVOKED = "REVOKED"
 
         private val PERMISSION_DENIED = SyncError.Permanent("permission-denied")
 

@@ -63,7 +63,11 @@ sealed class FunctionsError(val code: String) {
     }
 }
 
-/** [CallableInvoker] over `FirebaseFunctions.getInstance(app, region)`. */
+/**
+ * [CallableInvoker] over `FirebaseFunctions.getInstance(app, regionOrCustomDomain)`: the custom domain
+ * [FirebaseConfig.functionsBaseUrl] when set (D-M3-29: an HTTP service speaking the callable protocol), else Cloud
+ * Functions in [FirebaseConfig.region] ([FirebaseConfig.functionsEndpoint]).
+ */
 @Singleton
 class FirebaseCallableInvoker @Inject constructor(
     private val bootstrap: FirebaseBootstrap,
@@ -71,7 +75,7 @@ class FirebaseCallableInvoker @Inject constructor(
     @param:ApplicationContext private val context: Context,
 ) : CallableInvoker {
     private val functions: FirebaseFunctions by lazy {
-        FirebaseFunctions.getInstance(bootstrap.ensureInitialised(context), config.region)
+        FirebaseFunctions.getInstance(bootstrap.ensureInitialised(context), config.functionsEndpoint.value)
     }
 
     @Suppress("SwallowedException") // The SDK exception's message may echo request data; only the code is kept.

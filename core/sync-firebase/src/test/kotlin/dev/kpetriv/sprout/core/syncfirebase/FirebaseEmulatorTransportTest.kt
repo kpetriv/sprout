@@ -6,6 +6,7 @@ import dev.kpetriv.sprout.core.model.HouseholdId
 import dev.kpetriv.sprout.core.sync.DocTypes
 import dev.kpetriv.sprout.core.sync.RemoteChange
 import dev.kpetriv.sprout.core.sync.SyncCursor
+import dev.kpetriv.sprout.core.sync.code
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
@@ -71,16 +72,24 @@ class FirebaseEmulatorTransportTest {
     @Test
     fun pushPullAndListenAgainstTheEmulator() {
         val config = FirebaseConfig(emulatorHost = HOST, debugAppCheck = true)
-        val bootstrap = FirebaseBootstrap(config)
+        val bootstrap = FirebaseBootstrap(config, PortedEmulators)
         val session = FirebaseAuthSession(bootstrap, config, context)
         blocking { session.signInAnonymously().getOrThrow() }
         val uid = (blocking { session.current() } as AuthState.SignedIn).uid.value
         seedHousehold(uid)
+        // The claims the backend sets on joining (the transport treats a missing hid claim as "gone").
+        http(
+            "POST",
+            "$AUTH/identitytoolkit.googleapis.com/v1/projects/$PROJECT/accounts:update",
+            "{\"localId\":\"$uid\",\"customAttributes\":\"{\\\"hid\\\":\\\"$HID\\\",\\\"role\\\":\\\"PARENT\\\"}\"}",
+        )
+        assertEquals(HouseholdId(HID), blocking { session.refreshClaims().getOrThrow() }.hid)
 
         val transport = FirebaseSyncTransport(
             firestore = SdkFirestoreFacade(bootstrap, context),
             household = { HouseholdId(HID) },
             foreground = MutableStateFlow(true),
+            authProbe = session,
             pageSize = 2,
             batchSize = FirebaseSyncTransport.MAX_BATCH_WRITES,
             callTimeoutMs = 20_000,
@@ -92,14 +101,37 @@ class FirebaseEmulatorTransportTest {
         assertChangesSeeRemoteWrite(transport)
     }
 
-    /** Pushes three events and two documents (twice: idempotent), a conflicting event copy and a parent key. */
+    /**
+     * Pushes three events and two documents (twice: idempotent) and a conflicting event copy. A parent key is never
+     * pushed (the rules deny it, D-M3-34): it is seeded as the server would write it.
+     */
     private fun pushEverything(transport: FirebaseSyncTransport, uid: String): List<JsonObject> {
         val events = (1..3).map {
             TestData.event("evt-$it", lamport = it.toLong(), hid = HID, uid = uid, device = DEVICE)
         }
+        // Payloads within the rules' closed key sets for their collection.
         val documents = listOf(
-            TestData.document(docType = DocTypes.CHORE, docId = "chore-1", hid = HouseholdId(HID), uid = uid),
-            TestData.document(docType = DocTypes.REWARD, docId = "reward-1", hid = HouseholdId(HID), uid = uid),
+            TestData.document(
+                docType = DocTypes.CHORE,
+                docId = "chore-1",
+                hid = HouseholdId(HID),
+                uid = uid,
+                payload = buildJsonObject {
+                    put("id", "chore-1")
+                    put("title", "Feed the cat")
+                },
+            ),
+            TestData.document(
+                docType = DocTypes.REWARD,
+                docId = "reward-1",
+                hid = HouseholdId(HID),
+                uid = uid,
+                payload = buildJsonObject {
+                    put("id", "reward-1")
+                    put("title", "Treat")
+                    put("cost", 100)
+                },
+            ),
         )
         val pushed = blocking { transport.push(events, documents) }
         assertEquals(5, pushed.accepted.size, "rejected: ${pushed.rejected}")
@@ -108,20 +140,25 @@ class FirebaseEmulatorTransportTest {
         val again = blocking { transport.push(events, documents) }
         assertEquals(5, again.accepted.size, "rejected: ${again.rejected}")
 
-        // A second copy of evt-1 with another hash is kept as evidence; a parent key goes to parentKeys.
+        // A second copy of evt-1 with another hash is kept as evidence (from a parent member).
         val conflicting = TestData.event("evt-1", hash = TestData.hash(99), hid = HID, uid = uid, device = DEVICE)
-        val parentKey = TestData.document(
-            docType = DocTypes.PARENT_KEY,
-            docId = FINGERPRINT,
-            hid = HouseholdId(HID),
-            uid = uid,
-            payload = buildJsonObject {
-                put("publicKey", "AQID")
-                put("validFromLamport", 4)
-            },
+        val extra = blocking { transport.push(listOf(conflicting), emptyList()) }
+        assertEquals(1, extra.accepted.size, "rejected: ${extra.rejected}")
+
+        // A parent_key document is refused unsent; the server-written key is seeded instead.
+        val parentKey = TestData.parentKeyDocument(FINGERPRINT).copy(householdId = HouseholdId(HID))
+        val refused = blocking { transport.push(emptyList(), listOf(parentKey)) }
+        assertEquals(listOf(FirebaseSyncTransport.UNSUPPORTED), refused.rejected.map { it.second.code })
+        seed(
+            "households/$HID/parentKeys?documentId=$FINGERPRINT",
+            mapOf(
+                "publicKey" to str("AQID"),
+                "uid" to str(uid),
+                "deviceId" to str(DEVICE),
+                "validFromLamport" to mapOf("integerValue" to "4"),
+                "attestation" to str("NONE"),
+            ),
         )
-        val extra = blocking { transport.push(listOf(conflicting), listOf(parentKey)) }
-        assertEquals(2, extra.accepted.size, "rejected: ${extra.rejected}")
         return events + conflicting
     }
 
@@ -142,7 +179,7 @@ class FirebaseEmulatorTransportTest {
             pages++
         } while (page.hasMore && pages < MAX_PAGES)
         assertEquals(events, pulledEvents, "events come back as the tree that was hashed")
-        assertEquals(setOf("chore-1", "reward-1", FINGERPRINT), pulledDocuments.toSet())
+        assertEquals(setOf("chore-1", "reward-1"), pulledDocuments.toSet())
         assertEquals(listOf(FINGERPRINT), pulledKeys)
         assertTrue(pages >= 2, "four events at two per page need a second page")
     }
@@ -226,11 +263,28 @@ class FirebaseEmulatorTransportTest {
         Thread.sleep(POLL_MS)
     }
 
+    /**
+     * The debug [Emulators] wiring on the ports in `SPROUT_EMULATOR_FIRESTORE_PORT` / `SPROUT_EMULATOR_AUTH_PORT`
+     * (default: the standard ports), so the suite can run against a second Emulator Suite next to one already using
+     * the standard ports.
+     */
+    private object PortedEmulators : EmulatorSupport by Emulators {
+        override fun connect(app: com.google.firebase.FirebaseApp, config: FirebaseConfig) {
+            val host = config.emulatorHost ?: return
+            com.google.firebase.auth.FirebaseAuth.getInstance(app).useEmulator(host, AUTH_PORT)
+            com.google.firebase.firestore.FirebaseFirestore.getInstance(app).useEmulator(host, FIRESTORE_PORT)
+        }
+    }
+
     private companion object {
         const val HOST = "127.0.0.1"
         const val PROJECT = FirebaseBootstrap.DEMO_PROJECT_ID
-        const val FIRESTORE = "http://$HOST:${FirebaseBootstrap.FIRESTORE_EMULATOR_PORT}"
-        const val AUTH = "http://$HOST:${FirebaseBootstrap.AUTH_EMULATOR_PORT}"
+        val FIRESTORE_PORT: Int =
+            System.getenv("SPROUT_EMULATOR_FIRESTORE_PORT")?.toIntOrNull() ?: FirebaseBootstrap.FIRESTORE_EMULATOR_PORT
+        val AUTH_PORT: Int =
+            System.getenv("SPROUT_EMULATOR_AUTH_PORT")?.toIntOrNull() ?: FirebaseBootstrap.AUTH_EMULATOR_PORT
+        val FIRESTORE = "http://$HOST:$FIRESTORE_PORT"
+        val AUTH = "http://$HOST:$AUTH_PORT"
         const val HID = "h1"
         val DEVICE = "a".repeat(64)
         val FINGERPRINT = "c".repeat(64)

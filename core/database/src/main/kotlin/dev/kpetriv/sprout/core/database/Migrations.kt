@@ -38,7 +38,18 @@ object Migrations {
         }
     }
 
-    val ALL: Array<Migration> = arrayOf(MIGRATION_1_2, MIGRATION_2_3)
+    /**
+     * Version 3 to 4 (M3 fix pass, D-M3-31). Purely additive: `ledger_inbox.reason` and `document_inbox.authorDeviceId`
+     * (both null for existing rows; a held event gets its reason on the next retry) and an index on the latter for
+     * the per-author cap on held rows.
+     */
+    val MIGRATION_3_4: Migration = object : Migration(3, 4) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            VERSION_4_STATEMENTS.forEach(db::execSQL)
+        }
+    }
+
+    val ALL: Array<Migration> = arrayOf(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
 
     private val VERSION_2_STATEMENTS = listOf(
         "ALTER TABLE `ledger_events` ADD COLUMN `parentSignature` TEXT",
@@ -142,4 +153,10 @@ object Migrations {
                 "`householdId` TEXT NOT NULL, `role` TEXT NOT NULL, `kidId` TEXT, `deviceId` TEXT NOT NULL, " +
                 "`deviceStatus` TEXT NOT NULL, `signedInAtEpochMs` INTEGER NOT NULL, PRIMARY KEY(`id`))",
         )
+
+    private val VERSION_4_STATEMENTS: List<String> = listOf(
+        "ALTER TABLE `ledger_inbox` ADD COLUMN `reason` TEXT",
+        "ALTER TABLE `document_inbox` ADD COLUMN `authorDeviceId` TEXT",
+        "CREATE INDEX IF NOT EXISTS `index_document_inbox_authorDeviceId` ON `document_inbox` (`authorDeviceId`)",
+    )
 }

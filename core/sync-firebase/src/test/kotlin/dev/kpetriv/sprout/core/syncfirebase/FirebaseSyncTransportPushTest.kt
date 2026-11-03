@@ -1,5 +1,6 @@
 package dev.kpetriv.sprout.core.syncfirebase
 
+import dev.kpetriv.sprout.core.model.DeviceId
 import dev.kpetriv.sprout.core.model.HouseholdId
 import dev.kpetriv.sprout.core.sync.DocTypes
 import dev.kpetriv.sprout.core.sync.PushItemId
@@ -21,10 +22,19 @@ class FirebaseSyncTransportPushTest {
     private val firestore = FakeFirestore()
     private var hid: HouseholdId? = HID
 
+    /** What a forced token refresh returns; a member of [HID] by default. */
+    private var refreshed: AuthState? = TestData.member()
+    private var deviceId: DeviceId? = DeviceId(TestData.DEVICE)
+
     private fun transport(batchSize: Int = FirebaseSyncTransport.MAX_BATCH_WRITES) = FirebaseSyncTransport(
         firestore = firestore,
-        household = { hid },
+        household = object : HouseholdScope {
+            override suspend fun currentHouseholdId() = hid
+
+            override suspend fun currentDeviceId() = deviceId
+        },
         foreground = MutableStateFlow(true),
+        authProbe = { refreshed },
         pageSize = FirebaseSyncTransport.PAGE_SIZE,
         batchSize = batchSize,
         callTimeoutMs = 5_000,
@@ -102,28 +112,16 @@ class FirebaseSyncTransportPushTest {
     }
 
     @Test
-    fun `a parent key document is stored in parentKeys with the signed envelope`() = runTest {
+    fun `a parent key document is never written - keys are registered by the server`() = runTest {
         val key = TestData.parentKeyDocument()
+        val unsigned = TestData.document(docType = DocTypes.PARENT_KEY, docId = "c".repeat(64), signature = null)
 
-        val result = transport().push(emptyList(), listOf(key))
+        val result = transport().push(emptyList(), listOf(key, unsigned))
 
-        assertEquals(1, result.accepted.size)
-        val stored = firestore.docs.getValue("households/h1/parentKeys/${"c".repeat(64)}")
-        assertEquals("AAAA", stored["publicKey"])
-        assertEquals(TestData.UID, stored["uid"])
-        assertEquals(TestData.DEVICE, stored["deviceId"])
-        assertEquals(7L, stored["validFromLamport"])
-        assertTrue(stored["registeredAt"] is ServerTime)
-        assertEquals("parent_key", (stored["envelope"] as Map<*, *>)["docType"])
-    }
-
-    @Test
-    fun `a parent key document without its key fields is rejected unsent`() = runTest {
-        val bad = TestData.document(docType = DocTypes.PARENT_KEY, docId = "c".repeat(64))
-
-        val result = transport().push(emptyList(), listOf(bad))
-
-        assertEquals(listOf(PushItemId.ofDocument(bad) to SyncError.Permanent("malformed")), result.rejected)
+        assertEquals(
+            listOf(key, unsigned).map { PushItemId.ofDocument(it) to SyncError.Permanent("unsupported") },
+            result.rejected,
+        )
         assertTrue(firestore.commits.isEmpty())
     }
 
@@ -203,9 +201,23 @@ class FirebaseSyncTransportPushTest {
     }
 
     @Test
-    fun `a refusal while the household is unreadable means the household is gone`() = runTest {
+    fun `a bare refusal while the household is unreadable is transient, not gone`() = runTest {
         firestore.rule = { _, _ -> FirestoreCode.PERMISSION_DENIED }
         firestore.readFailures["households/h1"] = FirestoreCode.PERMISSION_DENIED
+        val event = TestData.event("evt-1")
+
+        val result = transport().push(listOf(event), listOf(TestData.document()))
+
+        assertEquals(listOf(SyncError.Transient(), SyncError.Transient()), result.rejected.map { it.second })
+        // The household document does not exist (or reads as such): still no evidence.
+        firestore.readFailures.clear()
+        assertEquals(SyncError.Transient(), transport().push(listOf(event), emptyList()).rejected.single().second)
+    }
+
+    @Test
+    fun `a refusal is household gone when a forced refresh finds the account deleted or disabled`() = runTest {
+        firestore.rule = { _, _ -> FirestoreCode.PERMISSION_DENIED }
+        refreshed = AuthState.UserGone
 
         val failure = assertFailsWith<SyncException> { transport().push(listOf(TestData.event("evt-1")), emptyList()) }
 
@@ -213,11 +225,42 @@ class FirebaseSyncTransportPushTest {
     }
 
     @Test
-    fun `a refusal when the household document does not exist means the household is gone`() = runTest {
+    fun `a refusal is household gone when the hid claim is gone after a forced refresh`() = runTest {
         firestore.rule = { _, _ -> FirestoreCode.PERMISSION_DENIED }
+        firestore.seed("households/h1", mapOf("createdBy" to "x"))
+        refreshed = TestData.member(hid = null)
 
         val failure = assertFailsWith<SyncException> { transport().push(emptyList(), listOf(TestData.document())) }
 
+        assertEquals(SyncError.HouseholdGone, failure.error)
+    }
+
+    @Test
+    fun `a refusal is household gone when this device reads as revoked in the registry`() = runTest {
+        firestore.rule = { _, _ -> FirestoreCode.PERMISSION_DENIED }
+        firestore.seed("households/h1", mapOf("createdBy" to "x"))
+        firestore.seed("households/h1/devices/${TestData.DEVICE}", mapOf("status" to "REVOKED"))
+
+        val failure = assertFailsWith<SyncException> { transport().push(listOf(TestData.event("evt-1")), emptyList()) }
+
+        assertEquals(SyncError.HouseholdGone, failure.error)
+        // Without a device id to look up, the same refusal is the item's own.
+        deviceId = null
+        val result = transport().push(listOf(TestData.event("evt-1")), emptyList())
+        assertEquals(SyncError.Permanent("permission-denied"), result.rejected.single().second)
+    }
+
+    @Test
+    fun `an unauthenticated write is household gone only when the account is gone`() = runTest {
+        firestore.commitFailures += FirestoreCode.UNAUTHENTICATED
+        assertEquals(
+            SyncError.Unauthenticated,
+            transport().push(listOf(TestData.event("evt-1")), emptyList()).rejected.single().second,
+        )
+
+        firestore.commitFailures += FirestoreCode.UNAUTHENTICATED
+        refreshed = AuthState.UserGone
+        val failure = assertFailsWith<SyncException> { transport().push(listOf(TestData.event("evt-1")), emptyList()) }
         assertEquals(SyncError.HouseholdGone, failure.error)
     }
 

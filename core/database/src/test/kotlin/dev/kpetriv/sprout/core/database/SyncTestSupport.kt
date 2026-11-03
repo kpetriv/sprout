@@ -12,6 +12,7 @@ import dev.kpetriv.sprout.core.domainledger.LedgerEvent
 import dev.kpetriv.sprout.core.domainledger.LedgerEventFactory
 import dev.kpetriv.sprout.core.domainledger.LedgerJson
 import dev.kpetriv.sprout.core.domainledger.RegisteredDevice
+import dev.kpetriv.sprout.core.domainledger.RegisteredParentKey
 import dev.kpetriv.sprout.core.domainledger.UuidV4EventIdGenerator
 import dev.kpetriv.sprout.core.domainledger.signedPayload
 import dev.kpetriv.sprout.core.domainledger.withSignature
@@ -70,8 +71,21 @@ internal suspend fun TestHousehold.queuedEvents(): List<JsonObject> = database.o
     .filter { it.kind == OutboxKind.LEDGER_EVENT }
     .map { LedgerJson.json.parseToJsonElement(it.payload) as JsonObject }
 
-/** Applies everything [from] has queued (documents, then events) on this device, as a pull would. */
+/**
+ * [from]'s parent keys as the server registry lists them once `registerParentKey` succeeded (D-M3-34): keys are never
+ * pushed as documents, so a test stands in for the server here.
+ */
+internal suspend fun TestHousehold.serverRegisteredKeys(): List<RegisteredParentKey> =
+    database.parentKeyDao().all().map {
+        RegisteredParentKey(it.fingerprint, it.publicKey, it.uid, it.deviceId, it.validFromLamport, it.revokedAtLamport)
+    }
+
+/**
+ * Applies what a pull would bring from [from]: its registered parent keys (the server registry), then everything it
+ * has queued (documents, then events).
+ */
 internal suspend fun TestHousehold.pullFrom(from: TestHousehold) {
+    applier.applyRegistry(emptyList(), from.serverRegisteredKeys())
     applier.applyDocuments(from.queuedDocuments())
     applier.applyEvents(from.queuedEvents())
 }

@@ -54,6 +54,11 @@ internal object ViolationCodec {
 
             is Violation.InvalidText -> put("field", violation.field)
 
+            is Violation.TooManyCauses -> {
+                put("count", violation.count)
+                put("max", violation.max)
+            }
+
             is Violation.InterestMismatch -> {
                 money("expected", violation.expected)
                 money("actual", violation.actual)
@@ -151,6 +156,11 @@ internal object ViolationCodec {
             "TextTooLong" -> Violation.TextTooLong(text("field"), json.getValue("maxLength").jsonPrimitive.int)
 
             "InvalidText" -> Violation.InvalidText(text("field"))
+
+            "TooManyCauses" -> Violation.TooManyCauses(
+                json.getValue("count").jsonPrimitive.int,
+                json.getValue("max").jsonPrimitive.int,
+            )
 
             "SameAccountTransfer" -> Violation.SameAccountTransfer
 

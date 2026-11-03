@@ -132,13 +132,14 @@ class IngestTest {
 
         val report = parent.applier.applyEvents(listOf(forged, misplaced, unknown, broken))
 
-        assertEquals(EventApplyReport(quarantined = 4), report)
+        // The unknown device's event is held for the registry (D-M3-31), not quarantined.
+        assertEquals(EventApplyReport(quarantined = 3, held = 1), report)
+        assertEquals(QuarantineReason.UNKNOWN_DEVICE.name, parent.database.ledgerInboxDao().all().single().reason)
         val rows = parent.database.ledgerEventDao().all().filter { it.origin == EventOrigin.REMOTE }
         assertTrue(rows.all { it.quarantined })
         assertEquals(
             setOf(
                 QuarantineReason.ROLE_NOT_ALLOWED.name,
-                QuarantineReason.UNKNOWN_DEVICE.name,
                 RoomLedgerRepository.INVARIANT_QUARANTINE + "WrongAccountKind",
             ),
             rows.map { it.quarantineReason }.toSet(),
@@ -147,10 +148,11 @@ class IngestTest {
         assertEquals(forged, LedgerJson.json.parseToJsonElement(rows.first().payloadJson))
         val listed = parent.ledger.observeQuarantined().first()
         assertEquals(rows.map { it.eventId }.toSet(), listed.map { it.eventId }.toSet())
-        assertEquals(4, parent.database.auditLogDao().all().count { it.action == AuditAction.LEDGER_EVENT_QUARANTINED })
+        assertEquals(3, parent.database.auditLogDao().all().count { it.action == AuditAction.LEDGER_EVENT_QUARANTINED })
         assertEquals(Money.ZERO, balanceOf(parent))
         // Pulling the same documents again changes nothing.
         assertEquals(3, parent.applier.applyEvents(listOf(forged, misplaced, unknown)).duplicates)
+        assertEquals(1, parent.database.ledgerInboxDao().count())
     }
 
     @Test

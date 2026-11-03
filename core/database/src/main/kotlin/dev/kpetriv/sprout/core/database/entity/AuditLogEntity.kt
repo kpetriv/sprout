@@ -49,8 +49,17 @@ enum class AuditAction {
     DEVICE_REGISTERED,
     DEVICE_REVOKED,
 
-    /** The backend refused an outbox item for good (`SyncError.Permanent`); its code only. */
+    /**
+     * The backend refused an outbox item for good (`SyncError.Permanent`): its push id, `seq`, code and whether it
+     * blocks the outbox (a ledger event, D-M3-33). One row per `(seq, code)`.
+     */
     SYNC_REJECTED,
+
+    /**
+     * A held pulled event or document was dropped because its author device had more than the cap of held rows
+     * (`RoomLedgerRepository.MAX_HELD_PER_AUTHOR`); ids and the hold reason only.
+     */
+    HELD_DROPPED,
 
     /** The local trial household was deleted when this device joined a real household; counts only. */
     LOCAL_HOUSEHOLD_PURGED,

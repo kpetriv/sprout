@@ -35,7 +35,19 @@ internal data class RegisterDeviceRequest(val devicePublicKey: String, val attes
 internal data class ApproveDeviceRequest(val deviceId: DeviceId, val approverDeviceId: DeviceId, val signature: String)
 
 @Serializable
-internal data class CreateLinkCodeRequest(val kidId: KidId)
+internal data class CreateLinkCodeRequest(val kidId: KidId, val callerDeviceId: DeviceId, val signature: String)
+
+/** A request whose only arguments are the device proof (`exportHousehold`). */
+@Serializable
+internal data class ProvenRequest(val callerDeviceId: DeviceId, val signature: String)
+
+@Serializable
+internal data class RegisterParentKeyRequest(
+    val publicKey: String,
+    val attestationChain: List<String>? = null,
+    val deviceId: DeviceId,
+    val signature: String,
+)
 
 @Serializable
 internal data class RedeemLinkCodeRequest(
@@ -47,10 +59,14 @@ internal data class RedeemLinkCodeRequest(
 }
 
 @Serializable
-internal data class RevokeDeviceRequest(val deviceId: DeviceId, val callerDeviceId: DeviceId)
+internal data class RevokeDeviceRequest(val deviceId: DeviceId, val callerDeviceId: DeviceId, val signature: String)
 
 @Serializable
-internal data class DeleteHouseholdRequest(val confirmation: HouseholdId)
+internal data class DeleteHouseholdRequest(
+    val confirmation: HouseholdId,
+    val callerDeviceId: DeviceId,
+    val signature: String,
+)
 
 @Serializable
 internal data class ChallengeResponse(val challenge: String) {
@@ -84,3 +100,10 @@ data class RedeemedLink(val hid: HouseholdId, val kidId: KidId, val deviceId: De
 /** `revokeDevice` result: events of the device at or above [revokedAtLamport] are refused by receivers. */
 @Serializable
 data class RevokedDevice(val deviceId: DeviceId, val revokedAtLamport: Long)
+
+/**
+ * `registerParentKey` result: the key's [fingerprint] (hex SHA-256 of its SPKI DER) and the lamport the server made it
+ * valid from (one above everything stored in the household when it was registered).
+ */
+@Serializable
+data class ParentKeyRegistration(val fingerprint: String, val validFromLamport: Long)

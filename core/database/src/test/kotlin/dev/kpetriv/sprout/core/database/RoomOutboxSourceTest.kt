@@ -12,6 +12,7 @@ import dev.kpetriv.sprout.core.sync.OutboxItem
 import dev.kpetriv.sprout.core.sync.PushItemId
 import dev.kpetriv.sprout.core.sync.PushRejection
 import dev.kpetriv.sprout.core.sync.SyncError
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.runTest
 import org.junit.After
 import org.junit.Test
@@ -20,6 +21,8 @@ import org.robolectric.RobolectricTestRunner
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
+import kotlin.time.Duration.Companion.hours
+import kotlin.time.Duration.Companion.minutes
 
 @RunWith(RobolectricTestRunner::class)
 class RoomOutboxSourceTest {
@@ -115,7 +118,42 @@ class RoomOutboxSourceTest {
 
         val audit = household.database.auditLogDao().all().single { it.action == AuditAction.SYNC_REJECTED }
         assertEquals("document/reward/a", audit.target)
-        assertEquals("{\"code\":\"permission-denied\"}", audit.detailsJson)
+        assertEquals("{\"code\":\"permission-denied\",\"seq\":7,\"blocking\":false}", audit.detailsJson)
         assertEquals(household.session.uid, audit.actorUid)
+    }
+
+    @Test
+    fun aBlockingRejectionIsAuditedOncePerSeqAndCodeAndSurfacesUntilAcked() = runTest {
+        val (kid, accounts) = household.addKid()
+        val main = with(household) { accounts.money() }
+        repeat(2) {
+            household.writer.append(kid.id, main.id) {
+                dev.kpetriv.sprout.core.domainledger.ManualAdjustment(it, household.gbp, Money(10), "start")
+            }
+        }
+        val (first, second) = household.database.outboxDao().all().filter { it.kind == OutboxKind.LEDGER_EVENT }
+        val id = PushItemId("event/${first.refId}")
+        assertEquals(null, source.observeBlocked().first())
+
+        household.clock.advanceBy(1.minutes)
+        val firstRefusedAt = household.clock.now()
+        source.auditRejections(listOf(PushRejection(first.seq, id, "permission-denied", blocking = true)))
+        // Offered again an hour later and refused again with the same code: not audited twice.
+        household.clock.advanceBy(1.hours)
+        source.auditRejections(listOf(PushRejection(first.seq, id, "permission-denied", blocking = true)))
+        suspend fun rejections() =
+            household.database.auditLogDao().all().filter { it.action == AuditAction.SYNC_REJECTED }
+        assertEquals(1, rejections().size)
+        assertEquals(BlockedPush(first.seq, "permission-denied", firstRefusedAt), source.observeBlocked().first())
+
+        // A new code for the same seq is audited, and becomes the code shown; "since" stays the first refusal.
+        source.auditRejections(listOf(PushRejection(first.seq, id, "invalid-argument", blocking = true)))
+        assertEquals(2, rejections().size)
+        assertEquals(BlockedPush(first.seq, "invalid-argument", firstRefusedAt), source.observeBlocked().first())
+
+        // A refused document never blocks; once the event is accepted (acked) nothing blocks any more.
+        source.auditRejections(listOf(PushRejection(second.seq + 1, PushItemId("document/reward/a"), "x")))
+        source.ack(first.seq)
+        assertEquals(null, source.observeBlocked().first())
     }
 }

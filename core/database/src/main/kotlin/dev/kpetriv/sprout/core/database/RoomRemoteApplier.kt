@@ -12,7 +12,6 @@ import dev.kpetriv.sprout.core.database.entity.DocumentStamp
 import dev.kpetriv.sprout.core.database.entity.HouseholdPolicyEntity
 import dev.kpetriv.sprout.core.database.entity.InterestPolicyEntity
 import dev.kpetriv.sprout.core.database.entity.KidEntity
-import dev.kpetriv.sprout.core.database.entity.ParentKeyEntity
 import dev.kpetriv.sprout.core.database.entity.RegistrationStatus
 import dev.kpetriv.sprout.core.database.entity.RewardEntity
 import dev.kpetriv.sprout.core.database.entity.SavingsGoalEntity
@@ -66,17 +65,22 @@ import javax.inject.Inject
  * [RemoteApplier] on Room: what a pull brings is verified and written to the same tables local writes use.
  *
  * - [applyRegistry] upserts the registry mirror (`devices`, `parent_keys`), audited `DEVICE_REGISTERED` /
- *   `DEVICE_REVOKED`, and refreshes the session's device status when this device's entry changed.
+ *   `DEVICE_REVOKED`, and refreshes the session's device status when this device's entry changed. Parent keys come
+ *   only from here: they are registered by the server (`registerParentKey`, D-M3-34).
  * - [applyDocuments] verifies every envelope with [RemoteDocumentVerifier] (registry, [check], the default
- *   `maxLamportJump`) and resolves it with [ConflictResolver] against the stored row, in [DocTypes.applyOrder] (kid,
- *   account, household_policy, parent_key, then the rest), all in one transaction. An applied document upserts its row
- *   from the payload (the same entity mappers local writes use) with the envelope's lamport, author, signature and
- *   tombstone flag; a tombstone keeps the row with `deleted = 1`, which every read hides and no later update can
- *   resurrect. The device clock observes every verified lamport. Refused documents get a `DOCUMENT_REJECTED` audit
- *   row (reason and ids only) and, for `LAMPORT_TOO_FAR_AHEAD`, a `document_inbox` row. Documents of another household
- *   and payloads that do not decode or whose ids disagree with the envelope are ignored and audited the same way.
- *   Kept device-local: an allowance schedule's `lastPaidOn`, an account's `lastAccruedOn`, this device's parent key.
- * - [applyEvents] and [retryHeld] are [RoomLedgerRepository.ingest] and [RoomLedgerRepository.retryHeld].
+ *   `maxLamportJump`, this session's household) and resolves it with [ConflictResolver] against the stored row, in
+ *   [DocTypes.applyOrder] (kid, account, household_policy, then the rest), all in one transaction. An applied document
+ *   upserts its row from the payload (the same entity mappers local writes use) with the envelope's lamport, author,
+ *   signature and tombstone flag; a tombstone keeps the row with `deleted = 1`, which every read hides and no later
+ *   update can resurrect. The device clock observes every verified lamport. A document whose author device is
+ *   unknown or PENDING is **held** in `document_inbox` (D-M3-31) and retried by [retryHeld]; one refused for a lamport
+ *   too far ahead is audited and kept there too. Other refusals (another household included) get a
+ *   `DOCUMENT_REJECTED` audit row (reason and ids only). Payloads that do not decode or whose ids disagree with the
+ *   envelope, and `parent_key` documents, are ignored and audited the same way. At most [MAX_HELD_PER_AUTHOR] held
+ *   documents per author device are kept. Kept device-local: an allowance schedule's `lastPaidOn`, an account's
+ *   `lastAccruedOn`, this device's parent key.
+ * - [applyEvents] is [RoomLedgerRepository.ingest]; [retryHeld] retries held documents, then
+ *   [RoomLedgerRepository.retryHeld].
  * - [cursor] and [saveCursor] use `sync_cursor`.
  */
 @Suppress("TooManyFunctions", "LargeClass") // One apply function per document type.
@@ -140,61 +144,161 @@ class RoomRemoteApplier internal constructor(
             if (session == null) {
                 DocumentApplyReport(ignored = documents.size)
             } else {
-                applyAll(documents.sortedBy { DocTypes.applyOrder(it.docType) }, session)
+                applyAll(documents.sortedBy { DocTypes.applyOrder(it.docType) }, session, fromInbox = false)
             }
         }
     }
 
-    private suspend fun applyAll(documents: List<DocumentEnvelope>, session: Session): DocumentApplyReport {
+    /**
+     * Verifies and applies [documents]. [fromInbox] marks a retry of `document_inbox` rows ([retryHeldDocuments]):
+     * those are removed once they apply, lose to the stored copy or are refused for good, and stay (with their
+     * reason updated) while still held; nothing is audited twice for them.
+     */
+    private suspend fun applyAll(
+        documents: List<DocumentEnvelope>,
+        session: Session,
+        fromInbox: Boolean,
+    ): DocumentApplyReport {
         val verifier = RemoteDocumentVerifier(registry, check, maxLamportJump, session.householdId)
         val now = clock.now().toEpochMilliseconds()
         var localMax = deviceClock.current()
         var report = DocumentApplyReport()
         for (envelope in documents) {
-            if (envelope.householdId != session.householdId) {
-                reject(envelope, WRONG_HOUSEHOLD, now)
-                report += DocumentApplyReport(ignored = 1)
-                continue
-            }
             report += when (val verified = verifier.verify(envelope, localMax)) {
-                // Compile fix only (core/sync M3 review): keeps the previous behaviour, a rejection. The data-layer
-                // follow-up keeps held documents in document_inbox and retries them instead.
+                // The author device is unknown or pending (D-M3-31): keep it and verify it again later.
                 is VerifiedDocument.Held -> {
-                    reject(envelope, verified.reason.name, now)
-                    DocumentApplyReport(rejected = mapOf(verified.reason to 1))
+                    holdDocument(envelope, verified.reason, now, fromInbox)
+                    DocumentApplyReport(held = if (fromInbox) 0 else 1)
                 }
 
-                is VerifiedDocument.Rejected -> {
-                    reject(envelope, verified.reason.name, now)
-                    if (verified.reason == DocumentRejection.LAMPORT_TOO_FAR_AHEAD) {
-                        database.documentInboxDao().upsert(
-                            DocumentInboxEntity(
-                                docType = envelope.docType,
-                                docId = envelope.docId,
-                                envelopeJson = DocumentJsonCodec.encode(envelope),
-                                reason = verified.reason.name,
-                                receivedAtEpochMs = now,
-                            ),
-                        )
-                    }
-                    DocumentApplyReport(rejected = mapOf(verified.reason to 1))
-                }
+                is VerifiedDocument.Rejected -> refused(envelope, verified.reason, now, fromInbox)
 
                 is VerifiedDocument.Ok -> {
                     // The verifier bounded the lamport by localMax + maxLamportJump.
                     localMax = maxOf(localMax, envelope.lamport)
                     database.observeDeviceLamport(localMax)
-                    outcome(envelope, apply(envelope, session), now)
+                    val outcome = apply(envelope, session)
+                    settleInbox(envelope, outcome, fromInbox)
+                    outcome(envelope, outcome, now)
                 }
             }
         }
         return report
     }
 
+    /**
+     * A refused document: audited `DOCUMENT_REJECTED` (a retried inbox row only when it is dropped). A lamport too
+     * far ahead may become acceptable once this device's clock catches up, so that document is kept in
+     * `document_inbox` and retried; any other refusal is final.
+     */
+    private suspend fun refused(
+        envelope: DocumentEnvelope,
+        reason: DocumentRejection,
+        now: Long,
+        fromInbox: Boolean,
+    ): DocumentApplyReport {
+        val retryable = reason == DocumentRejection.LAMPORT_TOO_FAR_AHEAD
+        when {
+            retryable -> holdDocument(envelope, reason, now, fromInbox)
+            fromInbox -> database.documentInboxDao().delete(envelope.docType, envelope.docId)
+        }
+        if (!(fromInbox && retryable)) reject(envelope, reason.name, now)
+        return DocumentApplyReport(rejected = mapOf(reason to 1))
+    }
+
+    /**
+     * Keeps [envelope] in `document_inbox` with [reason]: one row per document, the higher lamport wins (a retried
+     * row only has its reason refreshed). A new row may push its author over [MAX_HELD_PER_AUTHOR]; that author's
+     * oldest rows are then dropped and audited `HELD_DROPPED`.
+     */
+    private suspend fun holdDocument(
+        envelope: DocumentEnvelope,
+        reason: DocumentRejection,
+        now: Long,
+        fromInbox: Boolean,
+    ) {
+        val inbox = database.documentInboxDao()
+        val existing = inbox.get(envelope.docType, envelope.docId)
+        val existingLamport = existing?.let { DocumentJsonCodec.decodeOrNull(it.envelopeJson)?.lamport }
+        when {
+            fromInbox -> if (existing != null && (existing.reason != reason.name || existing.authorDeviceId == null)) {
+                inbox.upsert(existing.copy(reason = reason.name, authorDeviceId = envelope.authorDeviceId))
+            }
+
+            existing != null && existingLamport != null && existingLamport > envelope.lamport -> Unit
+
+            else -> {
+                inbox.upsert(
+                    DocumentInboxEntity(
+                        docType = envelope.docType,
+                        docId = envelope.docId,
+                        envelopeJson = DocumentJsonCodec.encode(envelope),
+                        reason = reason.name,
+                        receivedAtEpochMs = now,
+                        authorDeviceId = envelope.authorDeviceId,
+                    ),
+                )
+                capHeldDocuments(envelope.authorDeviceId, now)
+            }
+        }
+    }
+
+    private suspend fun capHeldDocuments(author: DeviceId, now: Long) {
+        val inbox = database.documentInboxDao()
+        val excess = inbox.countFor(author) - MAX_HELD_PER_AUTHOR
+        if (excess <= 0) return
+        for (row in inbox.oldestFor(author, excess)) {
+            inbox.delete(row.docType, row.docId)
+            record(AuditAction.HELD_DROPPED, LocalTrial.PARENT, author, row.docId, now) {
+                put("kind", "document")
+                put("docType", row.docType)
+                put("reason", row.reason)
+            }
+        }
+    }
+
+    /**
+     * After a verified document was resolved: its own inbox row (a retry) goes whatever the outcome, and a held copy
+     * of the same document goes once the stored copy beats it, so a newer held copy is never lost to an older one
+     * that applied.
+     */
+    private suspend fun settleInbox(envelope: DocumentEnvelope, outcome: Outcome, fromInbox: Boolean) {
+        val inbox = database.documentInboxDao()
+        val held = inbox.get(envelope.docType, envelope.docId) ?: return
+        val heldEnvelope = DocumentJsonCodec.decodeOrNull(held.envelopeJson)
+        val superseded = heldEnvelope == null || heldEnvelope == envelope || (
+            outcome == Outcome.APPLIED &&
+                ConflictResolver.resolve(StoredDocument.of(envelope), heldEnvelope) ==
+                ConflictResolver.Decision.Ignore
+            )
+        if (fromInbox || superseded) inbox.delete(envelope.docType, envelope.docId)
+    }
+
+    /**
+     * Verifies the documents kept in `document_inbox` again (the registry or this device's clock may have caught
+     * up) and applies those that now pass, in [DocTypes.applyOrder]. A row that no longer decodes is dropped.
+     */
+    private suspend fun retryHeldDocuments(): DocumentApplyReport = deviceClock.withLock {
+        database.withTransaction {
+            val session = database.sessionDao().get()?.toDomain()
+            val inbox = database.documentInboxDao()
+            val rows = inbox.all()
+            if (session == null || rows.isEmpty()) {
+                DocumentApplyReport()
+            } else {
+                val envelopes = rows.mapNotNull { row ->
+                    DocumentJsonCodec.decodeOrNull(row.envelopeJson)
+                        ?.takeIf { it.docType == row.docType && it.docId == row.docId }
+                        .also { if (it == null) inbox.delete(row.docType, row.docId) }
+                }
+                applyAll(envelopes.sortedBy { DocTypes.applyOrder(it.docType) }, session, fromInbox = true)
+            }
+        }
+    }
+
     private suspend fun outcome(envelope: DocumentEnvelope, outcome: Outcome, now: Long): DocumentApplyReport =
         when (outcome) {
             Outcome.APPLIED -> {
-                database.documentInboxDao().delete(envelope.docType, envelope.docId)
                 record(
                     AuditAction.DOCUMENT_APPLIED,
                     envelope.authorUid,
@@ -215,18 +319,27 @@ class RoomRemoteApplier internal constructor(
                 reject(envelope, MALFORMED_PAYLOAD, now)
                 DocumentApplyReport(ignored = 1)
             }
+
+            Outcome.UNSUPPORTED -> {
+                reject(envelope, SERVER_REGISTERED_ONLY, now)
+                DocumentApplyReport(ignored = 1)
+            }
         }
 
-    private enum class Outcome { APPLIED, IGNORED, MALFORMED }
+    private enum class Outcome { APPLIED, IGNORED, MALFORMED, UNSUPPORTED }
 
-    /** Resolves and writes one verified document. */
+    /**
+     * Resolves and writes one verified document. Parent keys are registered only by the server (`registerParentKey`,
+     * D-M3-34) and reach this device through the registry pull: a `parent_key` document (the rules no longer let a
+     * client write one) is never applied, only audited ([Outcome.UNSUPPORTED]).
+     */
     private suspend fun apply(envelope: DocumentEnvelope, session: Session): Outcome {
         val fallbackAuthor = session.deviceId
         return when (envelope.docType) {
             DocTypes.KID -> applyKid(envelope, fallbackAuthor)
             DocTypes.ACCOUNT -> applyAccount(envelope, fallbackAuthor)
             DocTypes.HOUSEHOLD_POLICY -> applyHouseholdPolicy(envelope, fallbackAuthor)
-            DocTypes.PARENT_KEY -> applyParentKey(envelope)
+            DocTypes.PARENT_KEY -> Outcome.UNSUPPORTED
             DocTypes.CHORE -> applyChore(envelope, fallbackAuthor)
             DocTypes.CHORE_SUBMISSION -> applySubmission(envelope, fallbackAuthor)
             DocTypes.REWARD -> applyReward(envelope, fallbackAuthor)
@@ -338,35 +451,6 @@ class RoomRemoteApplier internal constructor(
         )
     }
 
-    /** Parent keys are immutable: the first verified copy is kept; revocation comes from the registry only. */
-    private suspend fun applyParentKey(envelope: DocumentEnvelope): Outcome {
-        val key = DocumentPayloads.decodeParentKey(envelope.payload)
-        return when {
-            envelope.deleted -> Outcome.IGNORED
-
-            key == null || key.fingerprint != envelope.docId ||
-                key.fingerprint != JvmSha256Hasher.sha256(key.publicKey).toHex() ||
-                key.deviceId != envelope.authorDeviceId || key.uid != envelope.authorUid -> Outcome.MALFORMED
-
-            database.parentKeyDao().get(key.fingerprint) != null -> Outcome.IGNORED
-
-            else -> {
-                database.parentKeyDao().upsert(
-                    ParentKeyEntity(
-                        fingerprint = key.fingerprint,
-                        publicKey = key.publicKey,
-                        uid = key.uid,
-                        deviceId = key.deviceId,
-                        validFromLamport = key.validFromLamport,
-                        revokedAtLamport = null,
-                        registeredAtEpochMs = clock.now().toEpochMilliseconds(),
-                    ),
-                )
-                Outcome.APPLIED
-            }
-        }
-    }
-
     private suspend fun applyChore(envelope: DocumentEnvelope, fallback: DeviceId): Outcome = resolve(
         envelope,
         DocumentPayloads.decodeOrNull(Chore.serializer(), envelope.payload),
@@ -448,7 +532,14 @@ class RoomRemoteApplier internal constructor(
 
     override suspend fun applyEvents(events: List<JsonObject>): EventApplyReport = ledger.ingest(events)
 
-    override suspend fun retryHeld(): EventApplyReport = ledger.retryHeld()
+    /**
+     * Retries held documents first (an account or kid they bring may be what a held event waits for), then held
+     * events ([RoomLedgerRepository.retryHeld]). The report is the events'; documents only show in the audit log.
+     */
+    override suspend fun retryHeld(): EventApplyReport {
+        retryHeldDocuments()
+        return ledger.retryHeld()
+    }
 
     override suspend fun cursor(): SyncCursor =
         SyncCursor(database.syncCursorDao().all().associate { it.collection to it.cursor })
@@ -494,8 +585,11 @@ class RoomRemoteApplier internal constructor(
     }
 
     companion object {
-        /** Audit reason for a document of another household. */
-        const val WRONG_HOUSEHOLD: String = "WRONG_HOUSEHOLD"
+        /** Audit reason for a `parent_key` document: parent keys come only from the server registry (D-M3-34). */
+        const val SERVER_REGISTERED_ONLY: String = "SERVER_REGISTERED_ONLY"
+
+        /** Most rows `document_inbox` keeps per author device; beyond it the oldest are dropped (audited). */
+        const val MAX_HELD_PER_AUTHOR: Int = RoomLedgerRepository.MAX_HELD_PER_AUTHOR
 
         /** Audit reason for a payload that does not decode or whose ids disagree with its envelope. */
         const val MALFORMED_PAYLOAD: String = "MALFORMED_PAYLOAD"

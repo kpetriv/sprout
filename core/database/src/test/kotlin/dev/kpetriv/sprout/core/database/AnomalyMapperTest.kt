@@ -31,6 +31,7 @@ class AnomalyMapperTest {
         Violation.BlankText("reason"),
         Violation.TextTooLong("note", 200),
         Violation.InvalidText("reason"),
+        Violation.TooManyCauses(17, 16),
         Violation.SameAccountTransfer,
         Violation.InvalidInterestTerms,
         Violation.InterestMismatch(Money(3), Money(4)),

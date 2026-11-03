@@ -132,8 +132,11 @@ class RoomLedgerWriterTest {
 
         assertIs<AppendResult.Conflict>(second)
         assertEquals(2, database.deviceStateDao().get()?.lamport)
-        // Two parent copies of one id: neither applies, and the conflict is reported.
-        assertEquals(emptyList(), repository.observeBalances(kidId).first().filter { it.amount != Money.ZERO })
-        assertIs<LedgerAnomaly.ConflictingDuplicate>(repository.observeAnomalies(kidId).first().single())
+        // Two parent copies of one id (D-M3-30): exactly one applies, the first by (lamport, author, hash), and the
+        // conflict is reported with it.
+        assertEquals(listOf(Money(10)), repository.observeBalances(kidId).first().map { it.amount })
+        val conflict =
+            assertIs<LedgerAnomaly.ConflictingDuplicate>(repository.observeAnomalies(kidId).first().single())
+        assertEquals(1, conflict.applied?.lamport)
     }
 }

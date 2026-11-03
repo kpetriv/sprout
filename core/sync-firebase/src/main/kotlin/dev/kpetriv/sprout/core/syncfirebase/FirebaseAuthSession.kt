@@ -18,7 +18,6 @@ import com.google.firebase.FirebaseTooManyRequestsException
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.auth.FirebaseAuthInvalidCredentialsException
 import com.google.firebase.auth.FirebaseAuthInvalidUserException
-import com.google.firebase.auth.FirebaseAuthUserCollisionException
 import com.google.firebase.auth.FirebaseUser
 import com.google.firebase.auth.GoogleAuthProvider
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -50,7 +49,7 @@ class FirebaseAuthSession @Inject constructor(
     private val bootstrap: FirebaseBootstrap,
     private val config: FirebaseConfig,
     @param:ApplicationContext private val context: Context,
-) {
+) : AuthProbe {
     private val auth: FirebaseAuth by lazy { FirebaseAuth.getInstance(bootstrap.ensureInitialised(context)) }
 
     /** Last claims read per uid, used when a fresh token cannot be fetched (offline with an expired token). */
@@ -65,8 +64,20 @@ class FirebaseAuthSession @Inject constructor(
         awaitClose { auth.removeIdTokenListener(listener) }
     }.conflate().mapLatest { current() }.distinctUntilChanged()
 
-    /** The session now, with the claims of the cached ID token. */
+    /**
+     * The session now, with the claims of the cached ID token (refreshed by the SDK when it expired).
+     * [AuthState.UserGone] when that read finds the account deleted or disabled.
+     */
     suspend fun current(): AuthState = stateOf(auth.currentUser, forceRefresh = false)
+
+    /** [AuthProbe]: the session after a forced token refresh, or null when the refresh failed for another reason. */
+    // The SDK exception is dropped on purpose: its message can name the account.
+    @Suppress("SwallowedException")
+    override suspend fun refreshedState(): AuthState? = try {
+        stateOf(auth.currentUser, forceRefresh = true)
+    } catch (unavailable: FirebaseException) {
+        null
+    }
 
     /**
      * Signs a parent in with a Google ID token from Credential Manager. [activityContext] must be an Activity: the
@@ -92,27 +103,11 @@ class FirebaseAuthSession @Inject constructor(
 
     /**
      * Debug builds against the Auth emulator only ([FirebaseConfig.emulatorHost] set): signs in, creating the
-     * emulator account on first use. Fails with [AuthError.NotAvailableInThisBuild] everywhere else.
+     * emulator account on first use. Fails with [AuthError.NotAvailableInThisBuild] everywhere else; the code lives in
+     * `src/debug` only ([EmulatorSupport]).
      */
     suspend fun signInWithEmailPassword(email: String, password: String): Result<Unit> = guarded {
-        if (config.emulatorHost == null) throw AuthException(AuthError.NotAvailableInThisBuild)
-        try {
-            auth.signInWithEmailAndPassword(email, password).await()
-        } catch (unknownOrWrong: FirebaseAuthInvalidUserException) {
-            createEmulatorAccount(email, password, unknownOrWrong)
-        } catch (unknownOrWrong: FirebaseAuthInvalidCredentialsException) {
-            // With e-mail enumeration protection, an unknown account and a wrong password look the same.
-            createEmulatorAccount(email, password, unknownOrWrong)
-        }
-    }
-
-    private suspend fun createEmulatorAccount(email: String, password: String, signInFailure: FirebaseException) {
-        try {
-            auth.createUserWithEmailAndPassword(email, password).await()
-        } catch (expected: FirebaseAuthUserCollisionException) {
-            // The account exists, so the sign-in failure was a wrong password.
-            throw signInFailure
-        }
+        Emulators.signInWithEmailPassword(auth, config, email, password)
     }
 
     /** Signs a kid device in anonymously (before it redeems a link code). */
@@ -124,6 +119,7 @@ class FirebaseAuthSession @Inject constructor(
         when (val state = stateOf(user, forceRefresh = true)) {
             is AuthState.SignedIn -> state.claims
             AuthState.SignedOut -> throw AuthException(AuthError.SignedOut)
+            AuthState.UserGone -> throw AuthException(AuthError.UserDisabled)
         }
     }
 
@@ -138,15 +134,26 @@ class FirebaseAuthSession @Inject constructor(
         }
     }
 
+    /**
+     * The state of [user] from its ID token. A deleted or disabled account is [AuthState.UserGone] (positive evidence,
+     * kept as such); any other failure throws when [forceRefresh] is set and otherwise falls back to the last claims.
+     */
     private suspend fun stateOf(user: FirebaseUser?, forceRefresh: Boolean): AuthState {
         if (user == null || !ID_PATTERN.matches(user.uid)) return AuthState.SignedOut
-        val claims = try {
-            Claims.from(user.getIdToken(forceRefresh).await().claims).also { lastClaims[user.uid] = it }
+        return try {
+            val claims = Claims.from(user.getIdToken(forceRefresh).await().claims).also { lastClaims[user.uid] = it }
+            AuthState.SignedIn(UserId(user.uid), user.isAnonymous, claims)
+        } catch (invalid: FirebaseAuthInvalidUserException) {
+            if (isUserGone(invalid.errorCode)) AuthState.UserGone else lastKnown(user, forceRefresh, invalid)
         } catch (unavailable: FirebaseException) {
-            if (forceRefresh) throw unavailable
-            lastClaims[user.uid] ?: Claims.NONE
+            lastKnown(user, forceRefresh, unavailable)
         }
-        return AuthState.SignedIn(UserId(user.uid), user.isAnonymous, claims)
+    }
+
+    /** After a failed token read: [failure] when the refresh was forced, else the last claims read for [user]. */
+    private fun lastKnown(user: FirebaseUser, forceRefresh: Boolean, failure: FirebaseException): AuthState {
+        if (forceRefresh) throw failure
+        return AuthState.SignedIn(UserId(user.uid), user.isAnonymous, lastClaims[user.uid] ?: Claims.NONE)
     }
 
     // Every failure becomes an AuthException with a fixed code; the original exception (and its message) is dropped.
@@ -170,5 +177,12 @@ class FirebaseAuthSession @Inject constructor(
         is FirebaseNetworkException -> AuthError.Network
         is FirebaseTooManyRequestsException -> AuthError.TooManyRequests
         else -> AuthError.Unknown
+    }
+
+    internal companion object {
+        /** `FirebaseAuthInvalidUserException.errorCode`s meaning the account itself is gone (not just the session). */
+        private val USER_GONE_CODES = setOf("ERROR_USER_NOT_FOUND", "ERROR_USER_DISABLED")
+
+        fun isUserGone(errorCode: String): Boolean = errorCode in USER_GONE_CODES
     }
 }

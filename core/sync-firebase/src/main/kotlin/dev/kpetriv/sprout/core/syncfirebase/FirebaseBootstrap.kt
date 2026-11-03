@@ -3,11 +3,9 @@ package dev.kpetriv.sprout.core.syncfirebase
 import android.content.Context
 import com.google.firebase.FirebaseApp
 import com.google.firebase.FirebaseOptions
-import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.FirebaseFirestoreSettings
 import com.google.firebase.firestore.MemoryCacheSettings
-import com.google.firebase.functions.FirebaseFunctions
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -16,12 +14,19 @@ import javax.inject.Singleton
  *
  * With `google-services.json` the app is already initialised by Firebase's init provider and is used as is. Without
  * it (no real project yet, D-M3-1) the app is initialised programmatically for the `demo-sprout` project, which the
- * Emulator Suite accepts without credentials. When [FirebaseConfig.emulatorHost] is set, Auth, Firestore and Functions
- * are pointed at the emulators. Firestore keeps a memory cache only: Room is the source of truth on the device, so
- * nothing synced is persisted twice.
+ * Emulator Suite accepts without credentials. In **debug** builds, when [FirebaseConfig.emulatorHost] is set, Auth and
+ * Firestore are pointed at the emulators, and Functions too unless [FirebaseConfig.functionsBaseUrl] is set (D-M3-29:
+ * the callables then go to that HTTP service); release builds never do ([EmulatorSupport]). Firestore keeps a memory
+ * cache only: Room is the source of truth on the device, so nothing synced is persisted twice.
  */
 @Singleton
-class FirebaseBootstrap @Inject constructor(private val config: FirebaseConfig) {
+class FirebaseBootstrap internal constructor(
+    private val config: FirebaseConfig,
+    private val emulators: EmulatorSupport,
+) {
+    @Inject
+    constructor(config: FirebaseConfig) : this(config, Emulators)
+
     @Volatile
     private var app: FirebaseApp? = null
 
@@ -37,15 +42,10 @@ class FirebaseBootstrap @Inject constructor(private val config: FirebaseConfig) 
         val app = FirebaseApp.getApps(context).firstOrNull { it.name == FirebaseApp.DEFAULT_APP_NAME }
             ?: FirebaseApp.initializeApp(context)
             ?: FirebaseApp.initializeApp(context, demoOptions())
-        val firestore = FirebaseFirestore.getInstance(app)
-        firestore.firestoreSettings = FirebaseFirestoreSettings.Builder()
+        FirebaseFirestore.getInstance(app).firestoreSettings = FirebaseFirestoreSettings.Builder()
             .setLocalCacheSettings(MemoryCacheSettings.newBuilder().build())
             .build()
-        config.emulatorHost?.let { host ->
-            FirebaseAuth.getInstance(app).useEmulator(host, AUTH_EMULATOR_PORT)
-            firestore.useEmulator(host, FIRESTORE_EMULATOR_PORT)
-            FirebaseFunctions.getInstance(app, config.region).useEmulator(host, FUNCTIONS_EMULATOR_PORT)
-        }
+        emulators.connect(app, config)
         return app
     }
 

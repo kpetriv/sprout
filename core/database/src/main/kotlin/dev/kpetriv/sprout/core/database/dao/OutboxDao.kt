@@ -5,6 +5,8 @@ import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.Query
 import dev.kpetriv.sprout.core.database.entity.OutboxEntity
+import dev.kpetriv.sprout.core.database.entity.OutboxKind
+import kotlinx.coroutines.flow.Flow
 
 /** The sync outbox. Written with every local change; drained by the sync engine through `RoomOutboxSource`. */
 @Dao
@@ -41,4 +43,8 @@ interface OutboxDao {
 
     @Query("SELECT * FROM outbox ORDER BY seq")
     suspend fun all(): List<OutboxEntity>
+
+    /** The `seq` of every queued row of [kind], in order. */
+    @Query("SELECT seq FROM outbox WHERE kind = :kind ORDER BY seq")
+    fun observeSeqs(kind: OutboxKind): Flow<List<Long>>
 }

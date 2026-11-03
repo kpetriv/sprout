@@ -64,6 +64,12 @@ object LedgerRules {
     const val MAX_TEXT_LENGTH: Int = 200
 
     /**
+     * Most event ids an [OverdraftCompensated.causedBy] may list: the backend rules (`firestore/firestore.rules`,
+     * `idList16`) refuse a longer list, so a longer one could never sync.
+     */
+    const val MAX_CAUSES: Int = 16
+
+    /**
      * Event types only a [Role.PARENT] may author, whatever their content. A [TimeBankCredited] is parent-only only
      * when it is a manual grant; use [isParentOnly] to decide for a given event.
      */
@@ -151,7 +157,10 @@ object LedgerRules {
 
         is TimeBankStopped -> listOfNotNull(Violation.BlankText("sessionId").takeIf { event.sessionId.isBlank() })
 
-        is OverdraftCompensated -> listOfNotNull(Violation.BlankText("causedBy").takeIf { event.causedBy.isEmpty() })
+        is OverdraftCompensated -> listOfNotNull(
+            Violation.BlankText("causedBy").takeIf { event.causedBy.isEmpty() },
+            Violation.TooManyCauses(event.causedBy.size, MAX_CAUSES).takeIf { event.causedBy.size > MAX_CAUSES },
+        )
 
         is TransferToSavings ->
             listOfNotNull(Violation.SameAccountTransfer.takeIf { event.toAccountId == event.envelope.accountId })
@@ -365,6 +374,9 @@ sealed interface Violation {
 
     /** [field] is longer than [maxLength]. The text itself is never included (it may hold personal data). */
     data class TextTooLong(val field: String, val maxLength: Int) : Violation
+
+    /** An [OverdraftCompensated] lists [count] causing events, more than [max] ([LedgerRules.MAX_CAUSES]). */
+    data class TooManyCauses(val count: Int, val max: Int) : Violation
 
     /** [field] holds an unpaired UTF-16 surrogate, so it has no UTF-8 form and cannot be hashed or signed. */
     data class InvalidText(val field: String) : Violation

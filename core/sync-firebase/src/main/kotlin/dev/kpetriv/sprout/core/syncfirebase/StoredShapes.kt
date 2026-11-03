@@ -15,7 +15,6 @@ import dev.kpetriv.sprout.core.sync.DocumentJsonCodec
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
-import kotlinx.serialization.json.longOrNull
 import java.security.MessageDigest
 import kotlin.io.encoding.Base64
 
@@ -26,8 +25,9 @@ import kotlin.io.encoding.Base64
  *   event fields, plus `serverReceivedAt`. On the way back the envelope keys are nested again, so the tree is the one
  *   the author hashed and signed.
  * - **Documents**: the [DocumentEnvelope] fields at the top level plus `serverReceivedAt`.
- * - **Parent keys** (`parentKeys/{fingerprint}`): `{ publicKey, uid, deviceId, validFromLamport, registeredAt }` plus
- *   the signed `parent_key` envelope under `envelope`; `revokedAtLamport` is added by Cloud Functions only.
+ * - **Parent keys** (`parentKeys/{fingerprint}`): written by the server only (`registerParentKey`, D-M3-34):
+ *   `{ publicKey, uid, deviceId, validFromLamport, registeredAt, attestation }`, `revokedAtLamport` once revoked;
+ *   read into [RegisteredParentKey].
  * - **Devices**: written by Cloud Functions only; read into [RegisteredDevice].
  */
 internal object StoredShapes {
@@ -91,29 +91,6 @@ internal object StoredShapes {
     /** The envelope stored in a document collection, or null when it does not decode. */
     fun documentOf(stored: Map<String, Any?>): DocumentEnvelope? =
         DocumentJsonCodec.decodeOrNull(PlainValues.toJsonObject(stored - FirestoreFacade.SERVER_RECEIVED_AT))
-
-    /**
-     * The `parentKeys/{fingerprint}` fields for a `parent_key` document, or null when its payload lacks the key:
-     * the payload must hold `publicKey` (base64 SPKI) and `validFromLamport`; `uid` and `deviceId` are the author's.
-     */
-    @Suppress("ReturnCount")
-    fun parentKeyFields(envelope: DocumentEnvelope): Map<String, Any?>? {
-        val publicKey = envelope.payload.string("publicKey") ?: return null
-        val validFrom = (envelope.payload["validFromLamport"] as? JsonPrimitive)?.takeUnless { it.isString }?.longOrNull
-            ?: return null
-        return mapOf(
-            "publicKey" to publicKey,
-            "uid" to envelope.authorUid.value,
-            "deviceId" to envelope.authorDeviceId.value,
-            "validFromLamport" to validFrom,
-            "registeredAt" to ServerTimestamp,
-            ENVELOPE to documentFields(envelope),
-        )
-    }
-
-    /** The signed `parent_key` envelope stored with a parent key, if any. */
-    fun parentKeyEnvelopeOf(stored: Map<String, Any?>): DocumentEnvelope? =
-        (stored[ENVELOPE] as? Map<*, *>)?.let { DocumentJsonCodec.decodeOrNull(PlainValues.toJson(it)) }
 
     /** A `devices/{deviceId}` document as a registry entry, or null when any field is missing or malformed. */
     @Suppress("ReturnCount")

@@ -4,7 +4,9 @@ import dagger.Binds
 import dagger.Module
 import dagger.hilt.InstallIn
 import dagger.hilt.components.SingletonComponent
+import dev.kpetriv.sprout.core.syncfirebase.AuthProbe
 import dev.kpetriv.sprout.core.syncfirebase.CallableInvoker
+import dev.kpetriv.sprout.core.syncfirebase.FirebaseAuthSession
 import dev.kpetriv.sprout.core.syncfirebase.FirebaseCallableInvoker
 import dev.kpetriv.sprout.core.syncfirebase.FirestoreFacade
 import dev.kpetriv.sprout.core.syncfirebase.SdkFirestoreFacade
@@ -23,4 +25,7 @@ internal abstract class SyncFirebaseModule {
 
     @Binds
     abstract fun callableInvoker(impl: FirebaseCallableInvoker): CallableInvoker
+
+    @Binds
+    abstract fun authProbe(impl: FirebaseAuthSession): AuthProbe
 }

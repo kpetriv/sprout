@@ -542,6 +542,18 @@ class LedgerRulesTest {
     }
 
     @Test
+    fun anOverdraftCompensationNamesAtMostSixteenCauses() {
+        val causes = (1..LedgerRules.MAX_CAUSES + 1).map { parent.chore(it.toLong()).eventId }
+
+        assertEquals(emptyList(), violations(parent.compensate(5, causes.take(LedgerRules.MAX_CAUSES))))
+        assertEquals(
+            listOf(Violation.TooManyCauses(LedgerRules.MAX_CAUSES + 1, LedgerRules.MAX_CAUSES)),
+            violations(parent.compensate(5, causes)),
+        )
+        assertEquals(listOf(Violation.BlankText("causedBy")), violations(parent.compensate(5, emptyList())))
+    }
+
+    @Test
     fun freeTextIsRedactedFromToString() {
         val chore = parent.chore(1)
         val adjustment = parent.adjust(5, reason = "bought Emma's birthday present")

@@ -71,6 +71,7 @@ class HouseholdFunctionsTest {
                 "revokeDevice" -> mapOf("deviceId" to other.value, "revokedAtLamport" to 13)
                 "exportHousehold" -> mapOf("household" to mapOf("id" to "h1"), "events" to listOf<Any>())
                 "deleteHousehold" -> mapOf("deleted" to true)
+                "registerParentKey" -> mapOf("fingerprint" to "c".repeat(64), "validFromLamport" to 41.0)
                 else -> error("unexpected")
             }
         }
@@ -79,27 +80,38 @@ class HouseholdFunctionsTest {
 
         assertContentEquals(byteArrayOf(0, 1, 2), functions.beginDeviceRegistration().getOrThrow())
         functions.approveDevice(device, other, byteArrayOf(7, 7)).getOrThrow()
-        val code = functions.createLinkCode(KidId("kid-a")).getOrThrow()
+        val code = functions.createLinkCode(KidId("kid-a"), device, byteArrayOf(1)).getOrThrow()
         val redeemed = functions.redeemLinkCode("abcd-2345", key).getOrThrow()
-        val revoked = functions.revokeDevice(other, device).getOrThrow()
-        val export = functions.exportHousehold().getOrThrow()
-        functions.deleteHousehold(HouseholdId("h1")).getOrThrow()
+        val revoked = functions.revokeDevice(other, device, byteArrayOf(2)).getOrThrow()
+        val export = functions.exportHousehold(device, byteArrayOf(3)).getOrThrow()
+        functions.deleteHousehold(HouseholdId("h1"), device, byteArrayOf(4)).getOrThrow()
+        val parentKey = functions.registerParentKey(byteArrayOf(5), listOf(byteArrayOf(6)), device, byteArrayOf(8))
+            .getOrThrow()
 
         assertEquals(1_762_000_600_000, code.expiresAt)
         assertFalse("ABCD2345" in code.toString(), "a link code never shows in toString")
         assertEquals(RedeemedLink(HouseholdId("h1"), KidId("kid-a"), device), redeemed)
         assertEquals(13, revoked.revokedAtLamport)
         assertEquals(0, export.getValue("events").jsonArray.size)
+        assertEquals(ParentKeyRegistration("c".repeat(64), 41), parentKey)
         assertEquals(
             listOf(
                 "beginDeviceRegistration" to emptyMap(),
                 "approveDevice" to
                     mapOf("deviceId" to device.value, "approverDeviceId" to other.value, "signature" to "Bwc="),
-                "createLinkCode" to mapOf("kidId" to "kid-a"),
+                "createLinkCode" to mapOf("kidId" to "kid-a", "callerDeviceId" to device.value, "signature" to "AQ=="),
                 "redeemLinkCode" to mapOf("code" to "abcd-2345", "devicePublicKey" to "CQ=="),
-                "revokeDevice" to mapOf("deviceId" to other.value, "callerDeviceId" to device.value),
-                "exportHousehold" to emptyMap(),
-                "deleteHousehold" to mapOf("confirmation" to "h1"),
+                "revokeDevice" to
+                    mapOf("deviceId" to other.value, "callerDeviceId" to device.value, "signature" to "Ag=="),
+                "exportHousehold" to mapOf("callerDeviceId" to device.value, "signature" to "Aw=="),
+                "deleteHousehold" to
+                    mapOf("confirmation" to "h1", "callerDeviceId" to device.value, "signature" to "BA=="),
+                "registerParentKey" to mapOf(
+                    "publicKey" to "BQ==",
+                    "attestationChain" to listOf("Bg=="),
+                    "deviceId" to device.value,
+                    "signature" to "CA==",
+                ),
             ),
             invoker.calls.map { it.first to it.second },
         )
@@ -114,7 +126,8 @@ class HouseholdFunctionsTest {
         )
         assertEquals(
             FunctionsError.ResourceExhausted,
-            (failing.createLinkCode(KidId("kid-a")).exceptionOrNull() as FunctionsException).error,
+            (failing.createLinkCode(KidId("kid-a"), device, byteArrayOf(1)).exceptionOrNull() as FunctionsException)
+                .error,
         )
 
         val malformed = HouseholdFunctions(RecordingInvoker { _, _ -> mapOf("hid" to "bad id!", "deviceId" to "x") })
@@ -122,7 +135,7 @@ class HouseholdFunctionsTest {
         assertEquals(FunctionsError.MalformedResponse, (error as FunctionsException).error)
 
         val missing = HouseholdFunctions(RecordingInvoker { _, _ -> null })
-        assertTrue(missing.revokeDevice(device, other).isFailure)
+        assertTrue(missing.revokeDevice(device, other, byteArrayOf(1)).isFailure)
     }
 
     @Test
