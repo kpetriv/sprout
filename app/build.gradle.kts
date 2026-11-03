@@ -162,6 +162,8 @@ dependencies {
     implementation(libs.kotlinx.serialization.json)
 
     testImplementation(testFixtures(projects.core.crypto))
+    // TestHousehold: a real Room household for the local rows clear (chat tables and blob cache, M4).
+    testImplementation(testFixtures(projects.core.database))
     testImplementation(testFixtures(projects.core.sync))
     testImplementation(testFixtures(projects.core.time))
     testImplementation(libs.androidx.work.testing)

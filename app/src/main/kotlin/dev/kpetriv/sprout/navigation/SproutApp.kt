@@ -10,6 +10,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -27,9 +28,13 @@ import androidx.navigation3.runtime.rememberNavBackStack
 import androidx.navigation3.runtime.rememberSaveableStateHolderNavEntryDecorator
 import androidx.navigation3.ui.NavDisplay
 import dev.kpetriv.sprout.BuildConfig
+import dev.kpetriv.sprout.chat.rememberReadAloud
 import dev.kpetriv.sprout.core.domainledger.ParentAuthorizationRequester
 import dev.kpetriv.sprout.core.model.KidId
 import dev.kpetriv.sprout.core.model.KidUiTier
+import dev.kpetriv.sprout.feature.chat.ChatThreadListRoute
+import dev.kpetriv.sprout.feature.chat.KidChatRoute
+import dev.kpetriv.sprout.feature.chat.ParentChatRoute
 import dev.kpetriv.sprout.feature.chores.ApprovalsInboxRoute
 import dev.kpetriv.sprout.feature.chores.ChoreEditorRoute
 import dev.kpetriv.sprout.feature.chores.ChoreListRoute
@@ -38,11 +43,13 @@ import dev.kpetriv.sprout.feature.lock.KidModeExitGate
 import dev.kpetriv.sprout.feature.lock.ParentGateViewModel
 import dev.kpetriv.sprout.feature.lock.ParentSessionState
 import dev.kpetriv.sprout.feature.lock.RequireParent
+import dev.kpetriv.sprout.feature.lock.SecureWindow
 import dev.kpetriv.sprout.feature.onboarding.OnboardingRoute
 import dev.kpetriv.sprout.feature.onboarding.SigningSetupRoute
 import dev.kpetriv.sprout.feature.parenthome.ParentHomeRoute
 import dev.kpetriv.sprout.feature.settings.SettingsRoute
 import dev.kpetriv.sprout.feature.settings.SettingsSection
+import dev.kpetriv.sprout.feature.timebank.TimeBankRoute
 import dev.kpetriv.sprout.feature.wallet.ShopRoute
 import dev.kpetriv.sprout.feature.wallet.WalletMode
 import dev.kpetriv.sprout.feature.wallet.WalletRoute
@@ -61,8 +68,12 @@ import kotlinx.coroutines.launch
  * - **Onboarding** (no session, a phone waiting for approval, or the trial's "Set up sync"): `feature/onboarding`,
  *   with `feature/lock`'s PIN setup (or, for an existing PIN, fingerprint-signing setup) as its last parent step.
  * - **Parent**: everything behind `RequireParent` (PIN or fingerprint; `FLAG_SECURE`), one Navigation 3 back stack
- *   from [ParentHomeKey]. "Switch to kid mode" picks a kid, locks the parent session and enters kid mode.
- * - **Kid**: the kid's wallet ([KidHomeKey]) with its shop and today's chores, no lock. On a parent's phone back at
+ *   from [ParentHomeKey]. "Switch to kid mode" picks a kid, locks the parent session and enters kid mode. In a real
+ *   household the dashboard's Chat shortcut opens the chat inbox ([ChatThreadsKey]) and each kid's thread
+ *   ([ChatThreadKey]), both `SecureWindow`.
+ * - **Kid**: the kid's wallet ([KidHomeKey]) with its shop and today's chores, no lock, and shortcuts to the kid's
+ *   chat ([ChatThreadKey], real households only, `SecureWindow`, read-aloud by text-to-speech) and screen time
+ *   ([TimeBankKey]), each in the kid's tier. On a parent's phone back at
  *   the root (system back or the wallet's back arrow) opens `KidModeExitGate`; a successful unlock returns to the
  *   parent area. On a kid's own linked phone there is no parent area: back at the root leaves the app.
  * - **SignInAgain**: the "Sign in again" gate for a phone whose sign-in ended; no household data behind it.
@@ -76,6 +87,7 @@ fun SproutApp(requester: ParentAuthorizationRequester, modifier: Modifier = Modi
     val modeViewModel: ModeViewModel = hiltViewModel()
     val kidsViewModel: KidsViewModel = hiltViewModel()
     val mode by modeViewModel.mode.collectAsStateWithLifecycle()
+    val chatAvailable by modeViewModel.chatAvailable.collectAsStateWithLifecycle()
     val kids by kidsViewModel.state.collectAsStateWithLifecycle()
     val startupFailure = when (val state = kids) {
         is KidsUiState.Ready -> state.startupFailure
@@ -101,6 +113,7 @@ fun SproutApp(requester: ParentAuthorizationRequester, modifier: Modifier = Modi
         AppMode.Parent -> ParentArea(
             requester = requester,
             kids = kids,
+            chatAvailable = chatAvailable,
             onEnterKidMode = { modeViewModel.onEvent(ModeEvent.EnterKidMode(it)) },
             onSetUpSync = { modeViewModel.onEvent(ModeEvent.BeginOnboarding) },
             modifier = modifier,
@@ -110,6 +123,7 @@ fun SproutApp(requester: ParentAuthorizationRequester, modifier: Modifier = Modi
             KidArea(
                 kidId = current.kidId,
                 linkedDevice = current.linkedDevice,
+                chatAvailable = chatAvailable,
                 tierOf = modeViewModel::tierOf,
                 onExit = { modeViewModel.onEvent(ModeEvent.ExitKidMode) },
                 modifier = modifier,
@@ -172,6 +186,7 @@ private fun entryDecorators() = listOf(
 private fun ParentArea(
     requester: ParentAuthorizationRequester,
     kids: KidsUiState,
+    chatAvailable: Boolean,
     onEnterKidMode: (KidId) -> Unit,
     onSetUpSync: () -> Unit,
     modifier: Modifier = Modifier,
@@ -188,18 +203,20 @@ private fun ParentArea(
             entryDecorators = decorators,
             entryProvider = entryProvider {
                 entry<ParentHomeKey> {
-                    ParentHomeRoute(
-                        requester = requester,
-                        onOpenChores = { backStack.push(ChoresKey) },
-                        onOpenApprovals = { backStack.push(ApprovalsKey) },
-                        onOpenShop = { picking = KidPickPurpose.SHOP },
-                        onOpenSettings = { backStack.push(SettingsKey) },
-                        onSwitchToKidMode = { picking = KidPickPurpose.KID_MODE },
-                        onOpenKid = { kidId -> backStack.push(WalletKey(kidId, WalletMode.PARENT)) },
-                        onSetUpSync = onSetUpSync,
-                        onReviewDevice = { deviceId -> backStack.push(DevicesKey(deviceId)) },
-                        onRegisterSigningKey = { backStack.push(SecurityKey) },
-                    )
+                    WithShortcuts(parentShortcuts(chatAvailable) { backStack.push(ChatThreadsKey) }) {
+                        ParentHomeRoute(
+                            requester = requester,
+                            onOpenChores = { backStack.push(ChoresKey) },
+                            onOpenApprovals = { backStack.push(ApprovalsKey) },
+                            onOpenShop = { picking = KidPickPurpose.SHOP },
+                            onOpenSettings = { backStack.push(SettingsKey) },
+                            onSwitchToKidMode = { picking = KidPickPurpose.KID_MODE },
+                            onOpenKid = { kidId -> backStack.push(WalletKey(kidId, WalletMode.PARENT)) },
+                            onSetUpSync = onSetUpSync,
+                            onReviewDevice = { deviceId -> backStack.push(DevicesKey(deviceId)) },
+                            onRegisterSigningKey = { backStack.push(SecurityKey) },
+                        )
+                    }
                 }
                 parentEntries(backStack)
             },
@@ -268,12 +285,21 @@ private fun EntryProviderScope<NavKey>.parentEntries(backStack: NavBackStack<Nav
             initialSection = SettingsSection.PARENT_SECURITY,
         )
     }
+    entry<ChatThreadsKey> {
+        SecureWindow()
+        ChatThreadListRoute(onOpenThread = { kidId -> backStack.push(ChatThreadKey(kidId)) }, onBack = pop)
+    }
+    entry<ChatThreadKey> { key ->
+        SecureWindow()
+        ParentChatRoute(threadId = key.kidId, onBack = pop)
+    }
 }
 
 @Composable
 private fun KidArea(
     kidId: KidId,
     linkedDevice: Boolean,
+    chatAvailable: Boolean,
     tierOf: suspend (KidId) -> KidUiTier?,
     onExit: () -> Unit,
     modifier: Modifier = Modifier,
@@ -303,22 +329,38 @@ private fun KidArea(
         entryDecorators = decorators,
         entryProvider = entryProvider {
             entry<KidHomeKey> { key ->
-                WalletRoute(
-                    kidId = key.kidId,
-                    mode = WalletMode.KID,
-                    onBack = back,
-                    onOpenShop = { backStack.push(ShopKey(key.kidId, WalletMode.KID)) },
-                    onOpenChores = {
-                        if (openingChores?.isActive != true) {
-                            openingChores = scope.launch {
-                                tierOf(key.kidId)?.let { backStack.push(KidChoresKey(key.kidId, it)) }
-                            }
-                        }
-                    },
+                val shortcuts = kidShortcuts(
+                    chat = chatAvailable,
+                    onChat = { backStack.push(ChatThreadKey(key.kidId)) },
+                    onScreenTime = { backStack.push(TimeBankKey(key.kidId)) },
                 )
+                WithShortcuts(shortcuts) {
+                    WalletRoute(
+                        kidId = key.kidId,
+                        mode = WalletMode.KID,
+                        onBack = back,
+                        onOpenShop = { backStack.push(ShopKey(key.kidId, WalletMode.KID)) },
+                        onOpenChores = {
+                            if (openingChores?.isActive != true) {
+                                openingChores = scope.launch {
+                                    tierOf(key.kidId)?.let { backStack.push(KidChoresKey(key.kidId, it)) }
+                                }
+                            }
+                        },
+                    )
+                }
             }
             entry<ShopKey> { key -> ShopRoute(kidId = key.kidId, mode = key.mode, onBack = back) }
             entry<KidChoresKey> { key -> KidTodayRoute(kidId = key.kidId, tier = key.tier, onBack = back) }
+            entry<ChatThreadKey> { key ->
+                WithTier(key.kidId, tierOf) { tier ->
+                    SecureWindow()
+                    KidChatRoute(kidId = key.kidId, tier = tier, onBack = back, readAloud = rememberReadAloud())
+                }
+            }
+            entry<TimeBankKey> { key ->
+                WithTier(key.kidId, tierOf) { tier -> TimeBankRoute(kidId = key.kidId, tier = tier, onBack = back) }
+            }
         },
     )
     if (exiting && !linkedDevice) {
@@ -329,5 +371,20 @@ private fun KidArea(
                 onExit()
             },
         )
+    }
+}
+
+/**
+ * [content] in [kidId]'s UI tier, looked up first ([tierOf]); a progress indicator meanwhile, and nothing for a kid
+ * that does not exist (any more).
+ */
+@Composable
+private fun WithTier(kidId: KidId, tierOf: suspend (KidId) -> KidUiTier?, content: @Composable (KidUiTier) -> Unit) {
+    val tier by produceState<KidUiTier?>(initialValue = null, kidId) { value = tierOf(kidId) }
+    val current = tier
+    if (current == null) {
+        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
+    } else {
+        content(current)
     }
 }

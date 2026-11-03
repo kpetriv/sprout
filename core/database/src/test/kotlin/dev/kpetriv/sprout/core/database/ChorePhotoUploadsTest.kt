@@ -7,6 +7,7 @@ import dev.kpetriv.sprout.core.domainledger.chat.BlobJson
 import dev.kpetriv.sprout.core.model.CalendarDate
 import dev.kpetriv.sprout.core.model.ChoreId
 import dev.kpetriv.sprout.core.model.ChoreSchedule
+import dev.kpetriv.sprout.core.model.SubmissionStatus
 import kotlinx.coroutines.test.runTest
 import org.junit.After
 import org.junit.Test
@@ -71,6 +72,45 @@ class ChorePhotoUploadsTest {
         assertContentEquals(bytes, parent.chatBlobs.ingest(blobId, kid.queuedBlobChunks()))
         assertTrue(kid.uploadChorePhotos().isEmpty(), "never uploaded twice")
         assertNotNull(submission)
+    }
+
+    @Test
+    fun theUploadedBlobIdReachesTheParentThroughTheSignedSubmission() = runTest {
+        linkedWithChore()
+        val bytes = byteArrayOf(5, 6, 7)
+        val photo = kid.photos.save(KID_X, bytes)
+        val submission = kid.chores.submit(bed, today, photo = photo)
+        val (upload, blobId) = kid.uploadChorePhotos().single()
+
+        val updated = assertNotNull(kid.chores.attachPhotoBlob(upload.submissionId, upload.ref, blobId))
+        assertEquals(photo.copy(blobId = blobId.value), updated.photoRef)
+        assertEquals(blobId.value, kid.chores.getSubmission(submission.id)?.photoRef?.blobId)
+        assertNull(kid.chores.attachPhotoBlob(upload.submissionId, upload.ref, blobId), "attached once")
+
+        // The parent's next pull applies the re-signed submission: it now names the blob, which decrypts there.
+        parent.applier.applyDocuments(kid.queuedDocuments())
+        val received = assertNotNull(parent.chores.getSubmission(submission.id))
+        assertEquals(blobId.value, received.photoRef?.blobId)
+        assertContentEquals(bytes, parent.chatBlobs.ingest(blobId, kid.queuedBlobChunks()))
+    }
+
+    @Test
+    fun aBlobIsNotAttachedToAReplacedPhotoOrADecidedSubmission() = runTest {
+        linkedWithChore()
+        val first = kid.photos.save(KID_X, byteArrayOf(1))
+        val submission = kid.chores.submit(bed, today, photo = first)
+        val (upload, blobId) = kid.uploadChorePhotos().single()
+        // The kid replaced the photo before the upload was recorded on the submission.
+        val second = kid.photos.save(KID_X, byteArrayOf(2))
+        kid.chores.submit(bed, today, photo = second)
+        assertNull(kid.chores.attachPhotoBlob(upload.submissionId, upload.ref, blobId))
+        assertNull(kid.chores.getSubmission(submission.id)?.photoRef?.blobId)
+
+        parent.applier.applyDocuments(kid.queuedDocuments())
+        parent.chores.decide(submission.id, SubmissionDecision.REJECT)
+        kid.applier.applyDocuments(parent.queuedDocuments())
+        assertEquals(SubmissionStatus.REJECTED, kid.chores.getSubmission(submission.id)?.status)
+        assertNull(kid.chores.attachPhotoBlob(submission.id, second, blobId), "decided submissions stay as they are")
     }
 
     @Test

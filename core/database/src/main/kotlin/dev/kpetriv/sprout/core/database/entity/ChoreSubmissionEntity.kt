@@ -21,6 +21,8 @@ import kotlin.time.Instant
  *
  * @property note kid-written free text; never logged or audited.
  * @property rejectionReason parent-written free text; never logged or audited.
+ * @property photoBlobId the id of the end-to-end encrypted blob the kid's device uploaded the photo as
+ *   ([PhotoRef.blobId], M4 §2); null while the photo exists only on the kid's device (schema version 6).
  * @property stamp author, signature and tombstone flag of the row's current state (schema version 3).
  */
 @Entity(
@@ -40,6 +42,7 @@ data class ChoreSubmissionEntity(
     val note: String?,
     val photoFileName: String?,
     val photoSha256: String?,
+    val photoBlobId: String? = null,
     val status: SubmissionStatus,
     val decidedAtEpochMs: Long?,
     val decidedBy: UserId?,
@@ -54,7 +57,7 @@ data class ChoreSubmissionEntity(
         kidId = kidId,
         submittedAt = Instant.fromEpochMilliseconds(submittedAtEpochMs),
         note = note,
-        photoRef = photoFileName?.let { name -> photoSha256?.let { PhotoRef(name, it) } },
+        photoRef = photoFileName?.let { name -> photoSha256?.let { PhotoRef(name, it, photoBlobId) } },
         status = status,
         decidedAt = decidedAtEpochMs?.let(Instant::fromEpochMilliseconds),
         decidedBy = decidedBy,
@@ -74,6 +77,7 @@ data class ChoreSubmissionEntity(
             note = submission.note,
             photoFileName = submission.photoRef?.fileName,
             photoSha256 = submission.photoRef?.sha256,
+            photoBlobId = submission.photoRef?.blobId,
             status = submission.status,
             decidedAtEpochMs = submission.decidedAt?.toEpochMilliseconds(),
             decidedBy = submission.decidedBy,

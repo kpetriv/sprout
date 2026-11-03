@@ -2,7 +2,7 @@
   "formatVersion": 1,
   "database": {
     "version": 6,
-    "identityHash": "237ade0c869e272ac50c5369c28dc176",
+    "identityHash": "b012c5cec4880d91c6e9d6ac61ec2ed6",
     "entities": [
       {
         "tableName": "ledger_events",
@@ -799,7 +799,7 @@
       },
       {
         "tableName": "chore_submissions",
-        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`submissionId` TEXT NOT NULL, `choreId` TEXT NOT NULL, `dueOn` TEXT NOT NULL, `kidId` TEXT NOT NULL, `submittedAtEpochMs` INTEGER NOT NULL, `note` TEXT, `photoFileName` TEXT, `photoSha256` TEXT, `status` TEXT NOT NULL, `decidedAtEpochMs` INTEGER, `decidedBy` TEXT, `rejectionReason` TEXT, `lamport` INTEGER NOT NULL, `authorUid` TEXT, `authorDeviceId` TEXT, `signature` TEXT, `deleted` INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(`submissionId`))",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`submissionId` TEXT NOT NULL, `choreId` TEXT NOT NULL, `dueOn` TEXT NOT NULL, `kidId` TEXT NOT NULL, `submittedAtEpochMs` INTEGER NOT NULL, `note` TEXT, `photoFileName` TEXT, `photoSha256` TEXT, `photoBlobId` TEXT, `status` TEXT NOT NULL, `decidedAtEpochMs` INTEGER, `decidedBy` TEXT, `rejectionReason` TEXT, `lamport` INTEGER NOT NULL, `authorUid` TEXT, `authorDeviceId` TEXT, `signature` TEXT, `deleted` INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(`submissionId`))",
         "fields": [
           {
             "fieldPath": "submissionId",
@@ -844,6 +844,11 @@
           {
             "fieldPath": "photoSha256",
             "columnName": "photoSha256",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "photoBlobId",
+            "columnName": "photoBlobId",
             "affinity": "TEXT"
           },
           {
@@ -2236,7 +2241,7 @@
     ],
     "setupQueries": [
       "CREATE TABLE IF NOT EXISTS room_master_table (id INTEGER PRIMARY KEY,identity_hash TEXT)",
-      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, '237ade0c869e272ac50c5369c28dc176')"
+      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, 'b012c5cec4880d91c6e9d6ac61ec2ed6')"
     ]
   }
 }

@@ -79,6 +79,7 @@ object Migrations {
     private val VERSION_6_STATEMENTS: List<String> = listOf(
         "ALTER TABLE `outbox` ADD COLUMN `data` BLOB",
         "ALTER TABLE `photos` ADD COLUMN `blobId` TEXT",
+        "ALTER TABLE `chore_submissions` ADD COLUMN `photoBlobId` TEXT",
         "ALTER TABLE `devices` ADD COLUMN `encryptionKey` BLOB",
         "ALTER TABLE `devices` ADD COLUMN `encryptionKeySignature` BLOB",
         "ALTER TABLE `devices` ADD COLUMN `encryptionKeyHouseholdId` TEXT",

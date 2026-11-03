@@ -54,6 +54,15 @@ internal class ResourceApprovalReasonText @Inject constructor(@ApplicationContex
 }
 
 /**
+ * Fetches a chore photo the kid's phone uploaded as an end-to-end encrypted blob (M4 §2, [PhotoRef.blobId]): the
+ * app binds it to the same blob loader as chat (local cache, then the transport; verified and decrypted). A failure
+ * is a failed [Result]; the approvals inbox then shows the "photo on the kid's device" fallback.
+ */
+fun interface RemotePhotoLoader {
+    suspend fun load(blobId: String): Result<ByteArray>
+}
+
+/**
  * Whether a submission's photo file is on this phone. A submission synced from the kid's own phone carries a
  * [PhotoRef] whose file stays on that phone until uploads exist (M4, D-M3-9).
  */

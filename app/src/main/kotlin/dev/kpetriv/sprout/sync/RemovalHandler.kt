@@ -16,7 +16,10 @@ import dev.kpetriv.sprout.core.model.HouseholdId
 import dev.kpetriv.sprout.di.ApplicationScope
 import dev.kpetriv.sprout.feature.lock.EncryptedParentPinStore
 import dev.kpetriv.sprout.feature.lock.ParentSession
+import dev.kpetriv.sprout.timebank.TimeBankNotifier
+import dev.kpetriv.sprout.timebank.WorkManagerTimeBankAutoStop
 import dev.kpetriv.sprout.work.PlanScheduledActionsWorker
+import dev.kpetriv.sprout.work.UploadChorePhotosWorker
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
@@ -34,18 +37,26 @@ fun interface HouseholdRemovals {
     fun remove(reason: RemovalReason)
 }
 
-/** The unique WorkManager work a removal cancels (sync and the daily planner). */
+/**
+ * The WorkManager work a removal cancels (sync, the daily planner, the chore photo upload and every time bank
+ * auto-stop), and the time bank notifications it removes.
+ */
 fun interface BackgroundWork {
     fun cancelAll()
 }
 
-class WorkManagerBackgroundWork @Inject constructor(@param:ApplicationContext private val context: Context) :
-    BackgroundWork {
+class WorkManagerBackgroundWork @Inject constructor(
+    @param:ApplicationContext private val context: Context,
+    private val timeBankNotifications: TimeBankNotifier,
+) : BackgroundWork {
     override fun cancelAll() {
         val work = WorkManager.getInstance(context)
         work.cancelUniqueWork(SyncWorker.PERIODIC_NAME)
         work.cancelUniqueWork(SyncWorker.ONE_OFF_NAME)
         work.cancelUniqueWork(PlanScheduledActionsWorker.UNIQUE_NAME)
+        work.cancelUniqueWork(UploadChorePhotosWorker.UNIQUE_NAME)
+        work.cancelAllWorkByTag(WorkManagerTimeBankAutoStop.TAG)
+        timeBankNotifications.cancelAll()
     }
 }
 
@@ -161,10 +172,12 @@ class RemovalHandler internal constructor(
 }
 
 /**
- * Clears every table and the photos in place, without closing the database (D-M3-47): used when a session of another
- * account or household is about to be saved over rows a wipe did not remove. The previous parent's secrets go too
- * ([ParentSecrets]: the PIN hash, its lockout state and the parent signing key, audit L10), so their PIN never guards
- * the new account. The database and photo keys stay.
+ * Clears every table (chat messages and thread keys included), the photos and the cached chat blobs in place,
+ * without closing the database (D-M3-47): used when a session of another account or household is about to be saved
+ * over rows a wipe did not remove. The previous parent's secrets go too ([ParentSecrets]: the PIN hash, its lockout
+ * state and the parent signing key, audit L10), so their PIN never guards the new account. The database, photo and
+ * blob cache keys stay, and so does this device's chat encryption key (like its device key, it belongs to the
+ * device; a new household gets it registered again with a new binding).
  */
 class LocalHouseholdRows @Inject constructor(
     private val database: SproutDatabase,
@@ -176,6 +189,7 @@ class LocalHouseholdRows @Inject constructor(
         withContext(dispatcher) {
             database.clearAllTables()
             files.photoDirectory.listFiles()?.forEach { it.deleteRecursively() }
+            files.blobDirectory.listFiles()?.forEach { it.deleteRecursively() }
         }
         parentSecrets.clear()
     }

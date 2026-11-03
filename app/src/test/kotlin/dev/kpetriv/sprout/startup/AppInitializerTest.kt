@@ -82,6 +82,35 @@ class AppInitializerTest {
         }
 
     @Test
+    fun `the M4 upkeep runs after the ledger check and before sync, and its failure never fails startup`() =
+        scope.runTest {
+            fun withChat(chat: suspend () -> Unit) = AppInitializer(
+                scope = scope,
+                seedDemoHousehold = null,
+                quarantineLedger = { steps += "check" },
+                planner = planner,
+                scheduler = scheduler,
+                reconcileSession = { parentSession() },
+                startSync = { steps += "sync" },
+                chatStartup = chat,
+            )
+            withChat { steps += "chat" }.apply {
+                start()
+                advanceUntilIdle()
+                assertEquals(StartupState.Ready, state.value)
+            }
+            assertEquals(listOf("check", "chat", "schedule", "sync"), steps)
+
+            steps.clear()
+            withChat { throw GeneralSecurityException("encryption key store unavailable") }.apply {
+                start()
+                advanceUntilIdle()
+                assertEquals(StartupState.Ready, state.value)
+            }
+            assertEquals(listOf("check", "schedule", "sync"), steps)
+        }
+
+    @Test
     fun `the trial session is not seeded again and still plans at start`() = scope.runTest {
         withSession(trialSession()).apply {
             start()

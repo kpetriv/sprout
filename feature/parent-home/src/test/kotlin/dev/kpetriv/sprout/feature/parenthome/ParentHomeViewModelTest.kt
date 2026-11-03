@@ -355,6 +355,9 @@ class ParentHomeViewModelTest {
         assertEquals(RejectionReason.OTHER, RejectionReason.of("unknown"))
         assertEquals(RejectionReason.WRONG_KID, RejectionReason.of("KID_MISMATCH"))
         assertEquals(RejectionReason.CONFLICTING_HISTORY, RejectionReason.of("FORKED_CHAIN"))
+        assertEquals(RejectionReason.WRONG_THREAD, RejectionReason.of("WRONG_THREAD"))
+        assertEquals(RejectionReason.WAITING_FOR_EARLIER, RejectionReason.of("SEQ_GAP"))
+        assertEquals(RejectionReason.WRONG_HOUSEHOLD, RejectionReason.of("WRONG_HOUSEHOLD"))
     }
 
     @Test

@@ -321,9 +321,11 @@ class MigrationTest {
                 "payload" to "{}",
                 "createdAtEpochMs" to receivedAt,
             )
+            insertSubmissionWithPhoto(db)
         }
 
         helper.runMigrationsAndValidate(TEST_DB, 6, true, Migrations.MIGRATION_5_6).use { db ->
+            assertSubmissionWithoutBlob(db)
             db.query("SELECT fileName, blobId FROM photos").use { cursor ->
                 cursor.moveToFirst()
                 assertEquals("a.photo", cursor.getString(0))
@@ -439,6 +441,27 @@ class MigrationTest {
         )
         db.insertRow("device_state", "id" to 0, "deviceId" to row.authorDeviceId.value, "lamport" to 1L)
     }
+
+    /** A version 5 submission with a photo that was never uploaded (no blob id column yet). */
+    private fun insertSubmissionWithPhoto(db: SupportSQLiteDatabase) = db.insertRow(
+        "chore_submissions",
+        "submissionId" to "sub-1",
+        "choreId" to "chore-1",
+        "dueOn" to "2026-11-02",
+        "kidId" to "kid-1",
+        "submittedAtEpochMs" to receivedAt,
+        "photoFileName" to "a.photo",
+        "photoSha256" to "0".repeat(64),
+        "status" to "SUBMITTED",
+        "lamport" to 3L,
+    )
+
+    private fun assertSubmissionWithoutBlob(db: SupportSQLiteDatabase) =
+        db.query("SELECT photoFileName, photoBlobId FROM chore_submissions").use { cursor ->
+            cursor.moveToFirst()
+            assertEquals("a.photo", cursor.getString(0))
+            assertTrue(cursor.isNull(1), "the kid's device has not uploaded it yet")
+        }
 
     private fun SupportSQLiteDatabase.insertRow(table: String, vararg values: Pair<String, Any?>) {
         val content = ContentValues()

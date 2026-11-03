@@ -70,4 +70,13 @@
   <string name="gate_erase_wrong_pin">That PIN isn’t right.</string>
   <string name="gate_erase_locked_out">Too many wrong PINs. Try again later.</string>
   <string name="gate_erase_unavailable">The PIN can’t be checked on this phone right now.</string>
+
+  <!-- Home shortcuts (M4) -->
+  <string name="home_chat">💬 Chat</string>
+  <string name="home_screen_time">⏳ Screen time</string>
+
+  <!-- Time bank notification (M4 §5.3) -->
+  <string name="timebank_channel_name">Screen time</string>
+  <string name="timebank_notification_title">Screen time is running</string>
+  <string name="timebank_notification_text">Press Stop in Sprout when you’re done.</string>
 </resources>

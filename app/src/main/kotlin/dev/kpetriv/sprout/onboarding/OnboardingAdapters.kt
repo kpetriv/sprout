@@ -6,7 +6,9 @@ import dev.kpetriv.sprout.core.common.SproutDispatchers
 import dev.kpetriv.sprout.core.crypto.DeviceKeyStore
 import dev.kpetriv.sprout.core.crypto.DeviceRegistrationMaterial
 import dev.kpetriv.sprout.core.crypto.DeviceSigner
+import dev.kpetriv.sprout.core.crypto.EncryptionKeyStore
 import dev.kpetriv.sprout.core.crypto.JceEcdsaSigner
+import dev.kpetriv.sprout.core.crypto.chat.EncryptionKeyBinding
 import dev.kpetriv.sprout.core.database.FiatCurrencyProvider
 import dev.kpetriv.sprout.core.database.HouseholdPolicyRepository
 import dev.kpetriv.sprout.core.database.LocalTrial
@@ -27,6 +29,7 @@ import dev.kpetriv.sprout.core.syncfirebase.AuthState
 import dev.kpetriv.sprout.core.syncfirebase.DeviceKeyRegistration
 import dev.kpetriv.sprout.core.syncfirebase.DeviceProof
 import dev.kpetriv.sprout.core.syncfirebase.DeviceStatusValue
+import dev.kpetriv.sprout.core.syncfirebase.EncryptionKeyUpload
 import dev.kpetriv.sprout.core.syncfirebase.FirebaseAuthSession
 import dev.kpetriv.sprout.core.syncfirebase.FirebaseConfig
 import dev.kpetriv.sprout.core.syncfirebase.FunctionsError
@@ -58,6 +61,7 @@ import dev.kpetriv.sprout.sync.ParentSetupTracker
 import dev.kpetriv.sprout.sync.RemovalReason
 import dev.kpetriv.sprout.sync.ShellPreferences
 import dev.kpetriv.sprout.sync.SyncController
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.withContext
 import javax.inject.Inject
@@ -86,11 +90,21 @@ class FirebaseOnboardingAuth @Inject constructor(private val auth: FirebaseAuthS
 /**
  * Onboarding's callables over [HouseholdFunctions]. `deviceStatus` is signed here with the key it asks about (the
  * active or the pending registration key, [DeviceKeyStore]), since onboarding has no session yet.
+ *
+ * A second parent phone ([registerParentDevice]) also sends its X25519 encryption key ([EncryptionKeyStore], created
+ * here), bound to the household of the signed-in parent's claims by the **pending** registration key
+ * ([EncryptionKeyBinding.signWith], M4 §1.1). `createHousehold` and `redeemLinkCode` cannot: the household id the
+ * binding must name is only known from their answer, so those devices register the key right after joining
+ * (`EncryptionKeyRegistrar`, D-M4-13). If the key cannot be prepared, the phone registers without it and does the same.
  */
+@Suppress("LongParameterList") // The callables, the device keys and the encryption key with its binding.
 class FunctionsRegistrationBackend @Inject constructor(
     private val functions: HouseholdFunctions,
     private val keys: DeviceKeyStore,
     @param:Dispatcher(SproutDispatchers.IO) private val dispatcher: CoroutineDispatcher,
+    private val auth: FirebaseAuthSession,
+    private val encryptionKeys: EncryptionKeyStore,
+    private val binding: EncryptionKeyBinding,
 ) : RegistrationBackend {
     override suspend fun beginDeviceRegistration(): Result<ByteArray> =
         functions.beginDeviceRegistration().mapFunctionsFailure()
@@ -131,9 +145,27 @@ class FunctionsRegistrationBackend @Inject constructor(
         .map { RegisteredHousehold(it.hid, it.deviceId) }
 
     override suspend fun registerParentDevice(key: DeviceRegistrationMaterial): Result<PendingParentDevice> =
-        functions.registerParentDevice(key.toRegistration())
+        functions.registerParentDevice(key.toRegistration(), encryptionKeyFor(key))
             .mapFunctionsFailure()
             .map { PendingParentDevice(it.deviceId, it.fingerprint) }
+
+    /**
+     * This device's encryption key bound by the pending registration key [key] to the household of the signed-in
+     * parent; null when any part is missing (no claims, no pending key, a key store failure).
+     */
+    @Suppress("TooGenericExceptionCaught", "SwallowedException", "ReturnCount") // Optional: registered later instead.
+    private suspend fun encryptionKeyFor(key: DeviceRegistrationMaterial): EncryptionKeyUpload? = try {
+        val householdId = (auth.current() as? AuthState.SignedIn)?.claims?.hid ?: return null
+        val pending = keys.pendingSigningKey()?.takeIf { it.publicKey == key.publicKey } ?: return null
+        val deviceId = DeviceId(pending.publicKey.fingerprint().toHex())
+        val publicKey = encryptionKeys.publicKey()
+        val signature = withContext(dispatcher) { binding.signWith(pending, householdId, deviceId, publicKey) }
+        EncryptionKeyUpload(publicKey.bytes, signature)
+    } catch (cancellation: CancellationException) {
+        throw cancellation
+    } catch (failure: Exception) {
+        null
+    }
 
     override suspend fun redeemLinkCode(code: LinkCodeInput, key: DeviceRegistrationMaterial): Result<LinkedKidDevice> =
         functions.redeemLinkCode(code.value, key.toRegistration())

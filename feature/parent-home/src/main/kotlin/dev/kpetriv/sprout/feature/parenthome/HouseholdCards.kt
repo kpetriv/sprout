@@ -173,6 +173,7 @@ private fun deviceText(device: DeviceLabel): String = when (device.role) {
 }
 
 @Composable
+@Suppress("CyclomaticComplexMethod") // A flat lookup: one string per reason.
 private fun reasonText(reason: RejectionReason): String = stringResource(
     when (reason) {
         RejectionReason.UNREADABLE -> R.string.feature_parent_home_reason_unreadable
@@ -187,6 +188,9 @@ private fun reasonText(reason: RejectionReason): String = stringResource(
         RejectionReason.PARENT_SIGNATURE_INVALID -> R.string.feature_parent_home_reason_parent_signature_invalid
         RejectionReason.OUT_OF_ORDER -> R.string.feature_parent_home_reason_out_of_order
         RejectionReason.CONFLICTING_HISTORY -> R.string.feature_parent_home_reason_conflicting_history
+        RejectionReason.WRONG_THREAD -> R.string.feature_parent_home_reason_wrong_thread
+        RejectionReason.WAITING_FOR_EARLIER -> R.string.feature_parent_home_reason_waiting_for_earlier
+        RejectionReason.WRONG_HOUSEHOLD -> R.string.feature_parent_home_reason_wrong_household
         RejectionReason.OTHER -> R.string.feature_parent_home_reason_other
     },
 )
