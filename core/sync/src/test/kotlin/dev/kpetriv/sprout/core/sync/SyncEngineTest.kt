@@ -1,0 +1,321 @@
+package dev.kpetriv.sprout.core.sync
+
+import dev.kpetriv.sprout.core.model.Role
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.async
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.test.TestScope
+import kotlinx.coroutines.test.advanceTimeBy
+import kotlinx.coroutines.test.runCurrent
+import kotlinx.coroutines.test.runTest
+import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertNull
+import kotlin.test.assertTrue
+
+class SyncEngineTest {
+    private val parent = TestIdentity("parent-device", "parent-uid", Role.PARENT)
+    private val log = mutableListOf<String>()
+    private val transport = ScriptedTransport(log)
+    private val recording = RecordingApplier(SoftwareSignatureCheck)
+    private val applier = LoggingApplier(recording, log)
+    private val outbox = InMemoryOutboxSource()
+    private val clock = FakeSyncClock(start = 1_000_000)
+    private val engine = SyncEngine(
+        transport,
+        outbox,
+        applier,
+        clock,
+        backoff = ExponentialBackoff(baseMs = 1_000, maxMs = 3_600_000, jitter = Jitter.None),
+    )
+
+    private fun page(n: Int, hasMore: Boolean, documents: List<DocumentEnvelope> = emptyList()) = PullPage(
+        devices = if (n == 1) listOf(parent.registered) else emptyList(),
+        parentKeys = emptyList(),
+        documents = documents,
+        events = listOf(parent.event("e$n", lamport = n.toLong())),
+        next = SyncCursor(mapOf("events" to "$n")),
+        hasMore = hasMore,
+    )
+
+    @Test
+    fun pullsEveryPageThenRetriesHeldThenPushes() = runTest {
+        val reward = parent.signed(DocTypes.REWARD, "reward-1", lamport = 1)
+        transport.pages += page(1, hasMore = true, documents = listOf(reward))
+        transport.pages += page(2, hasMore = false)
+        outbox.enqueueEvent(parent.event("local", lamport = 3))
+
+        val report = engine.syncOnce()
+
+        assertEquals(
+            listOf(
+                "pull", "registry", "documents", "events", "saveCursor",
+                "pull", "events", "saveCursor",
+                "retryHeld", "push",
+            ),
+            log,
+        )
+        assertEquals(listOf(SyncCursor.START, SyncCursor(mapOf("events" to "1"))), transport.pulledCursors)
+        assertEquals(
+            listOf(SyncCursor(mapOf("events" to "1")), SyncCursor(mapOf("events" to "2"))),
+            applier.savedCursors,
+        )
+        assertEquals(2, report.pulled.pages)
+        assertEquals(1, report.pulled.documents.applied)
+        assertEquals(2, report.pulled.events.applied)
+        assertEquals(1, report.pushed)
+        assertNull(report.error)
+        assertTrue(outbox.rows().isEmpty())
+        assertEquals(report, engine.reports.value)
+    }
+
+    @Test
+    fun documentsAreAppliedInDocTypeOrder() = runTest {
+        val order = mutableListOf<String>()
+        val engine = SyncEngine(
+            transport,
+            outbox,
+            object : RemoteApplier by recording {
+                override suspend fun applyDocuments(documents: List<DocumentEnvelope>): DocumentApplyReport {
+                    order += documents.map { it.docType }
+                    return DocumentApplyReport()
+                }
+            },
+            clock,
+        )
+        transport.pages += page(
+            1,
+            hasMore = false,
+            documents = listOf(DocTypes.REWARD, DocTypes.PARENT_KEY, DocTypes.CHORE, DocTypes.KID, DocTypes.ACCOUNT)
+                .map { parent.signed(it, "doc-$it".replace('_', '-'), lamport = 1) },
+        )
+        engine.syncOnce()
+        assertEquals(
+            listOf(DocTypes.KID, DocTypes.ACCOUNT, DocTypes.PARENT_KEY, DocTypes.CHORE, DocTypes.REWARD),
+            order,
+        )
+    }
+
+    @Test
+    fun cursorIsSavedPerPageSoAFailedPageResumesThere() = runTest {
+        transport.pages += page(1, hasMore = true)
+        transport.beforePull = { if (transport.pulledCursors.size == 1) transport.pullError = SyncError.Transient() }
+
+        val report = engine.syncOnce()
+
+        assertEquals(SyncError.Transient(), report.error)
+        assertEquals(listOf(SyncCursor(mapOf("events" to "1"))), applier.savedCursors)
+        assertEquals(SyncCursor(mapOf("events" to "1")), recording.cursor())
+        assertFalse("push" in log, "a failed pull ends the sync before pushing")
+    }
+
+    @Test
+    fun transientRejectionBacksOffAndStops() = runTest {
+        val first = outbox.enqueueEvent(parent.event("e1", 1))
+        val second = outbox.enqueueEvent(parent.event("e2", 2))
+        transport.outcomes[PushItemId.ofEvent(parent.event("e1", 1))] = SyncError.Transient()
+
+        val report = engine.syncOnce()
+
+        assertEquals(SyncError.Transient(), report.error)
+        assertEquals(1, report.pushed)
+        val row = outbox.row(first)!!
+        assertEquals(1, row.item.attempts)
+        assertEquals(clock.nowMs + 1_000, row.nextAttemptAtEpochMs)
+        assertEquals("transient", row.lastError)
+        assertNull(outbox.row(second), "accepted items in the same batch are acked")
+    }
+
+    @Test
+    fun backoffGrowsWithAttemptsAndHonoursRetryAfter() = runTest {
+        val seq = outbox.enqueueEvent(parent.event("e1", 1))
+        transport.pushError = SyncError.Transient()
+        val delays = (1..4).map {
+            engine.syncOnce()
+            val row = outbox.row(seq)!!
+            (row.nextAttemptAtEpochMs - clock.nowMs).also { clock.advanceBy(it) }
+        }
+        assertEquals(listOf(1_000L, 2_000L, 4_000L, 8_000L), delays)
+
+        transport.pushError = SyncError.Transient(retryAfterMs = 60_000)
+        engine.syncOnce()
+        assertEquals(clock.nowMs + 60_000, outbox.row(seq)!!.nextAttemptAtEpochMs)
+    }
+
+    @Test
+    fun itemsWaitingForBackoffHoldBackLaterItems() = runTest {
+        outbox.enqueueEvent(parent.event("e1", 1))
+        transport.pushError = SyncError.Transient()
+        engine.syncOnce()
+        transport.pushError = null
+        outbox.enqueueEvent(parent.event("e2", 2))
+
+        val report = engine.syncOnce()
+
+        assertEquals(0, report.pushed)
+        assertEquals(1, transport.pushedBatches.size, "nothing is due while the head waits")
+        clock.advanceBy(1_000)
+        assertEquals(2, engine.syncOnce().pushed)
+    }
+
+    @Test
+    fun pushesInSeqOrderInBatchesOfAtMostOneHundred() = runTest {
+        val ids = (1..250).map { n -> parent.event("e$n", n.toLong()).also { outbox.enqueueEvent(it) } }
+            .map(PushItemId::ofEvent)
+
+        val report = engine.syncOnce()
+
+        assertEquals(listOf(100, 100, 50), transport.pushedBatches.map { it.size })
+        assertEquals(ids, transport.pushedBatches.flatten())
+        assertEquals(250, report.pushed)
+        assertTrue(outbox.rows().isEmpty())
+    }
+
+    @Test
+    fun transientFailureStopsBeforeTheNextBatch() = runTest {
+        repeat(150) { n -> outbox.enqueueEvent(parent.event("e$n", n.toLong())) }
+        transport.pushError = SyncError.Transient()
+
+        engine.syncOnce()
+
+        assertEquals(1, transport.pushedBatches.size)
+        assertEquals(100, outbox.rows().count { it.item.attempts == 1 })
+        assertEquals(50, outbox.rows().count { it.item.attempts == 0 })
+    }
+
+    @Test
+    fun permanentRejectionIsAckedAndReported() = runTest {
+        val seq = outbox.enqueueDocument(parent.signed(DocTypes.REWARD, "reward-1", 1))
+        val id = PushItemId("document/reward/reward-1")
+        transport.outcomes[id] = SyncError.Permanent("permission-denied")
+
+        val report = engine.syncOnce()
+
+        assertNull(report.error)
+        assertEquals(1, report.rejected)
+        assertEquals(listOf(PushRejection(seq, id, "permission-denied")), report.rejections)
+        assertTrue(outbox.rows().isEmpty())
+    }
+
+    @Test
+    fun itemMissingFromTheResultIsRetried() = runTest {
+        val seq = outbox.enqueueEvent(parent.event("e1", 1))
+        transport.outcomes[PushItemId.ofEvent(parent.event("e1", 1))] = null
+
+        val report = engine.syncOnce()
+
+        assertEquals(SyncError.Transient(), report.error)
+        assertEquals(1, outbox.row(seq)!!.item.attempts)
+    }
+
+    @Test
+    fun unauthenticatedStops() = runTest {
+        val first = outbox.enqueueEvent(parent.event("e1", 1))
+        transport.outcomes[PushItemId.ofEvent(parent.event("e1", 1))] = SyncError.Unauthenticated
+        repeat(120) { n -> outbox.enqueueEvent(parent.event("more$n", n + 2L)) }
+
+        val report = engine.syncOnce()
+
+        assertEquals(SyncError.Unauthenticated, report.error)
+        assertEquals("unauthenticated", outbox.row(first)!!.lastError)
+        assertEquals(1, transport.pushedBatches.size)
+
+        transport.pullError = SyncError.Unauthenticated
+        clock.advanceBy(10_000)
+        assertEquals(SyncError.Unauthenticated, engine.syncOnce().error)
+        assertEquals(1, transport.pushedBatches.size, "nothing is pushed after a failed pull")
+    }
+
+    @Test
+    fun householdGoneFromPullIsFlagged() = runTest {
+        outbox.enqueueEvent(parent.event("e1", 1))
+        transport.pullError = SyncError.HouseholdGone
+
+        val report = engine.syncOnce()
+
+        assertTrue(report.householdGone)
+        assertEquals(SyncError.HouseholdGone, report.error)
+        assertTrue(transport.pushedBatches.isEmpty())
+    }
+
+    @Test
+    fun householdGoneFromPushIsFlaggedWithoutBackoff() = runTest {
+        val seq = outbox.enqueueEvent(parent.event("e1", 1))
+        transport.pushError = SyncError.HouseholdGone
+
+        val report = engine.syncOnce()
+
+        assertTrue(report.householdGone)
+        assertEquals(0, outbox.row(seq)!!.item.attempts)
+
+        transport.pushError = null
+        transport.outcomes[PushItemId.ofEvent(parent.event("e1", 1))] = SyncError.HouseholdGone
+        assertTrue(engine.syncOnce().householdGone)
+    }
+
+    @Test
+    fun runCoalescesTriggers() = runTest {
+        val trigger = MutableSharedFlow<Unit>(extraBufferCapacity = 16)
+        engine.run(backgroundScope, trigger)
+        runCurrent()
+
+        repeat(5) {
+            trigger.emit(Unit)
+            advanceTimeBy(100)
+        }
+        assertEquals(0, transport.pulledCursors.size, "debounced while triggers keep coming")
+        advanceTimeBy(SyncEngine.DEFAULT_DEBOUNCE_MS + 1)
+        assertEquals(1, transport.pulledCursors.size)
+
+        transport.remoteChanges.emit(RemoteChange("documents"))
+        advanceTimeBy(SyncEngine.DEFAULT_DEBOUNCE_MS + 1)
+        assertEquals(2, transport.pulledCursors.size, "a remote change also syncs")
+    }
+
+    @Test
+    fun requestsDuringASyncRunExactlyOneMoreSync() = runTest {
+        val gate = CompletableDeferred<Unit>()
+        transport.beforePull = { gate.await() }
+        val trigger = MutableSharedFlow<Unit>(extraBufferCapacity = 16)
+        engine.run(backgroundScope, trigger)
+        runCurrent()
+
+        trigger.emit(Unit)
+        advanceTimeBy(SyncEngine.DEFAULT_DEBOUNCE_MS + 1)
+        // The first sync is waiting inside pull; three more requests arrive, debounced apart.
+        repeat(3) {
+            trigger.emit(Unit)
+            advanceTimeBy(SyncEngine.DEFAULT_DEBOUNCE_MS + 1)
+        }
+        assertEquals(0, transport.pulledCursors.size)
+        gate.complete(Unit)
+        settle()
+        assertEquals(2, transport.pulledCursors.size)
+    }
+
+    @Test
+    fun syncOnceCallsAreSerialised() = runTest {
+        val gate = CompletableDeferred<Unit>()
+        var inside = 0
+        var maxInside = 0
+        transport.beforePull = {
+            inside++
+            maxInside = maxOf(maxInside, inside)
+            gate.await()
+            inside--
+        }
+        val first = backgroundScope.async { engine.syncOnce() }
+        val second = backgroundScope.async { engine.syncOnce() }
+        runCurrent()
+        gate.complete(Unit)
+        first.await()
+        second.await()
+        assertEquals(1, maxInside)
+    }
+
+    private fun TestScope.settle() {
+        advanceTimeBy(10_000)
+        runCurrent()
+    }
+}
