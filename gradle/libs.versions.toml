@@ -55,6 +55,9 @@ kotlinxSerialization = "1.12.0"
 hilt = "2.60.1"
 firebaseBom = "35.1.0"
 googleServices = "4.5.0"
+# Google sign-in for parents (core/sync-firebase FirebaseAuthSession): Credential Manager + the Google ID token option.
+androidxCredentials = "1.6.0"
+googleId = "1.2.1"
 junit4 = "4.13.2"
 turbine = "1.2.1"
 robolectric = "4.17"
@@ -123,6 +126,11 @@ firebase-storage = { module = "com.google.firebase:firebase-storage" }
 firebase-functions = { module = "com.google.firebase:firebase-functions" }
 firebase-appcheck-playintegrity = { module = "com.google.firebase:firebase-appcheck-playintegrity" }
 firebase-appcheck-debug = { module = "com.google.firebase:firebase-appcheck-debug" }
+# Task.await() for the Firebase SDKs' Tasks API (core/sync-firebase).
+kotlinx-coroutines-play-services = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-play-services", version.ref = "kotlinxCoroutines" }
+androidx-credentials = { module = "androidx.credentials:credentials", version.ref = "androidxCredentials" }
+androidx-credentials-play-services-auth = { module = "androidx.credentials:credentials-play-services-auth", version.ref = "androidxCredentials" }
+googleid = { module = "com.google.android.libraries.identity.googleid:googleid", version.ref = "googleId" }
 
 junit4 = { module = "junit:junit", version.ref = "junit4" }
 turbine = { module = "app.cash.turbine:turbine", version.ref = "turbine" }
