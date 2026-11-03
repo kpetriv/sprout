@@ -156,6 +156,7 @@ class LedgerPropertyTest {
             Violation.UnknownGame::class,
             Violation.ScoreOutOfRange::class,
             Violation.GameCreditTooHigh::class,
+            Violation.GameCurrencyNotAllowed::class,
         )) {
             assertTrue(kind in violations, kind.toString())
         }
@@ -292,7 +293,8 @@ internal object ReferenceLedger {
             val from = policy.parentSignatureRequiredFromLamport
             val signatureRequired =
                 policy.requireParentSignature && it.isParentOnly() && (from == null || it.lamport >= from)
-            it.envelope.hash in history.invalidHashes || (signatureRequired && it.envelope.parentSignature == null)
+            it.envelope.hash in history.invalidHashes || (signatureRequired && it.envelope.parentSignature == null) ||
+                (it is GamePlayed && !creditsFiat(it))
         }
         val folder = Folder(accounts, policy, history.receivedAt)
         valid
@@ -379,6 +381,9 @@ internal object ReferenceLedger {
     }
 
     private const val SECONDS_PER_DAY = 86_400L
+
+    /** Games credit a fiat currency only, never screen-time minutes (audit H1). */
+    private fun creditsFiat(event: GamePlayed): Boolean = event.currency != Currency.Minutes
 
     /**
      * The most a play may credit, written out independently of `GameCredit`: rounds per difficulty (Seedling 5,
@@ -580,8 +585,9 @@ internal class StreamGenerator(seed: Int, parentKey: ParentAuthorization? = null
 
     /**
      * A play: usually a playable id with a score in range and at most what it earns, sometimes an unknown id, a score
-     * out of range or an amount above the credit (statically invalid). Half the plays get a server stamp (they were
-     * "pulled"), a few days either side of `playedOn`, so some fall outside the played-on window.
+     * out of range, an amount above the credit, or a screen-time minutes account (statically invalid). Half the
+     * plays get a server stamp (they were "pulled"), a few days either side of `playedOn`, so some fall outside the
+     * played-on window.
      */
     private fun game(device: DeviceWriter, account: Account) {
         val gameId = gameIds.random(random)
@@ -593,7 +599,7 @@ internal class StreamGenerator(seed: Int, parentKey: ParentAuthorization? = null
             else -> random.nextLong(1, max + 1)
         }
         val event = device.game(amount, dates.random(random), account, gameId, score)
-        if (max == null || amount > max) invalid += event.envelope.hash
+        if (max == null || amount > max || account.currency == Currency.Minutes) invalid += event.envelope.hash
         if (random.nextBoolean()) {
             val receivedOn = event.playedOn.plusDays(STAMP_OFFSETS.random(random))
             stamps[event.envelope.hash] =

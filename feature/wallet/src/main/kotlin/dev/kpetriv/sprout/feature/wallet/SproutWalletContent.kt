@@ -145,8 +145,10 @@ internal fun EmptyHistory(tier: KidUiTier, modifier: Modifier = Modifier) {
     )
 }
 
+/** One history row; an excluded game play leads its [subtitle] with why it is not counted. */
 @Composable
 internal fun EventRow(event: EventUi, tier: KidUiTier, modifier: Modifier = Modifier, subtitle: String? = event.note) {
+    val notCounted = event.excluded?.let { stringResource(it.textRes) }
     LedgerEventRow(
         icon = event.category.icon,
         title = stringResource(event.titleRes),
@@ -154,7 +156,13 @@ internal fun EventRow(event: EventUi, tier: KidUiTier, modifier: Modifier = Modi
         currency = event.currency,
         direction = event.direction,
         tier = tier,
-        subtitle = subtitle,
+        subtitle = listOfNotNull(notCounted, subtitle).joinToString(" · ").ifEmpty { null },
         modifier = modifier,
     )
 }
+
+private val GameExclusion.textRes: Int
+    get() = when (this) {
+        GameExclusion.PLAYED_ON_OUT_OF_RANGE -> R.string.feature_wallet_game_not_counted_window
+        GameExclusion.DAILY_CAP_EXCEEDED -> R.string.feature_wallet_game_not_counted_cap
+    }

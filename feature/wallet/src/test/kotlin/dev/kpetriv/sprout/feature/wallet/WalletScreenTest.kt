@@ -163,6 +163,25 @@ class WalletScreenTest {
     }
 
     @Test
+    fun `an excluded game says why it is not counted`() {
+        val ready = WalletPreviewData.ready(KidUiTier.SPROUT)
+        val games = ready.events.filter { it.category == EventCategory.GAMES }
+        show(
+            ready.copy(
+                events = listOf(
+                    games.single().copy(eventId = "late", excluded = GameExclusion.PLAYED_ON_OUT_OF_RANGE),
+                    games.single().copy(eventId = "over", excluded = GameExclusion.DAILY_CAP_EXCEEDED),
+                ),
+            ),
+        )
+
+        val late = "Game reward, Not counted: synced too long after the day it was played"
+        compose.onNodeWithContentDescription(late, substring = true).assertIsDisplayed()
+        compose.onNodeWithContentDescription("Not counted: over that day's game limit", substring = true)
+            .assertIsDisplayed()
+    }
+
+    @Test
     fun `seedling hides read aloud without a speech implementation`() {
         show(WalletPreviewData.ready(KidUiTier.SEEDLING), readAloud = ReadAloud.None)
         compose.onNodeWithText("Read to me").assertDoesNotExist()

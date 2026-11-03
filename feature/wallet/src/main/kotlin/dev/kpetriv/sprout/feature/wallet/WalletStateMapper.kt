@@ -10,6 +10,7 @@ import dev.kpetriv.sprout.core.domainledger.ChoreRewarded
 import dev.kpetriv.sprout.core.domainledger.Currency
 import dev.kpetriv.sprout.core.domainledger.GamePlayed
 import dev.kpetriv.sprout.core.domainledger.InterestAccrued
+import dev.kpetriv.sprout.core.domainledger.LedgerAnomaly
 import dev.kpetriv.sprout.core.domainledger.LedgerEvent
 import dev.kpetriv.sprout.core.domainledger.ManualAdjustment
 import dev.kpetriv.sprout.core.domainledger.Money
@@ -34,6 +35,7 @@ internal data class WalletSnapshot(
     val events: List<LedgerEvent>,
     val anomaliesCount: Int,
     val goals: List<SavingsGoal> = emptyList(),
+    val excludedGames: Map<String, GameExclusion> = emptyMap(),
 )
 
 /** Screen-local state the data sources do not own. */
@@ -58,7 +60,7 @@ internal class WalletStateMapper(private val formatter: MoneyFormatter) {
         val balances = balances(snapshot.accounts, snapshot.balances, tier)
         val main = balances.firstOrNull { it.kind == AccountKind.MAIN && it.currency is Currency.Fiat }
         val coins = main?.let { MoneyFormatter.wholeCoins(it.amount, it.currency as Currency.Fiat) } ?: 0L
-        val events = snapshot.events.mapNotNull(::eventUi)
+        val events = snapshot.events.mapNotNull { eventUi(it, snapshot.excludedGames[it.eventId.value]) }
         val filter = local.filter.takeIf { tier == KidUiTier.SAPLING }
         return WalletUiState.Ready(
             kid = snapshot.kid,
@@ -151,8 +153,23 @@ internal class WalletStateMapper(private val formatter: MoneyFormatter) {
             KidUiTier.SAPLING -> SAPLING_HISTORY
         }
 
-        /** A history row for [event], or null for events that move no value (a time bank start). */
-        fun eventUi(event: LedgerEvent): EventUi? {
+        /**
+         * Game plays the ledger excluded, by event id, from the kid's anomalies: one out of its played-on window or
+         * over its day's cap.
+         */
+        fun excludedGames(anomalies: List<LedgerAnomaly>): Map<String, GameExclusion> = anomalies.mapNotNull {
+            when (it) {
+                is LedgerAnomaly.PlayedOnOutOfRange -> it.eventId.value to GameExclusion.PLAYED_ON_OUT_OF_RANGE
+                is LedgerAnomaly.DailyCapExceeded -> it.eventId.value to GameExclusion.DAILY_CAP_EXCEEDED
+                else -> null
+            }
+        }.toMap()
+
+        /**
+         * A history row for [event], or null for events that move no value (a time bank start). [excluded] marks a
+         * game play the ledger left out of the balance; it is ignored for any other event.
+         */
+        fun eventUi(event: LedgerEvent, excluded: GameExclusion? = null): EventUi? {
             if (event !is MovesValue) return null
             val amount = event.amount
             return EventUi(
@@ -171,6 +188,7 @@ internal class WalletStateMapper(private val formatter: MoneyFormatter) {
                     else -> null
                 },
                 createdAt = event.envelope.createdAt,
+                excluded = excluded.takeIf { event is GamePlayed },
             )
         }
 

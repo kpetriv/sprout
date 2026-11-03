@@ -65,6 +65,22 @@ interface LedgerInboxDao {
     @Query("UPDATE ledger_inbox SET reason = :reason WHERE eventId = :eventId AND hash = :hash")
     suspend fun updateReason(eventId: EventId, hash: String, reason: String)
 
+    /**
+     * Sets the server stamp of the held row `(eventId, hash)` when it has none (held before schema v7), from a pulled
+     * copy of the same event (M5 review L5). Returns how many rows changed.
+     */
+    @Query(
+        """
+        UPDATE ledger_inbox SET serverReceivedAtEpochMs = :serverReceivedAtEpochMs
+        WHERE eventId = :eventId AND hash = :hash AND serverReceivedAtEpochMs IS NULL
+        """,
+    )
+    suspend fun backfillStamp(eventId: EventId, hash: String, serverReceivedAtEpochMs: Long): Int
+
+    /** The newest server stamp of any held row, or null when none has one. */
+    @Query("SELECT MAX(serverReceivedAtEpochMs) FROM ledger_inbox")
+    suspend fun newestServerStamp(): Long?
+
     @Query("SELECT COUNT(*) FROM ledger_inbox")
     suspend fun count(): Int
 

@@ -191,6 +191,7 @@ private fun reasonText(reason: RejectionReason): String = stringResource(
         RejectionReason.WRONG_THREAD -> R.string.feature_parent_home_reason_wrong_thread
         RejectionReason.WAITING_FOR_EARLIER -> R.string.feature_parent_home_reason_waiting_for_earlier
         RejectionReason.WRONG_HOUSEHOLD -> R.string.feature_parent_home_reason_wrong_household
+        RejectionReason.GAME_RULE -> R.string.feature_parent_home_reason_game_rule
         RejectionReason.OTHER -> R.string.feature_parent_home_reason_other
     },
 )

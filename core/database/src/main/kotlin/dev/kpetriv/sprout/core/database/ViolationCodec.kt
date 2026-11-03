@@ -147,6 +147,8 @@ internal object ViolationCodec {
                 money("requested", violation.requested)
             }
 
+            is Violation.GameCurrencyNotAllowed -> currency("currency", violation.currency)
+
             is Violation.PlayedOnOutOfRange -> {
                 put("playedOn", violation.playedOn.toString())
                 put("today", violation.today.toString())
@@ -246,6 +248,8 @@ internal object ViolationCodec {
             )
 
             "GameCreditTooHigh" -> Violation.GameCreditTooHigh(money("earned"), money("requested"))
+
+            "GameCurrencyNotAllowed" -> Violation.GameCurrencyNotAllowed(currency("currency"))
 
             "PlayedOnOutOfRange" -> Violation.PlayedOnOutOfRange(
                 CalendarDate.parse(text("playedOn")),

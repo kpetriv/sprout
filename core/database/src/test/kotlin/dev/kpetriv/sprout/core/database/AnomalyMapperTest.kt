@@ -64,6 +64,7 @@ class AnomalyMapperTest {
         Violation.ScoreOutOfRange(score = 11, max = 10),
         Violation.ScoreOutOfRange(score = -1, max = 5),
         Violation.GameCreditTooHigh(earned = Money(11), requested = Money(12)),
+        Violation.GameCurrencyNotAllowed(Currency.Minutes),
         Violation.PlayedOnOutOfRange(Fixtures.today.plusDays(-8), Fixtures.today),
     )
 

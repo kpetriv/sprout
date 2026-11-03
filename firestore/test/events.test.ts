@@ -158,6 +158,15 @@ describe('events: create', () => {
     await assertFails(put(asParent(env), event({ serverReceivedAt: new Date(0) })));
   });
 
+  it('a kid cannot forge or omit the server stamp of a game_played event (M5 audit I7, D-M5-5)', async () => {
+    // The played-on window is judged against this stamp, so a kid session must not be able to choose it.
+    await assertFails(put(asKid(env), gamePlayed({ serverReceivedAt: undefined })));
+    await assertFails(put(asKid(env), gamePlayed({ serverReceivedAt: new Date(0) })));
+    await assertFails(put(asKid(env), gamePlayed({ serverReceivedAt: new Date(Date.now() + 9 * 86_400_000) })));
+    await assertFails(put(asKid(env), gamePlayed({ serverReceivedAt: '2026-11-03T00:00:00Z' })));
+    await assertSucceeds(put(asKid(env), gamePlayed()));
+  });
+
   it('a kid cannot store a conflicting copy under eventId__hash', async () => {
     await assertFails(put(asKid(env), kidEvent(), `evt-kid-1__${HASH}`));
     await assertSucceeds(put(asKid(env), kidEvent()));

@@ -17,8 +17,10 @@ import dev.kpetriv.sprout.core.domainledger.Account
 import dev.kpetriv.sprout.core.domainledger.AppendResult
 import dev.kpetriv.sprout.core.domainledger.Balance
 import dev.kpetriv.sprout.core.domainledger.ChainVerification
+import dev.kpetriv.sprout.core.domainledger.Currency
 import dev.kpetriv.sprout.core.domainledger.DeviceRegistry
 import dev.kpetriv.sprout.core.domainledger.EventId
+import dev.kpetriv.sprout.core.domainledger.GamePlayed
 import dev.kpetriv.sprout.core.domainledger.HashChain
 import dev.kpetriv.sprout.core.domainledger.IngestOrdering
 import dev.kpetriv.sprout.core.domainledger.IngestPlan
@@ -29,7 +31,9 @@ import dev.kpetriv.sprout.core.domainledger.LedgerJson
 import dev.kpetriv.sprout.core.domainledger.LedgerPolicy
 import dev.kpetriv.sprout.core.domainledger.LedgerRepository
 import dev.kpetriv.sprout.core.domainledger.LedgerRules
+import dev.kpetriv.sprout.core.domainledger.Money
 import dev.kpetriv.sprout.core.domainledger.MovesValue
+import dev.kpetriv.sprout.core.domainledger.PlayedOnWindow
 import dev.kpetriv.sprout.core.domainledger.Projection
 import dev.kpetriv.sprout.core.domainledger.QuarantineReason
 import dev.kpetriv.sprout.core.domainledger.RegisteredDevice
@@ -47,6 +51,7 @@ import dev.kpetriv.sprout.core.domainledger.requiresParentSignature
 import dev.kpetriv.sprout.core.domainledger.signatureBytes
 import dev.kpetriv.sprout.core.domainledger.signedPayload
 import dev.kpetriv.sprout.core.domainledger.signedPayloadOf
+import dev.kpetriv.sprout.core.model.CalendarDate
 import dev.kpetriv.sprout.core.model.DeviceId
 import dev.kpetriv.sprout.core.model.KidId
 import dev.kpetriv.sprout.core.model.Role
@@ -57,10 +62,12 @@ import dev.kpetriv.sprout.core.time.Clock
 import dev.kpetriv.sprout.core.time.HouseholdCalendar
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.sync.Mutex
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonObjectBuilder
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
+import java.util.WeakHashMap
 import javax.inject.Inject
 import kotlin.time.Instant
 
@@ -107,7 +114,11 @@ import kotlin.time.Instant
  * ([calendar]); [LedgerRules.validate] gets that date. A pulled event keeps its server stamp in
  * `serverReceivedAtEpochMs` (held ones in `ledger_inbox` too), and every projection is built with those stamps, so a
  * pulled game dated outside the window of its stamp is stored (its author's chain still links) but excluded as
- * [LedgerAnomaly.PlayedOnOutOfRange], identically on every receiver.
+ * [LedgerAnomaly.PlayedOnOutOfRange], identically on every receiver. A pulled copy of an event already stored or held
+ * without a stamp (the author's own LOCAL row, or a row from before schema v7) gives it its stamp, and the caches are
+ * rebuilt, so the author device converges with the receivers once it pulls its own events back (M5 audit M1). A local
+ * game is also refused when it is dated before the window of the newest server stamp this device holds
+ * ([newestServerStamp]): the device's date was moved back (M5 audit L1).
  *
  * **Reward catalogue (M2, M3).** A kid-authored [RewardPurchased] appended here must match the catalogue row of its
  * reward (active, available to the kid, same cost, currency and granted minutes, and a parent-authored row: see
@@ -212,7 +223,8 @@ class RoomLedgerRepository internal constructor(
      *    `LEDGER_EVENT_QUARANTINED`; a document too broken to decode is audited only. One the verifier holds (author
      *    device unknown or PENDING, D-M3-31) goes to `ledger_inbox` with that reason and is verified again on every
      *    later ingest and [retryHeld].
-     * 2. Events already stored under the same `(eventId, hash)` are duplicates and skipped.
+     * 2. Events already stored under the same `(eventId, hash)` are duplicates and skipped; a stored or held copy
+     *    without a server stamp takes the duplicate's (and the caches are rebuilt), see [backfillStored].
      * 3. [IngestOrdering.plan] orders the rest together with the events held in `ledger_inbox`, from each author's
      *    stored chain heads, and detects forks against the stored chains ([LedgerEventDao.branchHashes]). Every
      *    forked branch is quarantined `FORKED_CHAIN` (audited): the batch's, the stored ones the plan reports with
@@ -249,6 +261,49 @@ class RoomLedgerRepository internal constructor(
 
     /** The highest lamport this device has seen ([DeviceClock.current]). */
     suspend fun localMaxLamport(): Long = database.withTransaction { deviceClock.current() }
+
+    /**
+     * The newest backend `serverReceivedAt` stamp this device holds, on a stored or a held event of any author
+     * (null before anything stamped was pulled). The server set it, so the real date is at least its UTC date
+     * whatever the device clock says (M5 audit L1).
+     */
+    internal suspend fun newestServerStamp(): Instant? = database.withTransaction { newestServerStampLocked() }
+
+    private suspend fun newestServerStampLocked(): Instant? =
+        listOfNotNull(events.newestServerStamp(), inbox.newestServerStamp()).maxOrNull()
+            ?.let(Instant::fromEpochMilliseconds)
+
+    /**
+     * What is left of [kidId]'s daily game cap in [currency] on [date] (never negative), as the household projection
+     * counts it, without folding or re-verifying the whole ledger (M5 review L7): only the kid's stored [GamePlayed]
+     * rows dated [date], and every other copy of their ids (a conflicting copy decides which one applies), are
+     * projected, with their server stamps and the current policy. Whether a game counts depends on no other event
+     * (static rules, its window, and the games before it that day), so the answer is the full projection's. Rows are
+     * hash-checked but their signatures are not re-verified here; the append that follows a play does that.
+     */
+    internal suspend fun remainingGameCap(kidId: KidId, date: CalendarDate, currency: Currency): Money =
+        database.withTransaction {
+            val active = policies.load()
+            val ids = events.verifiedOfType(kidId, GAME_PLAYED_TYPE)
+                .filter { row -> (LedgerEventMapper.toDomain(row) as? GamePlayed)?.playedOn == date }
+                .map { it.eventId }
+            val rows = ids.distinct().chunked(MAX_QUERY_IDS).flatMap { events.verifiedCopiesOf(it) }
+            val received = HashMap<String, Instant>()
+            val folded = rows.mapNotNull { row ->
+                LedgerEventMapper.toDomain(row)?.also { event ->
+                    row.serverReceivedAtEpochMs?.let { ms ->
+                        received[event.envelope.hash] = Instant.fromEpochMilliseconds(ms)
+                    }
+                }
+            }
+            val projection = project(folded, active, received)
+            val cap = projection.policy.dailyGameCapFor(currency)
+            // The projection never credits past the cap; both are bounded, so this cannot overflow.
+            maxOf(cap - projection.dailyGameCredits(kidId, date, currency), Money.ZERO)
+        }
+
+    /** Serialises game plays on this device's database ([dev.kpetriv.sprout.core.database.usecase.PlayGameUseCase]). */
+    internal val gamePlays: Mutex get() = GamePlayLocks.of(database)
 
     /** Binds the local-event check to this device's key; a Keystore read, so done outside any transaction. */
     internal suspend fun bindLocalCheck(): LocalEventCheck.Bound = localEvents.bind()
@@ -450,7 +505,7 @@ class RoomLedgerRepository internal constructor(
         stored: List<LedgerEvent>,
         before: Projection,
     ): AppendResult {
-        val validation = LedgerRules.validate(event, before, calendar.today())
+        val validation = LedgerRules.validate(event, before, calendar.today()).with(serverDateViolation(event))
         return when {
             validation is ValidationResult.Invalid ->
                 AppendResult.Rejected(INVARIANT_REJECTION, validation.violations)
@@ -463,6 +518,24 @@ class RoomLedgerRepository internal constructor(
                 AppendResult.Accepted
             }
         }
+    }
+
+    /**
+     * A local game dated before the played-on window of the newest server stamp this device holds (M5 audit L1): the
+     * device's date was moved back, and every receiver would exclude it. Null when it is not a game or nothing
+     * stamped was pulled yet.
+     */
+    private suspend fun serverDateViolation(event: LedgerEvent): Violation? {
+        val playedOn = (event as? GamePlayed)?.playedOn ?: return null
+        return newestServerStampLocked()?.let(PlayedOnWindow::utcDateOf)
+            ?.takeIf { PlayedOnWindow.isBeforeWindowOf(playedOn, it) }
+            ?.let { Violation.PlayedOnOutOfRange(playedOn, it) }
+    }
+
+    private fun ValidationResult.with(violation: Violation?): ValidationResult = when {
+        violation == null -> this
+        this is ValidationResult.Invalid -> ValidationResult.Invalid(violations + violation)
+        else -> ValidationResult.Invalid(listOf(violation))
     }
 
     /**
@@ -556,7 +629,7 @@ class RoomLedgerRepository internal constructor(
      * transport gave none or a pre-v7 `ledger_inbox` row held it); [heldKey] (and the row's [heldReason]) are set when
      * it came from `ledger_inbox`.
      */
-    private class Incoming(
+    private data class Incoming(
         val json: JsonObject,
         val serverReceivedAtEpochMs: Long?,
         val heldKey: Pair<EventId, String>?,
@@ -570,6 +643,9 @@ class RoomLedgerRepository internal constructor(
         var quarantined = 0
         var newlyHeld = 0
         var maxLamport = 0L
+
+        /** Stored or held rows that took the server stamp of a pulled copy ([backfillStored], [backfillPlanned]). */
+        var backfilled = 0
 
         fun report() = EventApplyReport(applied, duplicates, quarantined, newlyHeld)
     }
@@ -605,7 +681,12 @@ class RoomLedgerRepository internal constructor(
                 is VerifiedRemote.Ok -> accept(verified, item, ok, tally)
             }
         }
-        if (ok.isNotEmpty()) applyPlanned(ok, check, active, now, tally)
+        val refreshed = ok.isNotEmpty() && applyPlanned(ok, check, active, now, tally)
+        if (tally.backfilled > 0 && !refreshed) {
+            // A stamp learnt for a stored row can exclude a game (D-M5-5), so the caches follow it (audit M1).
+            val loaded = loadVerified(check, active)
+            refreshCaches(project(loaded.events, active, loaded.received), loaded.events)
+        }
         if (tally.applied > 0) {
             // The verifier bounded every stored lamport by localMax + maxLamportJump; clamp anyway.
             val jump = active.policy.maxLamportJump
@@ -625,7 +706,11 @@ class RoomLedgerRepository internal constructor(
     private fun remotePolicy(local: LedgerPolicy, synced: HouseholdPolicyEntity?): LedgerPolicy =
         local.copy(requireParentSignature = synced?.requireParentSignature ?: true)
 
-    /** Step 2 of [ingest]: a verified event already stored is a duplicate; the rest wait for planning in [ok]. */
+    /**
+     * Step 2 of [ingest]: a verified event already stored is a duplicate; the rest wait for planning in [ok]. A
+     * duplicate still gives its server stamp to a stored or held copy that has none ([backfillStored],
+     * [backfillPlanned]).
+     */
     private suspend fun accept(
         verified: VerifiedRemote.Ok,
         item: Incoming,
@@ -636,14 +721,54 @@ class RoomLedgerRepository internal constructor(
         val stored = events.copiesOf(key.first).any { it.hash == key.second }
         if (stored) dropHeld(item)
         when {
-            stored || key in ok -> if (item.heldKey == null) tally.duplicates++
+            stored -> {
+                backfillStored(key, item, tally)
+                if (item.heldKey == null) tally.duplicates++
+            }
+
+            key in ok -> {
+                backfillPlanned(key, item, ok, tally)
+                if (item.heldKey == null) tally.duplicates++
+            }
+
             else -> ok[key] = verified to item
         }
     }
 
     /**
+     * Gives the stored copy [key] the server stamp of [item] when it has none (M5 audit M1). The author device's own
+     * rows are LOCAL and unstamped: the stamp every receiver judged them by comes back only when the device pulls its
+     * own events, and without it the author would keep crediting a play every receiver excludes. Rows stored before
+     * schema v7 get their stamp the same way.
+     */
+    private suspend fun backfillStored(key: Pair<EventId, String>, item: Incoming, tally: IngestTally) {
+        val ms = item.serverReceivedAtEpochMs ?: return
+        if (events.backfillStamp(key.first, key.second, ms) > 0) tally.backfilled++
+    }
+
+    /**
+     * A copy of [key] is already planned in this ingest (a held row, planned first); when it has no stamp it takes
+     * [item]'s, on its `ledger_inbox` row (in case it stays held) and on the planned item (in case it is stored now)
+     * (M5 review L5).
+     */
+    private suspend fun backfillPlanned(
+        key: Pair<EventId, String>,
+        item: Incoming,
+        ok: MutableMap<Pair<EventId, String>, Pair<VerifiedRemote.Ok, Incoming>>,
+        tally: IngestTally,
+    ) {
+        val ms = item.serverReceivedAtEpochMs ?: return
+        val (verified, planned) = ok.getValue(key)
+        if (planned.serverReceivedAtEpochMs != null) return
+        planned.heldKey?.let { (eventId, hash) -> inbox.backfillStamp(eventId, hash, ms) }
+        ok[key] = verified to planned.copy(serverReceivedAtEpochMs = ms)
+        tally.backfilled++
+    }
+
+    /**
      * Steps 3 to 5 of [ingest] for the verified, not yet stored events in [ok]: plan (forks first), quarantine the
-     * forked branches (stored ones and their stored descendants included), then apply in order.
+     * forked branches (stored ones and their stored descendants included), then apply in order. Returns whether the
+     * caches were rebuilt (with every stored row and stamp, so stamps backfilled before it are included).
      */
     private suspend fun applyPlanned(
         ok: Map<Pair<EventId, String>, Pair<VerifiedRemote.Ok, Incoming>>,
@@ -651,7 +776,7 @@ class RoomLedgerRepository internal constructor(
         active: ActivePolicy,
         now: Long,
         tally: IngestTally,
-    ) {
+    ): Boolean {
         val batch = ok.values.map { it.first.event }
         val authors = batch.map { it.envelope.authorDeviceId }.toSet()
         val plan = plan(batch, authors)
@@ -672,7 +797,9 @@ class RoomLedgerRepository internal constructor(
             val (verified, item) = ok.getValue(event.eventId to event.envelope.hash)
             hold(event, verified.json, item, HELD_CHAIN_GAP, now, tally)
         }
-        if (tally.applied > 0 || storedForked > 0) refreshCaches(project(folded, active, received), folded)
+        val refresh = tally.applied > 0 || storedForked > 0 || tally.backfilled > 0
+        if (refresh) refreshCaches(project(folded, active, received), folded)
+        return refresh
     }
 
     /**
@@ -916,6 +1043,8 @@ class RoomLedgerRepository internal constructor(
             ),
         )
         if (inserted == NOT_INSERTED) {
+            // Already held: a pre-v7 row takes this copy's stamp (M5 review L5).
+            incoming.serverReceivedAtEpochMs?.let { ms -> inbox.backfillStamp(envelope.eventId, envelope.hash, ms) }
             tally.duplicates++
             return
         }
@@ -948,7 +1077,10 @@ class RoomLedgerRepository internal constructor(
         val event = LedgerJson.decodeOrNull(json)
         val stored = event != null && events.copiesOf(event.eventId).any { it.hash == event.envelope.hash }
         when {
-            stored -> tally.duplicates++
+            stored -> {
+                if (event != null) backfillStored(event.eventId to event.envelope.hash, item, tally)
+                tally.duplicates++
+            }
 
             event != null -> {
                 storeRemote(event, json, item, now, refused.reason.name, AuditAction.LEDGER_EVENT_QUARANTINED)
@@ -1045,6 +1177,12 @@ class RoomLedgerRepository internal constructor(
         /** [AppendResult.Rejected.reason] when a kid-authored purchase does not match the reward catalogue. */
         const val CATALOGUE_REJECTION: String = "reward does not match the catalogue"
 
+        /** `ledger_events.type` of a [GamePlayed]. */
+        private const val GAME_PLAYED_TYPE: String = "game_played"
+
+        /** Most ids one `IN (...)` query binds (SQLite's default limit is 999 variables). */
+        private const val MAX_QUERY_IDS: Int = 500
+
         /** Prefix of the quarantine reason of a pulled event that broke an order-independent ledger rule. */
         const val INVARIANT_QUARANTINE: String = "invariant violated: "
 
@@ -1119,6 +1257,13 @@ internal class LedgerSnapshot(
         trustEnvelopeRoles = roles.trustEnvelopeRoles,
         receivedAt = received,
     )
+}
+
+/** One game-play lock per database in the process, like [DeviceClock]. */
+private object GamePlayLocks {
+    private val locks = WeakHashMap<SproutDatabase, Mutex>()
+
+    fun of(database: SproutDatabase): Mutex = synchronized(locks) { locks.getOrPut(database) { Mutex() } }
 }
 
 /** One quarantined row, as the parent's "Rejected events" card lists it: ids, author device, reason; no payload. */

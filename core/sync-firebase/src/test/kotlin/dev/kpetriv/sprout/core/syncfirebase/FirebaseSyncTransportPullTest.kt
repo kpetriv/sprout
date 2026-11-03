@@ -118,6 +118,19 @@ class FirebaseSyncTransportPullTest {
     }
 
     @Test
+    fun `an event without a readable server stamp is dropped as malformed, never passed on unstamped`() = runTest {
+        transport().push(listOf(TestData.event("evt-1")), emptyList())
+        transport().push(listOf(TestData.event("evt-2", lamport = 2)), emptyList())
+        firestore.unreadableStamps += "households/h1/events/evt-1"
+
+        val page = transport().pull(SyncCursor.START)
+
+        assertEquals(listOf(TestData.event("evt-2", lamport = 2)), page.events.map { it.json })
+        assertTrue(page.events.all { it.serverReceivedAt != null })
+        assertEquals(1, page.malformed)
+    }
+
+    @Test
     fun `pages follow the cursor across writes that share a server time`() = runTest {
         // One batch: all five events share one serverReceivedAt, so only the document id orders them.
         transport().push((1..5).map { TestData.event("evt-$it") }, emptyList())

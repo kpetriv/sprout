@@ -81,7 +81,9 @@ import javax.inject.Singleton
  * digest of the collection), then each document collection in [DocTypes.applyOrder], then events, then messages,
  * each by `(serverReceivedAt, document id)` after its cursor, [pageSize] per collection. Parent keys come back as
  * registry entries only. A device row that does not parse, or whose id is not the SHA-256 of its public key (audit H1),
- * is dropped and counted in [PullPage.malformed], as is a document or an event that does not decode (audit I3). A
+ * is dropped and counted in [PullPage.malformed], as is a document or an event that does not decode (audit I3), and
+ * an event without a readable `serverReceivedAt` (M5 audit L2: the stamp is mandatory, and the played-on window of
+ * D-M5-5 is judged against it). A
  * KID session reads only its own kid's messages (`where threadId == kidId`, the read scope the rules enforce; the kid
  * comes from [HouseholdScope.currentKidId], else this device's registry entry); a session whose kid cannot be
  * determined and that is not known to be a parent skips the messages lane and its listener instead of issuing a query
@@ -573,8 +575,11 @@ internal constructor(
         }
         val eventPage = page(hid, FirestoreLayout.EVENTS, cursor, next)
         hasMore = hasMore || eventPage.size >= pageSize
+        // The rules require a server stamp on every event, so one without a readable stamp is malformed: passing it
+        // on unstamped would switch the played-on window off for it on every receiver (audit L2).
         val events = eventPage.mapNotNull { doc ->
-            StoredShapes.nestEvent(doc.data)?.let { PulledEvent(it, doc.serverReceivedAt?.toInstant()) }
+            val stamp = doc.serverReceivedAt?.toInstant() ?: return@mapNotNull null
+            StoredShapes.nestEvent(doc.data)?.let { PulledEvent(it, stamp) }
         }
         malformed += eventPage.size - events.size
 

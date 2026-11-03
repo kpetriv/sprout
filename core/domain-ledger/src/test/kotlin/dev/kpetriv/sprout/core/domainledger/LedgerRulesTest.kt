@@ -335,13 +335,13 @@ class LedgerRulesTest {
         assertEquals(emptyList(), violations(kid.game(10), before))
         // A different day has its own allowance.
         assertEquals(emptyList(), violations(kid.game(15, Fixtures.today.copy(day = 3)), before))
-        // So does another currency, with its own override.
-        val minutesPolicy = policy.copy(dailyGameCapOverrides = mapOf(Currency.Minutes to Money(5)))
-        val minutesBefore = Projection.empty(Fixtures.accounts, minutesPolicy)
-        assertEquals(emptyList(), violations(kid.game(5, account = Fixtures.minutes), minutesBefore))
-        assertIs<Violation.DailyCapExceeded>(
-            violations(kid.game(6, account = Fixtures.minutes), minutesBefore).single(),
-        )
+        // So does another fiat currency, with its own override.
+        val eur = Currency.Fiat("EUR")
+        val eurMain = Account(AccountId("main-eur"), Fixtures.kid, eur, AccountKind.MAIN)
+        val eurPolicy = policy.copy(dailyGameCapOverrides = mapOf(eur to Money(5)))
+        val eurBefore = Projection.empty(Fixtures.accounts + eurMain, eurPolicy).apply(listOf(kid.game(15)))
+        assertEquals(emptyList(), violations(kid.game(5, account = eurMain), eurBefore))
+        assertIs<Violation.DailyCapExceeded>(violations(kid.game(6, account = eurMain), eurBefore).single())
     }
 
     @Test

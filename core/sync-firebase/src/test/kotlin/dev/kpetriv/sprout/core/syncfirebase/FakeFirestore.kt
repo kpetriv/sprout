@@ -33,6 +33,12 @@ class FakeFirestore : FirestoreFacade {
     /** When set, every query and getAll fails with this code. */
     var queryFailure: FirestoreCode? = null
 
+    /**
+     * Paths whose documents queries still return (in their stamp's order) but with a `serverReceivedAt` the client
+     * cannot read, as after a change in the SDK's type mapping.
+     */
+    val unreadableStamps = mutableSetOf<String>()
+
     /** When true, commits never complete (an offline device whose writes stay queued). */
     var hangCommits = false
 
@@ -85,6 +91,13 @@ class FakeFirestore : FirestoreFacade {
                     (doc.serverReceivedAt == after.serverReceivedAt && doc.id > after.documentId)
             }
             .take(limit)
+            .map { doc ->
+                if ("$path/${doc.id}" !in unreadableStamps) {
+                    doc
+                } else {
+                    doc.copy(data = doc.data + (FirestoreFacade.SERVER_RECEIVED_AT to doc.serverReceivedAt.toString()))
+                }
+            }
     }
 
     override fun listen(path: String, latestOnly: Boolean, where: FieldEquals?): Flow<Unit> {

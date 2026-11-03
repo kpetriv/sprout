@@ -13,7 +13,10 @@ import kotlinx.coroutines.flow.Flow
 /** One stored copy of an eventId, as [LedgerEventDao.copiesOf] lists it. */
 data class StoredCopy(val hash: String, val quarantined: Boolean)
 
-/** Append-only access to `ledger_events`. There is deliberately no delete; the only update is [quarantine]. */
+/**
+ * Append-only access to `ledger_events`. There is deliberately no delete; the only updates are [quarantine] and
+ * [backfillStamp] (which only ever fills a missing server stamp, never changes one).
+ */
 @Dao
 @Suppress("TooManyFunctions") // Inserts, chain heads, verified and quarantined reads.
 interface LedgerEventDao {
@@ -37,6 +40,34 @@ interface LedgerEventDao {
         """,
     )
     suspend fun quarantine(eventId: EventId, hash: String, reason: String)
+
+    /**
+     * Sets the server stamp of the copy `(eventId, hash)` when it has none yet (the author's own LOCAL row, or a row
+     * stored before schema v7), from a pulled copy of the same event (M5 audit M1). Returns how many rows changed
+     * (0 or 1); a stamp once set is never replaced.
+     */
+    @Query(
+        """
+        UPDATE ledger_events SET serverReceivedAtEpochMs = :serverReceivedAtEpochMs
+        WHERE eventId = :eventId AND hash = :hash AND serverReceivedAtEpochMs IS NULL
+        """,
+    )
+    suspend fun backfillStamp(eventId: EventId, hash: String, serverReceivedAtEpochMs: Long): Int
+
+    /** The newest server stamp of any stored row (quarantined ones included), or null when none has one. */
+    @Query("SELECT MAX(serverReceivedAtEpochMs) FROM ledger_events")
+    suspend fun newestServerStamp(): Long?
+
+    /**
+     * Every verified [type] row of [kidId] (the event type's stored name), in no particular order, for reads that
+     * need one kind of event without folding the household.
+     */
+    @Query("SELECT * FROM ledger_events WHERE kidId = :kidId AND type = :type AND quarantined = 0")
+    suspend fun verifiedOfType(kidId: KidId, type: String): List<LedgerEventEntity>
+
+    /** Every verified row whose eventId is one of [eventIds] (other copies of the same ids included). */
+    @Query("SELECT * FROM ledger_events WHERE eventId IN (:eventIds) AND quarantined = 0")
+    suspend fun verifiedCopiesOf(eventIds: List<EventId>): List<LedgerEventEntity>
 
     /**
      * The newest [limit] verified events of [kidId], newest first by `(lamport, authorDeviceId, eventId)`.

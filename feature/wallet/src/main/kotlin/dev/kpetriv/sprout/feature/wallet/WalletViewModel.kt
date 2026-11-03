@@ -15,6 +15,7 @@ import dev.kpetriv.sprout.core.domainledger.AccountKind
 import dev.kpetriv.sprout.core.domainledger.AppendResult
 import dev.kpetriv.sprout.core.domainledger.Balance
 import dev.kpetriv.sprout.core.domainledger.Currency
+import dev.kpetriv.sprout.core.domainledger.LedgerAnomaly
 import dev.kpetriv.sprout.core.domainledger.LedgerEvent
 import dev.kpetriv.sprout.core.domainledger.LedgerRepository
 import dev.kpetriv.sprout.core.domainledger.Money
@@ -112,10 +113,18 @@ class WalletViewModel @Inject constructor(
                     ledgerRepository.observeBalances(kidId),
                     eventsFor(tier),
                     ledgerRepository.observeAnomalies(kidId),
-                ) { accounts, balances, events, anomalies -> LedgerPart(accounts, balances, events, anomalies.size) }
+                ) { accounts, balances, events, anomalies -> LedgerPart(accounts, balances, events, anomalies) }
                 combine(kid.filterNotNull(), ledger, savingsGoals.observeGoals(kidId)) { current, part, goals ->
                     Loaded(
-                        WalletSnapshot(current, part.accounts, part.balances, part.events, part.anomalies, goals),
+                        WalletSnapshot(
+                            current,
+                            part.accounts,
+                            part.balances,
+                            part.events,
+                            part.anomalies.size,
+                            goals,
+                            WalletStateMapper.excludedGames(part.anomalies),
+                        ),
                     )
                 }
             }
@@ -126,7 +135,7 @@ class WalletViewModel @Inject constructor(
         val accounts: List<Account>,
         val balances: List<Balance>,
         val events: List<LedgerEvent>,
-        val anomalies: Int,
+        val anomalies: List<LedgerAnomaly>,
     )
 
     /**

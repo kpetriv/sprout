@@ -149,8 +149,9 @@ data class PushResult(val accepted: List<PushItemId>, val rejected: List<Pair<Pu
  * One pulled ledger event: its `LedgerJson` tree as stored (without the server stamp, which no hash or signature
  * covers) and the backend's [serverReceivedAt] stamp. The stamp is set by the server (the rules require
  * `request.time`), so every device sees the same one for the same stored document; receivers judge a game's
- * `playedOn` against its UTC date (D-M5-5, `Ledger.project`'s `receivedAt`). Null only when the transport has no
- * stamp to give (a test transport, or a document stored without one).
+ * `playedOn` against its UTC date (D-M5-5, `Ledger.project`'s `receivedAt`). Null means "never date-checked", so
+ * a real transport never passes one without a stamp: the Firebase transport drops such a document as malformed
+ * ([PullPage.malformed]). Null is left for test transports and the data layer's own tests.
  */
 data class PulledEvent(val json: JsonObject, val serverReceivedAt: Instant? = null)
 
@@ -169,7 +170,8 @@ class PullPage(
     /**
      * Stored rows of this page the transport could not read into the lists above and dropped: a registry row that
      * does not parse or whose id is not its key's fingerprint, a document or an event that does not decode (or a
-     * document stored under another type's collection or another id). Counted for the sync report only.
+     * document stored under another type's collection or another id), an event without a readable server stamp.
+     * Counted for the sync report only.
      */
     val malformed: Int = 0,
 )
