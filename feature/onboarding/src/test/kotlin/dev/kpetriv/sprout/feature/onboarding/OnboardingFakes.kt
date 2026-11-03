@@ -2,9 +2,11 @@ package dev.kpetriv.sprout.feature.onboarding
 
 import android.content.Context
 import dev.kpetriv.sprout.core.crypto.DeviceRegistrationMaterial
+import dev.kpetriv.sprout.core.crypto.PublicKeyBytes
 import dev.kpetriv.sprout.core.database.Session
 import dev.kpetriv.sprout.core.database.SessionStore
 import dev.kpetriv.sprout.core.domainledger.Currency
+import dev.kpetriv.sprout.core.domainledger.toHex
 import dev.kpetriv.sprout.core.model.DeviceId
 import dev.kpetriv.sprout.core.model.HouseholdId
 import dev.kpetriv.sprout.core.model.KidId
@@ -27,6 +29,7 @@ val KID_UID = UserId("kid-uid")
 val HOUSEHOLD = HouseholdId("hh-1")
 val LEO = KidId("kid-leo")
 val NEW_DEVICE = DeviceId("ab12cd34ef567890" + "0".repeat(48))
+val NEW_KID_CLAIMS = AccountClaims(KID_UID, null, null, null)
 
 class FakeOnboardingAuth(private val log: CallLog, override val usesEmailPassword: Boolean = true) : OnboardingAuth {
     var signInResult: Result<Unit> = Result.success(Unit)
@@ -61,16 +64,34 @@ class FakeOnboardingAuth(private val log: CallLog, override val usesEmailPasswor
     }
 }
 
+/**
+ * The callables. By default every registration call answers with the registered key's own device id (as the server
+ * does); [deviceIdOverride] answers with another id instead. [statuses] is what `deviceStatus` reports per key
+ * (UNKNOWN when absent); [statusFailure] makes it fail.
+ */
 class FakeRegistrationBackend(private val log: CallLog) : RegistrationBackend {
-    var createResult: Result<RegisteredHousehold> = Result.success(RegisteredHousehold(HOUSEHOLD, NEW_DEVICE))
-    var redeemResult: Result<LinkedKidDevice> = Result.success(LinkedKidDevice(HOUSEHOLD, LEO, NEW_DEVICE))
+    var createFailure: Throwable? = null
+    var redeemFailure: Throwable? = null
+    var deviceIdOverride: DeviceId? = null
+    var householdOf: HouseholdId = HOUSEHOLD
     var createdWith: Currency.Fiat? = null
     var redeemedCode: LinkCodeInput? = null
     val registeredKeys = mutableListOf<DeviceRegistrationMaterial>()
+    val statuses = mutableMapOf<RegistrationKey, RegistryStatus>()
+    var statusFailure: Throwable? = null
+
+    /** Runs inside `createHousehold` before it answers, for example to hold it while a test presses back. */
+    var beforeCreate: suspend () -> Unit = {}
 
     override suspend fun beginDeviceRegistration(): Result<ByteArray> {
         log += "begin"
         return Result.success(ByteArray(32) { 7 })
+    }
+
+    override suspend fun deviceStatus(householdId: HouseholdId, key: RegistrationKey): Result<RegistryStatus> {
+        log += "status:$key"
+        statusFailure?.let { return Result.failure(it) }
+        return Result.success(statuses[key] ?: RegistryStatus.UNKNOWN)
     }
 
     override suspend fun createHousehold(
@@ -78,29 +99,44 @@ class FakeRegistrationBackend(private val log: CallLog) : RegistrationBackend {
         key: DeviceRegistrationMaterial,
     ): Result<RegisteredHousehold> {
         log += "createHousehold"
+        beforeCreate()
         createdWith = fiatCurrency
         registeredKeys += key
-        return createResult
+        createFailure?.let { return Result.failure(it) }
+        return Result.success(RegisteredHousehold(householdOf, idFor(key)))
     }
 
     override suspend fun registerParentDevice(key: DeviceRegistrationMaterial): Result<PendingParentDevice> {
         log += "registerParentDevice"
         registeredKeys += key
-        return Result.success(PendingParentDevice(NEW_DEVICE, displayFingerprint(NEW_DEVICE)))
+        // The server's fingerprint is deliberately wrong: the phone shows its own.
+        return Result.success(PendingParentDevice(idFor(key), "0000 0000 0000 0000"))
     }
 
     override suspend fun redeemLinkCode(code: LinkCodeInput, key: DeviceRegistrationMaterial): Result<LinkedKidDevice> {
         log += "redeemLinkCode"
         redeemedCode = code
         registeredKeys += key
-        return redeemResult
+        redeemFailure?.let { return Result.failure(it) }
+        return Result.success(LinkedKidDevice(householdOf, LEO, idFor(key)))
     }
+
+    private fun idFor(key: DeviceRegistrationMaterial): DeviceId = deviceIdOverride ?: key.publicKey.deviceId()
 }
 
-class FakeOnboardingHousehold(private val log: CallLog, var trial: Boolean = false) : OnboardingHousehold {
+/** The device id of a public key, as the server and the app compute it. */
+fun PublicKeyBytes.deviceId(): DeviceId = DeviceId(fingerprint().toHex())
+
+class FakeOnboardingHousehold(
+    private val log: CallLog,
+    private val sessions: FakeSessionStore,
+    var trial: Boolean = false,
+) : OnboardingHousehold {
     var policyCurrency: Currency.Fiat? = null
     var activeDevice: DeviceId? = null
     var syncs = 0
+    var syncSucceeds = true
+    var setupPending: HouseholdId? = null
 
     /** Runs on every sync, for example to mirror an approval into the session. */
     var onSync: suspend () -> Unit = {}
@@ -123,10 +159,29 @@ class FakeOnboardingHousehold(private val log: CallLog, var trial: Boolean = fal
         log += "sync"
         syncs += 1
         onSync()
-        return true
+        return syncSucceeds
     }
 
     override suspend fun activeDeviceOf(uid: UserId, householdId: HouseholdId): DeviceId? = activeDevice
+
+    override suspend fun saveSession(session: Session) = sessions.save(session)
+
+    override suspend fun startParentSetup(householdId: HouseholdId) {
+        log += "setupStarted"
+        setupPending = householdId
+    }
+
+    override suspend fun finishParentSetup() {
+        log += "setupFinished"
+        setupPending = null
+    }
+
+    override suspend fun parentSetupPending(householdId: HouseholdId): Boolean = setupPending == householdId
+
+    override suspend fun eraseLocalHousehold() {
+        log += "erase"
+        sessions.session.value = null
+    }
 }
 
 class FakeSessionStore(private val log: CallLog, initial: Session? = null) : SessionStore {

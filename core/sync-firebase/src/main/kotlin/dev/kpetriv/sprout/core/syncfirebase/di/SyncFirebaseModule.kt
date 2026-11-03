@@ -9,6 +9,7 @@ import dev.kpetriv.sprout.core.syncfirebase.CallableInvoker
 import dev.kpetriv.sprout.core.syncfirebase.FirebaseAuthSession
 import dev.kpetriv.sprout.core.syncfirebase.FirebaseCallableInvoker
 import dev.kpetriv.sprout.core.syncfirebase.FirestoreFacade
+import dev.kpetriv.sprout.core.syncfirebase.IdTokenHashSource
 import dev.kpetriv.sprout.core.syncfirebase.SdkFirestoreFacade
 
 /**
@@ -28,4 +29,7 @@ internal abstract class SyncFirebaseModule {
 
     @Binds
     abstract fun authProbe(impl: FirebaseAuthSession): AuthProbe
+
+    @Binds
+    abstract fun idTokenHashSource(impl: FirebaseAuthSession): IdTokenHashSource
 }

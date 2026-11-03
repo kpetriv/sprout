@@ -29,6 +29,9 @@ import kotlin.time.Duration.Companion.minutes
 import kotlin.time.Duration.Companion.seconds
 import kotlin.time.Instant
 
+/** A context for events that carry one; the fakes never use it. */
+private val RuntimeContext: android.content.Context = android.content.ContextWrapper(null)
+
 /** Keeps a WhileSubscribed state flow hot for the test, collecting eagerly. */
 @OptIn(ExperimentalCoroutinesApi::class)
 private fun <T> TestScope.hot(flow: StateFlow<T>): StateFlow<T> = flow.also {
@@ -86,6 +89,20 @@ class DevicesViewModelTest {
         val state = hot(viewModel.state)
         viewModel.onEvent(DevicesEvent.Review(LEO_PHONE))
         assertNull(state.value.reviewing)
+    }
+
+    @Test
+    fun `it doesn't match closes the approval and offers to remove that phone instead`() = runTest {
+        val admin = FakeDeviceAdmin()
+        val viewModel = DevicesViewModel(admin)
+        val state = hot(viewModel.state)
+        viewModel.onEvent(DevicesEvent.Review(SECOND_PHONE))
+        viewModel.onEvent(DevicesEvent.RejectReview)
+        assertNull(state.value.reviewing)
+        assertEquals(SECOND_PHONE, state.value.revoking?.deviceId)
+        assertEquals(emptyList(), admin.approved)
+        viewModel.onEvent(DevicesEvent.ConfirmRevoke)
+        assertEquals(listOf(SECOND_PHONE), admin.revoked)
     }
 
     @Test
@@ -213,6 +230,9 @@ class DataViewModelTest {
     val main = MainDispatcherRule()
 
     private val calendar = HouseholdCalendar(FakeClock(Instant.parse("2026-11-03T10:00:00Z"))) { ZoneOffset.UTC }
+
+    private fun TestScope.dataViewModel(data: FakeHouseholdData) =
+        DataViewModel(data, FakeExportWriter(), calendar, FakeAccountControl(), UnconfinedTestDispatcher(testScheduler))
     private val bundle = Json.parseToJsonElement(
         """
         {"exportedAt":"2026-11-03T10:00:00Z","household":{"id":"hh7f3k2q9xabc","fiatCurrency":"EUR"},
@@ -253,7 +273,13 @@ class DataViewModelTest {
     @Test
     fun `export offers one zip with the json and the csv, and writes it where the parent picked`() = runTest {
         val writer = FakeExportWriter()
-        val viewModel = DataViewModel(FakeHouseholdData(Result.success(bundle)), writer, calendar, FakeAccountControl())
+        val viewModel = DataViewModel(
+            FakeHouseholdData(Result.success(bundle)),
+            writer,
+            calendar,
+            FakeAccountControl(),
+            UnconfinedTestDispatcher(testScheduler),
+        )
         viewModel.onEvent(DataEvent.Export)
         val pending = assertNotNull(viewModel.state.value.pendingExport)
         assertEquals("sprout-export-2026-11-03.zip", pending.fileName)
@@ -271,7 +297,7 @@ class DataViewModelTest {
     @Test
     fun `a cancelled picker drops the export, and a too-large household says so`() = runTest {
         val data = FakeHouseholdData(Result.success(bundle))
-        val viewModel = DataViewModel(data, FakeExportWriter(), calendar, FakeAccountControl())
+        val viewModel = dataViewModel(data)
         viewModel.onEvent(DataEvent.Export)
         viewModel.onEvent(DataEvent.ExportDestination(null))
         assertNull(viewModel.state.value.pendingExport)
@@ -284,7 +310,7 @@ class DataViewModelTest {
     @Test
     fun `deleting needs the household id's first 8 characters typed, then deletes and erases this phone`() = runTest {
         val data = FakeHouseholdData(Result.success(bundle))
-        val viewModel = DataViewModel(data, FakeExportWriter(), calendar, FakeAccountControl())
+        val viewModel = dataViewModel(data)
         viewModel.onEvent(DataEvent.AskDelete)
         assertEquals("hh7f3k2q", viewModel.state.value.deleteConfirmation)
         viewModel.onEvent(DataEvent.DeleteTyped("hh7f3k2"))
@@ -305,13 +331,68 @@ class DataViewModelTest {
         val data = FakeHouseholdData(Result.success(bundle)).apply {
             deleteResult = Result.failure(AdminException(AdminFailure.NETWORK))
         }
-        val viewModel = DataViewModel(data, FakeExportWriter(), calendar, FakeAccountControl())
+        val viewModel = dataViewModel(data)
         viewModel.onEvent(DataEvent.AskDelete)
         viewModel.onEvent(DataEvent.DeleteTyped("hh7f3k2q"))
         viewModel.onEvent(DataEvent.ConfirmDelete)
         assertEquals(0, data.erased)
         assertEquals(DataMessage.NETWORK, viewModel.state.value.message)
         assertNull(viewModel.state.value.deleteTyped)
+    }
+
+    @Test
+    fun `a deletion that needs a recent sign-in signs in again and retries once`() = runTest {
+        val data = FakeHouseholdData(Result.success(bundle)).apply {
+            deleteResults += Result.failure(AdminException(AdminFailure.REAUTH_REQUIRED))
+        }
+        val viewModel = dataViewModel(data)
+        viewModel.onEvent(DataEvent.AskDelete)
+        viewModel.onEvent(DataEvent.DeleteTyped("hh7f3k2q"))
+        viewModel.onEvent(DataEvent.ConfirmDelete)
+        assertEquals(ReauthUi(usesPassword = true), viewModel.state.value.reauth)
+        assertNull(viewModel.state.value.deleteTyped)
+        assertEquals(0, data.erased)
+
+        viewModel.onEvent(DataEvent.SignInAgain(RuntimeContext, "secret1"))
+
+        assertEquals(listOf<String?>("secret1"), data.passwords)
+        assertEquals(2, data.deletes)
+        assertEquals(1, data.erased)
+    }
+
+    @Test
+    fun `another account on the confirmation sign-in deletes nothing and says so`() = runTest {
+        val data = FakeHouseholdData(Result.success(bundle)).apply {
+            deleteResults += Result.failure(AdminException(AdminFailure.REAUTH_REQUIRED))
+            signInResult = Result.failure(AdminException(AdminFailure.WRONG_ACCOUNT))
+        }
+        val viewModel = dataViewModel(data)
+        viewModel.onEvent(DataEvent.AskDelete)
+        viewModel.onEvent(DataEvent.DeleteTyped("hh7f3k2q"))
+        viewModel.onEvent(DataEvent.ConfirmDelete)
+        viewModel.onEvent(DataEvent.SignInAgain(RuntimeContext, "secret1"))
+        assertEquals(ReauthProblem.WRONG_ACCOUNT, viewModel.state.value.reauth?.problem)
+        assertEquals(1, data.deletes)
+        assertEquals(0, data.erased)
+        viewModel.onEvent(DataEvent.DismissReauth)
+        assertNull(viewModel.state.value.reauth)
+    }
+
+    @Test
+    fun `the retried deletion is tried only once`() = runTest {
+        val data = FakeHouseholdData(Result.success(bundle)).apply {
+            deleteResults += Result.failure(AdminException(AdminFailure.REAUTH_REQUIRED))
+            deleteResults += Result.failure(AdminException(AdminFailure.REAUTH_REQUIRED))
+        }
+        val viewModel = dataViewModel(data)
+        viewModel.onEvent(DataEvent.AskDelete)
+        viewModel.onEvent(DataEvent.DeleteTyped("hh7f3k2q"))
+        viewModel.onEvent(DataEvent.ConfirmDelete)
+        viewModel.onEvent(DataEvent.SignInAgain(RuntimeContext, "secret1"))
+        assertEquals(2, data.deletes)
+        assertNull(viewModel.state.value.reauth)
+        assertEquals(DataMessage.DELETE_FAILED, viewModel.state.value.message)
+        assertEquals(0, data.erased)
     }
 
     private fun unzip(bytes: ByteArray): Map<String, ByteArray> = buildMap {

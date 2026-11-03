@@ -1,8 +1,9 @@
 import { isIP } from 'node:net';
 import { appCheckRequired } from './config.js';
+import { idTokenHash } from './crypto.js';
 import { db } from './firebase.js';
 import { HttpsError, type CallableRequest } from './https.js';
-import { limitCaller, type Callable } from './rateLimit.js';
+import { limitCaller, type UserCallable } from './rateLimit.js';
 
 export interface Caller {
   readonly uid: string;
@@ -13,6 +14,8 @@ export interface Caller {
   readonly role: string | undefined;
   /** The ID token's `auth_time` (epoch seconds of the sign-in, kept across token refreshes); 0 when absent. */
   readonly authTime: number;
+  /** SHA-256 of the raw ID token of this request (crypto.ts `idTokenHash`): what every device proof is bound to. */
+  readonly idTokenHash: Buffer;
 }
 
 export interface ParentCaller extends Caller {
@@ -74,14 +77,22 @@ function ipv6Prefix64(ip: string): string {
 }
 
 /**
- * Every callable starts here: App Check (unless in the emulator, D-M3-6; the adapter in src/callable.ts already
- * rejects such requests, this is the same check for direct handler invocations), a signed-in caller, and the
- * callable's per-uid and per-IP rate limits.
+ * App Check (unless in the emulator, D-M3-6). The adapter in src/callable.ts already rejects requests without a valid
+ * token; this is the same check for direct handler invocations.
  */
-export async function signedIn(request: CallableRequest, callable: Callable): Promise<Caller> {
+export function requireAppCheck(request: CallableRequest): void {
   if (appCheckRequired() && !request.app) {
     throw new HttpsError('failed-precondition', 'App Check token required');
   }
+}
+
+/**
+ * Every callable that needs a user starts here: App Check (unless in the emulator, D-M3-6; the adapter in src/callable.ts already
+ * rejects such requests, this is the same check for direct handler invocations), a signed-in caller, and the
+ * callable's per-uid and per-IP rate limits.
+ */
+export async function signedIn(request: CallableRequest, callable: UserCallable): Promise<Caller> {
+  requireAppCheck(request);
   const authData = request.auth;
   if (!authData) throw new HttpsError('unauthenticated', 'Sign in first');
   const token = authData.token as {
@@ -97,6 +108,7 @@ export async function signedIn(request: CallableRequest, callable: Callable): Pr
     hid: typeof token.hid === 'string' ? token.hid : undefined,
     role: typeof token.role === 'string' ? token.role : undefined,
     authTime: typeof token.auth_time === 'number' && Number.isFinite(token.auth_time) ? token.auth_time : 0,
+    idTokenHash: idTokenHash(authData.rawToken),
   };
   await limitCaller(callable, caller.uid, caller.ip);
   return caller;
@@ -109,7 +121,7 @@ export async function signedIn(request: CallableRequest, callable: Callable): Pr
  * with `unauthenticated`, as the rules refuse its writes. The adapter's ID-token check (`checkRevoked`) refuses the same
  * sessions through Auth's `tokensValidAfterTime`; the member row keeps the rule and this check in step.
  */
-export async function parent(request: CallableRequest, callable: Callable): Promise<ParentCaller> {
+export async function parent(request: CallableRequest, callable: UserCallable): Promise<ParentCaller> {
   const caller = await signedIn(request, callable);
   if (caller.anonymous || caller.role !== 'PARENT' || caller.hid === undefined) {
     throw new HttpsError('permission-denied', 'Parents only');

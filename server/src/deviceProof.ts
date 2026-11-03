@@ -40,7 +40,8 @@ export function verifyDeviceProof(device: DocumentSnapshot, caller: ParentCaller
 
 /**
  * Checks the device proof of a call to [callable] with the signed arguments [args] (everything but `callerDeviceId`
- * and `signature`, see crypto.ts `callablePayload`) and returns the calling device id.
+ * and `signature`, see crypto.ts `callablePayload`), bound to the ID token of this request, and returns the calling
+ * device id.
  */
 export async function requireDeviceProof(
   caller: ParentCaller,
@@ -50,6 +51,6 @@ export async function requireDeviceProof(
 ): Promise<string> {
   const proof = proofOf(data);
   const device = await db.doc(`households/${caller.hid}/devices/${proof.deviceId}`).get();
-  verifyDeviceProof(device, caller, callablePayload(callable, caller.hid, args), proof.signature);
+  verifyDeviceProof(device, caller, callablePayload(callable, caller.hid, caller.idTokenHash, args), proof.signature);
   return proof.deviceId;
 }

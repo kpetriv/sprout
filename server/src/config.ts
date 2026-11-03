@@ -6,8 +6,8 @@ import { HttpsError } from './https.js';
  * `firebase emulators:exec`) or `GOOGLE_CLOUD_PROJECT`. In production it may be left unset, the service account's
  * project is used then (src/firebase.ts).
  */
-export function projectId(): string | undefined {
-  return process.env.FIREBASE_PROJECT_ID || process.env.GCLOUD_PROJECT || process.env.GOOGLE_CLOUD_PROJECT || undefined;
+export function projectId(env: NodeJS.ProcessEnv = process.env): string | undefined {
+  return env.FIREBASE_PROJECT_ID || env.GCLOUD_PROJECT || env.GOOGLE_CLOUD_PROJECT || undefined;
 }
 
 /**
@@ -15,8 +15,27 @@ export function projectId(): string | undefined {
  * and the tests) and a project id starting with `demo-`. A stray `SPROUT_EMULATOR=true` in a real project's
  * environment therefore never relaxes App Check, attestation or the link-code key.
  */
-export function isEmulator(): boolean {
-  return process.env.SPROUT_EMULATOR === 'true' && (projectId()?.startsWith('demo-') ?? false);
+export function isEmulator(env: NodeJS.ProcessEnv = process.env): boolean {
+  return env.SPROUT_EMULATOR === 'true' && (projectId(env)?.startsWith('demo-') ?? false);
+}
+
+/** The variables that point the Admin SDK at an emulator instead of the real service. */
+export const EMULATOR_HOST_VARIABLES = ['FIREBASE_AUTH_EMULATOR_HOST', 'FIRESTORE_EMULATOR_HOST'] as const;
+
+/**
+ * Refuses to start (throws) when an emulator host variable is set but [isEmulator] is false (audit Low 7): the Admin
+ * SDK would then send a real project's ID-token checks and data to whatever that variable names, with the emulator's
+ * relaxed token verification, while App Check and attestation stay enforced as in production. Either both describe
+ * the emulator (`SPROUT_EMULATOR=true` and a `demo-` project) or neither variable is set. Called before the Admin SDK
+ * initialises (src/firebase.ts).
+ */
+export function assertEmulatorEnvironment(env: NodeJS.ProcessEnv = process.env): void {
+  const set = EMULATOR_HOST_VARIABLES.filter((name) => (env[name] ?? '') !== '');
+  if (set.length > 0 && !isEmulator(env)) {
+    throw new Error(
+      `${set.join(' and ')} set outside the emulator: unset it, or set SPROUT_EMULATOR=true with a demo- project`,
+    );
+  }
 }
 
 /**

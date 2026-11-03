@@ -4,7 +4,6 @@ import dev.kpetriv.sprout.core.model.DeviceId
 import dev.kpetriv.sprout.core.model.HouseholdId
 import dev.kpetriv.sprout.core.model.KidId
 import kotlinx.coroutines.test.runTest
-import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.jsonArray
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
@@ -15,10 +14,16 @@ import kotlin.test.assertTrue
 class HouseholdFunctionsTest {
     private class RecordingInvoker(private val respond: (String, Map<String, Any?>) -> Any?) : CallableInvoker {
         val calls = mutableListOf<Triple<String, Map<String, Any?>, Long>>()
+        val withoutAuth = mutableListOf<String>()
 
         override suspend fun call(name: String, data: Map<String, Any?>, timeoutMs: Long): Any? {
             calls += Triple(name, data, timeoutMs)
             return respond(name, data)
+        }
+
+        override suspend fun callWithoutAuth(name: String, data: Map<String, Any?>, timeoutMs: Long): Any? {
+            withoutAuth += name
+            return call(name, data, timeoutMs)
         }
     }
 
@@ -153,10 +158,52 @@ class HouseholdFunctionsTest {
     }
 
     @Test
-    fun `the approval payload matches the backend's domain-separated bytes`() {
-        val payload = HouseholdFunctions.approvalPayload(device)
+    fun `deviceStatus goes without an ID token and decodes the status`() = runTest {
+        var answer: Any? = mapOf("status" to "REVOKED", "householdGone" to false)
+        val invoker = RecordingInvoker { _, _ -> answer }
+        val functions = HouseholdFunctions(invoker)
 
-        assertEquals("sprout/approve-device/v1\u0000${device.value}", payload.decodeToString())
-        assertEquals(JsonPrimitive(0), JsonPrimitive(payload[24].toInt()))
+        val revoked = functions.deviceStatus(HouseholdId("h1"), device, byteArrayOf(7, 7)).getOrThrow()
+        assertEquals(DeviceStatusAnswer(DeviceStatusValue.REVOKED, householdGone = false), revoked)
+        assertEquals(listOf("deviceStatus"), invoker.withoutAuth)
+        assertEquals(
+            mapOf("hid" to "h1", "deviceId" to device.value, "signature" to "Bwc="),
+            invoker.calls.single().second,
+        )
+
+        answer = mapOf("status" to "UNKNOWN", "householdGone" to true)
+        assertEquals(
+            DeviceStatusAnswer(DeviceStatusValue.UNKNOWN, householdGone = true),
+            functions.deviceStatus(HouseholdId("h1"), device, byteArrayOf(1)).getOrThrow(),
+        )
+
+        answer = mapOf("status" to "SOMETHING_ELSE", "householdGone" to false)
+        val malformed = functions.deviceStatus(HouseholdId("h1"), device, byteArrayOf(1)).exceptionOrNull()
+        assertEquals(FunctionsError.MalformedResponse, (malformed as FunctionsException).error)
+        assertEquals(3, invoker.withoutAuth.size, "every other callable goes through call() with the ID token")
+    }
+
+    @Test
+    fun `the token-less transport speaks the callable protocol`() {
+        assertEquals(
+            "http://10.0.2.2:8787/deviceStatus",
+            CallableHttp.url(FunctionsEndpoint.CustomDomain("http://10.0.2.2:8787"), "demo-sprout", "deviceStatus"),
+        )
+        assertEquals(
+            "https://europe-west1-p1.cloudfunctions.net/deviceStatus",
+            CallableHttp.url(FunctionsEndpoint.Region("europe-west1"), "p1", "deviceStatus"),
+        )
+        assertEquals(
+            mapOf("status" to "ACTIVE", "householdGone" to false),
+            CallableHttp.parse("""{"result":{"status":"ACTIVE","householdGone":false}}"""),
+        )
+        val refusal = """{"error":{"status":"PERMISSION_DENIED","message":"Device signature does not verify"}}"""
+        val denied = runCatching { CallableHttp.parse(refusal) }.exceptionOrNull() as FunctionsException
+        assertEquals(FunctionsError.PermissionDenied, denied.error)
+        assertEquals("permission-denied", denied.message, "the server's message is not kept")
+        for (body in listOf("not json", "[]", "{}", """{"error":{}}""")) {
+            val failure = runCatching { CallableHttp.parse(body) }.exceptionOrNull() as FunctionsException
+            assertEquals(FunctionsError.MalformedResponse, failure.error, body)
+        }
     }
 }

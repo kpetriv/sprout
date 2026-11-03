@@ -33,6 +33,36 @@ val functionsBaseUrl: String? = providers.gradleProperty("sprout.functionsBaseUr
 /** OAuth web client id Google ID tokens are issued for; only exists with a real Firebase project (D-M3-2). */
 val googleServerClientId: String? = providers.gradleProperty("sprout.googleServerClientId").orNull
 
+/**
+ * Release builds must be shippable (audit Low 5): an https callable base URL (`sprout.functionsBaseUrl`; release never
+ * falls back to Cloud Functions) and `app/google-services.json`. `bundleRelease` (the Play artifact) fails without
+ * them unless `-Psprout.allowUnconfiguredRelease=true`; `assembleRelease` (part of `build`, never shipped) does not.
+ */
+val allowUnconfiguredRelease: Boolean =
+    providers.gradleProperty("sprout.allowUnconfiguredRelease").map(String::toBoolean).orElse(false).get()
+val releaseConfigurationProblems: List<String> = buildList {
+    if (functionsBaseUrl?.startsWith("https://") != true) {
+        add("sprout.functionsBaseUrl must be set to the server's https:// base URL")
+    }
+    if (!file("google-services.json").exists()) add("app/google-services.json is missing (docs/FIREBASE.md)")
+}
+val checkReleaseConfiguration = tasks.register("checkReleaseConfiguration") {
+    description = "Fails a release build that is not configured for the real backend."
+    val problems = releaseConfigurationProblems
+    val allowed = allowUnconfiguredRelease
+    doLast {
+        if (problems.isNotEmpty() && !allowed) {
+            throw GradleException(
+                "Release build is not configured: " + problems.joinToString("; ") +
+                    ". Pass -Psprout.allowUnconfiguredRelease=true only for builds that are never shipped.",
+            )
+        }
+    }
+}
+tasks.configureEach {
+    if (name == "bundleRelease") dependsOn(checkReleaseConfiguration)
+}
+
 fun String?.asBuildConfigString(): String = this?.let { "\"" + it.replace("\"", "") + "\"" } ?: "null"
 
 android {

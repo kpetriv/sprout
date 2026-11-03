@@ -155,4 +155,25 @@ class RemoteApplierTest {
         kid.applier.saveCursor(SyncCursor(mapOf("events" to "9")))
         assertEquals(SyncCursor(mapOf("events" to "9", "documents" to "2")), kid.applier.cursor())
     }
+
+    @Test
+    fun theCursorBelongsToTheSessionsHousehold() = runTest {
+        kid.applier.saveCursor(SyncCursor(mapOf("events" to "4")))
+        val home = kid.sessions.get()!!
+
+        kid.sessions.save(home.copy(householdId = dev.kpetriv.sprout.core.model.HouseholdId("other-home")))
+        assertEquals(SyncCursor.START, kid.applier.cursor(), "another household starts from the beginning")
+        kid.applier.saveCursor(SyncCursor(mapOf("events" to "1")))
+
+        kid.sessions.save(home)
+        assertEquals(SyncCursor(mapOf("events" to "4")), kid.applier.cursor())
+        kid.sessions.clear()
+        assertEquals(SyncCursor.START, kid.applier.cursor(), "nothing to resume without a session")
+        kid.applier.saveCursor(SyncCursor(mapOf("events" to "7")))
+        val rows = kid.database.openHelper.readableDatabase.query("SELECT COUNT(*) FROM sync_cursor").use {
+            it.moveToFirst()
+            it.getInt(0)
+        }
+        assertEquals(2, rows, "a position without a session is not saved")
+    }
 }

@@ -19,6 +19,7 @@ import dev.kpetriv.sprout.core.syncfirebase.FirebaseSyncTransport
 import dev.kpetriv.sprout.core.syncfirebase.HouseholdScope
 import dev.kpetriv.sprout.core.time.Clock
 import dev.kpetriv.sprout.sync.SessionHouseholdScope
+import dev.kpetriv.sprout.sync.SyncReportProcessor
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
@@ -53,8 +54,22 @@ internal abstract class FirebaseModule {
             emulatorHost = BuildConfig.FIREBASE_EMULATOR_HOST,
             debugAppCheck = BuildConfig.DEBUG,
             googleServerClientId = BuildConfig.GOOGLE_SERVER_CLIENT_ID,
-            functionsBaseUrl = BuildConfig.FUNCTIONS_BASE_URL,
+            functionsBaseUrl = requireFunctionsBaseUrl(BuildConfig.DEBUG, BuildConfig.FUNCTIONS_BASE_URL),
         )
+
+        /**
+         * The callable base URL; a release build never falls back to Cloud Functions (audit Low 5, D-M3-29: the
+         * project has none): without an https base URL it fails here, at startup, with a clear message. The build
+         * already refuses such a release unless `sprout.allowUnconfiguredRelease` (CI only) waived it.
+         */
+        fun requireFunctionsBaseUrl(debug: Boolean, baseUrl: String?): String? {
+            if (!debug) {
+                check(baseUrl?.startsWith("https://") == true) {
+                    "Release build without an https sprout.functionsBaseUrl: it cannot reach the Sprout server."
+                }
+            }
+            return baseUrl
+        }
 
         @Provides
         @AppForeground
@@ -65,7 +80,10 @@ internal abstract class FirebaseModule {
         @Provides
         fun syncClock(clock: Clock): SyncClock = SyncClock { clock.now().toEpochMilliseconds() }
 
-        /** One engine per process: its mutex serialises the foreground loop and the SyncWorker. */
+        /**
+         * One engine per process: its mutex serialises the foreground loop and the SyncWorker. Every report goes to
+         * [SyncReportProcessor], whoever ran the sync.
+         */
         @Provides
         @Singleton
         fun syncEngine(
@@ -73,6 +91,7 @@ internal abstract class FirebaseModule {
             outbox: RoomOutboxSource,
             applier: RemoteApplier,
             clock: SyncClock,
-        ): SyncEngine = SyncEngine(transport, outbox, applier, clock)
+            reports: SyncReportProcessor,
+        ): SyncEngine = SyncEngine(transport, outbox, applier, clock, reportHandler = reports)
     }
 }

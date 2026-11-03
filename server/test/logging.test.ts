@@ -8,6 +8,7 @@ import {
   newHousehold,
   newUser,
   parentKeySignature,
+  Proof,
   req,
   resetEmulators,
   withProof,
@@ -109,11 +110,12 @@ describe('logging', () => {
       kidDevice.publicKey,
       h.device.publicKey,
       parentKey.publicKey,
-      keySignature,
-      linkProof.signature as string,
-      revokeProof.signature as string,
-      deleteProof.signature as string,
+      ...keySignature.sent,
+      ...(linkProof.signature as Proof).sent,
+      ...(revokeProof.signature as Proof).sent,
+      ...(deleteProof.signature as Proof).sent,
     ];
+    expect(secrets.length).toBe(13);
     for (const secret of secrets) {
       expect(everything).not.toContain(secret);
     }

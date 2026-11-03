@@ -107,11 +107,23 @@ class FakeHouseholdData(var bundle: Result<JsonObject>) : HouseholdData {
     var erased = 0
     var deleteResult: Result<Unit> = Result.success(Unit)
 
+    /** Answers to the next deletions, in order; [deleteResult] once used up. */
+    val deleteResults = ArrayDeque<Result<Unit>>()
+    var signInResult: Result<Unit> = Result.success(Unit)
+    val passwords = mutableListOf<String?>()
+
     override suspend fun export(): Result<JsonObject> = bundle
 
     override suspend fun deleteHousehold(): Result<Unit> {
         deletes += 1
-        return deleteResult
+        return deleteResults.removeFirstOrNull() ?: deleteResult
+    }
+
+    override val signInUsesPassword: Boolean = true
+
+    override suspend fun signInAgain(activityContext: android.content.Context, password: String?): Result<Unit> {
+        passwords += password
+        return signInResult
     }
 
     override suspend fun eraseAndRestart() {

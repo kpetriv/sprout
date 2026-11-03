@@ -15,7 +15,8 @@ const HOUR = 60 * 60 * 1000;
 /**
  * Per-callable limits (docs/FIREBASE.md "Rate limits", T6/T18). `uid` is keyed on the caller's uid, `ip` on the
  * client IP (requests without one share a stricter bucket, [noIpLimit]); redeemLinkCode also limits attempts per
- * code id (the HMAC of the code). Values are deliberately low: every flow is a rare,
+ * code id (the HMAC of the code). deviceStatus has no user: it is keyed on the device id it asks about and the IP.
+ * Values are deliberately low: every flow is a rare,
  * human-driven action.
  */
 export const LIMITS = {
@@ -33,9 +34,13 @@ export const LIMITS = {
   revokeDevice: { uid: { max: 30, windowMs: HOUR }, ip: { max: 60, windowMs: HOUR } },
   exportHousehold: { uid: { max: 5, windowMs: HOUR }, ip: { max: 10, windowMs: HOUR } },
   deleteHousehold: { uid: { max: 3, windowMs: HOUR }, ip: { max: 10, windowMs: HOUR } },
+  deviceStatus: { device: { max: 30, windowMs: HOUR }, ip: { max: 120, windowMs: HOUR } },
 } as const satisfies Record<string, Record<string, Limit>>;
 
 export type Callable = keyof typeof LIMITS;
+
+/** The callables of a signed-in user, limited per uid and IP ([limitCaller]). */
+export type UserCallable = Exclude<Callable, 'deviceStatus'>;
 
 /**
  * Records one call in `rateLimits/{bucket}` and throws `resource-exhausted` when the window is full. The bucket id is
@@ -80,7 +85,7 @@ export function noIpLimit(callable: Callable): Limit {
 }
 
 /** Applies the uid and IP limits of [callable]; [ip] is the rate-limit key from guards.ts `clientIp`, or null. */
-export async function limitCaller(callable: Callable, uid: string, ip: string | null): Promise<void> {
+export async function limitCaller(callable: UserCallable, uid: string, ip: string | null): Promise<void> {
   const limits: Record<string, Limit> = LIMITS[callable];
   await hit(callable, 'uid', uid, limits.uid);
   if (ip === null) {

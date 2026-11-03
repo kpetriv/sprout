@@ -50,7 +50,8 @@ class FirebaseAuthSession @Inject constructor(
     private val config: FirebaseConfig,
     @param:ApplicationContext private val context: Context,
 ) : AuthProbe,
-    AccountInfoReader {
+    AccountInfoReader,
+    IdTokenHashSource {
     private val auth: FirebaseAuth by lazy { FirebaseAuth.getInstance(bootstrap.ensureInitialised(context)) }
 
     /** Last claims read per uid, used when a fresh token cannot be fetched (offline with an expired token). */
@@ -117,6 +118,23 @@ class FirebaseAuthSession @Inject constructor(
      */
     override suspend fun accountInfo(): AccountInfo? =
         auth.currentUser?.takeUnless { it.isAnonymous }?.let { AccountInfo(it.email?.takeIf(String::isNotBlank)) }
+
+    /**
+     * [IdTokenHashSource]: forces a token refresh and returns the new token's hash. The refresh makes the token the
+     * SDK sends next the one hashed here: the Functions SDK reads the cached token, which is now fresh for an hour.
+     */
+    @Suppress("SwallowedException") // The SDK exception's message can name the account; only the code is kept.
+    override suspend fun currentIdTokenHash(): ByteArray {
+        val user = auth.currentUser ?: throw FunctionsException(FunctionsError.Unauthenticated)
+        val token = try {
+            user.getIdToken(true).await().token
+        } catch (offline: FirebaseNetworkException) {
+            throw FunctionsException(FunctionsError.Unavailable)
+        } catch (refused: FirebaseException) {
+            throw FunctionsException(FunctionsError.Unauthenticated)
+        }
+        return DeviceProof.idTokenHash(token ?: throw FunctionsException(FunctionsError.Unauthenticated))
+    }
 
     /** Signs a kid device in anonymously (before it redeems a link code). */
     suspend fun signInAnonymously(): Result<Unit> = guarded { auth.signInAnonymously().await() }

@@ -65,6 +65,7 @@ import kotlinx.coroutines.launch
  * - **Kid**: the kid's wallet ([KidHomeKey]) with its shop and today's chores, no lock. On a parent's phone back at
  *   the root (system back or the wallet's back arrow) opens `KidModeExitGate`; a successful unlock returns to the
  *   parent area. On a kid's own linked phone there is no parent area: back at the root leaves the app.
+ * - **SignInAgain**: the "Sign in again" gate for a phone whose sign-in ended; no household data behind it.
  * - **Removed**: the blocking wipe screen.
  *
  * @param requester the per-event parent prompt (`feature/lock`), for the dashboard's "Sign now": each prompt shows
@@ -92,16 +93,16 @@ fun SproutApp(requester: ParentAuthorizationRequester, modifier: Modifier = Modi
 
         is AppMode.Onboarding -> OnboardingArea(
             canLeave = current.canLeave,
-            onStarted = modeViewModel::beginOnboarding,
-            onEnded = modeViewModel::endOnboarding,
+            onStarted = { modeViewModel.onEvent(ModeEvent.BeginOnboarding) },
+            onEnded = { modeViewModel.onEvent(ModeEvent.EndOnboarding) },
             modifier = modifier,
         )
 
         AppMode.Parent -> ParentArea(
             requester = requester,
             kids = kids,
-            onEnterKidMode = modeViewModel::enterKidMode,
-            onSetUpSync = modeViewModel::beginOnboarding,
+            onEnterKidMode = { modeViewModel.onEvent(ModeEvent.EnterKidMode(it)) },
+            onSetUpSync = { modeViewModel.onEvent(ModeEvent.BeginOnboarding) },
             modifier = modifier,
         )
 
@@ -110,12 +111,14 @@ fun SproutApp(requester: ParentAuthorizationRequester, modifier: Modifier = Modi
                 kidId = current.kidId,
                 linkedDevice = current.linkedDevice,
                 tierOf = modeViewModel::tierOf,
-                onExit = modeViewModel::exitKidMode,
+                onExit = { modeViewModel.onEvent(ModeEvent.ExitKidMode) },
                 modifier = modifier,
             )
         }
 
-        is AppMode.Removed -> RemovedRoute(current.reason, modifier)
+        is AppMode.SignInAgain -> SignInAgainRoute(current.gate, modifier)
+
+        is AppMode.Removed -> RemovedRoute(current.removal.reason, modifier)
     }
 }
 

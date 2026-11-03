@@ -1,17 +1,23 @@
 package dev.kpetriv.sprout.onboarding
 
 import android.content.Context
+import dev.kpetriv.sprout.core.common.Dispatcher
+import dev.kpetriv.sprout.core.common.SproutDispatchers
+import dev.kpetriv.sprout.core.crypto.DeviceKeyStore
 import dev.kpetriv.sprout.core.crypto.DeviceRegistrationMaterial
 import dev.kpetriv.sprout.core.crypto.DeviceSigner
+import dev.kpetriv.sprout.core.crypto.JceEcdsaSigner
 import dev.kpetriv.sprout.core.database.FiatCurrencyProvider
 import dev.kpetriv.sprout.core.database.HouseholdPolicyRepository
 import dev.kpetriv.sprout.core.database.LocalTrial
+import dev.kpetriv.sprout.core.database.Session
 import dev.kpetriv.sprout.core.database.SessionStore
 import dev.kpetriv.sprout.core.database.SproutDatabase
 import dev.kpetriv.sprout.core.database.deviceId
 import dev.kpetriv.sprout.core.database.entity.RegistrationStatus
 import dev.kpetriv.sprout.core.database.usecase.PurgeLocalHouseholdUseCase
 import dev.kpetriv.sprout.core.domainledger.Currency
+import dev.kpetriv.sprout.core.domainledger.toHex
 import dev.kpetriv.sprout.core.model.DeviceId
 import dev.kpetriv.sprout.core.model.HouseholdId
 import dev.kpetriv.sprout.core.model.UserId
@@ -19,6 +25,8 @@ import dev.kpetriv.sprout.core.syncfirebase.AuthError
 import dev.kpetriv.sprout.core.syncfirebase.AuthException
 import dev.kpetriv.sprout.core.syncfirebase.AuthState
 import dev.kpetriv.sprout.core.syncfirebase.DeviceKeyRegistration
+import dev.kpetriv.sprout.core.syncfirebase.DeviceProof
+import dev.kpetriv.sprout.core.syncfirebase.DeviceStatusValue
 import dev.kpetriv.sprout.core.syncfirebase.FirebaseAuthSession
 import dev.kpetriv.sprout.core.syncfirebase.FirebaseConfig
 import dev.kpetriv.sprout.core.syncfirebase.FunctionsError
@@ -40,9 +48,18 @@ import dev.kpetriv.sprout.feature.onboarding.ParentSigningSetup
 import dev.kpetriv.sprout.feature.onboarding.PendingParentDevice
 import dev.kpetriv.sprout.feature.onboarding.RegisteredHousehold
 import dev.kpetriv.sprout.feature.onboarding.RegistrationBackend
+import dev.kpetriv.sprout.feature.onboarding.RegistrationKey
+import dev.kpetriv.sprout.feature.onboarding.RegistryStatus
 import dev.kpetriv.sprout.feature.onboarding.SigningSetupResult
 import dev.kpetriv.sprout.household.HouseholdAdminFunctions
+import dev.kpetriv.sprout.sync.HouseholdRemovals
+import dev.kpetriv.sprout.sync.LocalHouseholdRows
+import dev.kpetriv.sprout.sync.ParentSetupTracker
+import dev.kpetriv.sprout.sync.RemovalReason
+import dev.kpetriv.sprout.sync.ShellPreferences
 import dev.kpetriv.sprout.sync.SyncController
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.withContext
 import javax.inject.Inject
 
 /** Onboarding's sign-in over [FirebaseAuthSession]; e-mail/password only against the Auth emulator (D-M3-2). */
@@ -66,11 +83,45 @@ class FirebaseOnboardingAuth @Inject constructor(private val auth: FirebaseAuthS
     override suspend fun signOut() = auth.signOut()
 }
 
-/** Onboarding's callables over [HouseholdFunctions]. */
-class FunctionsRegistrationBackend @Inject constructor(private val functions: HouseholdFunctions) :
-    RegistrationBackend {
+/**
+ * Onboarding's callables over [HouseholdFunctions]. `deviceStatus` is signed here with the key it asks about (the
+ * active or the pending registration key, [DeviceKeyStore]), since onboarding has no session yet.
+ */
+class FunctionsRegistrationBackend @Inject constructor(
+    private val functions: HouseholdFunctions,
+    private val keys: DeviceKeyStore,
+    @param:Dispatcher(SproutDispatchers.IO) private val dispatcher: CoroutineDispatcher,
+) : RegistrationBackend {
     override suspend fun beginDeviceRegistration(): Result<ByteArray> =
         functions.beginDeviceRegistration().mapFunctionsFailure()
+
+    override suspend fun deviceStatus(householdId: HouseholdId, key: RegistrationKey): Result<RegistryStatus> {
+        val handle = when (key) {
+            RegistrationKey.CURRENT -> keys.deviceSigningKey()
+            RegistrationKey.PENDING -> keys.pendingSigningKey() ?: return Result.success(RegistryStatus.UNKNOWN)
+        }
+        val deviceId = DeviceId(handle.publicKey.fingerprint().toHex())
+        val payload = DeviceProof.deviceStatusPayload(householdId, deviceId)
+        val signature = withContext(dispatcher) { JceEcdsaSigner(handle).sign(payload) }
+        return functions.deviceStatus(householdId, deviceId, signature)
+            .map { answer ->
+                when (answer.status) {
+                    DeviceStatusValue.ACTIVE -> RegistryStatus.ACTIVE
+                    DeviceStatusValue.PENDING -> RegistryStatus.PENDING
+                    DeviceStatusValue.REVOKED -> RegistryStatus.REVOKED
+                    DeviceStatusValue.UNKNOWN -> RegistryStatus.UNKNOWN
+                }
+            }
+            // A key the registry does not hold fails its proof: for this lookup that simply means "not registered".
+            .recoverCatching { failure ->
+                if ((failure as? FunctionsException)?.error == FunctionsError.PermissionDenied) {
+                    RegistryStatus.UNKNOWN
+                } else {
+                    throw failure
+                }
+            }
+            .mapFunctionsFailure()
+    }
 
     override suspend fun createHousehold(
         fiatCurrency: Currency.Fiat,
@@ -95,9 +146,10 @@ class FunctionsRegistrationBackend @Inject constructor(private val functions: Ho
 
 /**
  * Onboarding's view of the local household: the trial household (its session or any of its kids), the purge, the
- * household policy, sync through [SyncController], and this device's registry entry.
+ * household policy, sync through [SyncController], this device's registry entry, the session (guarded by the account
+ * the local rows belong to, [ShellPreferences.linkedAccount]), the parent setup marker and the erase.
  */
-@Suppress("LongParameterList") // One collaborator per question onboarding asks.
+@Suppress("LongParameterList", "TooManyFunctions") // One collaborator per question onboarding asks.
 class RoomOnboardingHousehold @Inject constructor(
     private val database: SproutDatabase,
     private val sessions: SessionStore,
@@ -106,6 +158,10 @@ class RoomOnboardingHousehold @Inject constructor(
     private val currencies: FiatCurrencyProvider,
     private val sync: SyncController,
     private val signer: DeviceSigner,
+    private val preferences: ShellPreferences,
+    private val parentSetup: ParentSetupTracker,
+    private val removals: HouseholdRemovals,
+    private val localRows: LocalHouseholdRows,
 ) : OnboardingHousehold {
     override fun defaultCurrency(): Currency.Fiat = currencies.fiatCurrency()
 
@@ -122,11 +178,34 @@ class RoomOnboardingHousehold @Inject constructor(
 
     override suspend fun syncNow(): Boolean = sync.syncNow()?.error == null
 
+    /** Only a mirror that belongs to [uid] in [householdId] answers (audit: the mirror has no household column). */
     override suspend fun activeDeviceOf(uid: UserId, householdId: HouseholdId): DeviceId? {
+        if (preferences.linkedAccount() != ShellPreferences.digestOf(householdId, uid)) return null
         val own = signer.deviceId()
-        val entry = database.deviceDao().get(own) ?: return null
-        return own.takeIf { entry.uid == uid && entry.status == RegistrationStatus.ACTIVE }
+        val entry = database.deviceDao().get(own)
+        return own.takeIf { entry != null && entry.uid == uid && entry.status == RegistrationStatus.ACTIVE }
     }
+
+    override suspend fun saveSession(session: Session) {
+        if (!session.isLocalTrial) {
+            val digest = ShellPreferences.digestOf(session.householdId, session.uid)
+            val linked = preferences.linkedAccount()
+            // Rows of another account or household must never mix with this one's (D-M3-47).
+            if (linked != null && linked != digest) localRows.clear()
+            sessions.save(session)
+            preferences.setLinkedAccount(digest)
+        } else {
+            sessions.save(session)
+        }
+    }
+
+    override suspend fun startParentSetup(householdId: HouseholdId) = parentSetup.start(householdId)
+
+    override suspend fun finishParentSetup() = parentSetup.finish()
+
+    override suspend fun parentSetupPending(householdId: HouseholdId): Boolean = parentSetup.isPending(householdId)
+
+    override suspend fun eraseLocalHousehold() = removals.remove(RemovalReason.SIGNED_OUT)
 }
 
 /** Onboarding's signing step over `feature/lock`'s status check and PIN-gated enrolment. */

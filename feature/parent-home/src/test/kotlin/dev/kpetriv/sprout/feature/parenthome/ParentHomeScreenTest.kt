@@ -70,6 +70,24 @@ class ParentHomeScreenTest {
     }
 
     @Test
+    fun `signing off is shown and Turn on opens security settings`() {
+        show(ParentHomePreviewData.signingOff())
+
+        compose.onNodeWithText("Fingerprint signing is off").assertIsDisplayed()
+        compose.onNodeWithText("Turn on").performClick()
+
+        assertEquals(listOf("security"), opened)
+    }
+
+    @Test
+    fun `a blocked sync names a human reason, never the server's code`() {
+        show(ParentHomePreviewData.syncBlocked())
+
+        compose.onAllNodes(hasText("permission-denied", substring = true)).assertCountEquals(0)
+        compose.onNodeWithText("isn’t allowed to make it", substring = true).assertIsDisplayed()
+    }
+
+    @Test
     fun `a registered signing key shows no such card`() {
         show(ParentHomePreviewData.household())
 

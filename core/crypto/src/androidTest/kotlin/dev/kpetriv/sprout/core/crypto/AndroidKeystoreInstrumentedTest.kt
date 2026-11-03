@@ -49,13 +49,15 @@ class AndroidKeystoreInstrumentedTest {
         val challenge = ByteArray(32).also(random::nextBytes)
 
         val material = store.regenerateForRegistration(challenge)
+        assertEquals("pending until promoted", provisional, store.publicKey())
+        store.promotePendingKey()
 
         assertFalse("a fresh key", material.publicKey == provisional)
         assertEquals(material.publicKey, store.publicKey())
         val handle = store.deviceSigningKey()
-        assertEquals(KeyAliases.DEVICE_SIGNING_V2, handle.alias)
+        assertTrue(handle.alias == KeyAliases.DEVICE_SIGNING_V2 || handle.alias == KeyAliases.DEVICE_SIGNING_V2_PENDING)
         val keyStore = java.security.KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
-        assertFalse("v1 is deleted once v2 exists", keyStore.containsAlias(KeyAliases.DEVICE_SIGNING))
+        assertFalse("v1 is deleted once a v2 key is active", keyStore.containsAlias(KeyAliases.DEVICE_SIGNING))
         val payload = "document".encodeToByteArray()
         assertTrue(JceEcdsaVerifier().verify(material.publicKey, payload, JceEcdsaSigner(handle).sign(payload)))
         // A fresh instance (next process start) picks the v2 key.

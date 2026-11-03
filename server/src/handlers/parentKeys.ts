@@ -13,7 +13,9 @@ import { attestKey } from '../registration.js';
  * registers a parent authorisation key (ADR-0004 §1) as `parentKeys/{fingerprint}`. Clients cannot write parentKeys.
  *
  * - The caller is a PARENT; `deviceId` is one of its ACTIVE parent devices and `signature` is that device's ECDSA
- *   P-256/SHA-256 DER signature over `"sprout/register-parent-key/v1" || 0x00 || hid || 0x00 || publicKey SPKI DER`.
+ *   P-256/SHA-256 DER signature over
+ *   `"sprout/register-parent-key/v2" || 0x00 || hid || 0x00 || sha256(raw ID token) || 0x00 || publicKey SPKI DER`
+ *   (crypto.ts `registerParentKeyPayload`), so it is valid only with the ID token of this request.
  * - `publicKey` is a base64 EC P-256 SPKI; `fingerprint` = hex SHA-256 of its DER.
  * - With `attestationChain` (attested under the caller's outstanding challenge from beginDeviceRegistration) the key
  *   must be in a TEE or StrongBox and require biometric user authentication for every use (USER_AUTH_TYPE includes
@@ -39,7 +41,7 @@ export async function registerParentKey(
   verifyDeviceProof(
     await deviceRef.get(),
     caller,
-    registerParentKeyPayload(caller.hid, key.spki),
+    registerParentKeyPayload(caller.hid, caller.idTokenHash, key.spki),
     proof.signature,
   );
   const attestation = await attestKey(caller.uid, data.attestationChain, key, {

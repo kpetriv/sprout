@@ -1,5 +1,6 @@
 package dev.kpetriv.sprout.feature.settings
 
+import android.content.Context
 import dev.kpetriv.sprout.core.database.entity.RegistrationStatus
 import dev.kpetriv.sprout.core.domainledger.AttestationLevel
 import dev.kpetriv.sprout.core.model.DeviceId
@@ -29,6 +30,15 @@ enum class AdminFailure {
 
     /** The household is too large to export in one piece (D-M3-7). */
     TOO_LARGE,
+
+    /** Deleting needs a sign-in within the last 5 minutes (D-M3-34): sign in again to confirm. */
+    REAUTH_REQUIRED,
+
+    /** The sign-in to confirm was another account (it was signed out again). */
+    WRONG_ACCOUNT,
+
+    /** The sign-in to confirm was refused or cancelled. */
+    SIGN_IN_FAILED,
 
     FAILED,
 }
@@ -85,7 +95,10 @@ data class AccountInfo(val email: String?, val householdId: HouseholdId?, val tr
 interface AccountControl {
     fun observe(): Flow<AccountInfo>
 
-    /** Signs out of Firebase and clears the session; the data on this phone stays. */
+    /**
+     * Signs this phone out: its copy of the household is erased (D-M3-47) and the app then shows the erase screen and
+     * restarts into onboarding. The household stays in the cloud.
+     */
     suspend fun signOut()
 }
 
@@ -94,10 +107,26 @@ interface HouseholdData {
     /** The `exportHousehold` bundle. */
     suspend fun export(): Result<JsonObject>
 
-    /** Deletes the household and every member's account on the server. */
+    /**
+     * Deletes the household and every member's account on the server. [AdminFailure.REAUTH_REQUIRED] when the
+     * parent's sign-in is older than 5 minutes: [signInAgain], then delete again.
+     */
     suspend fun deleteHousehold(): Result<Unit>
 
-    /** Erases this phone's household data and restarts the app (after a deletion). */
+    /**
+     * True when [signInAgain] needs the account's password (debug builds against the Auth emulator, D-M3-2); Google
+     * sign-in otherwise.
+     */
+    val signInUsesPassword: Boolean
+
+    /**
+     * Signs the same parent in again to confirm a deletion ([activityContext] hosts Google's account picker; [password]
+     * for the debug path). [AdminFailure.WRONG_ACCOUNT] when another account signed in (it is signed out again),
+     * [AdminFailure.SIGN_IN_FAILED] or [AdminFailure.NETWORK] otherwise.
+     */
+    suspend fun signInAgain(activityContext: Context, password: String?): Result<Unit>
+
+    /** Erases this phone's household data (after a deletion); the app shows the erase screen, then restarts. */
     suspend fun eraseAndRestart()
 }
 

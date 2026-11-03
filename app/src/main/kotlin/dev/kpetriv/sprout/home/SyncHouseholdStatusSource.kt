@@ -27,6 +27,7 @@ import javax.inject.Inject
  * whether this phone's parent key still lacks its server registration
  * ([HouseholdPolicyRepository.observeServerRegistrationPending], D-M3-39). Sync never retries that registration (the
  * server needs a fresh attestation challenge and the parent's fingerprint); the card stays until the parent retries.
+ * "Fingerprint signing is off" shows while the household policy has no parent key for this parent phone (D-M3-46).
  */
 @Suppress("LongParameterList") // One source per card.
 class SyncHouseholdStatusSource @Inject constructor(
@@ -43,8 +44,8 @@ class SyncHouseholdStatusSource @Inject constructor(
         ledger.observeQuarantined(),
         database.deviceDao().observeAll(),
         kids.observeKids(),
-        policies.observeServerRegistrationPending(),
-    ) { (session, status, blocked), quarantined, devices, kidList, keyPending ->
+        combine(policies.observeServerRegistrationPending(), policies.observe(), ::Pair),
+    ) { (session, status, blocked), quarantined, devices, kidList, (keyPending, policy) ->
         val trial = session?.isLocalTrial ?: false
         val byId = devices.associateBy { it.deviceId }
         val names = kidList.associate { it.id to it.firstName }
@@ -74,6 +75,8 @@ class SyncHouseholdStatusSource @Inject constructor(
                 }
                 .map { PendingDevice(it.deviceId, label(it.deviceId).fingerprint) },
             signingKeyNotRegistered = keyPending && session?.role == Role.PARENT,
+            // A real household's parent phone whose policy exists without its parent key (D-M3-46).
+            signingOff = !trial && session?.role == Role.PARENT && policy != null && !policy.hasParentKey,
         )
     }
 

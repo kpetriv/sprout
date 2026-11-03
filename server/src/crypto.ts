@@ -57,13 +57,6 @@ export function displayFingerprint(deviceId: string): string {
   return (deviceId.slice(0, 16).match(/.{4}/g) ?? []).join(' ');
 }
 
-export const APPROVE_DEVICE_DOMAIN = 'sprout/approve-device/v1';
-
-/** The bytes an approving parent device signs: `"sprout/approve-device/v1" || 0x00 || deviceId` (UTF-8). */
-export function approvalPayload(deviceId: string): Buffer {
-  return Buffer.concat([Buffer.from(APPROVE_DEVICE_DOMAIN, 'utf8'), Buffer.from([0]), Buffer.from(deviceId, 'utf8')]);
-}
-
 /** ECDSA P-256 / SHA-256 verification of a DER signature (what Android's `SHA256withECDSA` produces). */
 export function verifyEcdsaSha256(key: KeyObject, payload: Buffer, signature: Buffer): boolean {
   try {
@@ -122,39 +115,81 @@ export function canonicalJson(value: unknown): string {
   return JSON.stringify(value);
 }
 
-/** Callables whose request a device signs (T7/T8), with the domain each signature is bound to. */
+/**
+ * Callables whose request a device signs (T7/T8), with the domain each signature is bound to. Version 2 binds the
+ * signature to the ID token the request carries (audit Low 2): a proof is valid only with that token, so a captured
+ * request cannot be replayed from another session or after the token expires (one hour at most).
+ */
 export const SIGNED_CALLABLES = {
-  createLinkCode: 'sprout/create-link-code/v1',
-  revokeDevice: 'sprout/revoke-device/v1',
-  exportHousehold: 'sprout/export-household/v1',
-  deleteHousehold: 'sprout/delete-household/v1',
+  approveDevice: 'sprout/approve-device/v2',
+  createLinkCode: 'sprout/create-link-code/v2',
+  revokeDevice: 'sprout/revoke-device/v2',
+  exportHousehold: 'sprout/export-household/v2',
+  deleteHousehold: 'sprout/delete-household/v2',
 } as const;
 
 export type SignedCallable = keyof typeof SIGNED_CALLABLES;
 
+const SEPARATOR = Buffer.from([0]);
+
+/** SHA-256 of the raw ID token (the compact JWT exactly as sent after `Bearer `), which every proof is bound to. */
+export function idTokenHash(rawIdToken: string): Buffer {
+  return sha256(Buffer.from(rawIdToken, 'utf8'));
+}
+
 /**
- * The bytes a parent device signs for [callable]: `domain || 0x00 || hid || 0x00 || canonicalJson(args)` (UTF-8),
- * where `args` are the callable's arguments other than `callerDeviceId` and `signature`.
+ * The bytes a parent device signs for [callable]:
+ * `domain || 0x00 || hid || 0x00 || sha256(rawIdToken) || 0x00 || canonicalJson(args)` (strings UTF-8, the hash its 32
+ * raw bytes), where `args` are the callable's arguments other than the proof's device id field and `signature`.
  */
-export function callablePayload(callable: SignedCallable, hid: string, args: Record<string, unknown>): Buffer {
+export function callablePayload(
+  callable: SignedCallable,
+  hid: string,
+  tokenHash: Buffer,
+  args: Record<string, unknown>,
+): Buffer {
   return Buffer.concat([
     Buffer.from(SIGNED_CALLABLES[callable], 'utf8'),
-    Buffer.from([0]),
+    SEPARATOR,
     Buffer.from(hid, 'utf8'),
-    Buffer.from([0]),
+    SEPARATOR,
+    tokenHash,
+    SEPARATOR,
     Buffer.from(canonicalJson(args), 'utf8'),
   ]);
 }
 
-export const REGISTER_PARENT_KEY_DOMAIN = 'sprout/register-parent-key/v1';
+export const REGISTER_PARENT_KEY_DOMAIN = 'sprout/register-parent-key/v2';
 
-/** The bytes a parent device signs to register a parent key: `domain || 0x00 || hid || 0x00 || SPKI DER bytes`. */
-export function registerParentKeyPayload(hid: string, publicKey: Buffer): Buffer {
+/**
+ * The bytes a parent device signs to register a parent key:
+ * `domain || 0x00 || hid || 0x00 || sha256(rawIdToken) || 0x00 || SPKI DER bytes`.
+ */
+export function registerParentKeyPayload(hid: string, tokenHash: Buffer, publicKey: Buffer): Buffer {
   return Buffer.concat([
     Buffer.from(REGISTER_PARENT_KEY_DOMAIN, 'utf8'),
-    Buffer.from([0]),
+    SEPARATOR,
     Buffer.from(hid, 'utf8'),
-    Buffer.from([0]),
+    SEPARATOR,
+    tokenHash,
+    SEPARATOR,
     publicKey,
+  ]);
+}
+
+export const DEVICE_STATUS_DOMAIN = 'sprout/device-status/v1';
+
+/**
+ * The bytes a device signs to ask for its own registry status without an ID token (deviceStatus):
+ * `"sprout/device-status/v1" || 0x00 || hid || 0x00 || deviceId` (UTF-8). Not bound to a session: it reveals only the
+ * status of the device that signed it.
+ */
+export function deviceStatusPayload(hid: string, deviceId: string): Buffer {
+  return Buffer.concat([
+    Buffer.from(DEVICE_STATUS_DOMAIN, 'utf8'),
+    SEPARATOR,
+    Buffer.from(hid, 'utf8'),
+    SEPARATOR,
+    Buffer.from(deviceId, 'utf8'),
   ]);
 }

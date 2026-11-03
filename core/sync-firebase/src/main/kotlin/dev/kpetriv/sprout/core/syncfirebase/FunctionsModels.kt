@@ -69,6 +69,21 @@ internal data class DeleteHouseholdRequest(
 )
 
 @Serializable
+internal data class DeviceStatusRequest(val hid: HouseholdId, val deviceId: DeviceId, val signature: String)
+
+@Serializable
+internal data class DeviceStatusResponse(val status: String, val householdGone: Boolean)
+
+/** A device's registry status as `deviceStatus` reports it; [UNKNOWN]: no such device (or household). */
+enum class DeviceStatusValue { ACTIVE, PENDING, REVOKED, UNKNOWN }
+
+/**
+ * `deviceStatus` result: this device's [status] in the registry, and [householdGone] when the household is known to
+ * have been deleted (only ever with [DeviceStatusValue.UNKNOWN]).
+ */
+data class DeviceStatusAnswer(val status: DeviceStatusValue, val householdGone: Boolean)
+
+@Serializable
 internal data class ChallengeResponse(val challenge: String) {
     override fun toString(): String = "ChallengeResponse(<redacted>)"
 }

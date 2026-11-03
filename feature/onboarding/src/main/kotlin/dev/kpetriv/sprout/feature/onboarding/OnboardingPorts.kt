@@ -2,6 +2,7 @@ package dev.kpetriv.sprout.feature.onboarding
 
 import android.content.Context
 import dev.kpetriv.sprout.core.crypto.DeviceRegistrationMaterial
+import dev.kpetriv.sprout.core.database.Session
 import dev.kpetriv.sprout.core.domainledger.Currency
 import dev.kpetriv.sprout.core.model.DeviceId
 import dev.kpetriv.sprout.core.model.HouseholdId
@@ -91,10 +92,35 @@ data class PendingParentDevice(val deviceId: DeviceId, val fingerprint: String)
 /** A kid device linked by a code. */
 data class LinkedKidDevice(val householdId: HouseholdId, val kidId: KidId, val deviceId: DeviceId)
 
+/** Which of this device's keys a registry lookup is about (`DeviceKeyStore`'s two-phase registration). */
+enum class RegistrationKey {
+    /** The active signing key. */
+    CURRENT,
+
+    /** The pending registration key, if any (a registration the server may have accepted before a process death). */
+    PENDING,
+}
+
+/** A device's status in the household's server registry, as the token-less `deviceStatus` callable answers it. */
+enum class RegistryStatus {
+    ACTIVE,
+    PENDING,
+    REVOKED,
+
+    /** Not registered in that household (or there is no such key). */
+    UNKNOWN,
+}
+
 /** The household callables (core/sync-firebase `HouseholdFunctions`). */
 interface RegistrationBackend {
     /** A fresh attestation challenge for the key about to be registered. */
     suspend fun beginDeviceRegistration(): Result<ByteArray>
+
+    /**
+     * The registry status of [key]'s device in [householdId], proven with that key's signature (`deviceStatus`). Used
+     * before registering, so a key the registry already has ACTIVE is never replaced (audit M1).
+     */
+    suspend fun deviceStatus(householdId: HouseholdId, key: RegistrationKey): Result<RegistryStatus>
 
     suspend fun createHousehold(
         fiatCurrency: Currency.Fiat,
@@ -106,7 +132,8 @@ interface RegistrationBackend {
     suspend fun redeemLinkCode(code: LinkCodeInput, key: DeviceRegistrationMaterial): Result<LinkedKidDevice>
 }
 
-/** The local household: trial data, the household policy and sync. */
+/** The local household: trial data, the household policy, sync, the session and the parent setup marker. */
+@Suppress("TooManyFunctions") // One function per question onboarding asks of the local household.
 interface OnboardingHousehold {
     /** The household currency the picker starts on (the locale's). */
     fun defaultCurrency(): Currency.Fiat
@@ -124,10 +151,31 @@ interface OnboardingHousehold {
     suspend fun syncNow(): Boolean
 
     /**
-     * This device's current key when the local registry mirror already has it ACTIVE for [uid] in [householdId]:
-     * the parent signed out and back in on the same phone, which needs no new registration and no approval.
+     * This device's current key when the local registry mirror, which must belong to [uid] in [householdId], already
+     * has it ACTIVE for [uid]: no new registration and no approval needed.
      */
     suspend fun activeDeviceOf(uid: UserId, householdId: HouseholdId): DeviceId?
+
+    /**
+     * Saves [session]. A real session whose account or household differs from the one the local rows belong to
+     * clears those rows first (D-M3-47), so two households never mix on one phone.
+     */
+    suspend fun saveSession(session: Session)
+
+    /** The parent's PIN and signing step for [householdId] has started; it survives a process death (review M4). */
+    suspend fun startParentSetup(householdId: HouseholdId)
+
+    /** The parent's PIN and signing step finished. */
+    suspend fun finishParentSetup()
+
+    /** True while [householdId]'s parent setup has started and not finished. */
+    suspend fun parentSetupPending(householdId: HouseholdId): Boolean
+
+    /**
+     * Erases this phone's copy of the household (a phone that leaves onboarding after its sync pulled household data)
+     * and signs out; the app then shows the erase screen and restarts.
+     */
+    suspend fun eraseLocalHousehold()
 }
 
 /**

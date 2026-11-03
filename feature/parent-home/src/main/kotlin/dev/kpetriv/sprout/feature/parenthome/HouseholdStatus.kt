@@ -22,6 +22,9 @@ fun interface HouseholdStatusSource {
  * @property signingKeyNotRegistered this phone's parent signing key works here but the household's server never
  *   recorded it (D-M3-39), so the other devices refuse its signatures; the card's "Retry" opens Settings → Security,
  *   which renews and registers the key. Sync cannot retry it: the server needs a fresh attestation challenge.
+ * @property signingOff this parent phone has no parent signing key ("Later" on the signing step, or no strong
+ *   biometric), so its parent-only events carry no fingerprint signature (D-M3-46); the card stays until signing is
+ *   turned on in Settings → Security.
  */
 data class HouseholdStatus(
     val trial: Boolean = false,
@@ -29,6 +32,7 @@ data class HouseholdStatus(
     val rejected: List<RejectedEvent> = emptyList(),
     val pendingDevices: List<PendingDevice> = emptyList(),
     val signingKeyNotRegistered: Boolean = false,
+    val signingOff: Boolean = false,
 )
 
 /**
@@ -38,6 +42,29 @@ data class HouseholdStatus(
  * @property failing the latest sync ended with an error.
  */
 data class SyncLine(val lastSyncedAt: Instant?, val blockedCode: String?, val failing: Boolean)
+
+/** A human reason for the server's code on a refused ledger entry ([SyncLine.blockedCode]); the code is never shown. */
+enum class SyncBlockedReason {
+    /** The server's rules refused it for this phone (`permission-denied`: not allowed, or no longer allowed). */
+    NOT_ALLOWED,
+
+    /** The entry itself was refused as malformed or for another household. */
+    INVALID,
+    OTHER,
+    ;
+
+    companion object {
+        fun of(code: String): SyncBlockedReason = when (code) {
+            "permission-denied", "unauthenticated" -> NOT_ALLOWED
+
+            "invalid-argument", "malformed", "unsigned", "unknown-doc-type", "wrong-household", "failed-precondition",
+            "out-of-range", "already-exists",
+            -> INVALID
+
+            else -> OTHER
+        }
+    }
+}
 
 /** Who wrote something: a role and, for a kid's phone, the kid's first name; null when the device is unknown. */
 data class DeviceLabel(val role: Role?, val kidName: String?, val fingerprint: String) {

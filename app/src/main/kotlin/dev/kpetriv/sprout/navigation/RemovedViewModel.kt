@@ -26,43 +26,39 @@ import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dev.kpetriv.sprout.R
 import dev.kpetriv.sprout.sync.AppRestarter
-import dev.kpetriv.sprout.sync.LocalDataEraser
+import dev.kpetriv.sprout.sync.RemovalHandler
 import dev.kpetriv.sprout.sync.RemovalReason
-import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.stateIn
 import javax.inject.Inject
 
+/** What the removed screen can ask for. */
+sealed interface RemovedEvent {
+    /** "Continue" once the data is erased: forget the removal and restart into onboarding. */
+    data object Continue : RemovedEvent
+}
+
 /**
- * The blocking "This phone was removed from the household" screen (M3 §6). The household's data is erased as soon as
- * the screen opens (a revoked phone must not keep it until someone taps); "Continue" restarts the app, which lands on
- * onboarding.
+ * The blocking removed screen (M3 §6). The wipe itself is [RemovalHandler]'s, started the moment the removal was
+ * reported (from sync, a worker, the session check, the gate or sign-out); this only shows its progress and, once the
+ * data is gone, "Continue", which restarts the app into onboarding.
  */
 @HiltViewModel
-class RemovedViewModel @Inject constructor(private val eraser: LocalDataEraser, private val restarter: AppRestarter) :
+class RemovedViewModel @Inject constructor(private val removals: RemovalHandler, private val restarter: AppRestarter) :
     ViewModel() {
-    private val erased = MutableStateFlow(false)
-
     /** True once the data is gone. */
-    val state: StateFlow<Boolean> = erased.asStateFlow()
+    val state: StateFlow<Boolean> = removals.state.map { it?.wiped == true }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, removals.state.value?.wiped == true)
 
-    init {
-        viewModelScope.launch {
-            try {
-                eraser.erase()
-            } catch (cancellation: CancellationException) {
-                throw cancellation
-            } catch (@Suppress("TooGenericExceptionCaught", "SwallowedException") failure: Exception) {
-                // Erasing is best effort per file; the restart opens onboarding either way. Nothing to log.
+    fun onEvent(event: RemovedEvent) {
+        when (event) {
+            RemovedEvent.Continue -> if (state.value) {
+                removals.acknowledge()
+                restarter.restart()
             }
-            erased.value = true
         }
-    }
-
-    fun onContinue() {
-        if (erased.value) restarter.restart()
     }
 }
 
@@ -70,7 +66,12 @@ class RemovedViewModel @Inject constructor(private val eraser: LocalDataEraser, 
 internal fun RemovedRoute(reason: RemovalReason, modifier: Modifier = Modifier) {
     val viewModel: RemovedViewModel = hiltViewModel()
     val erased by viewModel.state.collectAsStateWithLifecycle()
-    RemovedScreen(reason = reason, erased = erased, onContinue = viewModel::onContinue, modifier = modifier)
+    RemovedScreen(
+        reason = reason,
+        erased = erased,
+        onContinue = { viewModel.onEvent(RemovedEvent.Continue) },
+        modifier = modifier,
+    )
 }
 
 @Composable
@@ -87,7 +88,13 @@ internal fun RemovedScreen(
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             Text(
-                stringResource(R.string.removed_title),
+                stringResource(
+                    if (reason == RemovalReason.SIGNED_OUT) {
+                        R.string.removed_signed_out_title
+                    } else {
+                        R.string.removed_title
+                    },
+                ),
                 style = MaterialTheme.typography.headlineSmall,
                 textAlign = TextAlign.Center,
             )
@@ -96,6 +103,7 @@ internal fun RemovedScreen(
                     when (reason) {
                         RemovalReason.HOUSEHOLD_GONE -> R.string.removed_household_gone
                         RemovalReason.DEVICE_REVOKED -> R.string.removed_device_revoked
+                        RemovalReason.SIGNED_OUT -> R.string.removed_signed_out
                     },
                 ),
                 style = MaterialTheme.typography.bodyLarge,

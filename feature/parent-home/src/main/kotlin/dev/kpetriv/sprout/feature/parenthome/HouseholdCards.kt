@@ -30,15 +30,24 @@ import kotlin.time.toJavaInstant
 
 /**
  * The household cards at the top of the dashboard (M3 §6): trial banner, sync line, the unregistered signing key
- * (D-M3-39), new devices, refused events.
+ * (D-M3-39), fingerprint signing off (D-M3-46), new devices, refused events.
  */
 @Composable
 internal fun HouseholdCards(status: HouseholdStatus, links: ParentHomeLinks) {
     if (status.trial) TrialBanner(links.onSetUpSync)
     status.sync?.let { SyncStatusLine(it) }
     if (status.signingKeyNotRegistered) SigningKeyNotRegisteredCard(links.onRegisterSigningKey)
+    if (status.signingOff) SigningOffCard(links.onRegisterSigningKey)
     if (status.pendingDevices.isNotEmpty()) NewDevicesCard(status.pendingDevices, links.onReviewDevice)
     if (status.rejected.isNotEmpty()) RejectedEventsCard(status.rejected)
+}
+
+@Composable
+private fun SigningOffCard(onTurnOn: () -> Unit) {
+    HouseholdCard(stringResource(R.string.feature_parent_home_signing_off_title), highlighted = true) {
+        Text(stringResource(R.string.feature_parent_home_signing_off_text), style = MaterialTheme.typography.bodyMedium)
+        Button(onClick = onTurnOn) { Text(stringResource(R.string.feature_parent_home_signing_off_turn_on)) }
+    }
 }
 
 @Composable
@@ -61,9 +70,21 @@ private fun TrialBanner(onSetUpSync: () -> Unit) {
 private fun SyncStatusLine(sync: SyncLine) {
     val blocked = sync.blockedCode
     val text = when {
-        blocked != null -> stringResource(R.string.feature_parent_home_sync_blocked, blocked)
+        blocked != null -> stringResource(
+            R.string.feature_parent_home_sync_blocked,
+            stringResource(
+                when (SyncBlockedReason.of(blocked)) {
+                    SyncBlockedReason.NOT_ALLOWED -> R.string.feature_parent_home_sync_blocked_not_allowed
+                    SyncBlockedReason.INVALID -> R.string.feature_parent_home_sync_blocked_invalid
+                    SyncBlockedReason.OTHER -> R.string.feature_parent_home_sync_blocked_other
+                },
+            ),
+        )
+
         sync.failing -> stringResource(R.string.feature_parent_home_sync_failing)
+
         sync.lastSyncedAt != null -> stringResource(R.string.feature_parent_home_sync_last, timeText(sync.lastSyncedAt))
+
         else -> stringResource(R.string.feature_parent_home_sync_never)
     }
     Text(

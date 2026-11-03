@@ -33,8 +33,8 @@
 
 1. **From another ACTIVE parent phone of the household:** Settings → Devices → the lost phone → **Revoke**. This
    - marks it REVOKED at a lamport above its last event or document, and stamps its parent keys;
-   - revokes the parent account's refresh tokens and sets `tokensValidAfter`: **every session of that account signs out, the phone doing the revoking included**. Sign in again on it; writes from sessions older than the revocation are refused by the rules;
-   - on its next sync, the lost phone sees its own entry REVOKED and wipes its local data (if it is still online and the app runs).
+   - revokes the parent account's refresh tokens and sets `tokensValidAfter`: **every session of that account signs out, the phone doing the revoking included**. That phone shows "Sign in again": sign in with the same account (its data and unsynced changes stay; another account is refused). Writes from sessions older than the revocation are refused by the rules;
+   - the lost phone erases its copy of the household **the next time the app starts, or syncs, with a network**: its refresh token is revoked, so it shows "Sign in again" (no household data behind it) and asks the server with the token-less `deviceStatus` (signed by its device key, D-M3-48); REVOKED wipes it. A phone that stays offline keeps an encrypted copy behind that gate and the parent PIN until it next comes online. A thief who signs that phone back in with the parent's Google account gets nothing on it either: the status check runs first and the device is REVOKED.
 2. **At Google:** remove the phone from the Google account (Google Account → Security → Your devices) and lock or erase it with Find My Device. Sprout reads are gated by membership, not by device: a thief who can sign the phone back in with the parent's Google account could still **read** the household until the account is secured (threat model T33).
 3. **Kid devices** need nothing: they keep syncing; they hold anything the lost phone writes after revocation as quarantined.
 4. **Re-adding a replacement phone:** sign in on it, then approve it from the remaining parent phone ("New device waiting", compare fingerprints).

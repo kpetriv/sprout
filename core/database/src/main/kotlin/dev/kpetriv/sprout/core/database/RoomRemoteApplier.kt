@@ -82,7 +82,7 @@ import javax.inject.Inject
  *   `lastAccruedOn`, this device's parent key.
  * - [applyEvents] is [RoomLedgerRepository.ingest]; [retryHeld] retries held documents, then
  *   [RoomLedgerRepository.retryHeld].
- * - [cursor] and [saveCursor] use `sync_cursor`.
+ * - [cursor] and [saveCursor] use `sync_cursor`, keyed by the session's household.
  */
 @Suppress("TooManyFunctions", "LargeClass") // One apply function per document type.
 class RoomRemoteApplier internal constructor(
@@ -535,16 +535,24 @@ class RoomRemoteApplier internal constructor(
         return ledger.retryHeld()
     }
 
-    override suspend fun cursor(): SyncCursor =
-        SyncCursor(database.syncCursorDao().all().associate { it.collection to it.cursor })
+    /** The session household's positions; empty without a real session (nothing to resume). */
+    override suspend fun cursor(): SyncCursor {
+        val household = syncedHousehold() ?: return SyncCursor(emptyMap())
+        return SyncCursor(database.syncCursorDao().all(household).associate { it.collection to it.cursor })
+    }
 
+    /** Saved under the session's household; dropped without a real session. */
     override suspend fun saveCursor(cursor: SyncCursor) {
+        val household = syncedHousehold() ?: return
         database.syncCursorDao().upsert(
             cursor.perCollection.map { (collection, position) ->
-                SyncCursorEntity(collection, position)
+                SyncCursorEntity(household, collection, position)
             },
         )
     }
+
+    private suspend fun syncedHousehold(): HouseholdId? =
+        database.sessionDao().get()?.householdId?.takeUnless { it == LocalTrial.HOUSEHOLD }
 
     override suspend fun localMaxLamport(): Long = ledger.localMaxLamport()
 

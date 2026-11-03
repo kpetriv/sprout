@@ -2,9 +2,9 @@ package dev.kpetriv.sprout.core.database.entity
 
 import androidx.room.Entity
 import androidx.room.Index
-import androidx.room.PrimaryKey
 import dev.kpetriv.sprout.core.domainledger.EventId
 import dev.kpetriv.sprout.core.model.DeviceId
+import dev.kpetriv.sprout.core.model.HouseholdId
 
 /**
  * A pulled event that cannot be decided yet (M3 §2, D-M3-31): its author device is not in the registry mirror yet or
@@ -57,6 +57,9 @@ data class DocumentInboxEntity(
     val authorDeviceId: DeviceId? = null,
 )
 
-/** One collection's pull position (`SyncCursor.perCollection`), opaque to this layer. */
-@Entity(tableName = "sync_cursor")
-data class SyncCursorEntity(@PrimaryKey val collection: String, val cursor: String)
+/**
+ * One collection's pull position (`SyncCursor.perCollection`) in one household, opaque to this layer. Keyed by the
+ * household (schema version 5) so a device that joins another household never resumes the previous one's positions.
+ */
+@Entity(tableName = "sync_cursor", primaryKeys = ["householdId", "collection"])
+data class SyncCursorEntity(val householdId: HouseholdId, val collection: String, val cursor: String)

@@ -67,6 +67,10 @@ interface PurgeDao {
     @Query("DELETE FROM audit_log WHERE actorUid IN (:actors)")
     suspend fun deleteAudit(actors: List<UserId>): Int
 
+    /** The registry mirror's parent keys registered by [uid] (the trial parent's locally registered key). */
+    @Query("DELETE FROM parent_keys WHERE uid = :uid")
+    suspend fun deleteParentKeys(uid: UserId): Int
+
     @Query("DELETE FROM session WHERE householdId = :householdId")
     suspend fun deleteSession(householdId: HouseholdId): Int
 }

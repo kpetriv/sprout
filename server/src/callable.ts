@@ -3,7 +3,8 @@
  * so the Android client keeps using the Functions SDK, pointed at this server's base URL.
  *
  * `POST /<name>` with `Content-Type: application/json` and the body `{"data": ...}`; `Authorization: Bearer <idToken>`
- * (optional, verified with revocation checks), `X-Firebase-AppCheck: <token>` (required outside the emulator) and
+ * (optional, verified with revocation checks; ignored, never verified, by a callable declared with
+ * `authentication: 'none'`), `X-Firebase-AppCheck: <token>` (required outside the emulator) and
  * `Firebase-Instance-ID-Token` (passed through). The answer is `200 {"result": ...}` or
  * `{"error": {"status", "message", "details"?}}` with the HTTP status of the error's code (src/https.ts).
  */
@@ -18,10 +19,18 @@ import { log } from './log.js';
 
 export type CallableHandler<R> = (request: CallableRequest) => Promise<R>;
 
-/** One callable: its route name and its handler. */
+/**
+ * How a callable treats `Authorization`: `'idToken'` (the default) verifies a present token and refuses an invalid
+ * one before the handler; `'none'` ignores the header entirely (no verification, no `request.auth`), for the one
+ * callable a device without a working session calls (deviceStatus).
+ */
+export type CallableAuthentication = 'idToken' | 'none';
+
+/** One callable: its route name, its handler and how it treats the ID token. */
 export interface CallableDefinition<R = unknown> {
   readonly name: string;
   readonly handler: CallableHandler<R>;
+  readonly authentication: CallableAuthentication;
 }
 
 /** Verifies an App Check token; rejects when it is not valid. */
@@ -33,9 +42,13 @@ export interface CallableAppOptions {
 }
 
 /** Declares the callable [name], served at `POST /<name>` by [createCallableApp]. */
-export function callable<R>(name: string, handler: CallableHandler<R>): CallableDefinition<R> {
+export function callable<R>(
+  name: string,
+  handler: CallableHandler<R>,
+  options: { readonly authentication?: CallableAuthentication } = {},
+): CallableDefinition<R> {
   if (!/^[A-Za-z][A-Za-z0-9]*$/.test(name)) throw new Error(`Invalid callable name: ${name}`);
-  return { name, handler };
+  return { name, handler, authentication: options.authentication ?? 'idToken' };
 }
 
 /** Requests are small (the largest is an attestation chain of a few KB). */
@@ -75,7 +88,7 @@ export function createCallableApp(definitions: readonly CallableDefinition[], op
 async function serve(c: Context, definition: CallableDefinition, verifyAppCheck: AppCheckVerifier): Promise<Response> {
   try {
     const data = await parseBody(c);
-    const authData = await verifyAuth(c, definition.name);
+    const authData = definition.authentication === 'none' ? undefined : await verifyAuth(c, definition.name);
     const app = await verifyApp(c, definition.name, verifyAppCheck);
     const instanceIdToken = c.req.header('firebase-instance-id-token');
     const request: CallableRequest = {
@@ -201,7 +214,16 @@ export function encode(input: unknown): unknown {
   throw new Error('Data cannot be encoded in JSON');
 }
 
-/** The protocol's JSON decoding of request data: `{"@type": Int64Value|UInt64Value, "value": "..."}` becomes a number. */
+/**
+ * Keys dropped from request objects: `JSON.parse` makes `__proto__` an ordinary own key, and copying it onto a plain
+ * object would set that object's prototype (audit Low 6); the other two are never legitimate argument names either.
+ */
+const UNSAFE_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
+
+/**
+ * The protocol's JSON decoding of request data: `{"@type": Int64Value|UInt64Value, "value": "..."}` becomes a number.
+ * Objects are rebuilt as plain objects without [UNSAFE_KEYS].
+ */
 export function decode(data: unknown): unknown {
   if (data === null || typeof data !== 'object') return data;
   if (Array.isArray(data)) return data.map(decode);
@@ -213,6 +235,9 @@ export function decode(data: unknown): unknown {
     return value;
   }
   const out: Record<string, unknown> = {};
-  for (const [k, v] of Object.entries(data)) out[k] = decode(v);
+  for (const [k, v] of Object.entries(data)) {
+    if (UNSAFE_KEYS.has(k)) continue;
+    out[k] = decode(v);
+  }
   return out;
 }

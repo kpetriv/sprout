@@ -48,7 +48,7 @@ Devices mirror `devices` and `parentKeys` into Room (`RoomDeviceRegistry`), read
 
 **a. Create a household.** A signed-in, non-anonymous user with no household calls `createHousehold({ fiatCurrency, devicePublicKey, attestationChain })`: household, PARENT member, ACTIVE device, `userHouseholds` row and PARENT claims in one go.
 
-**b. Second parent device.** The same account signs in on another phone, which calls `registerParentDevice`: the device is created **PENDING** and the call returns its display fingerprint (first 16 hex characters in groups of 4). The existing phone shows "New device waiting"; the parent compares the fingerprints and approves with `approveDevice({ deviceId, approverDeviceId, signature })`, where `signature` is the approving ACTIVE parent device's signature over `"sprout/approve-device/v1" ‖ 0x00 ‖ deviceId` (T8). Until then the rules refuse the PENDING device's writes and receivers hold anything it wrote (D-M3-31).
+**b. Second parent device.** The same account signs in on another phone, which calls `registerParentDevice`: the device is created **PENDING** and the call returns its display fingerprint (first 16 hex characters in groups of 4). The existing phone shows "New device waiting"; the parent compares the fingerprints and approves with `approveDevice({ deviceId, approverDeviceId, signature })`, where `signature` is the approving ACTIVE parent device's signature over `"sprout/approve-device/v2" ‖ 0x00 ‖ hid ‖ 0x00 ‖ sha256(idToken) ‖ 0x00 ‖ {"deviceId":"<deviceId>"}` (T8; the device proof of section 6). Until then the rules refuse the PENDING device's writes and receivers hold anything it wrote (D-M3-31).
 
 **c. Kid device.** A parent calls `createLinkCode({ kidId, callerDeviceId, signature })` (device proof, section 6) from Settings → Kids → Link a device:
 
@@ -61,14 +61,14 @@ Devices mirror `devices` and `parentKeys` into Room (`RoomDeviceRegistry`), read
 
 The parent authorisation key (ADR-0004 §1) is registered only through `registerParentKey({ publicKey, attestationChain, deviceId, signature })` (D-M3-34); clients cannot write `parentKeys` (rules).
 
-- `signature` is by the caller's ACTIVE parent device over `"sprout/register-parent-key/v1" ‖ 0x00 ‖ hid ‖ 0x00 ‖ SPKI`, so a key is bound to the device whose Keystore holds it.
+- `signature` is by the caller's ACTIVE parent device over `"sprout/register-parent-key/v2" ‖ 0x00 ‖ hid ‖ 0x00 ‖ sha256(idToken) ‖ 0x00 ‖ SPKI`, so a key is bound to the device whose Keystore holds it (and the request to its ID token, section 6).
 - An attested key must be **TEE or StrongBox** and its hardware-enforced list must require a **biometric for every use** (`USER_AUTH_TYPE` includes biometric, no `NO_AUTH_REQUIRED`, `AUTH_TIMEOUT` absent or 0). Unattested keys only in the emulator or with `ALLOW_UNATTESTED=true`.
 - The server sets **`validFromLamport`** = the highest lamport of the household's events and documents + 1, read in the write transaction; the device moves its clock there (`recordServerRegisteredKey`, D-M3-36).
 - Receivers accept a parent signature only from a key whose `deviceId` is the event's author device, whose fingerprint is the SHA-256 of its key, and whose `[validFromLamport, revokedAtLamport)` covers the event's lamport.
 
 ### 6. Device proofs on privileged calls
 
-`createLinkCode`, `revokeDevice`, `exportHousehold` and `deleteHousehold` (and `approveDevice`, `registerParentKey` above) carry a signature by one of the caller's ACTIVE parent devices over `"sprout/<callable>/v1" ‖ 0x00 ‖ hid ‖ 0x00 ‖ canonicalJson(args)` (`server/src/deviceProof.ts`, `core/sync-firebase` `DeviceProof`). A stolen ID token alone is not enough for these calls; binding `hid` and the callable stops replay into another household or another call. The table of domains is in `docs/FIREBASE.md`.
+`createLinkCode`, `revokeDevice`, `exportHousehold` and `deleteHousehold` (and `approveDevice`, `registerParentKey` above) carry a signature by one of the caller's ACTIVE parent devices over `"sprout/<callable>/v2" ‖ 0x00 ‖ hid ‖ 0x00 ‖ sha256(idToken) ‖ 0x00 ‖ canonicalJson(args)` (`server/src/deviceProof.ts`, `core/sync-firebase` `DeviceProof`), where `idToken` is the raw ID token the request carries. A stolen ID token alone is not enough for these calls; binding `hid` and the callable stops replay into another household or another call, and binding the ID token stops replay with any other token (a captured request dies with its token, within the hour). The table of domains is in `docs/FIREBASE.md`. The one token-less callable, `deviceStatus({ hid, deviceId, signature })`, is signed by the asking device's own key over `"sprout/device-status/v1" ‖ 0x00 ‖ hid ‖ 0x00 ‖ deviceId` and reveals only that device's status (or that its household was deleted), so a device whose user was disabled or deleted can learn why.
 
 ### 7. Revocation
 

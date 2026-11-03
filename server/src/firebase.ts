@@ -2,7 +2,7 @@ import { applicationDefault, cert, getApps, initializeApp, type AppOptions, type
 import { getAppCheck } from 'firebase-admin/app-check';
 import { getAuth } from 'firebase-admin/auth';
 import { getFirestore } from 'firebase-admin/firestore';
-import { isEmulator, projectId } from './config.js';
+import { assertEmulatorEnvironment, isEmulator, projectId } from './config.js';
 
 /**
  * The service account of `FIREBASE_SERVICE_ACCOUNT_JSON`: the key file's JSON, raw or base64 encoded (docs/FIREBASE.md
@@ -44,8 +44,12 @@ function appOptions(): AppOptions {
   return { credential: applicationDefault(), projectId: project };
 }
 
-/** Admin SDK singletons. The server never runs on GCP: skip google-auth-library's metadata-server probe. */
+/**
+ * Admin SDK singletons. The server never runs on GCP: skip google-auth-library's metadata-server probe. An emulator
+ * host variable outside the emulator stops the server here ([assertEmulatorEnvironment]).
+ */
 process.env.METADATA_SERVER_DETECTION ??= 'none';
+assertEmulatorEnvironment();
 if (getApps().length === 0) initializeApp(appOptions());
 
 export const db = getFirestore();

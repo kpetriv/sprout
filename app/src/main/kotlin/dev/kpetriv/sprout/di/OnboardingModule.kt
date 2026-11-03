@@ -10,15 +10,17 @@ import dev.kpetriv.sprout.feature.onboarding.OnboardingHousehold
 import dev.kpetriv.sprout.feature.onboarding.ParentKeyRegistrar
 import dev.kpetriv.sprout.feature.onboarding.ParentSigningSetup
 import dev.kpetriv.sprout.feature.onboarding.RegistrationBackend
-import dev.kpetriv.sprout.navigation.RemovalSignal
+import dev.kpetriv.sprout.navigation.ShellSignals
 import dev.kpetriv.sprout.onboarding.FirebaseOnboardingAuth
 import dev.kpetriv.sprout.onboarding.FunctionsParentKeyRegistrar
 import dev.kpetriv.sprout.onboarding.FunctionsRegistrationBackend
 import dev.kpetriv.sprout.onboarding.LockParentSigningSetup
 import dev.kpetriv.sprout.onboarding.RoomOnboardingHousehold
-import dev.kpetriv.sprout.sync.SyncController
+import dev.kpetriv.sprout.sync.CredentialGate
+import dev.kpetriv.sprout.sync.ParentSetupTracker
+import dev.kpetriv.sprout.sync.RemovalHandler
 
-/** `feature/onboarding`'s ports over core/sync-firebase, core/database and `feature/lock`, and the shell's removal. */
+/** `feature/onboarding`'s ports over core/sync-firebase, core/database and `feature/lock`, and the shell's signals. */
 @Module
 @InstallIn(SingletonComponent::class)
 internal abstract class OnboardingModule {
@@ -39,6 +41,11 @@ internal abstract class OnboardingModule {
 
     companion object {
         @Provides
-        fun removalSignal(sync: SyncController): RemovalSignal = RemovalSignal { sync.removal }
+        fun shellSignals(removals: RemovalHandler, gate: CredentialGate, setup: ParentSetupTracker): ShellSignals =
+            object : ShellSignals {
+                override val removal = removals.state
+                override val gate = gate.state
+                override val parentSetupPending = setup.pending
+            }
     }
 }

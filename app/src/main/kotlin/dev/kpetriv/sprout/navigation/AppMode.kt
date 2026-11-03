@@ -13,7 +13,9 @@ import dev.kpetriv.sprout.core.model.KidUiTier
 import dev.kpetriv.sprout.core.model.Role
 import dev.kpetriv.sprout.startup.StartupState
 import dev.kpetriv.sprout.startup.StartupStatus
-import dev.kpetriv.sprout.sync.RemovalReason
+import dev.kpetriv.sprout.sync.GateState
+import dev.kpetriv.sprout.sync.Removal
+import dev.kpetriv.sprout.sync.ShellPreferences
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -26,12 +28,13 @@ import javax.inject.Inject
 
 /** Who the app is showing itself to. */
 sealed interface AppMode {
-    /** The session is being read. */
+    /** The session is being read (or startup is still running). */
     data object Loading : AppMode
 
     /**
-     * Onboarding (M3 §6): no session, a second parent phone waiting for approval, or the trial household's
-     * "Set up sync". [canLeave] when there is a trial household to go back to.
+     * Onboarding (M3 §6): no session, a second parent phone waiting for approval, a parent whose PIN and signing step
+     * has not finished, or the trial household's "Set up sync". [canLeave] when there is a trial household to go back
+     * to.
      */
     data class Onboarding(val canLeave: Boolean) : AppMode
 
@@ -45,8 +48,11 @@ sealed interface AppMode {
      */
     data class Kid(val kidId: KidId, val linkedDevice: Boolean = false) : AppMode
 
-    /** This phone was removed from the household and wipes its data (M3 §6). */
-    data class Removed(val reason: RemovalReason) : AppMode
+    /** The "Sign in again" gate (audit H2): no household data behind it. */
+    data class SignInAgain(val gate: GateState) : AppMode
+
+    /** This phone's copy of the household is being, or has been, erased (M3 §6, D-M3-47). */
+    data class Removed(val removal: Removal) : AppMode
 }
 
 /** Locks the parent area; the app binds it to `feature/lock`'s `ParentSession.lock`. */
@@ -54,9 +60,14 @@ fun interface ParentLock {
     fun lock()
 }
 
-/** Why this phone must wipe, or null; the app binds it to `SyncController.removal`. */
-fun interface RemovalSignal {
-    fun removal(): StateFlow<RemovalReason?>
+/**
+ * The shell's own state next to the session: the removal ([RemovalHandler.state]), the "Sign in again" gate
+ * ([CredentialGate.state]) and the household whose parent setup is pending ([ParentSetupTracker.pending], a digest).
+ */
+interface ShellSignals {
+    val removal: StateFlow<Removal?>
+    val gate: StateFlow<GateState?>
+    val parentSetupPending: StateFlow<String?>
 }
 
 /** The signed-in session as the shell sees it: still loading, or the stored session (null when signed out). */
@@ -66,39 +77,71 @@ internal sealed interface SessionView {
     data class Loaded(val session: Session?) : SessionView
 }
 
+/** One snapshot of [ShellSignals]. */
+internal data class ShellState(
+    val removal: Removal? = null,
+    val gate: GateState? = null,
+    val parentSetupPending: String? = null,
+)
+
 /**
  * The [AppMode] for a session (M3 §6):
+ * - nothing is decided while the session loads (startup still running included);
  * - a removal wins over everything;
- * - no session, or a PARENT session whose device still waits for approval, is onboarding; so is the trial session
- *   while the parent is setting up sync ([onboarding]);
+ * - the "Sign in again" gate comes next, for a real session;
+ * - no session, or a PARENT session whose device still waits for approval or whose PIN and signing step has not
+ *   finished, is onboarding; so is the trial session while the parent is setting up sync ([onboarding]);
  * - a KID session is kid mode for its kid only, with no parent area;
  * - a PARENT session (the trial one included) is the parent area, or kid mode for [kidModeKid] on this phone.
  */
-internal fun appModeOf(
-    session: SessionView,
-    onboarding: Boolean,
-    kidModeKid: KidId?,
-    removal: RemovalReason?,
-): AppMode {
-    val current = (session as? SessionView.Loaded)?.session
+internal fun appModeOf(session: SessionView, onboarding: Boolean, kidModeKid: KidId?, shell: ShellState): AppMode {
+    if (session !is SessionView.Loaded) return AppMode.Loading
+    val current = session.session
+    val real = current?.takeUnless { it.isLocalTrial }
     return when {
-        removal != null -> AppMode.Removed(removal)
-        session !is SessionView.Loaded -> AppMode.Loading
+        shell.removal != null -> AppMode.Removed(shell.removal)
+
+        real != null && shell.gate != null -> AppMode.SignInAgain(shell.gate)
+
         current == null -> AppMode.Onboarding(canLeave = false)
+
         onboarding -> AppMode.Onboarding(canLeave = current.isLocalTrial)
+
         current.role == Role.KID -> AppMode.Kid(checkNotNull(current.kidId), linkedDevice = true)
+
         current.deviceStatus == RegistrationStatus.PENDING -> AppMode.Onboarding(canLeave = false)
+
+        real != null && shell.parentSetupPending == ShellPreferences.digestOf(real.householdId) ->
+            AppMode.Onboarding(canLeave = false)
+
         kidModeKid != null -> AppMode.Kid(kidModeKid)
+
         else -> AppMode.Parent
     }
 }
 
+/** What the shell asks of [ModeViewModel]. */
+sealed interface ModeEvent {
+    /** Switch to kid mode for [kidId] and lock the parent area. */
+    data class EnterKidMode(val kidId: KidId) : ModeEvent
+
+    /** Back to the parent area; only after the kid-mode exit gate unlocked the parent session. */
+    data object ExitKidMode : ModeEvent
+
+    /** Onboarding is on screen (no session, or the trial household's "Set up sync"). */
+    data object BeginOnboarding : ModeEvent
+
+    /** Onboarding finished or was left: the mode follows the session again. */
+    data object EndOnboarding : ModeEvent
+}
+
 /**
- * The app's [AppMode], derived from the stored session ([SessionStore.observe]). Kid mode on a parent's phone is kept
- * in the [SavedStateHandle] so it survives process death (parent mode then starts locked anyway, the parent session
- * being in memory only). Entering kid mode locks the parent session, so handing the device to a kid never leaves the
- * parent area one tap away. Onboarding stays on screen until it says it is finished, even once it saved the session
- * (the PIN and signing step comes after that).
+ * The app's [AppMode], derived from the stored session ([SessionStore.observe]) and the [ShellSignals]. Kid mode on a
+ * parent's phone is kept in the [SavedStateHandle] so it survives process death (parent mode then starts locked
+ * anyway, the parent session being in memory only). Entering kid mode locks the parent session, so handing the
+ * device to a kid never leaves the parent area one tap away. Onboarding stays on screen until it says it is finished,
+ * even once it saved the session (the PIN and signing step comes after that). Until startup has finished the mode is
+ * Loading, so neither a session about to appear nor a removal found during startup flashes anything else.
  */
 @HiltViewModel
 class ModeViewModel @Inject constructor(
@@ -106,43 +149,35 @@ class ModeViewModel @Inject constructor(
     private val kids: KidRepository,
     private val parentLock: ParentLock,
     sessions: SessionStore,
-    removal: RemovalSignal,
+    signals: ShellSignals,
     startup: StartupStatus,
 ) : ViewModel() {
     private val onboarding = MutableStateFlow(false)
 
-    // The session is only final once startup restored and reconciled it (and seeded the debug trial); until then the
-    // mode is Loading, so a session that is about to appear never flashes onboarding.
     val mode: StateFlow<AppMode> = combine(
         combine(sessionViews(sessions), startup.state) { session, state ->
             if (state == StartupState.Running) SessionView.Loading else session
         },
         onboarding,
         savedStateHandle.getStateFlow<String?>(KID_ID_KEY, null),
-        removal.removal(),
-    ) { session, onboardingNow, kidId, removed ->
-        appModeOf(session, onboardingNow, kidId?.let(::KidId), removed)
+        combine(signals.removal, signals.gate, signals.parentSetupPending, ::ShellState),
+    ) { session, onboardingNow, kidId, shell ->
+        appModeOf(session, onboardingNow, kidId?.let(::KidId), shell)
     }.stateIn(viewModelScope, SharingStarted.Eagerly, AppMode.Loading)
 
-    /** Switches to kid mode for [kidId] and locks the parent area. */
-    fun enterKidMode(kidId: KidId) {
-        savedStateHandle[KID_ID_KEY] = kidId.value
-        parentLock.lock()
-    }
+    fun onEvent(event: ModeEvent) {
+        when (event) {
+            is ModeEvent.EnterKidMode -> {
+                savedStateHandle[KID_ID_KEY] = event.kidId.value
+                parentLock.lock()
+            }
 
-    /** Back to the parent area. Call only after the kid-mode exit gate unlocked the parent session. */
-    fun exitKidMode() {
-        savedStateHandle[KID_ID_KEY] = null
-    }
+            ModeEvent.ExitKidMode -> savedStateHandle[KID_ID_KEY] = null
 
-    /** Onboarding is on screen (no session, or the trial household's "Set up sync"). */
-    fun beginOnboarding() {
-        onboarding.value = true
-    }
+            ModeEvent.BeginOnboarding -> onboarding.value = true
 
-    /** Onboarding finished or was left: the mode follows the session again. */
-    fun endOnboarding() {
-        onboarding.value = false
+            ModeEvent.EndOnboarding -> onboarding.value = false
+        }
     }
 
     /** The kid's UI tier, or null when the kid does not exist. */

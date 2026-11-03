@@ -1,13 +1,10 @@
 package dev.kpetriv.sprout.sync
 
 import dev.kpetriv.sprout.FakeSessionStore
+import dev.kpetriv.sprout.FakeShellPreferences
 import dev.kpetriv.sprout.core.database.entity.RegistrationStatus
-import dev.kpetriv.sprout.core.sync.PushItemId
-import dev.kpetriv.sprout.core.sync.PushRejection
-import dev.kpetriv.sprout.core.sync.SyncError
 import dev.kpetriv.sprout.core.sync.SyncReport
 import dev.kpetriv.sprout.core.time.FakeClock
-import dev.kpetriv.sprout.kidSession
 import dev.kpetriv.sprout.parentSession
 import dev.kpetriv.sprout.trialSession
 import kotlinx.coroutines.CoroutineScope
@@ -15,10 +12,10 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
-import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
+import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runTest
 import org.junit.Test
 import kotlin.test.assertEquals
@@ -28,7 +25,6 @@ import kotlin.time.Instant
 @OptIn(ExperimentalCoroutinesApi::class)
 class SyncControllerTest {
     private class FakeRunner : SyncRunner {
-        override val reports = MutableStateFlow<SyncReport?>(null)
         var running = 0
         var started = 0
         var triggers = 0
@@ -43,28 +39,40 @@ class SyncControllerTest {
             }
         }
 
-        override suspend fun syncOnce(): SyncReport = SyncReport().also { reports.value = it }
+        override suspend fun syncOnce(): SyncReport = SyncReport()
     }
 
     private val sessions = FakeSessionStore()
     private val runner = FakeRunner()
-    private val trigger = MutableSharedFlow<Unit>()
-    private val audited = mutableListOf<PushRejection>()
-    private var plans = 0
+    private var trigger: Flow<Unit> = MutableSharedFlow()
+    private val triggerEmitter get() = trigger as MutableSharedFlow<Unit>
+    private val removals = mutableListOf<RemovalReason>()
     private var periodic = 0
     private var expedited = 0
     private var foreground = true
     private val foregroundChanges = MutableSharedFlow<Boolean>()
-    private var linked = false
+    private val preferences = FakeShellPreferences()
     private val clock = FakeClock(Instant.fromEpochSeconds(1_000))
+    private val processor = SyncReportProcessor(
+        auditor = { },
+        sessions = sessions,
+        planner = { },
+        preferences = preferences,
+        removals = { removals += it },
+        credentials = object : CredentialCheck {
+            override fun verify() = Unit
+
+            override fun credentialsLost() = Unit
+        },
+        clock = clock,
+    )
 
     private fun TestScope.controller() = SyncController(
         scope = CoroutineScope(backgroundScope.coroutineContext + UnconfinedTestDispatcher(testScheduler)),
         sessions = sessions,
         runner = runner,
         trigger = { trigger },
-        auditor = { audited += it },
-        planner = { plans += 1 },
+        reports = processor,
         scheduler = object : SyncScheduler {
             override fun schedulePeriodic() {
                 periodic += 1
@@ -74,19 +82,13 @@ class SyncControllerTest {
                 expedited += 1
             }
         },
-        preferences = object : ShellPreferences {
-            override fun wasLinked(): Boolean = linked
-
-            override fun markLinked() {
-                linked = true
-            }
-        },
+        preferences = preferences,
         foreground = object : ForegroundState {
             override fun isForeground(): Boolean = foreground
 
             override fun changes(): Flow<Boolean> = foregroundChanges
         },
-        clock = clock,
+        removals = { removals += it },
     ).also { it.start() }
 
     @Test
@@ -104,7 +106,12 @@ class SyncControllerTest {
         controller()
         assertEquals(1, runner.running)
         assertEquals(1, periodic)
-        assertEquals(true, linked, "a device that synced once never seeds the demo trial again")
+        assertEquals(true, preferences.linked, "a device that synced once never seeds the demo trial again")
+        assertEquals(
+            ShellPreferences.digestOf(parentSession().householdId, parentSession().uid),
+            preferences.linkedDigest,
+            "the account the local rows belong to is recorded",
+        )
         sessions.session.value = parentSession(RegistrationStatus.ACTIVE)
         assertEquals(1, runner.started, "an approval of the same device keeps the loop")
         sessions.session.value = null
@@ -115,42 +122,12 @@ class SyncControllerTest {
     fun `outbox triggers also enqueue an expedited worker while the app is in the background`() = runTest {
         sessions.session.value = parentSession()
         controller()
-        trigger.emit(Unit)
+        triggerEmitter.emit(Unit)
         assertEquals(1, runner.triggers)
         assertEquals(0, expedited)
         foreground = false
-        trigger.emit(Unit)
+        triggerEmitter.emit(Unit)
         assertEquals(1, expedited)
-    }
-
-    @Test
-    fun `reports are audited and plan once after the first good sync`() = runTest {
-        sessions.session.value = parentSession()
-        val controller = controller()
-        val refused = PushRejection(4, PushItemId("event/e1:abc"), "permission-denied", blocking = true)
-        runner.reports.value = SyncReport(rejections = listOf(refused))
-        assertEquals(listOf(refused), audited)
-        assertEquals(clock.now(), controller.status.value.lastSyncedAt)
-        assertEquals(1, plans)
-        runner.reports.value = SyncReport(error = SyncError.Transient())
-        assertEquals(true, controller.status.value.lastFailed)
-        runner.reports.value = SyncReport()
-        assertEquals(1, plans, "planning runs once per session")
-    }
-
-    @Test
-    fun `an account that is gone asks for the wipe`() = runTest {
-        val controller = controller()
-        controller.householdGone()
-        assertEquals(RemovalReason.HOUSEHOLD_GONE, controller.removal.value)
-    }
-
-    @Test
-    fun `a failed first sync does not plan, and a kid's phone never plans`() = runTest {
-        sessions.session.value = kidSession()
-        controller()
-        runner.reports.value = SyncReport()
-        assertEquals(0, plans)
     }
 
     @Test
@@ -164,21 +141,44 @@ class SyncControllerTest {
     }
 
     @Test
-    fun `household gone or a revoked session asks for the wipe`() = runTest {
+    fun `a session mirrored as REVOKED stops sync and reports the removal`() = runTest {
         sessions.session.value = parentSession()
-        val controller = controller()
-        assertNull(controller.removal.value)
-        runner.reports.value = SyncReport(householdGone = true, error = SyncError.HouseholdGone)
-        assertEquals(RemovalReason.HOUSEHOLD_GONE, controller.removal.value)
+        controller()
+        sessions.session.value = parentSession(RegistrationStatus.REVOKED)
+        assertEquals(listOf(RemovalReason.DEVICE_REVOKED), removals)
+        assertEquals(0, runner.running)
     }
 
     @Test
-    fun `a session mirrored as REVOKED stops sync and asks for the wipe`() = runTest {
+    fun `a throwing trigger restarts the loop with a doubling delay`() = runTest {
+        var subscriptions = 0
+        trigger = kotlinx.coroutines.flow.flow {
+            subscriptions += 1
+            error("trigger failed")
+        }
+        sessions.session.value = parentSession()
+        controller()
+        assertEquals(1, subscriptions)
+
+        advanceTimeBy(SyncController.BASE_RESTART_DELAY_MS + 1)
+        assertEquals(2, subscriptions, "restarted after 1 s")
+        advanceTimeBy(SyncController.BASE_RESTART_DELAY_MS + 1)
+        assertEquals(2, subscriptions, "the next restart waits 2 s")
+        advanceTimeBy(SyncController.BASE_RESTART_DELAY_MS)
+        assertEquals(3, subscriptions)
+        assertEquals(SyncController.MAX_RESTART_DELAY_MS, SyncController.restartDelayMs(30), "capped at 5 minutes")
+    }
+
+    @Test
+    fun `stop ends the loop for good and syncNow does nothing after it`() = runTest {
         sessions.session.value = parentSession()
         val controller = controller()
-        sessions.session.value = parentSession(RegistrationStatus.REVOKED)
-        assertEquals(RemovalReason.DEVICE_REVOKED, controller.removal.value)
+        assertEquals(1, runner.running)
+        controller.stop()
         assertEquals(0, runner.running)
+        assertNull(controller.syncNow())
+        sessions.session.value = parentSession(RegistrationStatus.PENDING)
+        assertEquals(1, runner.started)
     }
 
     @Test

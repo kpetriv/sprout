@@ -13,6 +13,7 @@ import dev.kpetriv.sprout.core.database.entity.SessionEntity
 import dev.kpetriv.sprout.core.database.entity.SyncCursorEntity
 import dev.kpetriv.sprout.core.domainledger.EventId
 import dev.kpetriv.sprout.core.model.DeviceId
+import dev.kpetriv.sprout.core.model.HouseholdId
 import kotlinx.coroutines.flow.Flow
 
 /** The device registry mirror. Written only by the sync applier. */
@@ -111,14 +112,17 @@ interface DocumentInboxDao {
     suspend fun oldestFor(authorDeviceId: DeviceId, limit: Int): List<DocumentInboxEntity>
 }
 
-/** Per-collection pull positions. */
+/** Per-household, per-collection pull positions. */
 @Dao
 interface SyncCursorDao {
     @Upsert
     suspend fun upsert(cursors: List<SyncCursorEntity>)
 
-    @Query("SELECT * FROM sync_cursor")
-    suspend fun all(): List<SyncCursorEntity>
+    @Query("SELECT * FROM sync_cursor WHERE householdId = :householdId")
+    suspend fun all(householdId: HouseholdId): List<SyncCursorEntity>
+
+    @Query("DELETE FROM sync_cursor WHERE householdId = :householdId")
+    suspend fun deleteFor(householdId: HouseholdId): Int
 
     @Query("DELETE FROM sync_cursor")
     suspend fun deleteAll()

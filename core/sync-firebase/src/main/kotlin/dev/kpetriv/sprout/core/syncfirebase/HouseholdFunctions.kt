@@ -14,13 +14,15 @@ import kotlin.io.encoding.Base64
 
 /**
  * Typed wrappers for the household callables (M3 §1, `server/src/index.ts`), at [FirebaseConfig.functionsEndpoint].
- * The privileged ones carry a device proof (`callerDeviceId` or `deviceId`, and `signature`): the calling device's
- * signature over the bytes [DeviceProof] builds (D-M3-34).
+ * The privileged ones carry a device proof (`callerDeviceId`, `approverDeviceId` or `deviceId`, and `signature`): the
+ * calling device's signature over the bytes [DeviceProof] builds (D-M3-34), bound to the ID token the call carries.
+ * [deviceStatus] alone is sent without an ID token.
  *
  * Requests and responses are kotlinx-serialised data classes converted to plain maps at the SDK boundary. Every call
  * returns a [Result] whose failure is a [FunctionsException]; public keys, attestation certificates and signatures
  * travel as standard base64 (the backend decodes them strictly).
  */
+@Suppress("TooManyFunctions") // One typed wrapper per callable of the server.
 @Singleton
 class HouseholdFunctions @Inject constructor(private val invoker: CallableInvoker) {
 
@@ -49,7 +51,7 @@ class HouseholdFunctions @Inject constructor(private val invoker: CallableInvoke
 
     /**
      * Approves a PENDING parent device from this ACTIVE parent device ([approverDeviceId]); [signature] is the
-     * approver key's ECDSA signature over [approvalPayload] of [deviceId].
+     * approver key's ECDSA signature over [DeviceProof.approveDevicePayload] of [deviceId].
      */
     suspend fun approveDevice(deviceId: DeviceId, approverDeviceId: DeviceId, signature: ByteArray): Result<Unit> =
         call(
@@ -150,6 +152,29 @@ class HouseholdFunctions @Inject constructor(private val invoker: CallableInvoke
         )
     }
 
+    /**
+     * This device's registry status, asked without an ID token (works signed out and after the account was disabled
+     * or deleted): [signature] is the device key's signature over [DeviceProof.deviceStatusPayload] of
+     * [householdId] and [deviceId]. `permission-denied` when the signature does not verify against the registered
+     * key; [DeviceStatusValue.UNKNOWN] when the device or household does not exist, with
+     * [DeviceStatusAnswer.householdGone] when the household was deleted.
+     */
+    suspend fun deviceStatus(
+        householdId: HouseholdId,
+        deviceId: DeviceId,
+        signature: ByteArray,
+    ): Result<DeviceStatusAnswer> = call(
+        DEVICE_STATUS,
+        DeviceStatusRequest(householdId, deviceId, Base64.Default.encode(signature)),
+        DeviceStatusRequest.serializer(),
+        DeviceStatusResponse.serializer(),
+        authenticated = false,
+    ).mapCatching { response ->
+        val status = DeviceStatusValue.entries.firstOrNull { it.name == response.status }
+            ?: throw FunctionsException(FunctionsError.MalformedResponse)
+        DeviceStatusAnswer(status, response.householdGone)
+    }
+
     @Suppress("SwallowedException") // A decoding message may quote response data; only the code is kept.
     private suspend fun <Req, Res> call(
         name: String,
@@ -157,9 +182,14 @@ class HouseholdFunctions @Inject constructor(private val invoker: CallableInvoke
         requestSerializer: KSerializer<Req>,
         responseSerializer: KSerializer<Res>,
         timeoutMs: Long = DEFAULT_TIMEOUT_MS,
+        authenticated: Boolean = true,
     ): Result<Res> = try {
-        val data = json.encodeToJsonElement(requestSerializer, request) as JsonObject
-        val response = invoker.call(name, PlainValues.toPlainMap(data), timeoutMs)
+        val data = PlainValues.toPlainMap(json.encodeToJsonElement(requestSerializer, request) as JsonObject)
+        val response = if (authenticated) {
+            invoker.call(name, data, timeoutMs)
+        } else {
+            invoker.callWithoutAuth(name, data, timeoutMs)
+        }
         Result.success(json.decodeFromJsonElement(responseSerializer, PlainValues.toJson(response, true)))
     } catch (cancellation: CancellationException) {
         throw cancellation
@@ -183,11 +213,19 @@ class HouseholdFunctions @Inject constructor(private val invoker: CallableInvoke
         const val REVOKE_DEVICE: String = "revokeDevice"
         const val EXPORT_HOUSEHOLD: String = "exportHousehold"
         const val DELETE_HOUSEHOLD: String = "deleteHousehold"
+        const val DEVICE_STATUS: String = "deviceStatus"
 
-        /** Domain of the device-approval signature (`functions/src/crypto.ts` `APPROVE_DEVICE_DOMAIN`). */
+        /** The retired version 1 approval domain, kept only so [approvalPayload] still compiles. */
         const val APPROVE_DEVICE_DOMAIN: String = "sprout/approve-device/v1"
 
-        /** The bytes an approving parent device signs: `"sprout/approve-device/v1" || 0x00 || deviceId` (UTF-8). */
+        /**
+         * The version 1 approval bytes, `"sprout/approve-device/v1" || 0x00 || deviceId`, which the server no longer
+         * accepts: approvals are now bound to the household and the ID token ([DeviceProof.approveDevicePayload]).
+         */
+        @Deprecated(
+            "The server refuses version 1 approvals; use HouseholdAdminFunctions.approveDevice (app) or " +
+                "DeviceProof.approveDevicePayload with the ID token hash.",
+        )
         fun approvalPayload(deviceId: DeviceId): ByteArray =
             APPROVE_DEVICE_DOMAIN.encodeToByteArray() + 0.toByte() + deviceId.value.encodeToByteArray()
 

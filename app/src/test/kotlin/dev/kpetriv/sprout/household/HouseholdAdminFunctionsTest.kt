@@ -12,9 +12,12 @@ import dev.kpetriv.sprout.core.model.DeviceId
 import dev.kpetriv.sprout.core.model.KidId
 import dev.kpetriv.sprout.core.syncfirebase.CallableInvoker
 import dev.kpetriv.sprout.core.syncfirebase.DeviceProof
+import dev.kpetriv.sprout.core.syncfirebase.DeviceStatusAnswer
+import dev.kpetriv.sprout.core.syncfirebase.DeviceStatusValue
 import dev.kpetriv.sprout.core.syncfirebase.FunctionsError
 import dev.kpetriv.sprout.core.syncfirebase.FunctionsException
 import dev.kpetriv.sprout.core.syncfirebase.HouseholdFunctions
+import dev.kpetriv.sprout.core.syncfirebase.IdTokenHashSource
 import dev.kpetriv.sprout.core.time.FakeClock
 import dev.kpetriv.sprout.parentSession
 import dev.kpetriv.sprout.trialSession
@@ -34,15 +37,40 @@ class HouseholdAdminFunctionsTest {
     private val signer = DeviceSigner(keys, Dispatchers.Unconfined)
     private val sessions = FakeSessionStore(parentSession())
     private val policies = RecordingPolicies()
+    private val tokens = FakeIdTokens()
+
+    /** Hands out the hash of token 1, 2, 3, ... (one fresh token per proof, as the real refresh does). */
+    private class FakeIdTokens : IdTokenHashSource {
+        var issued = 0
+        var failure: FunctionsException? = null
+
+        fun hashOf(token: Int): ByteArray = DeviceProof.idTokenHash("token-$token")
+
+        override suspend fun currentIdTokenHash(): ByteArray {
+            failure?.let { throw it }
+            issued++
+            return hashOf(issued)
+        }
+    }
 
     private class RecordingInvoker(private val response: Any?) : CallableInvoker {
         val calls = mutableListOf<Pair<String, Map<String, Any?>>>()
+        val withoutAuth = mutableListOf<String>()
         var failure: FunctionsException? = null
+
+        /** Failures for the next calls, in order, before [failure] applies. */
+        val failures = ArrayDeque<FunctionsException>()
 
         override suspend fun call(name: String, data: Map<String, Any?>, timeoutMs: Long): Any? {
             calls += name to data
+            failures.removeFirstOrNull()?.let { throw it }
             failure?.let { throw it }
             return response
+        }
+
+        override suspend fun callWithoutAuth(name: String, data: Map<String, Any?>, timeoutMs: Long): Any? {
+            withoutAuth += name
+            return call(name, data, timeoutMs)
         }
     }
 
@@ -65,7 +93,7 @@ class HouseholdAdminFunctionsTest {
     }
 
     private fun admin(invoker: CallableInvoker, store: FakeSessionStore = sessions) =
-        HouseholdAdminFunctions(HouseholdFunctions(invoker), signer, store, policies)
+        HouseholdAdminFunctions(HouseholdFunctions(invoker), signer, store, policies, tokens)
 
     private fun verifies(payload: ByteArray, signatureBase64: Any?): Boolean =
         Signature.getInstance("SHA256withECDSA").run {
@@ -83,22 +111,82 @@ class HouseholdAdminFunctionsTest {
         val (name, data) = invoker.calls.single()
         assertEquals(HouseholdFunctions.CREATE_LINK_CODE, name)
         assertEquals(THIS_DEVICE.value, data["callerDeviceId"])
-        assertTrue(verifies(DeviceProof.createLinkCodePayload(REAL_HOUSEHOLD, KidId("kid-leo")), data["signature"]))
+        val payload = DeviceProof.createLinkCodePayload(REAL_HOUSEHOLD, tokens.hashOf(1), KidId("kid-leo"))
+        assertTrue(verifies(payload, data["signature"]), "bound to the token the call carries")
     }
 
     @Test
-    fun `revoke, export and delete sign their own payloads`() = runTest {
+    fun `approve, revoke, export and delete sign their own payloads over a fresh token each`() = runTest {
         val target = DeviceId("e".repeat(64))
-        val invoker = RecordingInvoker(mapOf("deviceId" to target.value, "revokedAtLamport" to 12L, "deleted" to true))
+        val invoker = RecordingInvoker(
+            mapOf("deviceId" to target.value, "revokedAtLamport" to 12L, "deleted" to true, "status" to "ACTIVE"),
+        )
         val functions = admin(invoker)
-        functions.revokeDevice(target)
-        functions.exportHousehold()
-        functions.deleteHousehold()
-        val (revoke, export, delete) = invoker.calls
-        assertTrue(verifies(DeviceProof.revokeDevicePayload(REAL_HOUSEHOLD, target), revoke.second["signature"]))
-        assertTrue(verifies(DeviceProof.exportHouseholdPayload(REAL_HOUSEHOLD), export.second["signature"]))
-        assertTrue(verifies(DeviceProof.deleteHouseholdPayload(REAL_HOUSEHOLD), delete.second["signature"]))
+        functions.approveDevice(target).getOrThrow()
+        functions.revokeDevice(target).getOrThrow()
+        functions.exportHousehold().getOrThrow()
+        functions.deleteHousehold().getOrThrow()
+        val (approve, revoke, export) = invoker.calls
+        val delete = invoker.calls[3]
+        assertEquals(HouseholdFunctions.APPROVE_DEVICE, approve.first)
+        assertEquals(target.value, approve.second["deviceId"])
+        assertEquals(THIS_DEVICE.value, approve.second["approverDeviceId"])
+        val approval = DeviceProof.approveDevicePayload(REAL_HOUSEHOLD, tokens.hashOf(1), target)
+        assertTrue(verifies(approval, approve.second["signature"]))
+        val revocation = DeviceProof.revokeDevicePayload(REAL_HOUSEHOLD, tokens.hashOf(2), target)
+        assertTrue(verifies(revocation, revoke.second["signature"]))
+        val exported = DeviceProof.exportHouseholdPayload(REAL_HOUSEHOLD, tokens.hashOf(3))
+        assertTrue(verifies(exported, export.second["signature"]))
+        val deletion = DeviceProof.deleteHouseholdPayload(REAL_HOUSEHOLD, tokens.hashOf(4))
+        assertTrue(verifies(deletion, delete.second["signature"]))
         assertEquals(REAL_HOUSEHOLD.value, delete.second["confirmation"])
+        assertTrue(invoker.withoutAuth.isEmpty(), "every proof call carries the ID token")
+    }
+
+    @Test
+    fun `a proof refused with permission-denied is signed over a fresh token and sent once more`() = runTest {
+        val invoker = RecordingInvoker(mapOf("deleted" to true))
+        invoker.failures += FunctionsException(FunctionsError.PermissionDenied)
+        admin(invoker).deleteHousehold().getOrThrow()
+        val (first, second) = invoker.calls
+        val deletion = { token: Int -> DeviceProof.deleteHouseholdPayload(REAL_HOUSEHOLD, tokens.hashOf(token)) }
+        assertTrue(verifies(deletion(1), first.second["signature"]))
+        assertTrue(verifies(deletion(2), second.second["signature"]))
+
+        // A second refusal is final; other failures are not retried.
+        invoker.calls.clear()
+        invoker.failure = FunctionsException(FunctionsError.PermissionDenied)
+        val denied = admin(invoker).exportHousehold().exceptionOrNull() as FunctionsException
+        assertEquals(FunctionsError.PermissionDenied, denied.error)
+        assertEquals(2, invoker.calls.size)
+        invoker.calls.clear()
+        invoker.failure = FunctionsException(FunctionsError.FailedPrecondition)
+        val stale = admin(invoker).deleteHousehold().exceptionOrNull() as FunctionsException
+        assertEquals(FunctionsError.FailedPrecondition, stale.error, "deleteHousehold: sign in again")
+        assertEquals(1, invoker.calls.size)
+    }
+
+    @Test
+    fun `without a token there is no call`() = runTest {
+        val invoker = RecordingInvoker(mapOf("deleted" to true))
+        tokens.failure = FunctionsException(FunctionsError.Unavailable)
+        val failure = admin(invoker).deleteHousehold().exceptionOrNull() as FunctionsException
+        assertEquals(FunctionsError.Unavailable, failure.error)
+        assertTrue(invoker.calls.isEmpty())
+    }
+
+    @Test
+    fun `deviceStatus signs the session's household and device and needs no ID token`() = runTest {
+        val invoker = RecordingInvoker(mapOf("status" to "REVOKED", "householdGone" to false))
+        tokens.failure = FunctionsException(FunctionsError.Unauthenticated) // signed out, or the user is disabled
+        val answer = admin(invoker).deviceStatus().getOrThrow()
+        assertEquals(DeviceStatusAnswer(DeviceStatusValue.REVOKED, householdGone = false), answer)
+        assertEquals(listOf(HouseholdFunctions.DEVICE_STATUS), invoker.withoutAuth)
+        val data = invoker.calls.single().second
+        assertEquals(REAL_HOUSEHOLD.value, data["hid"])
+        assertEquals(THIS_DEVICE.value, data["deviceId"])
+        assertTrue(verifies(DeviceProof.deviceStatusPayload(REAL_HOUSEHOLD, THIS_DEVICE), data["signature"]))
+        assertEquals(0, tokens.issued)
     }
 
     @Test
@@ -113,7 +201,8 @@ class HouseholdAdminFunctionsTest {
             assertEquals(THIS_DEVICE.value, data["deviceId"])
             assertEquals(Base64.Default.encode(key), data["publicKey"])
             assertEquals(chain.map { Base64.Default.encode(it) }, data["attestationChain"], "leaf first, as given")
-            assertTrue(verifies(DeviceProof.registerParentKeyPayload(REAL_HOUSEHOLD, key), data["signature"]))
+            val payload = DeviceProof.registerParentKeyPayload(REAL_HOUSEHOLD, tokens.hashOf(1), key)
+            assertTrue(verifies(payload, data["signature"]))
             assertEquals(listOf("f".repeat(64) to 42L), policies.recorded)
         }
 

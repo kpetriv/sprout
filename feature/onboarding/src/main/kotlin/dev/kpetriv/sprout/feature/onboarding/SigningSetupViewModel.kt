@@ -25,7 +25,7 @@ data class SigningSetupUiState(
     val pinLength: Int = PIN_LENGTH,
     val busy: Boolean = false,
     val error: SigningSetupResult? = null,
-    /** Increments on every rejected PIN; the dots shake when it changes. */
+    /** Increments on every PIN the lock rejected ([SigningSetupResult.WRONG_PIN]); the dots shake when it changes. */
     val rejections: Int = 0,
     val done: Boolean = false,
 ) {
@@ -98,14 +98,24 @@ class SigningSetupViewModel @Inject constructor(private val setup: ParentSigning
         clearDigits()
         mutableState.update { it.copy(busy = true, enteredDigits = 0) }
         viewModelScope.launch {
-            // enrol zeroes the PIN.
-            val result = setup.enrol(pin)
+            // enrol zeroes the PIN; a failure it throws (Keystore, storage) reads as FAILED and is never logged.
+            val result = try {
+                setup.enrol(pin)
+            } catch (cancellation: CancellationException) {
+                throw cancellation
+            } catch (@Suppress("TooGenericExceptionCaught", "SwallowedException") failure: Exception) {
+                pin.fill(ZERO_CHAR)
+                SigningSetupResult.FAILED
+            }
             mutableState.update {
                 when (result) {
                     SigningSetupResult.REGISTERED, SigningSetupResult.UNAVAILABLE ->
                         it.copy(busy = false, done = true, error = null)
 
-                    else -> it.copy(busy = false, error = result, rejections = it.rejections + 1)
+                    SigningSetupResult.WRONG_PIN ->
+                        it.copy(busy = false, error = result, rejections = it.rejections + 1)
+
+                    else -> it.copy(busy = false, error = result)
                 }
             }
         }

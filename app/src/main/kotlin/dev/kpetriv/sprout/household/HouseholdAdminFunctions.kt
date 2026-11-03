@@ -7,48 +7,76 @@ import dev.kpetriv.sprout.core.database.SessionStore
 import dev.kpetriv.sprout.core.model.DeviceId
 import dev.kpetriv.sprout.core.model.KidId
 import dev.kpetriv.sprout.core.syncfirebase.DeviceProof
+import dev.kpetriv.sprout.core.syncfirebase.DeviceStatusAnswer
 import dev.kpetriv.sprout.core.syncfirebase.FunctionsError
 import dev.kpetriv.sprout.core.syncfirebase.FunctionsException
 import dev.kpetriv.sprout.core.syncfirebase.HouseholdFunctions
+import dev.kpetriv.sprout.core.syncfirebase.IdTokenHashSource
 import dev.kpetriv.sprout.core.syncfirebase.LinkCode
 import dev.kpetriv.sprout.core.syncfirebase.ParentKeyRegistration
 import dev.kpetriv.sprout.core.syncfirebase.RevokedDevice
 import dev.kpetriv.sprout.feature.lock.ParentKeyChallengeSource
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.json.JsonObject
 import javax.inject.Inject
 
 /**
  * The parent callables that carry this device's proof (D-M3-34): each signs the exact bytes of core/sync-firebase's
  * [DeviceProof] for the signed-in household with this device's key ([DeviceSigner]) and passes the session's device
- * as `callerDeviceId`. Failures are [FunctionsException] codes only; the trial household (no backend) is
- * [FunctionsError.Unauthenticated]. Nothing here logs; the link code stays inside [LinkCode] (whose `toString`
- * hides it).
+ * as `callerDeviceId` (`approverDeviceId`, `deviceId`). Every proof is bound to the ID token the call carries: the
+ * hash comes from [IdTokenHashSource], which never hands out the token itself. Failures are [FunctionsException]
+ * codes only; the trial household (no backend) is [FunctionsError.Unauthenticated]. Nothing here logs; the link code
+ * stays inside [LinkCode] (whose `toString` hides it).
+ *
+ * The token is refreshed just before signing, so the SDK sends that token; should something else refresh it in
+ * between, the server refuses the proof with `permission-denied`, and the call is signed and sent once more.
  */
 class HouseholdAdminFunctions @Inject constructor(
     private val functions: HouseholdFunctions,
     private val signer: DeviceSigner,
     private val sessions: SessionStore,
     private val policies: HouseholdPolicyRepository,
+    private val idTokens: IdTokenHashSource,
 ) {
-    suspend fun createLinkCode(kidId: KidId): Result<LinkCode> = withSession { session ->
-        val signature = signer.sign(DeviceProof.createLinkCodePayload(session.householdId, kidId))
+    suspend fun createLinkCode(kidId: KidId): Result<LinkCode> = withProof { session, tokenHash ->
+        val signature = signer.sign(DeviceProof.createLinkCodePayload(session.householdId, tokenHash, kidId))
         functions.createLinkCode(kidId, session.deviceId, signature)
     }
 
-    suspend fun revokeDevice(deviceId: DeviceId): Result<RevokedDevice> = withSession { session ->
-        val signature = signer.sign(DeviceProof.revokeDevicePayload(session.householdId, deviceId))
+    /** Approves the PENDING parent device [deviceId] from this ACTIVE parent device. */
+    suspend fun approveDevice(deviceId: DeviceId): Result<Unit> = withProof { session, tokenHash ->
+        val signature = signer.sign(DeviceProof.approveDevicePayload(session.householdId, tokenHash, deviceId))
+        functions.approveDevice(deviceId, session.deviceId, signature)
+    }
+
+    suspend fun revokeDevice(deviceId: DeviceId): Result<RevokedDevice> = withProof { session, tokenHash ->
+        val signature = signer.sign(DeviceProof.revokeDevicePayload(session.householdId, tokenHash, deviceId))
         functions.revokeDevice(deviceId, session.deviceId, signature)
     }
 
-    suspend fun exportHousehold(): Result<JsonObject> = withSession { session ->
-        val signature = signer.sign(DeviceProof.exportHouseholdPayload(session.householdId))
+    suspend fun exportHousehold(): Result<JsonObject> = withProof { session, tokenHash ->
+        val signature = signer.sign(DeviceProof.exportHouseholdPayload(session.householdId, tokenHash))
         functions.exportHousehold(session.deviceId, signature)
     }
 
-    /** Deletes the signed-in household; the confirmation is its id. */
-    suspend fun deleteHousehold(): Result<Unit> = withSession { session ->
-        val signature = signer.sign(DeviceProof.deleteHouseholdPayload(session.householdId))
+    /**
+     * Deletes the signed-in household; the confirmation is its id. The server requires a sign-in (ID token
+     * `auth_time`) within the last 5 minutes and answers [FunctionsError.FailedPrecondition] otherwise: sign in again.
+     */
+    suspend fun deleteHousehold(): Result<Unit> = withProof { session, tokenHash ->
+        val signature = signer.sign(DeviceProof.deleteHouseholdPayload(session.householdId, tokenHash))
         functions.deleteHousehold(session.householdId, session.deviceId, signature)
+    }
+
+    /**
+     * This device's registry status, asked with its key's signature and no ID token
+     * ([HouseholdFunctions.deviceStatus]), so it works when the account was disabled (a revoked kid device) or deleted
+     * (with its household). Needs only the local session; [FunctionsError.Unauthenticated] in the trial household.
+     */
+    suspend fun deviceStatus(): Result<DeviceStatusAnswer> = withSession { session ->
+        val signature = signer.sign(DeviceProof.deviceStatusPayload(session.householdId, session.deviceId))
+        functions.deviceStatus(session.householdId, session.deviceId, signature)
     }
 
     /**
@@ -63,8 +91,8 @@ class HouseholdAdminFunctions @Inject constructor(
     suspend fun registerParentKey(
         publicKey: ByteArray,
         attestationChain: List<ByteArray>,
-    ): Result<ParentKeyRegistration> = withSession { session ->
-        val signature = signer.sign(DeviceProof.registerParentKeyPayload(session.householdId, publicKey))
+    ): Result<ParentKeyRegistration> = withProof { session, tokenHash ->
+        val signature = signer.sign(DeviceProof.registerParentKeyPayload(session.householdId, tokenHash, publicKey))
         functions.registerParentKey(
             publicKey,
             attestationChain = attestationChain.takeIf { it.isNotEmpty() },
@@ -87,6 +115,38 @@ class HouseholdAdminFunctions @Inject constructor(
         val session = sessions.get()?.takeUnless { it.isLocalTrial }
             ?: return Result.failure(FunctionsException(FunctionsError.Unauthenticated))
         return block(session)
+    }
+
+    /**
+     * [block] with the session and the hash of the ID token the call will carry; once more with a new hash when the
+     * server refuses the proof (`permission-denied` changes nothing on the server). One proof call at a time, so two
+     * of them never refresh the token under each other.
+     */
+    private suspend fun <T> withProof(block: suspend (Session, ByteArray) -> Result<T>): Result<T> =
+        withSession { session ->
+            proofCalls.withLock {
+                val first = signedAttempt(session, block)
+                if (first.isPermissionDenied()) signedAttempt(session, block) else first
+            }
+        }
+
+    private suspend fun <T> signedAttempt(
+        session: Session,
+        block: suspend (Session, ByteArray) -> Result<T>,
+    ): Result<T> {
+        val tokenHash = try {
+            idTokens.currentIdTokenHash()
+        } catch (failure: FunctionsException) {
+            return Result.failure(failure)
+        }
+        return block(session, tokenHash)
+    }
+
+    private fun Result<*>.isPermissionDenied(): Boolean =
+        (exceptionOrNull() as? FunctionsException)?.error == FunctionsError.PermissionDenied
+
+    private companion object {
+        val proofCalls = Mutex()
     }
 }
 

@@ -2,6 +2,7 @@ package dev.kpetriv.sprout.core.syncfirebase
 
 import android.content.Context
 import android.os.Looper
+import dev.kpetriv.sprout.core.model.DeviceId
 import dev.kpetriv.sprout.core.model.HouseholdId
 import dev.kpetriv.sprout.core.sync.DocTypes
 import dev.kpetriv.sprout.core.sync.RemoteChange
@@ -45,8 +46,11 @@ import kotlin.test.assertTrue
  *     --tests '*FirebaseEmulatorTransportTest'
  * ```
  *
- * Seeds (household, membership, device registration: Cloud Functions' job) are written through the emulator's REST
+ * Seeds (household, membership, device registration: the server's job) are written through the emulator's REST
  * API with the `Bearer owner` token, which bypasses the rules.
+ *
+ * [callablesThroughTheServer] also needs the Sprout server against the same emulators (`npm --prefix server run dev`)
+ * and its URL in `SPROUT_SERVER_URL` (for example `http://127.0.0.1:8787`); without that variable it is skipped.
  */
 @RunWith(RobolectricTestRunner::class)
 class FirebaseEmulatorTransportTest {
@@ -60,6 +64,8 @@ class FirebaseEmulatorTransportTest {
             System.getProperty("sprout.firebaseEmulator") == "true",
         )
         context = RuntimeEnvironment.getApplication()
+        // Each test bootstraps its own default app (the configs differ); Firebase keeps apps in a static map.
+        com.google.firebase.FirebaseApp.clearInstancesForTest()
         http("DELETE", "$FIRESTORE/emulator/v1/projects/$PROJECT/databases/(default)/documents")
         http("DELETE", "$AUTH/emulator/v1/projects/$PROJECT/accounts")
     }
@@ -99,6 +105,75 @@ class FirebaseEmulatorTransportTest {
         val pushed = pushEverything(transport, uid)
         assertPullsBack(transport, pushed)
         assertChangesSeeRemoteWrite(transport)
+    }
+
+    /**
+     * The callables through the real Functions SDK and the token-less transport against the server (D-M3-29): a
+     * device proof bound to the ID token the SDK sends ([FirebaseAuthSession.currentIdTokenHash]) is accepted, one
+     * over another hash is refused, and `deviceStatus` answers signed in, signed out and after the household is gone.
+     */
+    @Test
+    fun callablesThroughTheServer() {
+        val serverUrl = System.getenv("SPROUT_SERVER_URL")
+        assumeTrue("set SPROUT_SERVER_URL with the server running", !serverUrl.isNullOrBlank())
+        val config = FirebaseConfig(emulatorHost = HOST, debugAppCheck = true, functionsBaseUrl = serverUrl)
+        val bootstrap = FirebaseBootstrap(config, PortedEmulators)
+        val session = FirebaseAuthSession(bootstrap, config, context)
+        val functions = HouseholdFunctions(FirebaseCallableInvoker(bootstrap, config, context))
+        val keys = java.security.KeyPairGenerator.getInstance("EC")
+            .apply { initialize(java.security.spec.ECGenParameterSpec("secp256r1")) }
+            .generateKeyPair()
+        val sign = { payload: ByteArray ->
+            java.security.Signature.getInstance("SHA256withECDSA").run {
+                initSign(keys.private)
+                update(payload)
+                sign()
+            }
+        }
+        blocking { session.signInWithEmailPassword("parent@example.test", "emulator-only-password").getOrThrow() }
+        val created = blocking {
+            functions.createHousehold("EUR", DeviceKeyRegistration(keys.public.encoded, null)).getOrThrow()
+        }
+        assertEquals(created.hid, blocking { session.refreshClaims().getOrThrow() }.hid)
+
+        // A proof over the hash of the token the SDK sends is accepted; one over any other hash is refused.
+        val tokenHash = blocking { session.currentIdTokenHash() }
+        val exportSignature = sign(DeviceProof.exportHouseholdPayload(created.hid, tokenHash))
+        val export = blocking { functions.exportHousehold(created.deviceId, exportSignature) }
+        assertTrue(export.isSuccess, "export: ${export.exceptionOrNull()}")
+        val stale = blocking {
+            functions.exportHousehold(
+                created.deviceId,
+                sign(DeviceProof.exportHouseholdPayload(created.hid, ByteArray(DeviceProof.ID_TOKEN_HASH_BYTES))),
+            )
+        }
+        assertEquals(FunctionsError.PermissionDenied, (stale.exceptionOrNull() as FunctionsException).error)
+
+        // deviceStatus: signed in, signed out, with a bad signature, for an unknown device.
+        val statusSignature = sign(DeviceProof.deviceStatusPayload(created.hid, created.deviceId))
+        val status = { blocking { functions.deviceStatus(created.hid, created.deviceId, statusSignature) } }
+        assertEquals(DeviceStatusAnswer(DeviceStatusValue.ACTIVE, householdGone = false), status().getOrThrow())
+        com.google.firebase.auth.FirebaseAuth.getInstance(bootstrap.ensureInitialised(context)).signOut()
+        assertEquals(DeviceStatusAnswer(DeviceStatusValue.ACTIVE, householdGone = false), status().getOrThrow())
+        val forged = blocking { functions.deviceStatus(created.hid, created.deviceId, sign(byteArrayOf(1))) }
+        assertEquals(FunctionsError.PermissionDenied, (forged.exceptionOrNull() as FunctionsException).error)
+        val unknown = blocking {
+            functions.deviceStatus(created.hid, DeviceId("d".repeat(64)), sign(byteArrayOf(1))).getOrThrow()
+        }
+        assertEquals(DeviceStatusAnswer(DeviceStatusValue.UNKNOWN, householdGone = false), unknown)
+
+        // Deleted (a fresh sign-in, as the server requires): the device learns the household is gone.
+        blocking { session.signInWithEmailPassword("parent@example.test", "emulator-only-password").getOrThrow() }
+        val deleteHash = blocking { session.currentIdTokenHash() }
+        val deleted = blocking {
+            functions.deleteHousehold(
+                created.hid,
+                created.deviceId,
+                sign(DeviceProof.deleteHouseholdPayload(created.hid, deleteHash)),
+            )
+        }
+        assertTrue(deleted.isSuccess, "delete: ${deleted.exceptionOrNull()}")
+        assertEquals(DeviceStatusAnswer(DeviceStatusValue.UNKNOWN, householdGone = true), status().getOrThrow())
     }
 
     /**

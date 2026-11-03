@@ -45,7 +45,13 @@ import kotlinx.coroutines.sync.withLock
  * A pull failure ends the sync before anything is pushed. [SyncError.HouseholdGone] from either side ends it with
  * [SyncReport.householdGone] set, and the caller wipes local data (M3 §6). Syncs never overlap: [syncOnce] holds a
  * [Mutex], so a WorkManager run and the foreground loop ([run]) are serialised.
+ *
+ * Every report, whoever asked for the sync, is passed to [reportHandler] before the next sync can start, in the order
+ * the syncs ran: no report is skipped or conflated (refused items must each get their `SYNC_REJECTED` audit row). The
+ * handler runs under the sync mutex, so it must not call [syncOnce]; its failures are dropped (they may carry
+ * personal data and must not end the sync).
  */
+@Suppress("LongParameterList") // Collaborators plus tuning knobs with defaults.
 class SyncEngine(
     private val transport: SyncTransport,
     private val outbox: OutboxSource,
@@ -54,6 +60,7 @@ class SyncEngine(
     private val backoff: Backoff = ExponentialBackoff(baseMs = 1_000, maxMs = 3_600_000, jitter = Jitter.equal()),
     private val debounceMs: Long = DEFAULT_DEBOUNCE_MS,
     private val maxPagesPerSync: Int = DEFAULT_MAX_PAGES,
+    private val reportHandler: SyncReportHandler = SyncReportHandler { },
 ) {
     init {
         require(debounceMs >= 0) { "debounceMs must not be negative" }
@@ -63,11 +70,28 @@ class SyncEngine(
     private val mutex = Mutex()
     private val lastReport = MutableStateFlow<SyncReport?>(null)
 
-    /** The report of the latest finished [syncOnce] (null before the first), for status UI and the wipe trigger. */
+    /**
+     * The report of the latest finished [syncOnce] (null before the first), for status UI. Conflated: a consumer
+     * that must see every report uses [reportHandler].
+     */
     val reports: StateFlow<SyncReport?> = lastReport.asStateFlow()
 
     /** One full pull-then-push pass. Transport failures end up in the report; they are not thrown. */
-    suspend fun syncOnce(): SyncReport = mutex.withLock { sync().also { lastReport.value = it } }
+    suspend fun syncOnce(): SyncReport = mutex.withLock { finish(sync()) }
+
+    /** Publishes [report] and hands it to [reportHandler], still under the mutex. */
+    @Suppress("TooGenericExceptionCaught", "SwallowedException") // See the class comment.
+    private suspend fun finish(report: SyncReport): SyncReport {
+        lastReport.value = report
+        try {
+            reportHandler.handle(report)
+        } catch (cancellation: CancellationException) {
+            throw cancellation
+        } catch (failure: Exception) {
+            // Dropped on purpose: nothing here may log, and the sync itself finished.
+        }
+        return report
+    }
 
     /**
      * Syncs whenever [transport] reports a remote change or [trigger] emits, debounced by [debounceMs]. A request
@@ -109,7 +133,7 @@ class SyncEngine(
         } catch (cancellation: CancellationException) {
             throw cancellation
         } catch (unexpected: Exception) {
-            lastReport.value = SyncReport(error = SyncError.Transient())
+            mutex.withLock { finish(SyncReport(error = SyncError.Transient())) }
         }
     }
 
@@ -267,6 +291,11 @@ class SyncEngine(
         const val DEFAULT_DEBOUNCE_MS: Long = 500
         const val DEFAULT_MAX_PAGES: Int = 1_000
     }
+}
+
+/** Receives every [SyncReport] of a [SyncEngine], in order (see [SyncEngine]). */
+fun interface SyncReportHandler {
+    suspend fun handle(report: SyncReport)
 }
 
 /** What one [SyncEngine.syncOnce] did. */

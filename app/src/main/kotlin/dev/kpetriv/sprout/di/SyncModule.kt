@@ -13,30 +13,40 @@ import dev.kpetriv.sprout.core.syncfirebase.FirebaseAuthSession
 import dev.kpetriv.sprout.sync.AppRestarter
 import dev.kpetriv.sprout.sync.AuthStateReader
 import dev.kpetriv.sprout.sync.BackgroundSync
+import dev.kpetriv.sprout.sync.BackgroundWork
+import dev.kpetriv.sprout.sync.CredentialCheck
+import dev.kpetriv.sprout.sync.CredentialGate
 import dev.kpetriv.sprout.sync.EngineSyncRunner
 import dev.kpetriv.sprout.sync.FirebaseAuthStateReader
+import dev.kpetriv.sprout.sync.FirebaseGateAuth
 import dev.kpetriv.sprout.sync.ForegroundState
+import dev.kpetriv.sprout.sync.GateAuth
 import dev.kpetriv.sprout.sync.HouseholdRemovals
 import dev.kpetriv.sprout.sync.LocalDataEraser
 import dev.kpetriv.sprout.sync.OutboxSyncTrigger
 import dev.kpetriv.sprout.sync.ProcessAppRestarter
 import dev.kpetriv.sprout.sync.RejectionAuditor
+import dev.kpetriv.sprout.sync.RemovalHandler
 import dev.kpetriv.sprout.sync.SessionBackgroundSync
 import dev.kpetriv.sprout.sync.SharedShellPreferences
 import dev.kpetriv.sprout.sync.ShellPreferences
-import dev.kpetriv.sprout.sync.SyncController
 import dev.kpetriv.sprout.sync.SyncRunner
 import dev.kpetriv.sprout.sync.SyncScheduler
 import dev.kpetriv.sprout.sync.SyncTrigger
 import dev.kpetriv.sprout.sync.WipingLocalDataEraser
+import dev.kpetriv.sprout.sync.WorkManagerBackgroundWork
 import dev.kpetriv.sprout.sync.WorkManagerSyncScheduler
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 
-/** The app's sync shell: trigger, scheduling, worker seam, session reconciliation, wipe and restart (M3 §6). */
+/**
+ * The app's sync shell: trigger, scheduling, worker seam, session reconciliation, the wipe owner, the "Sign in again"
+ * gate and restart (M3 §6).
+ */
 @Module
 @InstallIn(SingletonComponent::class)
+@Suppress("TooManyFunctions") // One binding per seam.
 internal abstract class SyncModule {
     @Binds
     abstract fun syncRunner(impl: EngineSyncRunner): SyncRunner
@@ -66,9 +76,19 @@ internal abstract class SyncModule {
     @Binds
     abstract fun localDataEraser(impl: WipingLocalDataEraser): LocalDataEraser
 
+    @Binds
+    abstract fun householdRemovals(impl: RemovalHandler): HouseholdRemovals
+
+    @Binds
+    abstract fun backgroundWork(impl: WorkManagerBackgroundWork): BackgroundWork
+
+    @Binds
+    abstract fun credentialCheck(impl: CredentialGate): CredentialCheck
+
+    @Binds
+    abstract fun gateAuth(impl: FirebaseGateAuth): GateAuth
+
     companion object {
-        @Provides
-        fun householdRemovals(sync: SyncController): HouseholdRemovals = HouseholdRemovals(sync::householdGone)
 
         @Provides
         fun rejectionAuditor(outbox: RoomOutboxSource): RejectionAuditor = RejectionAuditor(outbox::auditRejections)

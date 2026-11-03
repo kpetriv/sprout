@@ -61,6 +61,11 @@ class ParentHomeScreenshotTest : ScreenshotTest() {
         }
 
     @Test
+    fun `fingerprint signing off`() = screenshot.captureLightDark("parent_home_signing_off") {
+        ParentHomeScreen(ParentHomePreviewData.signingOff(), onEvent = {}, onSignNow = {}, links = ParentHomeLinks())
+    }
+
+    @Test
     fun `sync blocked`() = screenshot.captureLightDark("parent_home_sync_blocked") {
         ParentHomeScreen(ParentHomePreviewData.syncBlocked(), onEvent = {}, onSignNow = {}, links = ParentHomeLinks())
     }

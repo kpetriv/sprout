@@ -49,7 +49,29 @@ object Migrations {
         }
     }
 
-    val ALL: Array<Migration> = arrayOf(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
+    /**
+     * Version 4 to 5 (M3 fix pass 2): `sync_cursor` is keyed by household (`householdId`, `collection`), so a device
+     * that joins another household never resumes the previous one's pull positions. Existing positions are kept for
+     * the stored real session's household; without one (signed out, or the trial) they are dropped, which only costs
+     * a full pull.
+     */
+    val MIGRATION_4_5: Migration = object : Migration(4, 5) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            VERSION_5_STATEMENTS.forEach(db::execSQL)
+        }
+    }
+
+    val ALL: Array<Migration> = arrayOf(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
+
+    private val VERSION_5_STATEMENTS = listOf(
+        "CREATE TABLE IF NOT EXISTS `sync_cursor_v5` (`householdId` TEXT NOT NULL, `collection` TEXT NOT NULL, " +
+            "`cursor` TEXT NOT NULL, PRIMARY KEY(`householdId`, `collection`))",
+        "INSERT INTO `sync_cursor_v5` (`householdId`, `collection`, `cursor`) " +
+            "SELECT `session`.`householdId`, `sync_cursor`.`collection`, `sync_cursor`.`cursor` " +
+            "FROM `sync_cursor` JOIN `session` ON `session`.`id` = 0 WHERE `session`.`householdId` != 'local'",
+        "DROP TABLE `sync_cursor`",
+        "ALTER TABLE `sync_cursor_v5` RENAME TO `sync_cursor`",
+    )
 
     private val VERSION_2_STATEMENTS = listOf(
         "ALTER TABLE `ledger_events` ADD COLUMN `parentSignature` TEXT",

@@ -4,13 +4,16 @@ import dev.kpetriv.sprout.core.time.Clock
 import kotlin.time.Instant
 
 /**
- * Software [DeviceKeyStore] with an in-memory P-256 key. Test fixture only; production binds
- * [AndroidKeystoreDeviceKeyStore]. [regenerateForRegistration] swaps in a fresh software key and returns an empty
- * attestation chain (software keys cannot be attested).
+ * Software [DeviceKeyStore] with in-memory P-256 keys. Test fixture only; production binds
+ * [AndroidKeystoreDeviceKeyStore]. [regenerateForRegistration] creates a fresh pending software key with an empty
+ * attestation chain (software keys cannot be attested); [promotePendingKey] makes it the active key.
  */
 class InMemoryDeviceKeyStore(private val clock: Clock) : DeviceKeyStore {
     @Volatile
     private var key: SigningKeyHandle? = null
+
+    @Volatile
+    private var pending: SigningKeyHandle? = null
     private var createdAt: Instant? = null
 
     /** How many times [regenerateForRegistration] ran. */
@@ -31,12 +34,31 @@ class InMemoryDeviceKeyStore(private val clock: Clock) : DeviceKeyStore {
         require(challenge.isNotEmpty()) { "the attestation challenge must not be empty" }
         val fresh = synchronized(this) {
             generateSoftwareSigningKey().also {
-                key = it
-                createdAt = clock.now()
+                pending = it
                 registrations++
             }
         }
         return DeviceRegistrationMaterial(fresh.publicKey, emptyList())
+    }
+
+    override suspend fun pendingSigningKey(): SigningKeyHandle? = pending
+
+    override suspend fun promotePendingKey(): PublicKeyBytes = synchronized(this) {
+        val promoted = checkNotNull(pending) { "no pending device key" }
+        key = promoted
+        pending = null
+        createdAt = clock.now()
+        promoted.publicKey
+    }
+
+    override suspend fun discardPendingKey() {
+        pending = null
+    }
+
+    /** Registers and promotes in one go, as a device that finished linking. */
+    suspend fun registerAndPromote(challenge: ByteArray = byteArrayOf(1)): PublicKeyBytes {
+        regenerateForRegistration(challenge)
+        return promotePendingKey()
     }
 
     @Synchronized

@@ -23,11 +23,15 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -39,7 +43,7 @@ internal fun AccountRoute(onBack: () -> Unit, modifier: Modifier = Modifier) {
     AccountScreen(state, viewModel::onEvent, onBack, modifier)
 }
 
-/** Settings → Account: who is signed in, the household, "Sign out" (data stays on the phone). */
+/** Settings → Account: who is signed in, the household, "Sign out" (erases this phone's copy after a confirmation). */
 @Composable
 fun AccountScreen(
     state: AccountUiState,
@@ -140,6 +144,7 @@ fun DataScreen(state: DataUiState, onEvent: (DataEvent) -> Unit, onBack: () -> U
         }
     }
     DataMessageEffect(state.message, snackbar) { onEvent(DataEvent.MessageShown) }
+    state.reauth?.let { ReauthDialog(it, onEvent) }
     if (state.deleteTyped != null) {
         AlertDialog(
             onDismissRequest = { onEvent(DataEvent.DismissDelete) },
@@ -159,6 +164,68 @@ fun DataScreen(state: DataUiState, onEvent: (DataEvent) -> Unit, onBack: () -> U
             },
         )
     }
+}
+
+/** "Sign in again to confirm": the server wants a recent sign-in before it deletes the household (D-M3-34). */
+@Composable
+internal fun ReauthDialog(reauth: ReauthUi, onEvent: (DataEvent) -> Unit) {
+    val context = LocalContext.current
+    // Not saveable: a password never goes into saved instance state.
+    var password by remember { mutableStateOf("") }
+    AlertDialog(
+        onDismissRequest = { onEvent(DataEvent.DismissReauth) },
+        title = { Text(stringResource(R.string.feature_settings_data_reauth_title)) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text(stringResource(R.string.feature_settings_data_reauth_text))
+                reauth.problem?.let { problem ->
+                    Text(
+                        stringResource(
+                            when (problem) {
+                                ReauthProblem.WRONG_ACCOUNT -> R.string.feature_settings_data_reauth_wrong_account
+                                ReauthProblem.SIGN_IN_FAILED -> R.string.feature_settings_data_reauth_failed
+                                ReauthProblem.NETWORK -> R.string.feature_settings_data_message_network
+                            },
+                        ),
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
+                if (reauth.usesPassword) {
+                    OutlinedTextField(
+                        value = password,
+                        onValueChange = { password = it },
+                        label = { Text(stringResource(R.string.feature_settings_data_reauth_password)) },
+                        singleLine = true,
+                        enabled = !reauth.busy,
+                        visualTransformation = PasswordVisualTransformation(),
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+                if (reauth.busy) LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = { onEvent(DataEvent.SignInAgain(context, password.takeIf { reauth.usesPassword })) },
+                enabled = !reauth.busy && (!reauth.usesPassword || password.isNotEmpty()),
+            ) {
+                Text(
+                    stringResource(
+                        if (reauth.usesPassword) {
+                            R.string.feature_settings_data_reauth_sign_in
+                        } else {
+                            R.string.feature_settings_data_reauth_google
+                        },
+                    ),
+                )
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = { onEvent(DataEvent.DismissReauth) }, enabled = !reauth.busy) {
+                Text(stringResource(R.string.feature_settings_cancel))
+            }
+        },
+    )
 }
 
 /** The delete dialog's body: what to type, the field, progress. */

@@ -1,18 +1,20 @@
 import { FieldValue } from 'firebase-admin/firestore';
 import { HttpsError, type CallableRequest } from '../https.js';
 import {
-  approvalPayload,
   callablePayload,
   decodeBase64,
+  deviceStatusPayload,
   displayFingerprint,
   parseDeviceKey,
+  sha256Hex,
   verifyEcdsaSha256,
 } from '../crypto.js';
 import { proofOf, verifyDeviceProof } from '../deviceProof.js';
 import { lamportOf, maxLamport, nextLamport } from '../lamport.js';
 import { auth, db } from '../firebase.js';
-import { dataOf, parent, requireDeviceId, signedIn } from '../guards.js';
+import { clientIp, dataOf, parent, requireAppCheck, requireDeviceId, requireId, signedIn } from '../guards.js';
 import { log } from '../log.js';
+import { hit, LIMITS, noIpLimit } from '../rateLimit.js';
 import { attestDevice, issueChallenge } from '../registration.js';
 import { deviceDocument } from './registry.js';
 
@@ -55,40 +57,30 @@ export async function registerParentDevice(
 
 /**
  * approveDevice({ deviceId, approverDeviceId, signature }) → { deviceId, status }: an ACTIVE parent device of the caller
- * approves a PENDING parent device by signing `"sprout/approve-device/v1" || 0x00 || deviceId` with its registered key
- * (ECDSA P-256, SHA-256, DER, base64).
+ * ([approverDeviceId]) approves a PENDING parent device. `signature` is the approver key's ECDSA P-256/SHA-256 DER
+ * signature (base64) over `"sprout/approve-device/v2" || 0x00 || hid || 0x00 || sha256(raw ID token) || 0x00 ||
+ * {"deviceId":"…"}` (crypto.ts `callablePayload`), so it is valid only with the ID token of this request.
  */
 export async function approveDevice(request: CallableRequest): Promise<{ deviceId: string; status: 'ACTIVE' }> {
   const caller = await parent(request, 'approveDevice');
   const data = dataOf(request);
   const deviceId = requireDeviceId(data.deviceId, 'deviceId');
-  const approverDeviceId = requireDeviceId(data.approverDeviceId, 'approverDeviceId');
-  const signature = decodeBase64(data.signature, 'signature', 256);
+  const proof = proofOf(data, 'approverDeviceId');
   const devices = db.collection(`households/${caller.hid}/devices`);
+  const payload = callablePayload('approveDevice', caller.hid, caller.idTokenHash, { deviceId });
 
   await db.runTransaction(async (tx) => {
-    const [approver, target] = await Promise.all([tx.get(devices.doc(approverDeviceId)), tx.get(devices.doc(deviceId))]);
-    if (
-      !approver.exists ||
-      approver.get('uid') !== caller.uid ||
-      approver.get('status') !== 'ACTIVE' ||
-      approver.get('role') !== 'PARENT'
-    ) {
-      throw new HttpsError('permission-denied', 'The approving device is not an active parent device');
-    }
-    const approverKey = parseDeviceKey(approver.get('publicKey'), 'approver key');
-    if (!verifyEcdsaSha256(approverKey.key, approvalPayload(deviceId), signature)) {
-      throw new HttpsError('permission-denied', 'Approval signature does not verify');
-    }
+    const [approver, target] = await Promise.all([tx.get(devices.doc(proof.deviceId)), tx.get(devices.doc(deviceId))]);
+    verifyDeviceProof(approver, caller, payload, proof.signature);
     if (!target.exists || target.get('role') !== 'PARENT') throw new HttpsError('not-found', 'No such device');
     if (target.get('status') !== 'PENDING') throw new HttpsError('failed-precondition', 'Device is not pending');
     tx.update(target.ref, {
       status: 'ACTIVE',
-      approvedBy: approverDeviceId,
+      approvedBy: proof.deviceId,
       approvedAt: FieldValue.serverTimestamp(),
     });
   });
-  log.info('device.approved', { hid: caller.hid, deviceId, approverDeviceId });
+  log.info('device.approved', { hid: caller.hid, deviceId, approverDeviceId: proof.deviceId });
   return { deviceId, status: 'ACTIVE' };
 }
 
@@ -96,7 +88,8 @@ export async function approveDevice(request: CallableRequest): Promise<{ deviceI
  * revokeDevice({ deviceId, callerDeviceId, signature }) → { deviceId, revokedAtLamport }: marks a device REVOKED (T7).
  *
  * The request is signed by `callerDeviceId`, an ACTIVE parent device of the caller other than the target, over
- * `"sprout/revoke-device/v1" || 0x00 || hid || 0x00 || {"deviceId":"…"}` (crypto.ts `callablePayload`).
+ * `"sprout/revoke-device/v2" || 0x00 || hid || 0x00 || sha256(raw ID token) || 0x00 || {"deviceId":"…"}` (crypto.ts
+ * `callablePayload`).
  * `revokedAtLamport` is one above the highest lamport of everything the device wrote (its events and its documents in
  * every collection; 1 when it wrote nothing), read in the transaction: receivers keep its earlier writes and
  * quarantine anything at or above it. Every parent key registered from the device gets the same `revokedAtLamport`.
@@ -118,7 +111,7 @@ export async function revokeDevice(
   }
   const household = db.doc(`households/${caller.hid}`);
   const devices = household.collection('devices');
-  const payload = callablePayload('revokeDevice', caller.hid, { deviceId });
+  const payload = callablePayload('revokeDevice', caller.hid, caller.idTokenHash, { deviceId });
 
   const outcome = await db.runTransaction(async (tx) => {
     const [own, target] = await Promise.all([tx.get(devices.doc(proof.deviceId)), tx.get(devices.doc(deviceId))]);
@@ -177,4 +170,60 @@ async function revokeParentSessions(hid: string, uid: string, deviceId: string):
   const member = db.doc(`households/${hid}/members/${uid}`);
   if ((await member.get()).exists) await member.update({ tokensValidAfter });
   await db.doc(`households/${hid}/devices/${deviceId}`).update({ sessionsRevokedAt: FieldValue.serverTimestamp() });
+}
+
+export type DeviceStatusValue = 'ACTIVE' | 'PENDING' | 'REVOKED' | 'UNKNOWN';
+
+/**
+ * deviceStatus({ hid, deviceId, signature }) → { status, householdGone }: a device asks for its own registry status
+ * without an ID token (the adapter ignores any Authorization header of this callable; App Check is still required
+ * outside the emulator). A revoked kid device's user is disabled and a deleted household's users are deleted, so such
+ * a device can no longer sign in; this is how it learns why (audit H2).
+ *
+ * `signature` is the device key's ECDSA P-256/SHA-256 DER signature (base64) over
+ * `"sprout/device-status/v1" || 0x00 || hid || 0x00 || deviceId` (crypto.ts `deviceStatusPayload`).
+ * - No household or no such device: `{ status: "UNKNOWN", householdGone }`, `householdGone` true only when a
+ *   `deletionRecords` row for the household exists (its `hidHash`). Nothing is verified then: there is no key.
+ * - Otherwise the signature must verify with the stored public key (`permission-denied` if not), whatever the status,
+ *   and the answer is `{ status, householdGone: false }`.
+ *
+ * Nothing else is revealed (no role, uid, lamport or timestamps). Calls are limited per device id and per IP, counted
+ * before anything is read.
+ */
+export async function deviceStatus(
+  request: CallableRequest,
+): Promise<{ status: DeviceStatusValue; householdGone: boolean }> {
+  requireAppCheck(request);
+  const data = dataOf(request);
+  const hid = requireId(data.hid, 'hid');
+  const deviceId = requireDeviceId(data.deviceId, 'deviceId');
+  const signature = decodeBase64(data.signature, 'signature', 256);
+  const ip = clientIp(request);
+  await hit('deviceStatus', 'device', deviceId, LIMITS.deviceStatus.device);
+  if (ip === null) {
+    await hit('deviceStatus', 'noip', 'shared', noIpLimit('deviceStatus'));
+  } else {
+    await hit('deviceStatus', 'ip', ip, LIMITS.deviceStatus.ip);
+  }
+
+  const [household, device] = await Promise.all([
+    db.doc(`households/${hid}`).get(),
+    db.doc(`households/${hid}/devices/${deviceId}`).get(),
+  ]);
+  if (!household.exists || !device.exists) {
+    const hidHash = sha256Hex(hid);
+    const records = await db.collection('deletionRecords').where('hidHash', '==', hidHash).limit(1).get();
+    const householdGone = !records.empty;
+    log.info('device.statusChecked', { deviceId, status: 'UNKNOWN', householdGone });
+    return { status: 'UNKNOWN', householdGone };
+  }
+  const key = parseDeviceKey(device.get('publicKey'), 'device key');
+  if (!verifyEcdsaSha256(key.key, deviceStatusPayload(hid, deviceId), signature)) {
+    log.warn('device.statusRefused', { deviceId });
+    throw new HttpsError('permission-denied', 'Device signature does not verify');
+  }
+  const stored: unknown = device.get('status');
+  const status: DeviceStatusValue = stored === 'ACTIVE' || stored === 'PENDING' || stored === 'REVOKED' ? stored : 'UNKNOWN';
+  log.info('device.statusChecked', { hid, deviceId, status, householdGone: false });
+  return { status, householdGone: false };
 }

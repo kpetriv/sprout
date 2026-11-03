@@ -8,6 +8,7 @@ import dev.kpetriv.sprout.core.database.RoomLedgerRepository
 import dev.kpetriv.sprout.core.database.Session
 import dev.kpetriv.sprout.di.ApplicationScope
 import dev.kpetriv.sprout.feature.chores.ChorePhotoCache
+import dev.kpetriv.sprout.sync.RemovalHandler
 import dev.kpetriv.sprout.sync.SessionReconciler
 import dev.kpetriv.sprout.sync.ShellPreferences
 import dev.kpetriv.sprout.sync.SyncController
@@ -30,16 +31,21 @@ import javax.inject.Singleton
  *    process death left behind never outlives the next start;
  * 1. initialise Firebase and install App Check (core/sync-firebase, M3 §5), best effort: the app works offline and
  *    sync retries later;
- * 2. restore the session and reconcile it with Firebase Auth ([SessionReconciler]): a session whose user signed out
- *    or whose claims name another household is cleared;
+ * 2. restore the session and reconcile it with Firebase Auth ([SessionReconciler]): another account or household
+ *    wipes, an account that is gone wipes, lost credentials raise the "Sign in again" gate;
  * 3. debug builds only, and only on a device that has no session and never belonged to a real household: seed the
  *    demo trial household ([HouseholdBootstrap]; release builds never create demo kids);
  * 4. ledger maintenance: quarantine stored events whose hash or signature no longer verifies
  *    ([RoomLedgerRepository.quarantineUnverifiable]);
  * 5. for the trial session only, plan allowance and interest up to today ([ScheduledActionsPlanner]), best effort; a
- *    real household plans after its first successful pull instead ([SyncController]);
+ *    real household plans after its first successful pull instead (`SyncReportProcessor`); no session never plans;
  * 6. schedule the daily planner ([PlanScheduler], kept if already scheduled);
  * 7. start sync for the session ([SyncController]).
+ *
+ * A removal ([RemovalHandler]) stops the work: one stored by an earlier process resumes its wipe before step 2, and one
+ * reported during startup (step 2, or sync elsewhere) skips every remaining step, checked between steps. Startup
+ * then ends [StartupState.Ready], never [StartupState.Failed] (a step that fails because the wipe closed the
+ * database counts as removed), and the shell shows the removed screen.
  *
  * Dependencies are injected lazily so even building their graph (database, Keystore-backed signer) happens on the IO
  * thread, never in `Application.onCreate`. Failures other than cancellation are caught and published as
@@ -62,6 +68,8 @@ class AppInitializer internal constructor(
     private val reconcileSession: suspend () -> Session? = { null },
     private val wasLinked: () -> Boolean = { false },
     private val startSync: () -> Unit = {},
+    private val resumeRemoval: () -> Boolean = { false },
+    private val removing: () -> Boolean = { false },
 ) : StartupStatus {
     @Inject
     @Suppress("LongParameterList") // One lazily built dependency per startup step.
@@ -76,6 +84,7 @@ class AppInitializer internal constructor(
         reconciler: Lazy<SessionReconciler>,
         preferences: Lazy<ShellPreferences>,
         sync: Lazy<SyncController>,
+        removals: Lazy<RemovalHandler>,
     ) : this(
         scope = scope,
         seedDemoHousehold = demoSeeding(householdBootstrap, BuildConfig.DEBUG),
@@ -87,6 +96,8 @@ class AppInitializer internal constructor(
         reconcileSession = { reconciler.get().reconcile() },
         wasLinked = { preferences.get().wasLinked() },
         startSync = { sync.get().start() },
+        resumeRemoval = { removals.get().resume() },
+        removing = { removals.get().isRemoving },
     )
 
     private val started = AtomicBoolean(false)
@@ -119,24 +130,35 @@ class AppInitializer internal constructor(
 
     @Suppress("TooGenericExceptionCaught") // Any failure must reach the UI as a state instead of crashing the process.
     private suspend fun runWork(): StartupState = try {
+        steps()
+        StartupState.Ready
+    } catch (e: CancellationException) {
+        throw e
+    } catch (e: Exception) {
+        if (removing()) StartupState.Ready else StartupState.Failed(failureKind(e))
+    }
+
+    /** The steps; returns early once a removal is set. */
+    @Suppress("ReturnCount") // One check between each pair of steps.
+    private suspend fun steps() {
         clearPhotoCacheBestEffort()
         initialiseFirebaseBestEffort()
+        if (resumeRemoval()) return
         var session = reconcileSession()
+        if (removing()) return
         if (session == null && !wasLinked()) {
             seedDemoHousehold?.let { seed ->
                 seed()
                 session = reconcileSession()
             }
         }
+        if (removing()) return
         quarantineLedger()
-        if (session?.isLocalTrial != false) planBestEffort()
+        if (removing()) return
+        if (session?.isLocalTrial == true) planBestEffort()
         scheduler.get().scheduleDaily()
+        if (removing()) return
         startSync()
-        StartupState.Ready
-    } catch (e: CancellationException) {
-        throw e
-    } catch (e: Exception) {
-        StartupState.Failed(failureKind(e))
     }
 
     /** Runs on the IO scope. A file system failure never fails startup; the next capture clears the cache too. */

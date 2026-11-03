@@ -7,6 +7,7 @@ import androidx.work.WorkerFactory
 import androidx.work.WorkerParameters
 import androidx.work.testing.TestListenableWorkerBuilder
 import dev.kpetriv.sprout.FakeSessionStore
+import dev.kpetriv.sprout.core.database.entity.RegistrationStatus
 import dev.kpetriv.sprout.core.sync.SyncError
 import dev.kpetriv.sprout.core.sync.SyncReport
 import dev.kpetriv.sprout.parentSession
@@ -14,7 +15,6 @@ import dev.kpetriv.sprout.trialSession
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.test.runTest
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -46,7 +46,6 @@ class SyncWorkerTest {
 
     private class Runner(private val report: SyncReport) : SyncRunner {
         var syncs = 0
-        override val reports = MutableStateFlow<SyncReport?>(null)
 
         override fun run(scope: CoroutineScope, trigger: Flow<Unit>): Job = error("not used")
 
@@ -87,16 +86,19 @@ class SyncWorkerTest {
     }
 
     @Test
-    fun `no session or the trial household syncs nothing`() = runTest {
+    fun `no session, the trial household, a PENDING or a REVOKED device syncs nothing`() = runTest {
         val runner = Runner(SyncReport())
-        assertEquals(
-            ListenableWorker.Result.success(),
-            worker(sync = SessionBackgroundSync(FakeSessionStore(), runner)).doWork(),
-        )
-        assertEquals(
-            ListenableWorker.Result.success(),
-            worker(sync = SessionBackgroundSync(FakeSessionStore(trialSession()), runner)).doWork(),
-        )
+        listOf(
+            null,
+            trialSession(),
+            parentSession(RegistrationStatus.PENDING),
+            parentSession(RegistrationStatus.REVOKED),
+        ).forEach { session ->
+            assertEquals(
+                ListenableWorker.Result.success(),
+                worker(sync = SessionBackgroundSync(FakeSessionStore(session), runner)).doWork(),
+            )
+        }
         assertEquals(0, runner.syncs)
     }
 

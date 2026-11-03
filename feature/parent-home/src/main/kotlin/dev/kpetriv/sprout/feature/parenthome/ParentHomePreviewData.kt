@@ -82,6 +82,14 @@ object ParentHomePreviewData {
         ),
     )
 
+    /** A synced household whose parent phone has fingerprint signing off (D-M3-46). */
+    fun signingOff(): ParentHomeUiState.Ready = empty().copy(
+        household = HouseholdStatus(
+            sync = SyncLine(Instant.parse("2026-11-03T09:41:00Z"), blockedCode = null, failing = false),
+            signingOff = true,
+        ),
+    )
+
     /** Key of the skipped allowance in [needsAttention]. */
     const val SKIPPED_KEY: String = "allowance/leo-weekly/2026-W30"
 

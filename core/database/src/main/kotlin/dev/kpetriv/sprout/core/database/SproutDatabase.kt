@@ -147,7 +147,9 @@ abstract class SproutDatabase : RoomDatabase() {
          *
          * 4 (M3 fix pass): `ledger_inbox.reason` and `document_inbox.authorDeviceId` for held events and documents
          * (D-M3-31). See [Migrations.MIGRATION_3_4].
+         *
+         * 5 (M3 fix pass 2): `sync_cursor` keyed by household. See [Migrations.MIGRATION_4_5].
          */
-        const val VERSION: Int = 4
+        const val VERSION: Int = 5
     }
 }

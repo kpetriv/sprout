@@ -52,3 +52,42 @@ class FakeSessionStore(initial: Session? = null) : SessionStore {
     override suspend fun ensureLocalTrialSession(deviceId: DeviceId): Session =
         session.value ?: Session.localTrial(deviceId, Instant.fromEpochSeconds(0)).also { session.value = it }
 }
+
+/** In-memory [ShellPreferences]. */
+class FakeShellPreferences : dev.kpetriv.sprout.sync.ShellPreferences {
+    var linked = false
+    var linkedDigest: String? = null
+    val firstPulls = mutableSetOf<HouseholdId>()
+    var parentSetup: String? = null
+    var storedRemoval: dev.kpetriv.sprout.sync.Removal? = null
+
+    override fun wasLinked(): Boolean = linked
+
+    override fun markLinked() {
+        linked = true
+    }
+
+    override fun linkedAccount(): String? = linkedDigest
+
+    override fun setLinkedAccount(digest: String?) {
+        linkedDigest = digest
+    }
+
+    override fun firstPullDone(householdId: HouseholdId): Boolean = householdId in firstPulls
+
+    override fun recordFirstPull(householdId: HouseholdId) {
+        firstPulls += householdId
+    }
+
+    override fun parentSetupPending(): String? = parentSetup
+
+    override fun setParentSetupPending(digest: String?) {
+        parentSetup = digest
+    }
+
+    override fun removal(): dev.kpetriv.sprout.sync.Removal? = storedRemoval
+
+    override fun setRemoval(removal: dev.kpetriv.sprout.sync.Removal?) {
+        storedRemoval = removal
+    }
+}

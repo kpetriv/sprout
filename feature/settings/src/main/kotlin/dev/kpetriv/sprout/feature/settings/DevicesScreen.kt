@@ -145,7 +145,7 @@ private fun DeviceRow(row: DeviceRowUi, busy: Boolean, onEvent: (DevicesEvent) -
     )
 }
 
-/** The approval sheet's content: the fingerprint to compare, the attestation warning, approve or reject. */
+/** The approval sheet's content: the fingerprint to compare, the attestation warning, approve, or remove it. */
 @Composable
 internal fun ApproveDeviceContent(
     row: DeviceRowUi,
@@ -179,8 +179,9 @@ internal fun ApproveDeviceContent(
         Button(onClick = { onEvent(DevicesEvent.Approve) }, enabled = !busy, modifier = Modifier.fillMaxWidth()) {
             Text(stringResource(R.string.feature_settings_devices_review_approve))
         }
+        // A phone that is not the one in hand (or a stale PENDING entry) is removed rather than left waiting (L8).
         OutlinedButton(
-            onClick = { onEvent(DevicesEvent.DismissReview) },
+            onClick = { onEvent(DevicesEvent.RejectReview) },
             enabled = !busy,
             modifier = Modifier.fillMaxWidth(),
         ) { Text(stringResource(R.string.feature_settings_devices_review_reject)) }

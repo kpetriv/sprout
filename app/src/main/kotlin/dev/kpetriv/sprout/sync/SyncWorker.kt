@@ -13,6 +13,7 @@ import dagger.assisted.Assisted
 import dagger.assisted.AssistedInject
 import dev.kpetriv.sprout.R
 import dev.kpetriv.sprout.core.database.SessionStore
+import dev.kpetriv.sprout.core.database.entity.RegistrationStatus
 import dev.kpetriv.sprout.core.sync.SyncError
 import kotlinx.coroutines.CancellationException
 import java.io.IOException
@@ -34,14 +35,17 @@ fun interface BackgroundSync {
 }
 
 /**
- * [BackgroundSync] over the real session: no session, the trial session or a revoked device sync nothing. The
- * report itself (audit, removal, planning) is handled by [SyncController], which sees every report.
+ * [BackgroundSync] over the real session: no session, the trial session, a PENDING device (onboarding polls while it
+ * waits) or a REVOKED one (it is being wiped) sync nothing. The report itself (audit, removal, planning) is handled
+ * by [SyncReportProcessor], which the engine calls for every report, so a removal found here wipes without any UI.
  */
 class SessionBackgroundSync @Inject constructor(private val sessions: SessionStore, private val runner: SyncRunner) :
     BackgroundSync {
     override suspend fun syncOnce(): BackgroundSyncOutcome {
         val session = sessions.get()
-        if (session == null || session.isLocalTrial) return BackgroundSyncOutcome.DONE
+        if (session == null || session.isLocalTrial || session.deviceStatus != RegistrationStatus.ACTIVE) {
+            return BackgroundSyncOutcome.DONE
+        }
         return when (runner.syncOnce().error) {
             null, is SyncError.Permanent, SyncError.HouseholdGone -> BackgroundSyncOutcome.DONE
             is SyncError.Transient, SyncError.Unauthenticated -> BackgroundSyncOutcome.RETRY

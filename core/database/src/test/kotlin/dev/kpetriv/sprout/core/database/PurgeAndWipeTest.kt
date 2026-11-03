@@ -87,6 +87,24 @@ class PurgeAndWipeTest {
     @Test
     fun purgeDeletesTheTrialHouseholdAndKeepsTheNewSession() = runTest {
         seedTrial()
+        val trialKey = dev.kpetriv.sprout.core.database.entity.ParentKeyEntity(
+            fingerprint = "a".repeat(64),
+            publicKey = byteArrayOf(1),
+            uid = LocalTrial.PARENT,
+            deviceId = household.deviceId,
+            validFromLamport = 0,
+            revokedAtLamport = null,
+            registeredAtEpochMs = 0,
+        )
+        household.database.parentKeyDao().upsert(trialKey)
+        val realKey = trialKey.copy(fingerprint = "b".repeat(64), uid = UserId("parent-uid"))
+        household.database.parentKeyDao().upsert(realKey)
+        household.database.syncCursorDao().upsert(
+            listOf(
+                dev.kpetriv.sprout.core.database.entity.SyncCursorEntity(LocalTrial.HOUSEHOLD, "events", "1"),
+                dev.kpetriv.sprout.core.database.entity.SyncCursorEntity(HOME, "events", "2"),
+            ),
+        )
         assertTrue(household.photoDirectory.listFiles().orEmpty().isNotEmpty())
         val real =
             Session(
@@ -106,6 +124,10 @@ class PurgeAndWipeTest {
         assertTrue(report.total > 0)
         assertEquals(1, report.counts.getValue("kids"))
         assertEquals(1, report.counts.getValue("photos"))
+        assertEquals(1, report.counts.getValue("parent_keys"), "only the trial parent's key")
+        assertEquals(listOf("b".repeat(64)), household.database.parentKeyDao().all().map { it.fingerprint })
+        assertEquals(1, report.counts.getValue("sync_cursor"))
+        assertEquals(listOf("2"), household.database.syncCursorDao().all(HOME).map { it.cursor })
         assertTrue(household.photoDirectory.listFiles().orEmpty().isEmpty(), "photo files are deleted")
         assertEquals(real, household.sessions.get())
         val audit = household.database.auditLogDao().all()

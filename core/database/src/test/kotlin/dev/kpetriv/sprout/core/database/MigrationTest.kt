@@ -229,7 +229,65 @@ class MigrationTest {
     fun migration1To4KeepsTheM1Rows() = runTest {
         helper.createDatabase(TEST_DB, 1).use { db -> insertVersion1Rows(db, chore) }
 
-        helper.runMigrationsAndValidate(TEST_DB, 4, true, *Migrations.ALL).close()
+        helper.runMigrationsAndValidate(
+            TEST_DB,
+            4,
+            true,
+            Migrations.MIGRATION_1_2,
+            Migrations.MIGRATION_2_3,
+            Migrations.MIGRATION_3_4,
+        ).close()
+    }
+
+    @Test
+    fun migration4To5KeysTheCursorsByTheSessionsHousehold() = runTest {
+        helper.createDatabase(TEST_DB, 4).use { db ->
+            db.insertRow(
+                "session",
+                "id" to 0,
+                "uid" to "parent-uid",
+                "householdId" to "hh-real",
+                "role" to "PARENT",
+                "kidId" to null,
+                "deviceId" to "d".repeat(64),
+                "deviceStatus" to "ACTIVE",
+                "signedInAtEpochMs" to receivedAt,
+            )
+            db.insertRow("sync_cursor", "collection" to "events", "cursor" to "2026-11-03T09:00:00Z|e1")
+            db.insertRow("sync_cursor", "collection" to "devices", "cursor" to "digest")
+        }
+
+        helper.runMigrationsAndValidate(TEST_DB, 5, true, Migrations.MIGRATION_4_5).use { db ->
+            db.query("SELECT householdId, collection, cursor FROM sync_cursor ORDER BY collection").use { cursor ->
+                assertEquals(2, cursor.count)
+                cursor.moveToFirst()
+                assertEquals("hh-real", cursor.getString(0))
+                assertEquals("devices", cursor.getString(1))
+                cursor.moveToNext()
+                assertEquals("2026-11-03T09:00:00Z|e1", cursor.getString(2))
+            }
+        }
+    }
+
+    @Test
+    fun migration4To5DropsCursorsWithoutARealSession() = runTest {
+        helper.createDatabase(TEST_DB, 4).use { db ->
+            db.insertRow("sync_cursor", "collection" to "events", "cursor" to "x")
+        }
+
+        helper.runMigrationsAndValidate(TEST_DB, 5, true, Migrations.MIGRATION_4_5).use { db ->
+            db.query("SELECT COUNT(*) FROM sync_cursor").use { cursor ->
+                cursor.moveToFirst()
+                assertEquals(0, cursor.getInt(0))
+            }
+        }
+    }
+
+    @Test
+    fun migration1To5KeepsTheM1Rows() = runTest {
+        helper.createDatabase(TEST_DB, 1).use { db -> insertVersion1Rows(db, chore) }
+
+        helper.runMigrationsAndValidate(TEST_DB, 5, true, *Migrations.ALL).close()
     }
 
     @Test

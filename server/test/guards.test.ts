@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { isEmulator } from '../src/config.js';
+import { assertEmulatorEnvironment, isEmulator } from '../src/config.js';
 import { clientIp, rateLimitIp, signedIn } from '../src/guards.js';
 import type { CallableRequest } from '../src/https.js';
 import { noIpLimit } from '../src/rateLimit.js';
@@ -94,5 +94,26 @@ describe('isEmulator', () => {
     process.env.FIREBASE_PROJECT_ID = project;
     delete process.env.SPROUT_EMULATOR;
     expect(isEmulator()).toBe(false);
+  });
+});
+
+describe('emulator environment guard', () => {
+  it('refuses an emulator host variable unless the server runs as the emulator (SPROUT_EMULATOR and a demo- project)', () => {
+    const emulator = { SPROUT_EMULATOR: 'true', FIREBASE_PROJECT_ID: 'demo-sprout' };
+    expect(() => assertEmulatorEnvironment({})).not.toThrow();
+    expect(() => assertEmulatorEnvironment({ FIREBASE_PROJECT_ID: 'sprout-prod' })).not.toThrow();
+    expect(() => assertEmulatorEnvironment({ ...emulator, FIRESTORE_EMULATOR_HOST: '127.0.0.1:8080' })).not.toThrow();
+    expect(() => assertEmulatorEnvironment({ ...emulator, FIREBASE_AUTH_EMULATOR_HOST: '127.0.0.1:9099' })).not.toThrow();
+
+    expect(() => assertEmulatorEnvironment({ FIRESTORE_EMULATOR_HOST: '127.0.0.1:8080' })).toThrow(/FIRESTORE_EMULATOR_HOST/);
+    expect(() => assertEmulatorEnvironment({ FIREBASE_AUTH_EMULATOR_HOST: 'x:1', FIREBASE_PROJECT_ID: 'sprout-prod' }))
+      .toThrow(/FIREBASE_AUTH_EMULATOR_HOST/);
+    // SPROUT_EMULATOR with a real project id is not the emulator either.
+    expect(() =>
+      assertEmulatorEnvironment({ SPROUT_EMULATOR: 'true', FIREBASE_PROJECT_ID: 'sprout-prod', FIRESTORE_EMULATOR_HOST: 'x:1' }),
+    ).toThrow(/outside the emulator/);
+    expect(() => assertEmulatorEnvironment({ FIREBASE_PROJECT_ID: 'demo-sprout', FIREBASE_AUTH_EMULATOR_HOST: 'x:1' })).toThrow();
+    // The test process itself runs as the emulator.
+    expect(() => assertEmulatorEnvironment()).not.toThrow();
   });
 });

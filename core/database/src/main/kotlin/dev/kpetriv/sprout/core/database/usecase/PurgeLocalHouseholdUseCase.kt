@@ -37,7 +37,8 @@ data class PurgeReport(val counts: Map<String, Int>) {
  * One transaction removes: its kids and their accounts, ledger events, balances, anomalies, chores, submissions,
  * rewards, allowance schedules, savings goals, interest policy, pending parent actions and photo rows; the household
  * policy (this device's view of the trial household, including the locally registered parent key: the parent
- * registers again in the real household); outbox rows and held inbox rows of the trial household; the audit rows its
+ * registers again in the real household) and the trial parent's `parent_keys` rows; its pull cursors; outbox rows
+ * and held inbox rows of the trial household; the audit rows its
  * trial parent (and, before M3, its kids) wrote; and the trial session. It then writes one
  * `LOCAL_HOUSEHOLD_PURGED` audit row with the counts. The photo files are deleted after the transaction commits.
  * Nothing of a real household is touched; `device_state` (the Lamport clock, which only moves forward) is kept.
@@ -79,6 +80,8 @@ class PurgeLocalHouseholdUseCase @Inject constructor(
             "accounts" to purge.deleteAccounts(kids),
             "kids" to purge.deleteKids(household),
             "household_policy" to purge.deleteHouseholdPolicy(),
+            "parent_keys" to purge.deleteParentKeys(LocalTrial.PARENT),
+            "sync_cursor" to database.syncCursorDao().deleteFor(household),
             "outbox" to purge.deleteOutbox(
                 database.outboxDao().all().filter {
                     it.belongsTo(household)

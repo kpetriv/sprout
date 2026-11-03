@@ -23,36 +23,58 @@ data class DeviceKeyProperties(
 )
 
 /**
- * The device's EC P-256 signing key (alias [KeyAliases.DEVICE_SIGNING], replaced by [KeyAliases.DEVICE_SIGNING_V2]
- * at registration). It signs every ledger event and chat message this device authors (threats T3, T16); its public
- * key is registered with the household at link time.
+ * The device's EC P-256 signing key (alias [KeyAliases.DEVICE_SIGNING], replaced at registration by a key in one of
+ * the two registration slots [KeyAliases.DEVICE_SIGNING_V2] and [KeyAliases.DEVICE_SIGNING_V2_PENDING]). It signs
+ * every ledger event and chat message this device authors (threats T3, T16); its public key is registered with the
+ * household at link time.
  *
  * The M1 device key is **provisional**: it is created on first use, without an attestation challenge, before the
- * device belongs to any household. At link time [regenerateForRegistration] creates the v2 key with
- * `setAttestationChallenge` (challenge from the backend) so the backend can verify where it lives.
+ * device belongs to any household. Registration is two-phase so a failed or refused registration can never leave the
+ * device without the key the household knows (audit M1):
+ * 1. [regenerateForRegistration] creates a **pending** key with `setAttestationChallenge` (challenge from the
+ *    backend). The active key, which [deviceSigningKey] and `DeviceSigner` keep using, does not change.
+ * 2. Once the server accepted the registration, [promotePendingKey] makes the pending key the active one and deletes
+ *    the previous one; on failure [discardPendingKey] deletes the pending key and the previous key stays.
  */
 interface DeviceKeyStore {
-    /** The signing key, created on first use. */
+    /** The active signing key, created on first use. Never the pending key. */
     suspend fun deviceSigningKey(): SigningKeyHandle
 
-    /** X.509 SubjectPublicKeyInfo DER of the device key. Creates the key if needed, so it may block briefly. */
+    /** X.509 SubjectPublicKeyInfo DER of the active key. Creates the key if needed, so it may block briefly. */
     fun publicKey(): PublicKeyBytes
 
     /**
-     * The key's [DeviceKeyProperties], read from Keystore `KeyInfo`. Self-reported by this device, **not**
+     * The active key's [DeviceKeyProperties], read from Keystore `KeyInfo`. Self-reported by this device, **not**
      * attestation; see [DeviceKeyProperties]. Creates the key if needed, so it may block briefly.
      */
     fun keyProperties(): DeviceKeyProperties
 
     /**
-     * Creates a fresh signing key for registering this device with a household (M3 §1): EC P-256 under
-     * [KeyAliases.DEVICE_SIGNING_V2] with `setAttestationChallenge(challenge)` (StrongBox first, TEE fallback, the
-     * same key properties as the v1 key), makes it the active signing key and only then deletes the provisional v1
-     * key. Calling it again replaces the v2 key. The device id (the key fingerprint) changes with it.
+     * Creates a fresh **pending** signing key for registering this device with a household (M3 §1): EC P-256 with
+     * `setAttestationChallenge(challenge)` (StrongBox first, TEE fallback, the same key properties as the v1 key) in
+     * the registration slot the active key does not use. A pending key left by an earlier attempt is replaced. The
+     * active key is untouched until [promotePendingKey].
      *
      * @param challenge the backend's registration challenge (`beginDeviceRegistration`), bound into the attestation.
      */
     suspend fun regenerateForRegistration(challenge: ByteArray): DeviceRegistrationMaterial
+
+    /**
+     * The pending key from [regenerateForRegistration], or null when there is none. It survives a process restart, so
+     * a registration the server accepted just before the process died can still be promoted.
+     */
+    suspend fun pendingSigningKey(): SigningKeyHandle?
+
+    /**
+     * Makes the pending key the active signing key (the server accepted its registration) and deletes the previous
+     * active key and the provisional v1 key. Returns the new active key's public key.
+     *
+     * @throws IllegalStateException when there is no pending key.
+     */
+    suspend fun promotePendingKey(): PublicKeyBytes
+
+    /** Deletes the pending key, if any; the active key stays (registration failed or was refused). */
+    suspend fun discardPendingKey()
 }
 
 /**

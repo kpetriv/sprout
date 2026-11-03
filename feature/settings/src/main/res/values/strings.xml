@@ -184,7 +184,7 @@
   <string name="feature_settings_devices_review_approve">It matches, approve</string>
   <string name="feature_settings_devices_review_reject">It doesn’t match</string>
   <string name="feature_settings_devices_revoke_title">Remove this phone?</string>
-  <string name="feature_settings_devices_revoke_text">It stops syncing at once and anything it does from now on is refused by the other phones. A kid’s phone erases the household’s data.</string>
+  <string name="feature_settings_devices_revoke_text">It stops syncing at once and anything it does from now on is refused by the other phones. The removed phone erases its copy of the household the next time it goes online.</string>
   <string name="feature_settings_devices_revoke_confirm">Remove</string>
   <string name="feature_settings_devices_message_approved">Phone approved</string>
   <string name="feature_settings_devices_message_revoked">Phone removed</string>
@@ -210,7 +210,16 @@
   <string name="feature_settings_account_household">Household %1$s</string>
   <string name="feature_settings_account_sign_out">Sign out</string>
   <string name="feature_settings_account_sign_out_title">Sign out of this phone?</string>
-  <string name="feature_settings_account_sign_out_text">The household’s data stays on this phone. Sign in again to keep syncing.</string>
+  <string name="feature_settings_account_sign_out_text">Signing out erases this phone’s copy of the household. Your household stays in the cloud.</string>
+
+  <!-- Household data: sign in again to confirm a deletion -->
+  <string name="feature_settings_data_reauth_title">Sign in again to confirm</string>
+  <string name="feature_settings_data_reauth_text">For your safety, deleting the household needs a fresh sign-in with the same parent account.</string>
+  <string name="feature_settings_data_reauth_password">Password</string>
+  <string name="feature_settings_data_reauth_sign_in">Sign in and delete</string>
+  <string name="feature_settings_data_reauth_google">Continue with Google</string>
+  <string name="feature_settings_data_reauth_wrong_account">That’s a different account. Sign in with the account of this household.</string>
+  <string name="feature_settings_data_reauth_failed">That sign-in didn’t work. Try again.</string>
 
   <!-- Household data -->
   <string name="feature_settings_data_export_title">Export household</string>

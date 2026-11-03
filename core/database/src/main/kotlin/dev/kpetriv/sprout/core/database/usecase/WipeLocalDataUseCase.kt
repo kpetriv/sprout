@@ -12,7 +12,8 @@ import javax.inject.Inject
 
 /**
  * Erases this device's household data when the household is gone (`SyncError.HouseholdGone`, deletion, or this
- * device was revoked; M3 §6): clears the session, closes the database, deletes the database files (and their WAL
+ * device was revoked, or this phone signed out; M3 §6): clears the session and every pull cursor, closes the database,
+ * deletes the database files (and their WAL
  * siblings), the encrypted photo directory and every wrapped `SecretStore` blob (database key, photo key, PIN lockout
  * state). The Keystore keys stay: the device signing key keeps this device's identity, and the wrapping key is
  * useless without the blobs.
@@ -31,6 +32,7 @@ class WipeLocalDataUseCase @Inject constructor(
     suspend operator fun invoke() {
         try {
             sessions.clear()
+            database.syncCursorDao().deleteAll()
         } catch (cancellation: CancellationException) {
             throw cancellation
         } catch (unreadable: Exception) {

@@ -11,12 +11,48 @@ import java.security.spec.ECGenParameterSpec
 import android.security.keystore.KeyProperties as AndroidKeyProperties
 
 /**
+ * Which Keystore alias holds the active device key and which the pending registration key ([DeviceKeyStore]'s
+ * two-phase registration). Keystore cannot rename an entry, so promoting a pending key means recording its alias as
+ * the active one. Holds alias names only (no key material); it must be written durably before the call returns.
+ */
+internal interface DeviceKeySlots {
+    var active: String?
+    var pending: String?
+}
+
+/** [DeviceKeySlots] in a private shared-preferences file, written with `commit` (durable before returning). */
+internal class SharedPreferencesDeviceKeySlots(context: Context) : DeviceKeySlots {
+    private val preferences = context.getSharedPreferences(FILE, Context.MODE_PRIVATE)
+
+    override var active: String?
+        get() = preferences.getString(ACTIVE, null)
+        set(value) = write(ACTIVE, value)
+
+    override var pending: String?
+        get() = preferences.getString(PENDING, null)
+        set(value) = write(PENDING, value)
+
+    private fun write(key: String, value: String?) {
+        check(preferences.edit().putString(key, value).commit()) { "the device key slot could not be saved" }
+    }
+
+    private companion object {
+        const val FILE = "sprout_device_key"
+        const val ACTIVE = "active"
+        const val PENDING = "pending"
+    }
+}
+
+/**
  * [DeviceKeyStore] backed by Android Keystore: EC P-256, SHA-256 digest only, StrongBox when available, TEE
  * otherwise.
  *
- * Two aliases: the provisional [KeyAliases.DEVICE_SIGNING] (v1, created on first use) and the registered
- * [KeyAliases.DEVICE_SIGNING_V2] (created by [regenerateForRegistration] with an attestation challenge). The v2 key
- * wins whenever it exists; v1 is deleted once v2 has been created.
+ * Three aliases: the provisional [KeyAliases.DEVICE_SIGNING] (v1, created on first use) and the two registration
+ * slots [KeyAliases.DEVICE_SIGNING_V2] and [KeyAliases.DEVICE_SIGNING_V2_PENDING]. [regenerateForRegistration] creates
+ * a key with an attestation challenge in the slot the active key does not use and records it as pending
+ * ([DeviceKeySlots]); [promotePendingKey] records it as active and deletes the previous key and v1;
+ * [discardPendingKey] deletes it. The active key is the recorded one, else [KeyAliases.DEVICE_SIGNING_V2] when it
+ * exists (a key registered before the slots were recorded), else v1.
  *
  * The key deliberately does **not** require user authentication: ledger events and chat messages must be
  * signable by background sync and by kid devices with no parent present. Parent-only operations are gated by
@@ -24,9 +60,11 @@ import android.security.keystore.KeyProperties as AndroidKeyProperties
  */
 class AndroidKeystoreDeviceKeyStore internal constructor(
     private val keystore: AndroidKeystore,
+    private val slots: DeviceKeySlots,
     private val dispatcher: CoroutineDispatcher,
 ) : DeviceKeyStore {
-    constructor(context: Context, dispatcher: CoroutineDispatcher) : this(AndroidKeystore(context), dispatcher)
+    constructor(context: Context, dispatcher: CoroutineDispatcher) :
+        this(AndroidKeystore(context), SharedPreferencesDeviceKeySlots(context), dispatcher)
 
     @Volatile
     private var cached: SigningKeyHandle? = null
@@ -45,18 +83,56 @@ class AndroidKeystoreDeviceKeyStore internal constructor(
         return withContext(dispatcher) { regenerate(challenge.copyOf()) }
     }
 
+    override suspend fun pendingSigningKey(): SigningKeyHandle? = withContext(dispatcher) { pending() }
+
+    override suspend fun promotePendingKey(): PublicKeyBytes = withContext(dispatcher) { promote() }
+
+    override suspend fun discardPendingKey() = withContext(dispatcher) { discard() }
+
     @Synchronized
     private fun regenerate(challenge: ByteArray): DeviceRegistrationMaterial {
-        val alias = KeyAliases.DEVICE_SIGNING_V2
+        val alias = if (loadOrCreate().alias == KeyAliases.DEVICE_SIGNING_V2_PENDING) {
+            KeyAliases.DEVICE_SIGNING_V2
+        } else {
+            KeyAliases.DEVICE_SIGNING_V2_PENDING
+        }
+        // Recorded before the key exists, so a crash mid-generation leaves a known slot to clean up, never a stray
+        // key in the active slot.
+        slots.pending = alias
+        keystore.delete(alias)
         // Keystore without attestation support refuses the challenge: register an unattested key instead.
         val pair = generateWithAttestationFallback(challenge, cleanUp = { keystore.delete(alias) }) { attest ->
             generate(alias) { if (attest != null) setAttestationChallenge(attest) }
         }
         val handle = handleFor(pair.private, pair.public.encoded, alias)
-        cached = handle
-        // Only now, with the v2 key in place, is the provisional key dropped.
-        keystore.delete(KeyAliases.DEVICE_SIGNING)
         return DeviceRegistrationMaterial(handle.publicKey, attestationChain(alias))
+    }
+
+    @Synchronized
+    @Suppress("ReturnCount") // No pending slot, the slot is the active one, or the key.
+    private fun pending(): SigningKeyHandle? {
+        val alias = slots.pending ?: return null
+        if (alias == loadOrCreate().alias) return null
+        return existing(alias)
+    }
+
+    @Synchronized
+    private fun promote(): PublicKeyBytes {
+        val handle = checkNotNull(pending()) { "no pending device key" }
+        val previous = loadOrCreate().alias
+        slots.active = handle.alias
+        slots.pending = null
+        cached = handle
+        if (previous != null && previous != handle.alias) keystore.delete(previous)
+        keystore.delete(KeyAliases.DEVICE_SIGNING)
+        return handle.publicKey
+    }
+
+    @Synchronized
+    private fun discard() {
+        val alias = slots.pending ?: return
+        if (alias != loadOrCreate().alias) keystore.delete(alias)
+        slots.pending = null
     }
 
     /** The attestation chain of [alias], leaf first; empty when Keystore only holds a self-signed certificate. */
@@ -66,7 +142,8 @@ class AndroidKeystoreDeviceKeyStore internal constructor(
     @Synchronized
     private fun loadOrCreate(): SigningKeyHandle {
         cached?.let { return it }
-        val handle = existing(KeyAliases.DEVICE_SIGNING_V2)
+        val handle = slots.active?.let(::existing)
+            ?: existing(KeyAliases.DEVICE_SIGNING_V2)?.takeIf { slots.pending != KeyAliases.DEVICE_SIGNING_V2 }
             ?: existing(KeyAliases.DEVICE_SIGNING)
             ?: generate(KeyAliases.DEVICE_SIGNING) {}.let {
                 handleFor(it.private, it.public.encoded, KeyAliases.DEVICE_SIGNING)

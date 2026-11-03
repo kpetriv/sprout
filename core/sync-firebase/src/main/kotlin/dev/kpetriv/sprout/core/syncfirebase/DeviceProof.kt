@@ -12,63 +12,105 @@ import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.longOrNull
 import kotlinx.serialization.json.put
+import java.security.MessageDigest
 
 /**
- * The bytes a parent device signs to prove a privileged request (D-M3-34, T7/T8), exactly as the backend rebuilds them
- * (`server/src/crypto.ts` `callablePayload`, `registerParentKeyPayload`, `canonicalJson`). The app signs them with the
- * device key (`DeviceSigner`, ECDSA P-256 / SHA-256, DER) and passes the signature with `callerDeviceId` to
- * [HouseholdFunctions].
+ * The bytes a device signs to prove a privileged request (D-M3-34, T7/T8), exactly as the backend rebuilds them
+ * (`server/src/crypto.ts` `callablePayload`, `registerParentKeyPayload`, `deviceStatusPayload`, `canonicalJson`). The
+ * app signs them with the device key (`DeviceSigner`, ECDSA P-256 / SHA-256, DER) and passes the signature with the
+ * signing device's id to [HouseholdFunctions].
  *
- * - A signed callable: `"sprout/<callable-in-kebab-case>/v1" || 0x00 || hid || 0x00 || canonicalJson(args)` (UTF-8),
- *   where `args` are the callable's arguments other than `callerDeviceId` and `signature` ([payload]).
- * - `registerParentKey`: `"sprout/register-parent-key/v1" || 0x00 || hid || 0x00 || SPKI DER of the parent key`
- *   ([registerParentKeyPayload]).
+ * Every proof of a signed-in call is bound to the ID token that call carries (version 2 of the domains, audit Low 2):
+ * `idTokenHash` is [idTokenHash] of the raw token, which `IdTokenHashSource` provides without ever exposing the token.
+ * A captured request is then useless with any other token.
+ *
+ * - A signed callable: `"sprout/<callable-in-kebab-case>/v2" || 0x00 || hid || 0x00 || sha256(rawIdToken) || 0x00 ||
+ *   canonicalJson(args)` (strings UTF-8, the hash its 32 raw bytes), where `args` are the callable's arguments other
+ *   than the signing device's id and `signature` ([payload]).
+ * - `registerParentKey`: `"sprout/register-parent-key/v2" || 0x00 || hid || 0x00 || sha256(rawIdToken) || 0x00 ||
+ *   SPKI DER of the parent key` ([registerParentKeyPayload]).
+ * - `deviceStatus` (no ID token): `"sprout/device-status/v1" || 0x00 || hid || 0x00 || deviceId`
+ *   ([deviceStatusPayload]).
  */
 object DeviceProof {
     /** The signed callables and the domain each signature is bound to (`SIGNED_CALLABLES`). */
     val SIGNED_CALLABLES: Map<String, String> = mapOf(
-        HouseholdFunctions.CREATE_LINK_CODE to "sprout/create-link-code/v1",
-        HouseholdFunctions.REVOKE_DEVICE to "sprout/revoke-device/v1",
-        HouseholdFunctions.EXPORT_HOUSEHOLD to "sprout/export-household/v1",
-        HouseholdFunctions.DELETE_HOUSEHOLD to "sprout/delete-household/v1",
+        HouseholdFunctions.APPROVE_DEVICE to "sprout/approve-device/v2",
+        HouseholdFunctions.CREATE_LINK_CODE to "sprout/create-link-code/v2",
+        HouseholdFunctions.REVOKE_DEVICE to "sprout/revoke-device/v2",
+        HouseholdFunctions.EXPORT_HOUSEHOLD to "sprout/export-household/v2",
+        HouseholdFunctions.DELETE_HOUSEHOLD to "sprout/delete-household/v2",
     )
 
     /** Domain of the `registerParentKey` signature (`REGISTER_PARENT_KEY_DOMAIN`). */
-    const val REGISTER_PARENT_KEY_DOMAIN: String = "sprout/register-parent-key/v1"
+    const val REGISTER_PARENT_KEY_DOMAIN: String = "sprout/register-parent-key/v2"
+
+    /** Domain of the `deviceStatus` signature (`DEVICE_STATUS_DOMAIN`). */
+    const val DEVICE_STATUS_DOMAIN: String = "sprout/device-status/v1"
+
+    /** Length of [idTokenHash]. */
+    const val ID_TOKEN_HASH_BYTES: Int = 32
+
+    /** SHA-256 of the raw ID token (the compact JWT exactly as the callable request sends it after `Bearer `). */
+    fun idTokenHash(rawIdToken: String): ByteArray =
+        MessageDigest.getInstance("SHA-256").digest(rawIdToken.encodeToByteArray())
 
     /**
      * The bytes to sign for a call to [callable] (one of [SIGNED_CALLABLES]' keys, the callable's name such as
-     * `createLinkCode`) in household [hid] with the signed arguments [args].
+     * `createLinkCode`) in household [hid] with the signed arguments [args], sent with the ID token whose
+     * [idTokenHash] is [idTokenHash].
      *
-     * @throws IllegalArgumentException for a callable that is not signed this way, or [args] holding a number that
-     *   is not an integer within ±(2^53 − 1) (JavaScript would print it differently).
+     * @throws IllegalArgumentException for a callable that is not signed this way, an [idTokenHash] that is not 32
+     *   bytes, or [args] holding a number that is not an integer within ±(2^53 − 1) (JavaScript would print it
+     *   differently).
      */
-    fun payload(callable: String, hid: HouseholdId, args: JsonObject): ByteArray {
+    fun payload(callable: String, hid: HouseholdId, idTokenHash: ByteArray, args: JsonObject): ByteArray {
         val domain = requireNotNull(SIGNED_CALLABLES[callable]) { "not a signed callable: $callable" }
         return domain.encodeToByteArray() + SEPARATOR + hid.value.encodeToByteArray() + SEPARATOR +
-            canonicalJson(args).encodeToByteArray()
+            checkedHash(idTokenHash) + SEPARATOR + canonicalJson(args).encodeToByteArray()
     }
 
     /** The bytes to sign for `registerParentKey` of [publicKey] (X.509 SPKI DER) in household [hid]. */
-    fun registerParentKeyPayload(hid: HouseholdId, publicKey: ByteArray): ByteArray =
+    fun registerParentKeyPayload(hid: HouseholdId, idTokenHash: ByteArray, publicKey: ByteArray): ByteArray =
         REGISTER_PARENT_KEY_DOMAIN.encodeToByteArray() + SEPARATOR + hid.value.encodeToByteArray() + SEPARATOR +
-            publicKey
+            checkedHash(idTokenHash) + SEPARATOR + publicKey
+
+    /** [payload] for `approveDevice(deviceId)`, signed by the approver; the signed arguments are `{ deviceId }`. */
+    fun approveDevicePayload(hid: HouseholdId, idTokenHash: ByteArray, deviceId: DeviceId): ByteArray =
+        payload(HouseholdFunctions.APPROVE_DEVICE, hid, idTokenHash, deviceIdArgs(deviceId))
 
     /** [payload] for `createLinkCode(kidId)`: the signed arguments are `{ kidId }`. */
-    fun createLinkCodePayload(hid: HouseholdId, kidId: KidId): ByteArray =
-        payload(HouseholdFunctions.CREATE_LINK_CODE, hid, buildJsonObject { put("kidId", kidId.value) })
+    fun createLinkCodePayload(hid: HouseholdId, idTokenHash: ByteArray, kidId: KidId): ByteArray =
+        payload(HouseholdFunctions.CREATE_LINK_CODE, hid, idTokenHash, buildJsonObject { put("kidId", kidId.value) })
 
     /** [payload] for `revokeDevice(deviceId)`: the signed arguments are `{ deviceId }` (the device to revoke). */
-    fun revokeDevicePayload(hid: HouseholdId, deviceId: DeviceId): ByteArray =
-        payload(HouseholdFunctions.REVOKE_DEVICE, hid, buildJsonObject { put("deviceId", deviceId.value) })
+    fun revokeDevicePayload(hid: HouseholdId, idTokenHash: ByteArray, deviceId: DeviceId): ByteArray =
+        payload(HouseholdFunctions.REVOKE_DEVICE, hid, idTokenHash, deviceIdArgs(deviceId))
 
     /** [payload] for `exportHousehold()`: no signed arguments (`{}`). */
-    fun exportHouseholdPayload(hid: HouseholdId): ByteArray =
-        payload(HouseholdFunctions.EXPORT_HOUSEHOLD, hid, JsonObject(emptyMap()))
+    fun exportHouseholdPayload(hid: HouseholdId, idTokenHash: ByteArray): ByteArray =
+        payload(HouseholdFunctions.EXPORT_HOUSEHOLD, hid, idTokenHash, JsonObject(emptyMap()))
 
     /** [payload] for `deleteHousehold(confirmation = hid)`: the signed arguments are `{ confirmation: hid }`. */
-    fun deleteHouseholdPayload(hid: HouseholdId): ByteArray =
-        payload(HouseholdFunctions.DELETE_HOUSEHOLD, hid, buildJsonObject { put("confirmation", hid.value) })
+    fun deleteHouseholdPayload(hid: HouseholdId, idTokenHash: ByteArray): ByteArray {
+        val args = buildJsonObject { put("confirmation", hid.value) }
+        return payload(HouseholdFunctions.DELETE_HOUSEHOLD, hid, idTokenHash, args)
+    }
+
+    /**
+     * The bytes a device signs to ask for its own registry status without an ID token (`deviceStatus`). Not bound to
+     * a session: the answer is only that device's status.
+     */
+    fun deviceStatusPayload(hid: HouseholdId, deviceId: DeviceId): ByteArray =
+        DEVICE_STATUS_DOMAIN.encodeToByteArray() + SEPARATOR + hid.value.encodeToByteArray() + SEPARATOR +
+            deviceId.value.encodeToByteArray()
+
+    private fun deviceIdArgs(deviceId: DeviceId): JsonObject = buildJsonObject { put("deviceId", deviceId.value) }
+
+    private fun checkedHash(idTokenHash: ByteArray): ByteArray {
+        require(idTokenHash.size == ID_TOKEN_HASH_BYTES) { "idTokenHash must be a SHA-256 digest" }
+        return idTokenHash
+    }
 
     /**
      * The backend's `canonicalJson`: object keys sorted by UTF-16 code unit (JavaScript's default sort, which is also

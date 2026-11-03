@@ -1,11 +1,15 @@
 package dev.kpetriv.sprout.feature.settings
 
+import android.content.Context
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
+import dev.kpetriv.sprout.core.common.Dispatcher
+import dev.kpetriv.sprout.core.common.SproutDispatchers
 import dev.kpetriv.sprout.core.model.HouseholdId
 import dev.kpetriv.sprout.core.time.HouseholdCalendar
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -15,6 +19,7 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import javax.inject.Inject
 
 /** The settings hub: which sections exist (the trial household has no account, devices or household data). */
@@ -44,7 +49,10 @@ sealed interface AccountEvent {
     data object ConfirmSignOut : AccountEvent
 }
 
-/** Settings → Account: the signed-in parent and "Sign out" (the data on this phone stays; onboarding follows). */
+/**
+ * Settings → Account: the signed-in parent and "Sign out", which erases this phone's copy of the household after a
+ * confirmation (D-M3-47); the app then shows the erase screen and restarts into onboarding.
+ */
 @HiltViewModel
 class AccountViewModel @Inject constructor(private val account: AccountControl) : ViewModel() {
     private val local = MutableStateFlow(AccountUiState())
@@ -84,6 +92,21 @@ enum class DataMessage {
     NETWORK,
 }
 
+/** Why the "Sign in again to confirm" step did not get through. */
+enum class ReauthProblem {
+    WRONG_ACCOUNT,
+    SIGN_IN_FAILED,
+    NETWORK,
+}
+
+/**
+ * The "Sign in again to confirm" step of a deletion (D-M3-34: the server needs a sign-in within 5 minutes).
+ *
+ * @property usesPassword the debug path (e-mail/password against the Auth emulator) asks for the password; release
+ *   builds use Google.
+ */
+data class ReauthUi(val usesPassword: Boolean, val busy: Boolean = false, val problem: ReauthProblem? = null)
+
 data class DataUiState(
     val householdId: HouseholdId? = null,
     val exporting: Boolean = false,
@@ -91,6 +114,8 @@ data class DataUiState(
     /** The delete dialog: what the parent typed so far. Null while closed. */
     val deleteTyped: String? = null,
     val deleting: Boolean = false,
+    /** The "Sign in again to confirm" step; null while not needed. */
+    val reauth: ReauthUi? = null,
     val message: DataMessage? = null,
 ) {
     /** The household id's first [CONFIRMATION_LENGTH] characters, which the parent types to confirm a deletion. */
@@ -118,13 +143,22 @@ sealed interface DataEvent {
 
     data object ConfirmDelete : DataEvent
 
+    /** Sign in again to confirm the deletion; [password] on the debug path only. Never logged. */
+    class SignInAgain(val activityContext: Context, val password: String?) : DataEvent {
+        override fun toString(): String = "SignInAgain(<redacted>)"
+    }
+
+    data object DismissReauth : DataEvent
+
     data object MessageShown : DataEvent
 }
 
 /**
- * Settings → Data. "Export household" fetches the `exportHousehold` bundle and offers a zip with the JSON and a
- * derived `ledger.csv` ([HouseholdExport]) for the system file picker. "Delete household" needs the household id's
- * first 8 characters typed, deletes it on the server, then erases this phone and restarts to onboarding.
+ * Settings → Data. "Export household" fetches the `exportHousehold` bundle and builds a zip with the JSON and a
+ * derived `ledger.csv` ([HouseholdExport], on [dispatcher], before the state changes) for the system file picker.
+ * "Delete household" needs the household id's first 8 characters typed, deletes it on the server, then erases this
+ * phone and restarts to onboarding. When the server wants a recent sign-in ([AdminFailure.REAUTH_REQUIRED]) the
+ * parent signs in again ([HouseholdData.signInAgain], same account) and the deletion is retried once.
  */
 @HiltViewModel
 class DataViewModel @Inject constructor(
@@ -132,6 +166,7 @@ class DataViewModel @Inject constructor(
     private val writer: ExportWriter,
     private val calendar: HouseholdCalendar,
     account: AccountControl,
+    @param:Dispatcher(SproutDispatchers.IO) private val dispatcher: CoroutineDispatcher,
 ) : ViewModel() {
     private val local = MutableStateFlow(DataUiState())
 
@@ -155,6 +190,10 @@ class DataViewModel @Inject constructor(
 
             DataEvent.ConfirmDelete -> delete()
 
+            is DataEvent.SignInAgain -> signInAgain(event.activityContext, event.password)
+
+            DataEvent.DismissReauth -> local.update { if (it.reauth?.busy == true) it else it.copy(reauth = null) }
+
             DataEvent.MessageShown -> local.update { it.copy(message = null) }
         }
     }
@@ -163,12 +202,14 @@ class DataViewModel @Inject constructor(
         if (local.value.exporting || local.value.pendingExport != null) return
         local.update { it.copy(exporting = true) }
         viewModelScope.launch {
+            // The zip (JSON and CSV of the whole household) is built off the main thread, before the state changes.
             val result = safely { data.export() }
+                .mapCatching { bundle -> withContext(dispatcher) { HouseholdExport.zip(bundle) } }
             local.update { state ->
                 result.fold(
-                    onSuccess = { bundle ->
+                    onSuccess = { zip ->
                         val name = "sprout-export-${calendar.today()}.zip"
-                        state.copy(exporting = false, pendingExport = PendingExport(name, HouseholdExport.zip(bundle)))
+                        state.copy(exporting = false, pendingExport = PendingExport(name, zip))
                     },
                     onFailure = { failure ->
                         val message = when ((failure as? AdminException)?.failure) {
@@ -205,18 +246,47 @@ class DataViewModel @Inject constructor(
         local.update { it.copy(deleting = true) }
         viewModelScope.launch {
             val result = safely { data.deleteHousehold() }
-            if (result.isSuccess) {
-                data.eraseAndRestart()
-            } else {
-                val message = if ((result.exceptionOrNull() as? AdminException)?.failure == AdminFailure.NETWORK) {
-                    DataMessage.NETWORK
-                } else {
-                    DataMessage.DELETE_FAILED
+            when {
+                result.isSuccess -> data.eraseAndRestart()
+
+                result.failure() == AdminFailure.REAUTH_REQUIRED -> local.update {
+                    it.copy(deleting = false, deleteTyped = null, reauth = ReauthUi(data.signInUsesPassword))
                 }
-                local.update { it.copy(deleting = false, deleteTyped = null, message = message) }
+
+                else -> local.update { it.copy(deleting = false, deleteTyped = null, message = deleteMessage(result)) }
             }
         }
     }
+
+    /** Signs the same parent in again, then retries the deletion once. */
+    private fun signInAgain(activityContext: Context, password: String?) {
+        val reauth = local.value.reauth ?: return
+        if (reauth.busy) return
+        local.update { it.copy(reauth = reauth.copy(busy = true, problem = null)) }
+        viewModelScope.launch {
+            val signedIn = safely { data.signInAgain(activityContext, password) }
+            if (signedIn.isFailure) {
+                val problem = when (signedIn.failure()) {
+                    AdminFailure.WRONG_ACCOUNT -> ReauthProblem.WRONG_ACCOUNT
+                    AdminFailure.NETWORK -> ReauthProblem.NETWORK
+                    else -> ReauthProblem.SIGN_IN_FAILED
+                }
+                local.update { it.copy(reauth = reauth.copy(busy = false, problem = problem)) }
+                return@launch
+            }
+            val result = safely { data.deleteHousehold() }
+            if (result.isSuccess) {
+                data.eraseAndRestart()
+            } else {
+                local.update { it.copy(reauth = null, message = deleteMessage(result)) }
+            }
+        }
+    }
+
+    private fun Result<*>.failure(): AdminFailure? = (exceptionOrNull() as? AdminException)?.failure
+
+    private fun deleteMessage(result: Result<*>): DataMessage =
+        if (result.failure() == AdminFailure.NETWORK) DataMessage.NETWORK else DataMessage.DELETE_FAILED
 
     @Suppress("TooGenericExceptionCaught") // Any failure becomes a message.
     private suspend fun <T> safely(block: suspend () -> Result<T>): Result<T> = try {

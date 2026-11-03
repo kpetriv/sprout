@@ -406,6 +406,54 @@ class SyncEngineTest {
     }
 
     @Test
+    fun everyReportReachesTheHandlerEvenBackToBack() = runTest {
+        val handled = mutableListOf<SyncReport>()
+        val engine = SyncEngine(transport, outbox, applier, clock, reportHandler = { handled += it })
+        val first = outbox.enqueueDocument(parent.signed(DocTypes.REWARD, "reward-1", 1))
+        transport.outcomes[PushItemId("document/reward/reward-1")] = SyncError.Permanent("permission-denied")
+        val one = backgroundScope.async { engine.syncOnce() }
+        val two = backgroundScope.async {
+            outbox.enqueueDocument(parent.signed(DocTypes.REWARD, "reward-2", 2))
+            transport.outcomes[PushItemId("document/reward/reward-2")] = SyncError.Permanent("invalid-argument")
+            engine.syncOnce()
+        }
+        one.await()
+        two.await()
+
+        // The conflated StateFlow keeps only the last one; the handler saw both, in order.
+        assertEquals(listOf(one.getCompleted(), two.getCompleted()), handled)
+        assertEquals(listOf(first), handled.first().rejections.map { it.seq })
+        assertEquals(listOf("invalid-argument"), handled.last().rejections.map { it.code })
+        assertEquals(two.getCompleted(), engine.reports.value)
+    }
+
+    @Test
+    fun theLoopsReportsReachTheHandlerAndAFailingHandlerDoesNotEndTheLoop() = runTest {
+        val handled = mutableListOf<SyncReport>()
+        val engine = SyncEngine(
+            transport,
+            outbox,
+            applier,
+            clock,
+            reportHandler = {
+                handled += it
+                error("handler failure")
+            },
+        )
+        val trigger = MutableSharedFlow<Unit>(extraBufferCapacity = 16)
+        engine.run(backgroundScope, trigger)
+        runCurrent()
+
+        repeat(2) {
+            trigger.emit(Unit)
+            settle()
+        }
+
+        assertEquals(2, handled.size)
+        assertEquals(2, transport.pulledCursors.size)
+    }
+
+    @Test
     fun syncOnceCallsAreSerialised() = runTest {
         val gate = CompletableDeferred<Unit>()
         var inside = 0

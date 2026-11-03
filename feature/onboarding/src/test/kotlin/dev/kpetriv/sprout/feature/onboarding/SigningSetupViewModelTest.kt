@@ -14,11 +14,13 @@ class SigningSetupViewModelTest {
     private class FakeSigning(var needed: Boolean = true) : ParentSigningSetup {
         val results = ArrayDeque<SigningSetupResult>()
         val pins = mutableListOf<String>()
+        var failure: Exception? = null
 
         override suspend fun needsEnrolment(): Boolean = needed
 
         override suspend fun enrol(pin: CharArray): SigningSetupResult {
             pins += pin.concatToString()
+            failure?.let { throw it }
             pin.fill('\u0000')
             return results.removeFirstOrNull() ?: SigningSetupResult.REGISTERED
         }
@@ -72,5 +74,32 @@ class SigningSetupViewModelTest {
         viewModel.onEvent(SigningSetupEvent.Skip)
         assertTrue(viewModel.state.value.done)
         assertEquals(emptyList(), signing.pins)
+    }
+
+    @Test
+    fun `a cancelled fingerprint or a failure shows the error without counting a rejected PIN`() {
+        val signing = FakeSigning()
+        signing.results += SigningSetupResult.CANCELLED
+        val viewModel = SigningSetupViewModel(signing)
+        viewModel.type("246813")
+        assertEquals(SigningSetupResult.CANCELLED, viewModel.state.value.error)
+        assertEquals(0, viewModel.state.value.rejections)
+        assertFalse(viewModel.state.value.busy)
+        assertFalse(viewModel.state.value.done)
+    }
+
+    @Test
+    fun `an exception from enrolment reads as failed and the step stays usable`() {
+        val signing = FakeSigning()
+        signing.failure = IllegalStateException("keystore")
+        val viewModel = SigningSetupViewModel(signing)
+        viewModel.type("246813")
+        assertEquals(SigningSetupResult.FAILED, viewModel.state.value.error)
+        assertEquals(0, viewModel.state.value.rejections)
+        assertFalse(viewModel.state.value.busy)
+
+        signing.failure = null
+        viewModel.type("246813")
+        assertTrue(viewModel.state.value.done)
     }
 }

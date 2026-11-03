@@ -81,6 +81,9 @@ sealed interface DevicesEvent {
 
     data object DismissReview : DevicesEvent
 
+    /** "It doesn't match": close the approval sheet and offer to remove that device instead (review L8). */
+    data object RejectReview : DevicesEvent
+
     data class AskRevoke(val deviceId: DeviceId) : DevicesEvent
 
     data object ConfirmRevoke : DevicesEvent
@@ -93,7 +96,8 @@ sealed interface DevicesEvent {
 /**
  * Settings → Devices: every registered device with role, linked kid, attestation label and status. "Approve" on a
  * PENDING parent device shows its fingerprint for the parent to compare with the new phone, then approves it (the
- * app signs the approval with this device's key, T8). "Revoke" asks first; this device cannot revoke itself.
+ * app signs the approval with this device's key, T8); "It doesn't match" offers to remove that entry instead, so a
+ * stale or foreign PENDING device does not linger. "Revoke" asks first; this device cannot revoke itself.
  */
 @HiltViewModel
 class DevicesViewModel @Inject constructor(private val admin: DeviceAdmin) : ViewModel() {
@@ -122,6 +126,12 @@ class DevicesViewModel @Inject constructor(private val admin: DeviceAdmin) : Vie
             DevicesEvent.DismissReview -> {
                 pendingReview.value = null
                 local.update { it.copy(reviewing = null) }
+            }
+
+            DevicesEvent.RejectReview -> {
+                val row = state.value.reviewing?.takeIf { it.canRevoke }
+                pendingReview.value = null
+                local.update { it.copy(reviewing = null, revoking = row) }
             }
 
             is DevicesEvent.AskRevoke -> {

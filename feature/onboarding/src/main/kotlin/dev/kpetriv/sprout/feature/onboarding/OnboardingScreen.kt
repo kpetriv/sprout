@@ -87,8 +87,10 @@ fun OnboardingRoute(
     LaunchedEffect(state.finished) { if (state.finished) onFinished() }
     val atWelcome = state.step == OnboardingStep.Welcome
     LaunchedEffect(atWelcome) { if (!atWelcome) onStarted() }
-    SystemBackHandler(enabled = !atWelcome) { viewModel.onEvent(OnboardingEvent.Back) }
-    SystemBackHandler(enabled = atWelcome && canLeave, onBack = onExit)
+    // While a call runs, system back is swallowed (the view model ignores Back then): a registration is never left
+    // half-way, and the activity is not finished under it either.
+    SystemBackHandler(enabled = !atWelcome || state.busy) { viewModel.onEvent(OnboardingEvent.Back) }
+    SystemBackHandler(enabled = atWelcome && canLeave && !state.busy, onBack = onExit)
     if (state.step == OnboardingStep.ParentLock) {
         parentLock { viewModel.onEvent(OnboardingEvent.ParentLockDone) }
     } else {

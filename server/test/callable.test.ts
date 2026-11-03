@@ -46,7 +46,8 @@ const fail = callable('fail', (request): Promise<never> => {
 const shapes = callable('shapes', () =>
   Promise.resolve({ n: 1, f: 1.5, s: 'x', t: true, nil: null, missing: undefined, list: [1, undefined], nested: { a: 'b' } }),
 );
-const testApp = createCallableApp([echo, fail, shapes] as CallableDefinition[], { verifyAppCheck: testAppCheck });
+const anonymous = callable('anonymous', echo.handler, { authentication: 'none' });
+const testApp = createCallableApp([echo, fail, shapes, anonymous] as CallableDefinition[], { verifyAppCheck: testAppCheck });
 
 describe('callable protocol: success', () => {
   it('answers 200 {"result": ...} with the verified caller, the decoded data and the request context', async () => {
@@ -87,7 +88,7 @@ describe('callable protocol: success', () => {
     expect(() => decode({ '@type': 'type.googleapis.com/google.protobuf.Other', value: '1' })).toThrow();
   });
 
-  it('serves the ten callables of the server', () => {
+  it('serves the eleven callables of the server', () => {
     expect(fns.callables.map((c) => c.name).sort()).toEqual(
       [
         'approveDevice',
@@ -100,8 +101,35 @@ describe('callable protocol: success', () => {
         'registerParentDevice',
         'registerParentKey',
         'revokeDevice',
+        'deviceStatus',
       ].sort(),
     );
+    // Only deviceStatus ignores the ID token.
+    expect(fns.callables.filter((c) => c.authentication === 'none').map((c) => c.name)).toEqual(['deviceStatus']);
+  });
+
+  it('drops __proto__, constructor and prototype keys from request data at every depth', async () => {
+    const raw = '{"__proto__":{"polluted":true},"a":1,"nested":{"constructor":{"prototype":{"x":1}},"b":[{"__proto__":{"y":2},"c":3}]},"prototype":4}';
+    const decoded = decode(JSON.parse(raw)) as Record<string, unknown>;
+    expect(Object.getPrototypeOf(decoded)).toBe(Object.prototype);
+    expect((decoded as { polluted?: unknown }).polluted).toBeUndefined();
+    expect(decoded).toEqual({ a: 1, nested: { b: [{ c: 3 }] } });
+    const inner = ((decoded.nested as { b: unknown[] }).b[0]) as Record<string, unknown>;
+    expect(Object.getPrototypeOf(inner)).toBe(Object.prototype);
+    expect(({} as { polluted?: unknown }).polluted).toBeUndefined();
+
+    const response = await post('/echo', `{"data":${raw}}`, JSON_HEADERS, undefined, testApp);
+    expect(await bodyOf(response)).toEqual({ result: { uid: null, data: { a: 1, nested: { b: [{ c: 3 }] } }, app: null } });
+    expect(Object.getPrototypeOf(seen?.data)).toBe(Object.prototype);
+  });
+
+  it('a callable declared with authentication none ignores the Authorization header', async () => {
+    const response = await post('/anonymous', JSON.stringify({ data: null }), { ...JSON_HEADERS, authorization: 'Bearer forged' }, undefined, testApp);
+    expect(response.status).toBe(200);
+    expect(await bodyOf(response)).toEqual({ result: { uid: null, data: null, app: null } });
+    expect(seen?.auth).toBeUndefined();
+    // The same header is refused by a callable that verifies tokens.
+    expect((await post('/echo', JSON.stringify({ data: null }), { ...JSON_HEADERS, authorization: 'Bearer forged' }, undefined, testApp)).status).toBe(401);
   });
 });
 
