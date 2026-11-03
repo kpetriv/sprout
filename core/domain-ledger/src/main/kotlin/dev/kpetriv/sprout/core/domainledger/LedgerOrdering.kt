@@ -22,8 +22,8 @@ object LedgerOrdering : Comparator<LedgerEvent> {
  * True when [other] is the same event as this one: the same eventId, the same stored hash and the same content.
  * Only the device signature may differ (ECDSA signatures are randomised, so a re-signed copy is still the same event).
  * The parent signature does count: it cannot be re-made without a new parent prompt, so a copy with a stripped or
- * different [Envelope.parentSignature] is a conflict, which no device applies, rather than a duplicate whose fate
- * would depend on which copy arrived first.
+ * different [Envelope.parentSignature] is a conflict, which every device resolves the same way ([appliedCopyOf]),
+ * rather than a duplicate whose fate would depend on which copy arrived first.
  * Two copies of one eventId that are not the same event are a conflict (see [LedgerAnomaly.ConflictingDuplicate]).
  */
 fun LedgerEvent.isSameEventAs(other: LedgerEvent): Boolean = eventId == other.eventId &&
@@ -35,32 +35,47 @@ private fun LedgerEvent.withoutSignature(): LedgerEvent =
 
 /**
  * The copy of one eventId that projections apply, given every distinct copy of it ([isSameEventAs] tells copies
- * apart), or null when none is applied:
+ * apart), or null only when there are no copies:
  * - a single copy is applied;
- * - when copies conflict and **exactly one** comes from a device whose role [roleOf] reports as [Role.PARENT]
- *   while [roleOf] reports [Role.KID] for every other copy's device, the parent device's copy is applied and the
- *   kid copies are excluded. A kid device that reuses a parent's eventId (seen on a shared tablet, or replayed from
- *   sync) therefore cannot cancel the parent's event;
- * - otherwise (all copies share a role, several parent copies, or any copy whose device role is unknown) **none**
- *   is applied.
+ * - when copies conflict and **exactly one** comes from a device whose role [roleOf] reports as [Role.PARENT], that
+ *   copy is applied and every other copy is excluded. A kid device that reuses a parent's eventId (seen on a shared
+ *   tablet, or replayed from sync) therefore cannot cancel the parent's event;
+ * - otherwise the copy that sorts first by `(lamport, authorDeviceId, hash)` ([CONFLICT_ORDER]) among the PARENT
+ *   copies (several parent copies), or among all copies (no parent copy: all KID, or roles unknown), is applied. A
+ *   KID copy never beats a PARENT copy.
+ *
+ * Applying one copy rather than none (ADR-0004 §6 as amended at the M3 review, D-M1-1) keeps a single reused id from
+ * erasing an event, while the choice still depends only on the set of copies and the registry, never on arrival
+ * order, so every device applies the same copy and converges.
  *
  * [roleOf] must answer from the household's device registry (ADR-0004 M2-review amendment, M3 §2), never from the
  * envelope's self-declared `authorRole`: a kid device that writes `authorRole = PARENT` on its copy is still a KID
  * device. Pulled parent-only copies only get this far when [RemoteEventVerifier] verified their parent signature.
  *
- * Every conflict is still reported as a [LedgerAnomaly.ConflictingDuplicate] listing all copies. The rule depends
- * only on the set of copies and the registry, never on arrival order, so every device converges.
+ * Every conflict is still reported as a [LedgerAnomaly.ConflictingDuplicate] listing all copies.
  */
 fun appliedCopyOf(copies: List<LedgerEvent>, roleOf: (DeviceId) -> Role?): LedgerEvent? =
-    resolveConflict(copies) { roleOf(it.envelope.authorDeviceId) }
+    resolveConflict(copies, { roleOf(it.envelope.authorDeviceId) }, CONFLICT_ORDER)
 
-/** [appliedCopyOf] over any copy representation; [role] reads the verified author role of a copy (null: unknown). */
-internal inline fun <T> resolveConflict(copies: List<T>, role: (T) -> Role?): T? {
+/**
+ * Tie-break among conflicting copies: `(lamport, authorDeviceId, hash)`, the first wins. Copies that share all three
+ * (the same hashed content with a different [Envelope.parentSignature], or tampered content that kept its hash) are
+ * ordered by parent signature and then by their encoded content without the device signature, so the order stays
+ * total and the choice never depends on arrival order.
+ */
+internal val CONFLICT_ORDER: Comparator<LedgerEvent> =
+    compareBy<LedgerEvent>({ it.envelope.lamport }, { it.envelope.authorDeviceId.value }, { it.envelope.hash })
+        .thenBy { it.envelope.parentSignature.orEmpty() }
+        .thenBy { LedgerJson.encodeToJsonObject(it.withoutSignature()).toString() }
+
+/**
+ * [appliedCopyOf] over any copy representation; [role] reads the verified author role of a copy (null: unknown) and
+ * [order] sorts copies by `(lamport, authorDeviceId, hash)`.
+ */
+internal fun <T> resolveConflict(copies: List<T>, role: (T) -> Role?, order: Comparator<in T>): T? {
     if (copies.size <= 1) return copies.singleOrNull()
-    val roles = copies.map(role)
-    val parents = roles.count { it == Role.PARENT }
-    val kids = roles.count { it == Role.KID }
-    return if (parents == 1 && kids == copies.size - 1) copies[roles.indexOf(Role.PARENT)] else null
+    val parents = copies.filter { role(it) == Role.PARENT }
+    return (parents.ifEmpty { copies }).minWithOrNull(order)
 }
 
 /**
@@ -69,8 +84,8 @@ internal inline fun <T> resolveConflict(copies: List<T>, role: (T) -> Role?): T?
  *   outbox retries and duplicate pulls safe;
  * - adding a different event under an id already present records a **conflict**: every distinct copy is kept, the
  *   id is listed in [conflictingIds], and [Ledger.project] of [sorted] reports [LedgerAnomaly.ConflictingDuplicate]
- *   and applies at most [appliedCopyOf] (the single copy from a PARENT device when every other copy comes from a
- *   KID device; otherwise none).
+ *   and applies exactly one copy, [appliedCopyOf] (a PARENT device's copy over KID copies, otherwise the first by
+ *   `(lamport, authorDeviceId, hash)`).
  *   The choice depends only on the copies, never on arrival order, so every device converges.
  */
 class LedgerEventSet private constructor(private val byId: Map<EventId, List<LedgerEvent>>) {

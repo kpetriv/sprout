@@ -7,8 +7,10 @@ import {
   newDevice,
   newHousehold,
   newUser,
+  parentKeySignature,
   req,
   resetEmulators,
+  withProof,
 } from './helpers.js';
 
 // Every production log line goes through src/log.ts to firebase-functions/logger (eslint forbids console and other
@@ -39,7 +41,8 @@ describe('logging', () => {
     const h = await newHousehold(ip);
     const kidName = 'Matilda';
     const kidId = await addKid(h.hid, 'kid-a', kidName);
-    const { code } = await call(fns.createLinkCode, req(h.parent, { kidId }));
+    const linkProof = withProof(h, 'createLinkCode', { kidId });
+    const { code } = await call(fns.createLinkCode, req(h.parent, linkProof));
     const kidUid = await newUser();
     const kidDevice = newDevice();
     const { challenge } = await call(fns.beginDeviceRegistration, req({ uid: kidUid, anonymous: true, ip }));
@@ -48,11 +51,23 @@ describe('logging', () => {
       'not-found',
     );
     await call(fns.redeemLinkCode, req({ uid: kidUid, anonymous: true, ip }, { code, devicePublicKey: kidDevice.publicKey }));
+    const parentKey = newDevice();
+    const keySignature = parentKeySignature(h.device, h.hid, parentKey.spki);
+    await call(
+      fns.registerParentKey,
+      req(h.parent, { publicKey: parentKey.publicKey, deviceId: h.device.deviceId, signature: keySignature }),
+    );
+    await expectCode(
+      call(fns.registerParentKey, req(h.parent, { publicKey: parentKey.publicKey, deviceId: h.device.deviceId, signature: 'AAAA' })),
+      'permission-denied',
+    );
     const second = newDevice();
     await call(fns.registerParentDevice, req(h.parent, { devicePublicKey: second.publicKey }));
-    await call(fns.revokeDevice, req(h.parent, { deviceId: second.deviceId, callerDeviceId: h.device.deviceId }));
-    for (let i = 0; i < 6; i++) await call(fns.exportHousehold, req(h.parent)).catch(() => undefined);
-    await call(fns.deleteHousehold, req(h.parent, { confirmation: h.hid }));
+    const revokeProof = withProof(h, 'revokeDevice', { deviceId: second.deviceId });
+    await call(fns.revokeDevice, req(h.parent, revokeProof));
+    for (let i = 0; i < 6; i++) await call(fns.exportHousehold, req(h.parent, withProof(h, 'exportHousehold'))).catch(() => undefined);
+    const deleteProof = withProof(h, 'deleteHousehold', { confirmation: h.hid });
+    await call(fns.deleteHousehold, req(h.parent, deleteProof));
 
     expect(captured.length).toBeGreaterThan(5);
     const events = captured.map((args) => args[0]);
@@ -63,6 +78,7 @@ describe('logging', () => {
         'linkCode.rejected',
         'linkCode.redeemed',
         'device.registered',
+        'parentKey.registered',
         'device.revoked',
         'household.exported',
         'rateLimit.exceeded',
@@ -76,7 +92,22 @@ describe('logging', () => {
       }
     }
     const everything = JSON.stringify(captured) + consoleOutput.join('\n');
-    for (const secret of [code, code.toLowerCase(), 'WRNGCDEX', kidName, ip, challenge, kidDevice.publicKey, h.device.publicKey]) {
+    const secrets = [
+      code,
+      code.toLowerCase(),
+      'WRNGCDEX',
+      kidName,
+      ip,
+      challenge,
+      kidDevice.publicKey,
+      h.device.publicKey,
+      parentKey.publicKey,
+      keySignature,
+      linkProof.signature as string,
+      revokeProof.signature as string,
+      deleteProof.signature as string,
+    ];
+    for (const secret of secrets) {
       expect(everything).not.toContain(secret);
     }
   });

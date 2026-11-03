@@ -1,6 +1,7 @@
 package dev.kpetriv.sprout.core.domainledger
 
 import dev.kpetriv.sprout.core.model.DeviceId
+import dev.kpetriv.sprout.core.model.KidId
 import dev.kpetriv.sprout.core.model.Role
 import dev.kpetriv.sprout.core.model.UserId
 import kotlinx.coroutines.test.runTest
@@ -20,7 +21,7 @@ class RemoteEventVerifierTest {
     private val parentDeviceKey = SoftwareKey()
     private val kidDeviceKey = SoftwareKey()
     private val parentAuthKey = SoftwareKey()
-    private val policy = LedgerPolicy(maxLamportJump = 100)
+    private val policy = LedgerPolicy(maxLamportJump = 100, requireParentSignature = true)
     private val verifier = RemoteEventVerifier(registry, SoftwareSignatureCheck, policy)
 
     private val parent =
@@ -117,19 +118,28 @@ class RemoteEventVerifierTest {
     }
 
     @Test
-    fun anUnregisteredDeviceIsUnknown() = runTest {
+    fun anUnregisteredDeviceIsHeldUntilTheRegistryCatchesUp() = runTest {
         val strangerKey = SoftwareKey()
-        val stranger = DeviceWriter(
-            Fixtures.kidTablet.copy(deviceId = DeviceId("stranger-phone")),
-            deviceKey = strangerKey.signer,
+        val author = Fixtures.kidTablet.copy(deviceId = DeviceId("stranger-phone"))
+        val event = DeviceWriter(author, deviceKey = strangerKey.signer).game(10)
+        val held = assertIs<VerifiedRemote.Held>(verify(event))
+        assertEquals(
+            VerifiedRemote.Held(event.eventId, event.envelope.hash, author.deviceId, QuarantineReason.UNKNOWN_DEVICE),
+            held,
         )
-        assertEquals(QuarantineReason.UNKNOWN_DEVICE, reasonFor(stranger.game(10)))
+
+        registry.register(author, strangerKey)
+        assertIs<VerifiedRemote.Ok>(verify(event))
     }
 
     @Test
-    fun aPendingDeviceIsNotActive() = runTest {
+    fun aPendingDeviceIsHeldUntilApproved() = runTest {
         registry.register(Fixtures.kidTablet, kidDeviceKey, status = DeviceStatus.Pending)
-        assertEquals(QuarantineReason.DEVICE_NOT_ACTIVE, reasonFor(kid.game(10)))
+        val event = kid.game(10)
+        assertEquals(QuarantineReason.DEVICE_NOT_ACTIVE, assertIs<VerifiedRemote.Held>(verify(event)).reason)
+
+        registry.register(Fixtures.kidTablet, kidDeviceKey, status = DeviceStatus.Active)
+        assertIs<VerifiedRemote.Ok>(verify(event))
     }
 
     @Test
@@ -164,6 +174,33 @@ class RemoteEventVerifierTest {
     }
 
     @Test
+    fun aKidDeviceWritesOnlyForItsOwnKid() = runTest {
+        registry.register(
+            RegisteredDevice(
+                deviceId = Fixtures.kidTablet.deviceId,
+                owner = DeviceOwner(Fixtures.kidTablet.uid, Role.KID, KidId("kid-2")),
+                publicKey = kidDeviceKey.publicKey,
+                status = DeviceStatus.Active,
+                attestation = AttestationLevel.TEE,
+            ),
+        )
+        assertEquals(Fixtures.kid, kid.game(10).envelope.kidId)
+        assertEquals(QuarantineReason.KID_MISMATCH, reasonFor(kid.game(10)))
+
+        // A KID device registered without a kid writes for no kid.
+        registry.register(
+            RegisteredDevice(
+                deviceId = Fixtures.kidTablet.deviceId,
+                owner = DeviceOwner(Fixtures.kidTablet.uid, Role.KID, kidId = null),
+                publicKey = kidDeviceKey.publicKey,
+                status = DeviceStatus.Active,
+                attestation = AttestationLevel.TEE,
+            ),
+        )
+        assertEquals(QuarantineReason.KID_MISMATCH, reasonFor(kid.game(10)))
+    }
+
+    @Test
     fun aParentDeviceMayAuthorKidRoleEvents() = runTest {
         // Kid mode on a parent device (D-M3-12): the parent uid and device with role KID.
         val kidMode = DeviceWriter(Fixtures.parentPhone.copy(role = Role.KID), deviceKey = parentDeviceKey.signer)
@@ -195,12 +232,12 @@ class RemoteEventVerifierTest {
     }
 
     @Test
-    fun parentOnlyEventsAlwaysNeedAParentSignature() = runTest {
+    fun parentOnlyEventsAlwaysNeedAParentSignatureWhenTheHouseholdRequiresIt() = runTest {
         val unsignedParent = DeviceWriter(Fixtures.parentPhone, deviceKey = parentDeviceKey.signer)
         val chore = unsignedParent.chore(100)
-        // The policy's switch and from-lamport exemption are not consulted for pulled events.
-        for (lenient in listOf(LedgerPolicy(), LedgerPolicy(parentSignatureRequiredFromLamport = Long.MAX_VALUE))) {
-            val result = RemoteEventVerifier(registry, SoftwareSignatureCheck, lenient)
+        // The from-lamport exemption is not consulted for pulled events.
+        for (required in listOf(policy, policy.copy(parentSignatureRequiredFromLamport = Long.MAX_VALUE))) {
+            val result = RemoteEventVerifier(registry, SoftwareSignatureCheck, required)
                 .verify(LedgerJson.encodeToJsonObject(chore), 0)
             assertEquals(
                 QuarantineReason.PARENT_SIGNATURE_MISSING,
@@ -215,6 +252,34 @@ class RemoteEventVerifierTest {
         assertEquals(QuarantineReason.PARENT_SIGNATURE_MISSING, reasonFor(unsignedParent.timeCredit(15)))
         val purchase = kid.screenTime(cost = 50, minutes = 20)
         assertIs<VerifiedRemote.Ok>(verify(kid.timeCredit(20, grantedBy = purchase)))
+    }
+
+    @Test
+    fun aHouseholdWithoutParentSignaturesAcceptsUnsignedParentEventsFromParentDevicesOnly() = runTest {
+        // D-M2-1: the household's synced policy says parent signatures are not required.
+        val lenient = RemoteEventVerifier(registry, SoftwareSignatureCheck, policy.copy(requireParentSignature = false))
+        suspend fun outcome(event: LedgerEvent) = lenient.verify(LedgerJson.encodeToJsonObject(event), 0)
+
+        val unsignedParent = DeviceWriter(Fixtures.parentPhone, deviceKey = parentDeviceKey.signer)
+        assertIs<VerifiedRemote.Ok>(outcome(unsignedParent.chore(100)))
+        assertIs<VerifiedRemote.Ok>(outcome(unsignedParent.allowance(500)))
+        // A signature by an unregistered key counts as unsigned, so it does not matter either.
+        val strangerSigned =
+            DeviceWriter(Fixtures.parentPhone, parentKey = SoftwareKey(), deviceKey = parentDeviceKey.signer)
+        assertIs<VerifiedRemote.Ok>(outcome(strangerSigned.adjust(-5)))
+
+        // The role checks still apply: a kid device claiming PARENT is refused...
+        val claimsParent = DeviceWriter(Fixtures.kidTablet.copy(role = Role.PARENT), deviceKey = kidDeviceKey.signer)
+        assertEquals(
+            QuarantineReason.ROLE_NOT_ALLOWED,
+            assertIs<VerifiedRemote.Quarantined>(outcome(claimsParent.chore(100))).reason,
+        )
+        // ...and a parent-only event written in kid mode (KID role) is not exempt.
+        val kidMode = DeviceWriter(Fixtures.parentPhone.copy(role = Role.KID), deviceKey = parentDeviceKey.signer)
+        assertEquals(
+            QuarantineReason.PARENT_SIGNATURE_MISSING,
+            assertIs<VerifiedRemote.Quarantined>(outcome(kidMode.chore(100))).reason,
+        )
     }
 
     @Test
@@ -233,6 +298,44 @@ class RemoteEventVerifierTest {
         val deviceAsParent =
             DeviceWriter(Fixtures.parentPhone, parentKey = parentDeviceKey, deviceKey = parentDeviceKey.signer)
         assertEquals(QuarantineReason.PARENT_SIGNATURE_INVALID, reasonFor(deviceAsParent.adjust(-5)))
+    }
+
+    @Test
+    fun aParentKeyOnlySignsForItsOwnDevice() = runTest {
+        // The tablet's parent key is registered, but for the tablet: it cannot sign the phone's events.
+        val tabletKey = SoftwareKey()
+        registry.addParentKey(Fixtures.parentTablet, tabletKey)
+        val phoneWithTabletKey =
+            DeviceWriter(Fixtures.parentPhone, parentKey = tabletKey, deviceKey = parentDeviceKey.signer)
+        assertEquals(QuarantineReason.PARENT_SIGNATURE_INVALID, reasonFor(phoneWithTabletKey.chore(100)))
+
+        // The tablet itself may use it.
+        val tabletDeviceKey = SoftwareKey()
+        registry.register(Fixtures.parentTablet, tabletDeviceKey)
+        val tablet = DeviceWriter(Fixtures.parentTablet, parentKey = tabletKey, deviceKey = tabletDeviceKey.signer)
+        assertIs<VerifiedRemote.Ok>(verify(tablet.chore(100)))
+    }
+
+    @Test
+    fun aParentKeyWhoseFingerprintDoesNotMatchItsKeyIsIgnored() = runTest {
+        val key = SoftwareKey()
+        assertTrue(registry.addParentKey(Fixtures.parentPhone, key).matchesPublicKey())
+        val tampered = RegisteredParentKey(
+            fingerprint = SoftwareKey().fingerprint,
+            publicKey = key.publicKey,
+            uid = Fixtures.parentPhone.uid,
+            deviceId = Fixtures.parentPhone.deviceId,
+            validFromLamport = 0,
+            revokedAtLamport = null,
+        )
+        assertEquals(false, tampered.matchesPublicKey())
+        val registryWithTampered = object : DeviceRegistry by registry {
+            override suspend fun parentKeys(): List<RegisteredParentKey> = listOf(tampered)
+        }
+        val writer = DeviceWriter(Fixtures.parentPhone, parentKey = key, deviceKey = parentDeviceKey.signer)
+        val result = RemoteEventVerifier(registryWithTampered, SoftwareSignatureCheck, policy)
+            .verify(LedgerJson.encodeToJsonObject(writer.chore(100)), 0)
+        assertEquals(QuarantineReason.PARENT_SIGNATURE_INVALID, assertIs<VerifiedRemote.Quarantined>(result).reason)
     }
 
     @Test

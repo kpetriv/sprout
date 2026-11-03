@@ -11,6 +11,8 @@ import {
   newHousehold,
   req,
   resetEmulators,
+  signed,
+  withProof,
   type Household,
 } from './helpers.js';
 
@@ -128,7 +130,7 @@ describe('revokeDevice', () => {
 
     const result = await call(
       fns.revokeDevice,
-      req(h.parent, { deviceId: linked.device.deviceId, callerDeviceId: h.device.deviceId }),
+      req(h.parent, withProof(h, 'revokeDevice', { deviceId: linked.device.deviceId })),
     );
     expect(result).toEqual({ deviceId: linked.device.deviceId, revokedAtLamport: 13 });
     const stored = (await db.doc(`households/${h.hid}/devices/${linked.device.deviceId}`).get()).data();
@@ -140,7 +142,7 @@ describe('revokeDevice', () => {
     // Idempotent.
     const again = await call(
       fns.revokeDevice,
-      req(h.parent, { deviceId: linked.device.deviceId, callerDeviceId: h.device.deviceId }),
+      req(h.parent, withProof(h, 'revokeDevice', { deviceId: linked.device.deviceId })),
     );
     expect(again.revokedAtLamport).toBe(13);
   });
@@ -152,7 +154,7 @@ describe('revokeDevice', () => {
     await keys.doc('1'.repeat(64)).set({ deviceId: device.deviceId, uid: h.parent.uid, validFromLamport: 0 });
     await keys.doc('2'.repeat(64)).set({ deviceId: h.device.deviceId, uid: h.parent.uid, validFromLamport: 0 });
 
-    const result = await call(fns.revokeDevice, req(h.parent, { deviceId: device.deviceId, callerDeviceId: h.device.deviceId }));
+    const result = await call(fns.revokeDevice, req(h.parent, withProof(h, 'revokeDevice', { deviceId: device.deviceId })));
     expect(result.revokedAtLamport).toBe(1);
     expect((await keys.doc('1'.repeat(64)).get()).get('revokedAtLamport')).toBe(1);
     expect((await keys.doc('2'.repeat(64)).get()).get('revokedAtLamport')).toBeUndefined();
@@ -165,20 +167,109 @@ describe('revokeDevice', () => {
     const h = await newHousehold();
     const linked = await linkKid(h);
     await expectCode(
-      call(fns.revokeDevice, req(h.parent, { deviceId: h.device.deviceId, callerDeviceId: h.device.deviceId })),
+      call(fns.revokeDevice, req(h.parent, withProof(h, 'revokeDevice', { deviceId: h.device.deviceId }))),
       'failed-precondition',
     );
     await expectCode(
-      call(fns.revokeDevice, req(h.parent, { deviceId: 'a'.repeat(64), callerDeviceId: h.device.deviceId })),
+      call(fns.revokeDevice, req(h.parent, withProof(h, 'revokeDevice', { deviceId: 'a'.repeat(64) }))),
       'not-found',
     );
     await expectCode(
-      call(fns.revokeDevice, req(h.parent, { deviceId: h.device.deviceId, callerDeviceId: linked.device.deviceId })),
+      call(
+        fns.revokeDevice,
+        req(h.parent, { deviceId: h.device.deviceId, ...signed(linked.device, 'revokeDevice', h.hid, { deviceId: h.device.deviceId }) }),
+      ),
       'permission-denied',
     );
     await expectCode(
-      call(fns.revokeDevice, req(linked.kid, { deviceId: h.device.deviceId, callerDeviceId: linked.device.deviceId })),
+      call(
+        fns.revokeDevice,
+        req(linked.kid, { deviceId: h.device.deviceId, ...signed(linked.device, 'revokeDevice', h.hid, { deviceId: h.device.deviceId }) }),
+      ),
       'permission-denied',
     );
+  });
+});
+
+describe('revokeDevice: lamport, device proof and parent sessions', () => {
+  it('revokedAtLamport covers the device\'s documents in every collection, not only its events', async () => {
+    const h = await newHousehold();
+    const linked = await linkKid(h);
+    const base = `households/${h.hid}`;
+    await db.doc(`${base}/events/k1`).set({ authorDeviceId: linked.device.deviceId, lamport: 12 });
+    await db.doc(`${base}/choreSubmissions/s1`).set({ authorDeviceId: linked.device.deviceId, lamport: 20 });
+    await db.doc(`${base}/chores/c1`).set({ authorDeviceId: h.device.deviceId, lamport: 99 });
+    const result = await call(fns.revokeDevice, req(h.parent, withProof(h, 'revokeDevice', { deviceId: linked.device.deviceId })));
+    expect(result.revokedAtLamport).toBe(21);
+
+    const { device } = await secondDevice(h);
+    await db.doc(`${base}/savingsGoals/g1`).set({ authorDeviceId: device.deviceId, lamport: 33 });
+    await db.doc(`${base}/interestPolicy/i1`).set({ authorDeviceId: device.deviceId, lamport: 34 });
+    const parentResult = await call(fns.revokeDevice, req(h.parent, withProof(h, 'revokeDevice', { deviceId: device.deviceId })));
+    expect(parentResult.revokedAtLamport).toBe(35);
+  });
+
+  it('refuses a stored lamport that is not a safe integer with internal', async () => {
+    const h = await newHousehold();
+    const linked = await linkKid(h);
+    await db.doc(`households/${h.hid}/events/k1`).set({ authorDeviceId: linked.device.deviceId, lamport: 2 ** 53 });
+    await expectCode(
+      call(fns.revokeDevice, req(h.parent, withProof(h, 'revokeDevice', { deviceId: linked.device.deviceId }))),
+      'internal',
+    );
+    expect((await db.doc(`households/${h.hid}/devices/${linked.device.deviceId}`).get()).get('status')).toBe('ACTIVE');
+  });
+
+  it('requires the calling device\'s signature over hid and the target', async () => {
+    const h = await newHousehold();
+    const linked = await linkKid(h);
+    const target = { deviceId: linked.device.deviceId };
+    // No signature, a signature by another key, and a signature over another target.
+    await expectCode(
+      call(fns.revokeDevice, req(h.parent, { ...target, callerDeviceId: h.device.deviceId })),
+      'invalid-argument',
+    );
+    await expectCode(
+      call(fns.revokeDevice, req(h.parent, { ...target, ...signed(newDevice(), 'revokeDevice', h.hid, target), callerDeviceId: h.device.deviceId })),
+      'permission-denied',
+    );
+    await expectCode(
+      call(fns.revokeDevice, req(h.parent, { ...target, signature: signed(h.device, 'revokeDevice', h.hid, { deviceId: 'b'.repeat(64) }).signature, callerDeviceId: h.device.deviceId })),
+      'permission-denied',
+    );
+    // A signature made for another callable with the same arguments.
+    await expectCode(
+      call(fns.revokeDevice, req(h.parent, { ...target, ...signed(h.device, 'createLinkCode', h.hid, target) })),
+      'permission-denied',
+    );
+    expect((await db.doc(`households/${h.hid}/devices/${linked.device.deviceId}`).get()).get('status')).toBe('ACTIVE');
+  });
+
+  it('revoking a PARENT device revokes the owner\'s sessions and refuses tokens signed in before it', async () => {
+    const h = await newHousehold();
+    const { device } = await secondDevice(h);
+    const before = Math.floor(Date.now() / 1000) - 60;
+    await call(fns.revokeDevice, req(h.parent, withProof(h, 'revokeDevice', { deviceId: device.deviceId })));
+
+    const member = await db.doc(`households/${h.hid}/members/${h.parent.uid}`).get();
+    const validAfter = member.get('tokensValidAfter') as number;
+    expect(Number.isSafeInteger(validAfter)).toBe(true);
+    expect(validAfter).toBeGreaterThan(before);
+    const user = await auth.getUser(h.parent.uid);
+    expect(Math.floor(Date.parse(user.tokensValidAfterTime ?? '') / 1000)).toBe(validAfter);
+    expect((await db.doc(`households/${h.hid}/devices/${device.deviceId}`).get()).get('sessionsRevokedAt')).toBeDefined();
+
+    // A session signed in before the revocation is refused; a fresh sign-in works.
+    await expectCode(
+      call(fns.exportHousehold, req({ ...h.parent, authTime: validAfter - 1 }, withProof(h, 'exportHousehold'))),
+      'unauthenticated',
+    );
+    await call(fns.exportHousehold, req({ ...h.parent, authTime: validAfter }, withProof(h, 'exportHousehold')));
+
+    // Revoking a kid device leaves the parent's sessions alone.
+    await db.doc(`households/${h.hid}/members/${h.parent.uid}`).update({ tokensValidAfter: 1 });
+    const linked = await linkKid(h);
+    await call(fns.revokeDevice, req(h.parent, withProof(h, 'revokeDevice', { deviceId: linked.device.deviceId })));
+    expect((await db.doc(`households/${h.hid}/members/${h.parent.uid}`).get()).get('tokensValidAfter')).toBe(1);
   });
 });

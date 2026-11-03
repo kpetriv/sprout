@@ -6,14 +6,16 @@ import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.channels.consumeEach
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.merge
+import kotlinx.coroutines.flow.onEach
+import kotlinx.coroutines.flow.retryWhen
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -26,10 +28,19 @@ import kotlinx.coroutines.sync.withLock
  * 1. pull pages until the transport says there is no more; per page: registry, then documents (in
  *    [DocTypes.applyOrder]), then events, then [RemoteApplier.saveCursor] with the page's cursor;
  * 2. [RemoteApplier.retryHeld] for events whose gap the pull may have filled;
- * 3. push the outbox in `seq` order in batches of at most [PUSH_BATCH_SIZE]: accepted items are acked; a
- *    [SyncError.Permanent] rejection is acked too (retrying cannot help) and listed in [SyncReport.rejections];
- *    a [SyncError.Transient] or [SyncError.Unauthenticated] failure records the attempt with a [backoff] time and
- *    ends the push, so later items wait behind it.
+ * 3. push the outbox in `seq` order in batches of at most [PUSH_BATCH_SIZE]. A batch never carries two items with
+ *    the same [PushItemId] (it is cut before the second one, which goes in the next batch), so every per-item result
+ *    maps back to exactly one outbox `seq`. Then, per item:
+ *    - accepted: acked;
+ *    - a **document** refused with [SyncError.Permanent]: acked too (retrying cannot help) and listed in
+ *      [SyncReport.rejections];
+ *    - a **ledger event** refused with [SyncError.Permanent]: **not** acked, because dropping it would break the
+ *      device's hash chain for every receiver. It is marked failed with its next attempt [EVENT_REJECTION_RETRY_MS]
+ *      later, listed in [SyncReport.rejections] with [PushRejection.blocking] set, and the push stops: everything
+ *      queued behind it waits (head-of-line), so the parent sees one blocking item rather than a silent gap;
+ *    - [SyncError.Transient]: the attempt is recorded with a [backoff] time and the push stops;
+ *    - [SyncError.Unauthenticated]: the push stops **without** recording an attempt, so the backoff does not grow
+ *      while the user is signed out and the outbox resumes as soon as the session is back.
  *
  * A pull failure ends the sync before anything is pushed. [SyncError.HouseholdGone] from either side ends it with
  * [SyncReport.householdGone] set, and the caller wipes local data (M3 §6). Syncs never overlap: [syncOnce] holds a
@@ -61,16 +72,32 @@ class SyncEngine(
     /**
      * Syncs whenever [transport] reports a remote change or [trigger] emits, debounced by [debounceMs]. A request
      * that arrives during a sync runs exactly one more sync after it, however many requests arrived. A failing
-     * change listener only stops live updates; [trigger] keeps working. Cancel the returned job to stop.
+     * change listener is resubscribed after a [backoff] delay that grows with consecutive failures (reset by the
+     * next change it delivers), so live updates come back after a network or listener error; [trigger] keeps working
+     * meanwhile. Cancel the returned job to stop.
      */
     @OptIn(FlowPreview::class)
     fun run(scope: CoroutineScope, trigger: Flow<Unit>): Job = scope.launch {
         val requests = Channel<Unit>(Channel.CONFLATED)
-        launch {
-            val remote = transport.changes().map { }.catch { /* listener lost: rely on triggers */ }
-            merge(remote, trigger).debounce(debounceMs).collect { requests.trySend(Unit) }
-        }
+        launch { merge(remoteChanges(), trigger).debounce(debounceMs).collect { requests.trySend(Unit) } }
         requests.consumeEach { syncSafely() }
+    }
+
+    /** [SyncTransport.changes] as sync requests, resubscribed with backoff whenever the listener fails. */
+    private fun remoteChanges(): Flow<Unit> {
+        var failures = 0
+        return transport.changes()
+            .onEach { failures = 0 }
+            .map { }
+            .retryWhen { cause, _ ->
+                // The exception is dropped on purpose: it may carry personal data and nothing here may log it.
+                if (cause is CancellationException) {
+                    false
+                } else {
+                    delay(backoff.delayMs(failures++, null))
+                    true
+                }
+            }
     }
 
     // A failing store must not end the loop: the report says the sync failed and the next trigger retries. The
@@ -123,11 +150,21 @@ class SyncEngine(
         var stop: SyncError? = null
         var more = true
         while (stop == null && more) {
-            val batch = outbox.due(clock.nowEpochMs(), PUSH_BATCH_SIZE)
+            val due = outbox.due(clock.nowEpochMs(), PUSH_BATCH_SIZE)
+            val batch = untilRepeatedId(due)
             if (batch.isNotEmpty()) stop = pushBatch(batch, pushed)
-            more = batch.size == PUSH_BATCH_SIZE
+            more = due.size == PUSH_BATCH_SIZE || batch.size < due.size
         }
         return stop
+    }
+
+    /**
+     * The longest prefix of [due] without two items of the same [PushItemId], so each per-item result of a push
+     * belongs to exactly one `seq`. The cut-off items are pushed in the next batch.
+     */
+    private fun untilRepeatedId(due: List<OutboxItem>): List<OutboxItem> {
+        val seen = HashSet<PushItemId>()
+        return due.takeWhile { seen.add(it.pushId) }
     }
 
     private suspend fun pushBatch(batch: List<OutboxItem>, pushed: PushAccumulator): SyncError? {
@@ -137,13 +174,18 @@ class SyncEngine(
                 documents = batch.mapNotNull { it.document },
             )
         } catch (failure: SyncException) {
-            if (failure.error != SyncError.HouseholdGone) batch.forEach { fail(it, failure.error) }
+            if (failure.error is SyncError.Transient || failure.error is SyncError.Permanent) {
+                batch.forEach { fail(it, failure.error) }
+            }
             return failure.error
         }
         return settle(batch, result, pushed)
     }
 
-    /** Acks or fails every item of [batch]; returns the error that ends the push, if any. */
+    /**
+     * Acks or fails every item of [batch]; returns the error that ends the push, if any. Results are matched to
+     * items by [PushItemId], unique within a batch ([untilRepeatedId]), so each outbox `seq` gets its own outcome.
+     */
     private suspend fun settle(batch: List<OutboxItem>, result: PushResult, pushed: PushAccumulator): SyncError? {
         val accepted = result.accepted.toSet()
         val rejected = result.rejected.toMap()
@@ -160,17 +202,24 @@ class SyncEngine(
                     stop = stop ?: missing
                 }
 
-                is SyncError.Permanent -> {
+                is SyncError.Permanent -> if (item.kind == OutboxItem.Kind.EVENT) {
+                    outbox.fail(item.seq, error, clock.nowEpochMs() + EVENT_REJECTION_RETRY_MS)
+                    pushed.rejections += PushRejection(item.seq, item.pushId, error.code, blocking = true)
+                    stop = stop ?: error
+                } else {
                     outbox.ack(item.seq)
                     pushed.rejections += PushRejection(item.seq, item.pushId, error.code)
                 }
 
                 SyncError.HouseholdGone -> return error
 
-                is SyncError.Transient, SyncError.Unauthenticated -> {
+                is SyncError.Transient -> {
                     fail(item, error)
                     stop = stop ?: error
                 }
+
+                // Not an attempt: the backoff must not grow while signed out.
+                SyncError.Unauthenticated -> stop = stop ?: error
             }
         }
         return stop
@@ -212,6 +261,9 @@ class SyncEngine(
 
     companion object {
         const val PUSH_BATCH_SIZE: Int = 100
+
+        /** When a ledger event the server refused for good is offered again (a rules fix, an approval). */
+        const val EVENT_REJECTION_RETRY_MS: Long = 3_600_000
         const val DEFAULT_DEBOUNCE_MS: Long = 500
         const val DEFAULT_MAX_PAGES: Int = 1_000
     }
@@ -222,7 +274,10 @@ data class SyncReport(
     val pulled: PullCounts = PullCounts(),
     /** Outbox items the server accepted. */
     val pushed: Int = 0,
-    /** Outbox items the server refused for good; acked, to be audited as `SYNC_REJECTED` by the caller. */
+    /**
+     * Outbox items the server refused for good, to be audited as `SYNC_REJECTED` by the caller: documents are acked;
+     * ledger events are kept and [blocking][PushRejection.blocking] (see [SyncEngine]).
+     */
     val rejections: List<PushRejection> = emptyList(),
     /** Pulled events quarantined plus pulled documents rejected. */
     val quarantined: Int = 0,
@@ -245,5 +300,11 @@ data class PullCounts(
     val events: EventApplyReport = EventApplyReport(),
 )
 
-/** One outbox item the server refused for good: its `seq`, push id and the server's code (no free text). */
-data class PushRejection(val seq: Long, val id: PushItemId, val code: String)
+/**
+ * One outbox item the server refused for good: its `seq`, push id and the server's code (no free text).
+ *
+ * @property blocking the item is a ledger event and stays in the outbox, holding back everything queued after it
+ *   until it is accepted (retried every [SyncEngine.EVENT_REJECTION_RETRY_MS]) or a parent deals with it. False for
+ *   documents, which are acked.
+ */
+data class PushRejection(val seq: Long, val id: PushItemId, val code: String, val blocking: Boolean = false)

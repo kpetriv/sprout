@@ -17,6 +17,7 @@ import {
   KID_ID,
   OTHER_HID,
   PARENT_DEVICE,
+  payloadFor,
   PENDING_DEVICE,
   REVOKED_DEVICE,
   seed,
@@ -84,6 +85,141 @@ describe('documents: envelope checks', () => {
   it('bounds the payload key count', async () => {
     const payload = Object.fromEntries(Array.from({ length: 65 }, (_, i) => [`k${i}`, i]));
     await assertFails(put(asParent(env), 'chores', document('chores', { payload })));
+  });
+
+  it('requires serverReceivedAt, stamped with the server time', async () => {
+    const parent = asParent(env);
+    await assertFails(put(parent, 'rewards', document('rewards', { serverReceivedAt: undefined })));
+    await assertFails(put(parent, 'rewards', document('rewards', { serverReceivedAt: new Date(0) })));
+    await assertSucceeds(put(parent, 'rewards', document('rewards')));
+  });
+});
+
+describe('documents: payload shape and size (T18)', () => {
+  it('refuses an unknown payload key in a chore submission', async () => {
+    await assertFails(put(asKid(env), 'choreSubmissions', submission({}, { extra: 'x' })));
+    await assertFails(put(asParent(env), 'choreSubmissions', submission({ authorUid: 'parent-uid',
+      authorDeviceId: PARENT_DEVICE }, { reward: 100 })));
+  });
+
+  it('refuses an oversized note or rejection reason and accepts 500 characters', async () => {
+    await assertFails(put(asKid(env), 'choreSubmissions', submission({}, { note: 'x'.repeat(501) })));
+    await assertSucceeds(put(asKid(env), 'choreSubmissions', submission({}, { note: 'x'.repeat(500) })));
+    await assertFails(
+      put(asParent(env), 'choreSubmissions', document('choreSubmissions', {
+        docId: 'sub-r', lamport: 9,
+        payload: { ...payloadFor('choreSubmissions', 'sub-r'), status: 'REJECTED', rejectionReason: 'x'.repeat(501) },
+      })),
+    );
+  });
+
+  it('bounds titles to 80 characters, descriptions to 500 and a first name to 40', async () => {
+    const parent = asParent(env);
+    const over = (coll: string, field: string, n: number) =>
+      put(parent, coll, document(coll, { payload: { ...payloadFor(coll, 'doc-1'), [field]: 'x'.repeat(n) } }));
+    await assertFails(over('rewards', 'title', 81));
+    await assertFails(over('chores', 'title', 81));
+    await assertFails(over('savingsGoals', 'title', 81));
+    await assertFails(over('chores', 'description', 501));
+    await assertFails(over('kids', 'firstName', 41));
+    await assertSucceeds(over('rewards', 'title', 80));
+  });
+
+  it('refuses unknown keys and wrong kinds in every docType, and an unknown submission status', async () => {
+    const parent = asParent(env);
+    for (const coll of Object.keys(COLLECTIONS)) {
+      await assertFails(put(parent, coll, document(coll, { payload: { ...payloadFor(coll, 'doc-1'), bogus: 1 } })));
+    }
+    await assertFails(put(parent, 'rewards', document('rewards', { payload: { ...payloadFor('rewards', 'doc-1'), cost: '250' } })));
+    await assertFails(put(parent, 'rewards', document('rewards', { payload: { ...payloadFor('rewards', 'doc-1'), forKids: Array(65).fill('k') } })));
+    await assertFails(
+      put(parent, 'choreSubmissions', document('choreSubmissions', {
+        payload: { ...payloadFor('choreSubmissions', 'doc-1'), status: 'PAID' },
+      })),
+    );
+  });
+});
+
+describe('documents: conflict semantics match core/sync ConflictResolver', () => {
+  it('a live copy never overwrites a tombstone, whatever its lamport', async () => {
+    const parent = asParent(env);
+    await assertSucceeds(put(parent, 'rewards', document('rewards', { lamport: 5, deleted: true })));
+    await assertFails(put(parent, 'rewards', document('rewards', { lamport: 6 })));
+    await assertFails(put(parent, 'rewards', document('rewards', { lamport: 600 })));
+    // Tombstone over tombstone is last-writer-wins.
+    await assertFails(put(parent, 'rewards', document('rewards', { lamport: 4, deleted: true })));
+    await assertSucceeds(put(parent, 'rewards', document('rewards', { lamport: 7, deleted: true })));
+  });
+
+  it('a parent tombstones a live document with a lower lamport', async () => {
+    const parent = asParent(env);
+    await assertSucceeds(put(parent, 'chores', document('chores', { lamport: 40 })));
+    await assertSucceeds(put(parent, 'chores', document('chores', { lamport: 3, deleted: true })));
+  });
+
+  it('a kid cannot tombstone their own submission, even with a higher lamport', async () => {
+    await assertSucceeds(put(asKid(env), 'choreSubmissions', submission({ lamport: 1 })));
+    await assertFails(put(asKid(env), 'choreSubmissions', submission({ lamport: 2, deleted: true })));
+  });
+
+  it('a parent approves a SUBMITTED submission with a lower lamport', async () => {
+    await assertSucceeds(put(asKid(env), 'choreSubmissions', submission({ lamport: 10 })));
+    await assertSucceeds(
+      put(asParent(env), 'choreSubmissions', document('choreSubmissions', {
+        docId: 'sub-1', lamport: 2,
+        payload: { ...payloadFor('choreSubmissions', 'sub-1'), status: 'APPROVED', decidedAt: '2026-11-03T19:00:00Z',
+          decidedBy: 'parent-uid' },
+      })),
+    );
+  });
+
+  it('SUBMITTED never replaces APPROVED, even with a higher lamport; equal ranks fall back to LWW', async () => {
+    const decided = (status: string, lamport: number) =>
+      document('choreSubmissions', {
+        docId: 'sub-1', lamport,
+        payload: { ...payloadFor('choreSubmissions', 'sub-1'), status, decidedAt: status === 'SUBMITTED' ? null : '2026-11-03T19:00:00Z' },
+      });
+    const parent = asParent(env);
+    await assertSucceeds(put(parent, 'choreSubmissions', decided('APPROVED', 5)));
+    await assertFails(put(parent, 'choreSubmissions', decided('SUBMITTED', 50)));
+    await assertFails(put(parent, 'choreSubmissions', decided('REJECTED', 50)));
+    await assertFails(put(asKid(env), 'choreSubmissions', submission({ lamport: 60 })));
+    await assertFails(put(parent, 'choreSubmissions', decided('APPROVED', 4)));
+    await assertSucceeds(put(parent, 'choreSubmissions', decided('APPROVED', 6)));
+  });
+
+  it('stays within the rules evaluation budget for the largest kid update', async () => {
+    const full = {
+      note: 'n'.repeat(500),
+      photoRef: { fileName: 'f'.repeat(128), sha256: 'a'.repeat(64) },
+      choreId: 'c'.repeat(128),
+      dueOn: '2026-11-03',
+    };
+    await assertSucceeds(put(asKid(env), 'choreSubmissions', submission({ lamport: 1 }, full)));
+    await assertSucceeds(put(asKid(env), 'choreSubmissions', submission({ lamport: 2 }, full)));
+    await assertSucceeds(
+      put(asParent(env), 'choreSubmissions', document('choreSubmissions', {
+        docId: 'sub-1', lamport: 1,
+        payload: { ...payloadFor('choreSubmissions', 'sub-1'), ...full, status: 'REJECTED', decidedAt: '2026-11-03T19:00:00Z',
+          decidedBy: 'p'.repeat(128), rejectionReason: 'r'.repeat(500) },
+      })),
+    );
+  });
+
+  it('a kid cannot change the identity (choreId, dueOn) of their stored submission', async () => {
+    await assertSucceeds(put(asKid(env), 'choreSubmissions', submission({ lamport: 1 })));
+    await assertFails(put(asKid(env), 'choreSubmissions', submission({ lamport: 2 }, { choreId: 'chore-2' })));
+    await assertFails(put(asKid(env), 'choreSubmissions', submission({ lamport: 2 }, { dueOn: '2026-11-04' })));
+    await assertSucceeds(put(asKid(env), 'choreSubmissions', submission({ lamport: 2 }, { note: 'again' })));
+  });
+
+  it('a kid cannot write over a tombstoned submission', async () => {
+    await assertSucceeds(
+      put(asParent(env), 'choreSubmissions', document('choreSubmissions', {
+        docId: 'sub-1', lamport: 1, deleted: true, payload: payloadFor('choreSubmissions', 'sub-1'),
+      })),
+    );
+    await assertFails(put(asKid(env), 'choreSubmissions', submission({ lamport: 50 })));
   });
 });
 

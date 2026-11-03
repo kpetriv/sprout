@@ -22,17 +22,20 @@ data class StoredDocument(
 }
 
 /**
- * Decides whether a verified remote copy of a document replaces the local one (M3 §3).
+ * Decides whether a verified remote copy of a document replaces the local one (M3 §3, D-M3-13).
  *
  * The decision is "apply iff the remote copy is strictly greater than the local one" under one total order on the
  * copies of a document, compared field by field:
  * 1. **Tombstones first.** A tombstone beats every live copy, whatever the lamports: once deleted, a document is
- *    only ever replaced by another tombstone, so a late or concurrent update can never resurrect it. (Deletion is
- *    final and ids are never reused.)
- * 2. **Submission precedence.** For two live `chore_submission` copies, [SubmissionStatusPrecedence.merge] on the
- *    decoded payloads decides before lamports: an approval is never undone by a stale or later `SUBMITTED` copy.
- *    Copies that precedence cannot tell apart (equal, or equal on every field it compares) fall through.
+ *    only ever replaced by another tombstone with a greater `(lamport, authorDeviceId)`, so a late or concurrent
+ *    update can never resurrect it. (Deletion is final and ids are never reused.)
+ * 2. **Submission status rank.** For two live `chore_submission` copies, the higher
+ *    [SubmissionStatusPrecedence.rank] wins (`APPROVED` > `REJECTED` > `SUBMITTED`), before lamports: a decision is
+ *    never undone by a stale or later `SUBMITTED` copy.
  * 3. **Last writer wins** on `(lamport, authorDeviceId.value)`.
+ *
+ * The backend's document update rule (`firestore/firestore.rules`, mirrored by the `FakeBackend` test fixture) is the
+ * same relation, so a write the rules refuse as stale is exactly one this resolver ignores.
  *
  * Because every step is a total preorder and the last one is a total order on distinct writes, the resulting state
  * is the maximum of the copies a replica has seen: **commutative** (arrival order does not matter), **associative**
@@ -51,36 +54,29 @@ object ConflictResolver {
             local.deleted != remote.deleted -> remote.deleted
 
             !local.deleted && remote.docType == DocTypes.CHORE_SUBMISSION ->
-                submissionPrecedence(local, remote) ?: lastWriterWins(local, remote)
+                submissionRank(local, remote) ?: lastWriterWins(local, remote)
 
             else -> lastWriterWins(local, remote)
         }
         return if (greater) Decision.Apply else Decision.Ignore
     }
 
-    /** True if remote wins, false if local wins, null if precedence cannot tell them apart. */
-    private fun submissionPrecedence(local: StoredDocument, remote: DocumentEnvelope): Boolean? {
+    /** True if remote wins, false if local wins, null if both have the same status (fall back to LWW). */
+    private fun submissionRank(local: StoredDocument, remote: DocumentEnvelope): Boolean? {
         val remoteCopy = decodeSubmission(remote.payload)
         val localCopy = decodeSubmission(local.payload)
         return when {
             remoteCopy == null -> false
+
             localCopy == null -> true
+
             !sameIdentity(localCopy, remoteCopy) -> false
-            localCopy == remoteCopy -> null
-            else -> precedence(localCopy, remoteCopy)
-        }
-    }
 
-    private fun precedence(localCopy: ChoreSubmission, remoteCopy: ChoreSubmission): Boolean? {
-        val mergedLocalFirst = SubmissionStatusPrecedence.merge(localCopy, remoteCopy)
-        val mergedRemoteFirst = SubmissionStatusPrecedence.merge(remoteCopy, localCopy)
-        return when {
-            mergedLocalFirst == remoteCopy && mergedRemoteFirst == remoteCopy -> true
-
-            mergedLocalFirst == localCopy && mergedRemoteFirst == localCopy -> false
-
-            // Equal on every field the precedence order compares, but different: no winner by precedence.
-            else -> null
+            else -> {
+                val remoteRank = SubmissionStatusPrecedence.rank(remoteCopy.status)
+                val localRank = SubmissionStatusPrecedence.rank(localCopy.status)
+                if (remoteRank == localRank) null else remoteRank > localRank
+            }
         }
     }
 

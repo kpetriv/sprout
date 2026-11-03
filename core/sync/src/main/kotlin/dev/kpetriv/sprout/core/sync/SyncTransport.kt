@@ -101,13 +101,13 @@ sealed interface SyncError {
     data object HouseholdGone : SyncError
 }
 
-/** The fixed code of an error, as stored in the outbox's `lastError` and the audit log. */
+/** The fixed kebab-case code of an error, as stored in the outbox's `lastError` and the audit log. */
 val SyncError.code: String
     get() = when (this) {
         is SyncError.Transient -> "transient"
         is SyncError.Permanent -> code
         SyncError.Unauthenticated -> "unauthenticated"
-        SyncError.HouseholdGone -> "household_gone"
+        SyncError.HouseholdGone -> "household-gone"
     }
 
 /** How a [SyncTransport] reports a failed call. The message is the error's code, never user data. */

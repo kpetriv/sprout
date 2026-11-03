@@ -48,36 +48,35 @@ function parentKey(overrides: Record<string, unknown> = {}): Record<string, unkn
 const putKey = (db: Firestore, data: Record<string, unknown>, fp = FINGERPRINT) =>
   setDoc(doc(db, `households/${HID}/parentKeys/${fp}`), data);
 
-describe('parentKeys', () => {
-  it('a parent registers a key for its ACTIVE device', async () => {
-    await assertSucceeds(putKey(asParent(env), parentKey()));
-    await assertSucceeds(getDoc(doc(asKid(env), `households/${HID}/parentKeys/${FINGERPRINT}`)));
+describe('parentKeys (written by registerParentKey only)', () => {
+  beforeEach(async () => {
+    await env.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(
+        doc(ctx.firestore() as unknown as Firestore, `households/${HID}/parentKeys/${FINGERPRINT}`),
+        parentKey({ attestation: 'TEE' }),
+      );
+    });
+  });
+
+  it('a parent cannot create a key, even a well-formed one for its own ACTIVE device', async () => {
+    await assertFails(putKey(asParent(env), parentKey(), '8'.repeat(64)));
   });
 
   it('a kid cannot create a parent key', async () => {
-    await assertFails(putKey(asKid(env), parentKey({ uid: KID_UID, deviceId: KID_DEVICE })));
+    await assertFails(putKey(asKid(env), parentKey({ uid: KID_UID, deviceId: KID_DEVICE }), '8'.repeat(64)));
   });
 
-  it('a parent cannot register a key for a PENDING, REVOKED or foreign device, or another uid', async () => {
-    const parent = asParent(env);
-    await assertFails(putKey(parent, parentKey({ deviceId: PENDING_DEVICE })));
-    await assertFails(putKey(parent, parentKey({ deviceId: REVOKED_DEVICE })));
-    await assertFails(putKey(parent, parentKey({ deviceId: KID_DEVICE })));
-    await assertFails(putKey(parent, parentKey({ uid: KID_UID })));
-  });
-
-  it('rejects revokedAtLamport from a client, a malformed fingerprint and a client-chosen registeredAt', async () => {
-    const parent = asParent(env);
-    await assertFails(putKey(parent, parentKey({ revokedAtLamport: 1 })));
-    await assertFails(putKey(parent, parentKey(), 'not-a-fingerprint'));
-    await assertFails(putKey(parent, parentKey({ registeredAt: new Date(0) })));
+  it('members read keys; other households do not', async () => {
+    await assertSucceeds(getDoc(doc(asKid(env), `households/${HID}/parentKeys/${FINGERPRINT}`)));
+    await assertSucceeds(getDocs(collection(asParent(env), `households/${HID}/parentKeys`)));
+    await assertFails(getDoc(doc(asOtherParent(env), `households/${HID}/parentKeys/${FINGERPRINT}`)));
   });
 
   it('a parent cannot update or delete a key', async () => {
-    await assertSucceeds(putKey(asParent(env), parentKey()));
     const ref = doc(asParent(env), `households/${HID}/parentKeys/${FINGERPRINT}`);
     await assertFails(updateDoc(ref, { revokedAtLamport: 99 }));
     await assertFails(updateDoc(ref, { validFromLamport: 0 }));
+    await assertFails(putKey(asParent(env), parentKey({ deviceId: PENDING_DEVICE })));
     await assertFails(deleteDoc(ref));
   });
 });
@@ -113,7 +112,8 @@ describe('devices and members', () => {
 });
 
 describe('top-level collections are closed', () => {
-  for (const path of ['linkCodes/abc', `challenges/${PARENT_UID}`, 'deletionRecords/r1', 'rateLimits/b1']) {
+  for (const path of ['linkCodes/abc', `challenges/${PARENT_UID}`, 'deletionRecords/r1', 'rateLimits/b1',
+    `userHouseholds/${PARENT_UID}`]) {
     it(`${path} is unreadable and unwritable, even by members`, async () => {
       await assertFails(getDoc(doc(asParent(env), path)));
       await assertFails(getDoc(doc(asKid(env), path)));

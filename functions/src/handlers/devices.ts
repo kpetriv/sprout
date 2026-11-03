@@ -2,11 +2,14 @@ import { FieldValue } from 'firebase-admin/firestore';
 import { HttpsError, type CallableRequest } from 'firebase-functions/v2/https';
 import {
   approvalPayload,
+  callablePayload,
   decodeBase64,
   displayFingerprint,
   parseDeviceKey,
   verifyEcdsaSha256,
 } from '../crypto.js';
+import { proofOf, verifyDeviceProof } from '../deviceProof.js';
+import { lamportOf, maxLamport, nextLamport } from '../lamport.js';
 import { auth, db } from '../firebase.js';
 import { dataOf, parent, requireDeviceId, signedIn } from '../guards.js';
 import { log } from '../log.js';
@@ -86,11 +89,18 @@ export async function approveDevice(request: CallableRequest): Promise<{ deviceI
 }
 
 /**
- * revokeDevice({ deviceId, callerDeviceId }) → { deviceId, revokedAtLamport }: marks a device REVOKED (T7).
- * `revokedAtLamport` is one above the highest lamport of the device's stored events (1 when it has none): receivers
- * keep its earlier events and quarantine anything at or above it. Every parent key registered from the device gets
- * the same `revokedAtLamport`. A revoked kid device's anonymous user is disabled and its membership removed. A parent
- * cannot revoke the device making the request (`callerDeviceId`, which must be one of the caller's active devices).
+ * revokeDevice({ deviceId, callerDeviceId, signature }) → { deviceId, revokedAtLamport }: marks a device REVOKED (T7).
+ *
+ * The request is signed by `callerDeviceId`, an ACTIVE parent device of the caller other than the target, over
+ * `"sprout/revoke-device/v1" || 0x00 || hid || 0x00 || {"deviceId":"…"}` (crypto.ts `callablePayload`).
+ * `revokedAtLamport` is one above the highest lamport of everything the device wrote (its events and its documents in
+ * every collection; 1 when it wrote nothing), read in the transaction: receivers keep its earlier writes and
+ * quarantine anything at or above it. Every parent key registered from the device gets the same `revokedAtLamport`.
+ * - A KID device: its anonymous user is disabled, its refresh tokens revoked and its membership removed.
+ * - A PARENT device: the owner's refresh tokens are revoked and `members/{uid}.tokensValidAfter` is set to the
+ *   revocation time (epoch seconds), so the rules and the callables refuse every session signed in before it (the
+ *   caller's own included: it signs in again). `sessionsRevokedAt` on the device marks that step done, so a retry
+ *   after a partial failure completes it without signing the parent out again.
  */
 export async function revokeDevice(
   request: CallableRequest,
@@ -98,48 +108,69 @@ export async function revokeDevice(
   const caller = await parent(request, 'revokeDevice');
   const data = dataOf(request);
   const deviceId = requireDeviceId(data.deviceId, 'deviceId');
-  const callerDeviceId = requireDeviceId(data.callerDeviceId, 'callerDeviceId');
-  if (deviceId === callerDeviceId) {
+  const proof = proofOf(data);
+  if (deviceId === proof.deviceId) {
     throw new HttpsError('failed-precondition', 'A device cannot revoke itself');
   }
   const household = db.doc(`households/${caller.hid}`);
   const devices = household.collection('devices');
+  const payload = callablePayload('revokeDevice', caller.hid, { deviceId });
 
   const outcome = await db.runTransaction(async (tx) => {
-    const [own, target] = await Promise.all([tx.get(devices.doc(callerDeviceId)), tx.get(devices.doc(deviceId))]);
-    if (!own.exists || own.get('uid') !== caller.uid || own.get('status') !== 'ACTIVE') {
-      throw new HttpsError('permission-denied', 'callerDeviceId is not an active device of the caller');
-    }
+    const [own, target] = await Promise.all([tx.get(devices.doc(proof.deviceId)), tx.get(devices.doc(deviceId))]);
+    verifyDeviceProof(own, caller, payload, proof.signature);
     if (!target.exists) throw new HttpsError('not-found', 'No such device');
-    if (target.get('status') === 'REVOKED') {
-      return { revokedAtLamport: target.get('revokedAtLamport') as number, kidUid: undefined, already: true };
-    }
-    const latest = await tx.get(
-      household.collection('events').where('authorDeviceId', '==', deviceId).orderBy('lamport', 'desc').limit(1),
-    );
-    const maxLamport = latest.empty ? 0 : Number(latest.docs[0].get('lamport') ?? 0);
-    const revokedAtLamport = maxLamport + 1;
-    const keys = await tx.get(household.collection('parentKeys').where('deviceId', '==', deviceId));
     const uid = target.get('uid') as string;
+    const role = target.get('role') as string;
+    if (target.get('status') === 'REVOKED') {
+      return {
+        revokedAtLamport: lamportOf(target.get('revokedAtLamport')),
+        uid,
+        role,
+        kidUid: undefined,
+        sessionsPending: role === 'PARENT' && target.get('sessionsRevokedAt') === undefined,
+        already: true,
+      };
+    }
+    const revokedAtLamport = nextLamport(await maxLamport(tx, household, deviceId));
+    const keys = await tx.get(household.collection('parentKeys').where('deviceId', '==', deviceId));
     const member = await tx.get(household.collection('members').doc(uid));
 
     tx.update(target.ref, { status: 'REVOKED', revokedAt: FieldValue.serverTimestamp(), revokedAtLamport });
     keys.docs.forEach((k) => tx.update(k.ref, { revokedAtLamport }));
     const kidUid = member.exists && member.get('role') === 'KID' ? uid : undefined;
     if (kidUid !== undefined) tx.delete(member.ref);
-    return { revokedAtLamport, kidUid, already: false };
+    return { revokedAtLamport, uid, role, kidUid, sessionsPending: role === 'PARENT', already: false };
   });
 
   if (outcome.kidUid !== undefined) {
     await auth.updateUser(outcome.kidUid, { disabled: true });
     await auth.revokeRefreshTokens(outcome.kidUid);
   }
+  if (outcome.sessionsPending) {
+    await revokeParentSessions(caller.hid, outcome.uid, deviceId);
+  }
   log.info('device.revoked', {
     hid: caller.hid,
     deviceId,
     revokedAtLamport: outcome.revokedAtLamport,
     kidUserDisabled: outcome.kidUid !== undefined,
+    parentSessionsRevoked: outcome.sessionsPending,
     alreadyRevoked: outcome.already,
   });
   return { deviceId, revokedAtLamport: outcome.revokedAtLamport };
+}
+
+/**
+ * Revokes [uid]'s refresh tokens and mirrors the cut-off into `members/{uid}.tokensValidAfter` (epoch seconds, the
+ * Auth backend's own `tokensValidAfterTime`), which the rules and parent() compare with the ID token's `auth_time`.
+ */
+async function revokeParentSessions(hid: string, uid: string, deviceId: string): Promise<void> {
+  await auth.revokeRefreshTokens(uid);
+  const user = await auth.getUser(uid);
+  const fromAuth = user.tokensValidAfterTime ? Date.parse(user.tokensValidAfterTime) : NaN;
+  const tokensValidAfter = Math.floor((Number.isFinite(fromAuth) ? fromAuth : Date.now()) / 1000);
+  const member = db.doc(`households/${hid}/members/${uid}`);
+  if ((await member.get()).exists) await member.update({ tokensValidAfter });
+  await db.doc(`households/${hid}/devices/${deviceId}`).update({ sessionsRevokedAt: FieldValue.serverTimestamp() });
 }

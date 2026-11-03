@@ -5,8 +5,10 @@ import {
   asKid,
   asOtherParent,
   asParent,
+  asParentSignedInAt,
   asStranger,
   clean,
+  document,
   event,
   HASH,
   HID,
@@ -52,7 +54,7 @@ describe('events: create', () => {
     await assertSucceeds(put(asKid(env), kidEvent()));
   });
 
-  it('accepts a conflicting copy stored under eventId__hash and a server-stamped event', async () => {
+  it('a parent stores a conflicting copy under eventId__hash; a server-stamped event is accepted', async () => {
     await assertSucceeds(put(asParent(env), event(), `evt-1__${HASH}`));
     await assertSucceeds(put(asParent(env), event({ eventId: 'evt-2', serverReceivedAt: serverTimestamp() })));
   });
@@ -113,9 +115,76 @@ describe('events: create', () => {
 
   it('enforces size bounds on free text and lists', async () => {
     const parent = asParent(env);
-    await assertFails(put(parent, event({ reason: 'x'.repeat(401) })));
+    await assertFails(put(parent, event({ reason: 'x'.repeat(501) })));
+    await assertFails(put(parent, event({ note: 'x'.repeat(501) })));
     await assertFails(put(parent, event({ type: 'overdraft_compensated', causedBy: Array(65).fill('e') })));
     await assertSucceeds(put(parent, event({ type: 'overdraft_compensated', causedBy: ['e1'], note: 'ok' })));
+  });
+
+  it('bounds causedBy to 16 ids of at most 128 characters', async () => {
+    const parent = asParent(env);
+    const comp = (eventId: string, causedBy: unknown) =>
+      put(parent, event({ eventId, type: 'overdraft_compensated', reason: undefined, causedBy }));
+    await assertSucceeds(comp('c-16', Array.from({ length: 16 }, (_, i) => `e${i}`.padEnd(128, 'x'))));
+    await assertFails(comp('c-17', Array.from({ length: 17 }, (_, i) => `e${i}`)));
+    await assertFails(comp('c-long', ['e1', 'x'.repeat(129)]));
+    await assertFails(comp('c-last-long', [...Array.from({ length: 15 }, (_, i) => `e${i}`), 'x'.repeat(129)]));
+    await assertFails(comp('c-empty', ['e1', '']));
+    await assertFails(comp('c-int', ['e1', 7]));
+  });
+
+  it('stays within the rules evaluation budget with every optional field set', async () => {
+    const everything = {
+      parentSignature: 'MEUCIQ-parent', currency: 'EUR', amount: 1, choreId: 'c'.repeat(128), dueOn: '2026-11-03',
+      scheduleId: 's'.repeat(128), periodKey: '2026-W45', gameId: 'g'.repeat(128), score: 9, playedOn: '2026-11-03',
+      rewardId: 'r'.repeat(128), minutesGranted: 30, reason: 'x'.repeat(500), toAccountId: 'a'.repeat(256),
+      principal: 100, annualRateBasisPoints: 200, days: 30, sessionId: 's'.repeat(128), minutesUsed: 5, minutes: 5,
+      grantedBy: 'g'.repeat(128), note: 'n'.repeat(500),
+      causedBy: Array.from({ length: 16 }, (_, i) => `${i}`.padEnd(128, '-')),
+    };
+    await assertSucceeds(put(asKid(env), kidEvent({ ...everything, eventId: 'evt-kid-max' })));
+    await assertSucceeds(put(asParent(env), event({ ...everything, eventId: 'evt-max' }), `evt-max__${HASH}`));
+  });
+
+  it('requires serverReceivedAt stamped with the server time', async () => {
+    await assertFails(put(asParent(env), event({ serverReceivedAt: undefined })));
+    await assertFails(put(asParent(env), event({ serverReceivedAt: new Date(0) })));
+  });
+
+  it('a kid cannot store a conflicting copy under eventId__hash', async () => {
+    await assertFails(put(asKid(env), kidEvent(), `evt-kid-1__${HASH}`));
+    await assertSucceeds(put(asKid(env), kidEvent()));
+  });
+});
+
+describe('device revocation freshness (tokensValidAfter)', () => {
+  const REVOKED_AT = 1_800_000_000;
+
+  beforeEach(async () => {
+    await env.withSecurityRulesDisabled(async (ctx) => {
+      await updateDoc(doc(ctx.firestore() as unknown as Firestore, `households/${HID}/members/${PARENT_UID}`), {
+        tokensValidAfter: REVOKED_AT,
+      });
+    });
+  });
+
+  it('a session signed in before the revocation can no longer write events or documents', async () => {
+    const stale = asParentSignedInAt(env, REVOKED_AT - 1);
+    await assertFails(put(stale, event()));
+    await assertFails(setDoc(doc(stale, `households/${HID}/rewards/doc-1`), clean(document('rewards'))));
+    // Reads are membership-based and unaffected.
+    await assertSucceeds(getDoc(doc(stale, `households/${HID}/kids/kid-a`)));
+  });
+
+  it('a session signed in at or after the revocation writes as before', async () => {
+    await assertSucceeds(put(asParentSignedInAt(env, REVOKED_AT), event()));
+    await assertSucceeds(
+      setDoc(doc(asParentSignedInAt(env, REVOKED_AT + 60), `households/${HID}/rewards/doc-1`), clean(document('rewards'))),
+    );
+  });
+
+  it('members without tokensValidAfter are unaffected', async () => {
+    await assertSucceeds(put(asKid(env), kidEvent()));
   });
 });
 

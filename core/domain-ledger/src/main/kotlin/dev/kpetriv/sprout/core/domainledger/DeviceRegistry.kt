@@ -61,7 +61,9 @@ enum class AttestationLevel { NONE, SOFTWARE, TEE, STRONGBOX }
 
 /**
  * One parent authorisation key (ADR-0004 §1). A parent signature on an event with lamport `l` is valid against this
- * key when `validFromLamport <= l` and (`revokedAtLamport == null || l < revokedAtLamport`).
+ * key when `validFromLamport <= l` and (`revokedAtLamport == null || l < revokedAtLamport`), the event was authored by
+ * [deviceId] (the key lives in that device's Keystore, so it is per device), and the key is internally consistent
+ * ([matchesPublicKey]).
  */
 class RegisteredParentKey(
     /** Lower-case hex SHA-256 of [publicKey]. */
@@ -69,12 +71,19 @@ class RegisteredParentKey(
     /** X.509 SPKI DER. */
     val publicKey: ByteArray,
     val uid: UserId,
+    /** The parent device whose Keystore holds this key; only events that device authored can be signed with it. */
     val deviceId: DeviceId,
     val validFromLamport: Long,
     val revokedAtLamport: Long?,
 ) {
     fun coversLamport(lamport: Long): Boolean =
         validFromLamport <= lamport && (revokedAtLamport == null || lamport < revokedAtLamport)
+
+    /**
+     * True when [fingerprint] is the lower-case hex SHA-256 of [publicKey]. A row whose fingerprint (its document id
+     * on the backend) does not match its key is malformed or tampered with, and verifiers ignore it.
+     */
+    fun matchesPublicKey(hasher: Hasher = JvmSha256Hasher): Boolean = hasher.sha256(publicKey).toHex() == fingerprint
 }
 
 /**

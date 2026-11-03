@@ -77,6 +77,7 @@ export async function seed(env: RulesTestEnvironment): Promise<void> {
     await setDoc(doc(db, `challenges/${PARENT_UID}`), { hash: 'x' });
     await setDoc(doc(db, 'deletionRecords/r1'), { hidHash: 'x' });
     await setDoc(doc(db, 'rateLimits/b1'), { hits: [] });
+    await setDoc(doc(db, `userHouseholds/${PARENT_UID}`), { hid: HID });
   });
 }
 
@@ -84,6 +85,9 @@ export async function seed(env: RulesTestEnvironment): Promise<void> {
 const fs = (ctx: RulesTestContext): Firestore => ctx.firestore() as unknown as Firestore;
 
 export const asParent = (env: RulesTestEnvironment): Firestore => fs(env.authenticatedContext(PARENT_UID));
+/** The parent with an ID token whose auth_time (sign-in time, epoch seconds) is [authTime]. */
+export const asParentSignedInAt = (env: RulesTestEnvironment, authTime: number): Firestore =>
+  fs(env.authenticatedContext(PARENT_UID, { auth_time: authTime }));
 export const asKid = (env: RulesTestEnvironment): Firestore => fs(env.authenticatedContext(KID_UID));
 export const asKid2 = (env: RulesTestEnvironment): Firestore => fs(env.authenticatedContext(KID2_UID));
 export const asOtherParent = (env: RulesTestEnvironment): Firestore => fs(env.authenticatedContext(OTHER_PARENT_UID));
@@ -111,6 +115,7 @@ export function event(overrides: Record<string, unknown> = {}): Record<string, u
     currency: 'EUR',
     amount: 250,
     reason: 'Birthday',
+    serverReceivedAt: serverTimestamp(),
     ...overrides,
   };
 }
@@ -141,6 +146,39 @@ export const COLLECTIONS: Record<string, string> = {
   interestPolicy: 'interest_policy',
 };
 
+/** A well-formed payload of each docType, as the Kotlin models serialise it (defaults written, nulls kept). */
+export function payloadFor(coll: string, docId: string): Record<string, unknown> {
+  switch (coll) {
+    case 'kids':
+      return { id: docId, householdId: HID, firstName: 'Matilda', avatarId: 'fox', birthYearMonth: '2017-04',
+        uiTier: 'SPROUT', archived: false };
+    case 'accounts':
+      return { id: docId, kidId: KID_ID, currency: 'EUR', kind: 'MAIN' };
+    case 'householdPolicy':
+      return { fiatCurrency: 'EUR', requireParentSignature: true };
+    case 'chores':
+      return { id: docId, householdId: HID, kidId: KID_ID, title: 'Feed the cat', description: null,
+        reward: { money: 100, minutes: null }, schedule: { type: 'daily', daysOfWeek: ['MONDAY', 'THURSDAY'] },
+        createdAt: '2026-11-03T10:00:00Z', state: 'ACTIVE' };
+    case 'choreSubmissions':
+      return { id: docId, choreId: 'chore-1', dueOn: '2026-11-03', kidId: KID_ID,
+        submittedAt: '2026-11-03T18:00:00Z', note: null, photoRef: null, status: 'SUBMITTED', decidedAt: null,
+        decidedBy: null, rejectionReason: null };
+    case 'rewards':
+      return { id: docId, householdId: HID, title: 'Ice cream', kind: 'ITEM', cost: 250, currency: 'EUR',
+        minutesGranted: null, active: true, forKids: [KID_ID] };
+    case 'allowanceSchedules':
+      return { id: docId, kidId: KID_ID, accountId: `${KID_ID}.EUR.MAIN`, amount: 500, currency: 'EUR',
+        cadence: { type: 'weekly', dayOfWeek: 'SATURDAY' }, startsOn: '2026-11-01', active: true };
+    case 'savingsGoals':
+      return { id: docId, kidId: KID_ID, title: 'Bike', target: 10_000, createdOn: '2026-11-01', achievedOn: null };
+    case 'interestPolicy':
+      return { householdId: HID, annualRateBasisPoints: 200, accrualDay: 1 };
+    default:
+      throw new Error(`no payload for ${coll}`);
+  }
+}
+
 /** A DocumentEnvelope for [coll] authored by the parent device. */
 export function document(coll: string, overrides: Record<string, unknown> = {}): Record<string, unknown> {
   const docId = (overrides.docId as string | undefined) ?? 'doc-1';
@@ -153,8 +191,9 @@ export function document(coll: string, overrides: Record<string, unknown> = {}):
     authorDeviceId: PARENT_DEVICE,
     lamport: 5,
     deleted: false,
-    payload: { id: docId, title: 'Something' },
+    payload: payloadFor(coll, docId),
     signature: 'MEUCIQ-signature',
+    serverReceivedAt: serverTimestamp(),
     ...overrides,
   };
 }
@@ -166,7 +205,7 @@ export function submission(overrides: Record<string, unknown> = {}, payload: Rec
     docId,
     authorUid: KID_UID,
     authorDeviceId: KID_DEVICE,
-    payload: { id: docId, kidId: KID_ID, choreId: 'chore-1', status: 'SUBMITTED', ...payload },
+    payload: { ...payloadFor('choreSubmissions', docId), ...payload },
     ...overrides,
   });
 }

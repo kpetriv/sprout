@@ -1,7 +1,13 @@
 import { generateKeyPairSync, sign, type KeyObject } from 'node:crypto';
 import type { CallableFunction, CallableRequest } from 'firebase-functions/v2/https';
 import { expect } from 'vitest';
-import { approvalPayload, sha256Hex } from '../src/crypto.js';
+import {
+  approvalPayload,
+  callablePayload,
+  registerParentKeyPayload,
+  sha256Hex,
+  type SignedCallable,
+} from '../src/crypto.js';
 import { auth, db } from '../src/firebase.js';
 import * as fns from '../src/index.js';
 
@@ -25,13 +31,20 @@ export interface Who {
   uid: string;
   anonymous?: boolean;
   claims?: Record<string, unknown>;
-  ip?: string;
+  /** rawRequest.ip; null for a request without one. */
+  ip?: string | null;
+  /** Extra raw request headers (e.g. x-forwarded-for). */
+  headers?: Record<string, string>;
+  /** ID token auth_time (epoch seconds); defaults to now. */
+  authTime?: number;
   app?: boolean;
 }
 
+export const nowSeconds = (): number => Math.floor(Date.now() / 1000);
+
 /** A CallableRequest as firebase-functions builds it after verifying the ID and App Check tokens. */
 export function req(who: Who | null, data: unknown = {}): CallableRequest {
-  const ip = who?.ip ?? '203.0.113.7';
+  const ip = who?.ip === null ? undefined : (who?.ip ?? '203.0.113.7');
   return {
     data,
     auth: who
@@ -41,13 +54,14 @@ export function req(who: Who | null, data: unknown = {}): CallableRequest {
             uid: who.uid,
             sub: who.uid,
             firebase: { sign_in_provider: who.anonymous ? 'anonymous' : 'google.com', identities: {} },
+            auth_time: who.authTime ?? nowSeconds(),
             ...(who.claims ?? {}),
           } as never,
           rawToken: 'raw',
         }
       : undefined,
     app: who?.app === false ? undefined : { appId: '1:123:android:abc', token: {} as never },
-    rawRequest: { ip, headers: {} } as never,
+    rawRequest: { ...(ip === undefined ? {} : { ip }), headers: who?.headers ?? {} } as never,
     acceptsStreaming: false,
   } as CallableRequest;
 }
@@ -77,6 +91,36 @@ export function newDevice(): TestDevice {
 
 export function approvalSignature(approver: TestDevice, deviceId: string): string {
   return sign('sha256', approvalPayload(deviceId), { key: approver.privateKey, dsaEncoding: 'der' }).toString('base64');
+}
+
+/** `{ callerDeviceId, signature }` of [device] for a call to [callable] in [hid] with the signed [args]. */
+export function signed(
+  device: TestDevice,
+  callable: SignedCallable,
+  hid: string,
+  args: Record<string, unknown> = {},
+): { callerDeviceId: string; signature: string } {
+  const payload = callablePayload(callable, hid, args);
+  return {
+    callerDeviceId: device.deviceId,
+    signature: sign('sha256', payload, { key: device.privateKey, dsaEncoding: 'der' }).toString('base64'),
+  };
+}
+
+/** [args] plus the household device's proof for [callable]. */
+export function withProof(
+  h: Household,
+  callable: SignedCallable,
+  args: Record<string, unknown> = {},
+  device: TestDevice = h.device,
+): Record<string, unknown> {
+  return { ...args, ...signed(device, callable, h.hid, args) };
+}
+
+/** The registering device's signature over a parent key's SPKI. */
+export function parentKeySignature(device: TestDevice, hid: string, publicKey: Buffer): string {
+  return sign('sha256', registerParentKeyPayload(hid, publicKey), { key: device.privateKey, dsaEncoding: 'der' })
+    .toString('base64');
 }
 
 export async function newUser(): Promise<string> {
@@ -124,7 +168,7 @@ export interface LinkedKid {
 /** Creates a link code for a new kid and redeems it from a new anonymous user. */
 export async function linkKid(h: Household, kidId = 'kid-a'): Promise<LinkedKid> {
   await addKid(h.hid, kidId);
-  const { code } = await call(fns.createLinkCode, req(h.parent, { kidId }));
+  const { code } = await call(fns.createLinkCode, req(h.parent, withProof(h, 'createLinkCode', { kidId })));
   const uid = await newUser();
   const device = newDevice();
   await call(fns.redeemLinkCode, req({ uid, anonymous: true }, { code, devicePublicKey: device.publicKey }));

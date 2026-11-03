@@ -1,7 +1,8 @@
 import { DocumentSnapshot, FieldValue, Timestamp } from 'firebase-admin/firestore';
 import { HttpsError, type CallableRequest } from 'firebase-functions/v2/https';
-import { DOCUMENT_COLLECTIONS, MAX_EXPORT_BYTES } from '../config.js';
+import { DOCUMENT_COLLECTIONS, MAX_EXPORT_BYTES, RECENT_SIGN_IN_MS } from '../config.js';
 import { parseDeviceKey, sha256Hex } from '../crypto.js';
+import { requireDeviceProof } from '../deviceProof.js';
 import { auth, db } from '../firebase.js';
 import { dataOf, parent, signedIn } from '../guards.js';
 import { log } from '../log.js';
@@ -12,7 +13,8 @@ const CURRENCY = /^[A-Z]{3}$/;
 
 /**
  * createHousehold({ fiatCurrency, devicePublicKey, attestationChain? }) → { hid, deviceId }. The caller becomes the
- * household's first parent and the calling device its first ACTIVE device.
+ * household's first parent and the calling device its first ACTIVE device. The batch also creates
+ * `userHouseholds/{uid}`, so two concurrent calls from one uid cannot both create a household (D-M3-20).
  */
 export async function createHousehold(request: CallableRequest): Promise<{ hid: string; deviceId: string }> {
   const caller = await signedIn(request, 'createHousehold');
@@ -33,6 +35,7 @@ export async function createHousehold(request: CallableRequest): Promise<{ hid: 
   const hid = household.id;
   const batch = db.batch();
   batch.create(household, { createdBy: caller.uid, createdAt: FieldValue.serverTimestamp(), fiatCurrency });
+  batch.create(db.doc(`userHouseholds/${caller.uid}`), { hid });
   batch.create(household.collection('members').doc(caller.uid), {
     role: 'PARENT',
     addedAt: FieldValue.serverTimestamp(),
@@ -41,7 +44,13 @@ export async function createHousehold(request: CallableRequest): Promise<{ hid: 
     household.collection('devices').doc(key.deviceId),
     deviceDocument(caller.uid, 'PARENT', key, attestation, 'ACTIVE'),
   );
-  await batch.commit();
+  try {
+    await batch.commit();
+  } catch (e) {
+    // gRPC ALREADY_EXISTS: userHouseholds/{uid} was created by a concurrent call (or the uid is linked elsewhere).
+    if ((e as { code?: unknown }).code === 6) throw new HttpsError('already-exists', 'Already a member of a household');
+    throw e;
+  }
   await auth.setCustomUserClaims(caller.uid, { hid, role: 'PARENT' });
   log.info('household.created', { hid, deviceId: key.deviceId, attestation });
   return { hid, deviceId: key.deviceId };
@@ -72,11 +81,14 @@ export interface ExportBundle {
 }
 
 /**
- * exportHousehold() → the household's data as one JSON bundle (right of access and portability, PRIVACY.md;
- * D-M3-7). Refused with `resource-exhausted` above 9 MB, below the 10 MB callable response limit.
+ * exportHousehold({ callerDeviceId, signature }) → the household's data as one JSON bundle (right of access and
+ * portability, PRIVACY.md; D-M3-7). Signed by an ACTIVE parent device over
+ * `"sprout/export-household/v1" || 0x00 || hid || 0x00 || {}`. Refused with `resource-exhausted` above 9 MB, below
+ * the 10 MB callable response limit.
  */
 export async function exportHousehold(request: CallableRequest): Promise<ExportBundle> {
   const caller = await parent(request, 'exportHousehold');
+  await requireDeviceProof(caller, dataOf(request), 'exportHousehold', {});
   const ref = db.doc(`households/${caller.hid}`);
   const names = Object.keys(DOCUMENT_COLLECTIONS);
   const [household, members, devices, parentKeys, events, ...documents] = await Promise.all([
@@ -111,10 +123,15 @@ export async function exportHousehold(request: CallableRequest): Promise<ExportB
 }
 
 /**
- * deleteHousehold({ confirmation: hid }) → { deleted: true }. Deletes `households/{hid}` recursively, the household's
- * outstanding link codes and its members' registration challenges, and every member's Auth user (kids and parents,
- * the caller included), then records the deletion as `deletionRecords/{autoId}` with a hash of the id and counts only
- * (right to erasure, PRIVACY.md).
+ * deleteHousehold({ confirmation: hid, callerDeviceId, signature }) → { deleted: true }. Signed by an ACTIVE parent
+ * device over `"sprout/delete-household/v1" || 0x00 || hid || 0x00 || {"confirmation":"<hid>"}`, from a session signed
+ * in within the last 5 minutes (ID token `auth_time`; otherwise `failed-precondition`, sign in again).
+ *
+ * Deletes the `members` rows first (the rules key every client permission off them, so clients lose access before
+ * anything else goes), then `households/{hid}` recursively, the household's outstanding link codes, and for every uid
+ * that was a member or owns a registered device (a revoked kid's member row is already gone): its registration
+ * challenge, its `userHouseholds` row and its Auth user (kids and parents, the caller included). Finally records the
+ * deletion as `deletionRecords/{autoId}` with a hash of the id and counts only (right to erasure, PRIVACY.md).
  */
 export async function deleteHousehold(request: CallableRequest): Promise<{ deleted: true }> {
   const caller = await parent(request, 'deleteHousehold');
@@ -122,30 +139,45 @@ export async function deleteHousehold(request: CallableRequest): Promise<{ delet
   if (data.confirmation !== caller.hid) {
     throw new HttpsError('invalid-argument', 'Confirmation does not match the household');
   }
+  await requireDeviceProof(caller, data, 'deleteHousehold', { confirmation: caller.hid });
+  if (Date.now() - caller.authTime * 1000 > RECENT_SIGN_IN_MS) {
+    throw new HttpsError('failed-precondition', 'Sign in again to delete the household');
+  }
   const hid = caller.hid;
   const ref = db.doc(`households/${hid}`);
-  const members = await ref.collection('members').get();
+  const [members, deviceRows] = await Promise.all([ref.collection('members').get(), ref.collection('devices').get()]);
   const count = async (name: string) => (await ref.collection(name).count().get()).data().count;
-  const [devices, events, parentKeys, ...documents] = await Promise.all([
-    count('devices'),
+  const [events, parentKeys, ...documents] = await Promise.all([
     count('events'),
     count('parentKeys'),
     ...Object.keys(DOCUMENT_COLLECTIONS).map(count),
   ]);
   const counts = {
     members: members.size,
-    devices,
+    devices: deviceRows.size,
     events,
     documents: parentKeys + documents.reduce((a, b) => a + b, 0),
   };
-  const uids = members.docs.map((m) => m.id);
+  const uids = [
+    ...new Set([
+      ...members.docs.map((m) => m.id),
+      ...deviceRows.docs.map((d) => d.get('uid') as unknown).filter((u): u is string => typeof u === 'string'),
+    ]),
+  ];
+
+  const memberWriter = db.bulkWriter();
+  members.docs.forEach((m) => void memberWriter.delete(m.ref));
+  await memberWriter.close();
 
   await db.recursiveDelete(ref);
 
   const writer = db.bulkWriter();
   const codes = await db.collection('linkCodes').where('hid', '==', hid).get();
   codes.docs.forEach((d) => void writer.delete(d.ref));
-  uids.forEach((uid) => void writer.delete(db.doc(`challenges/${uid}`)));
+  uids.forEach((uid) => {
+    void writer.delete(db.doc(`challenges/${uid}`));
+    void writer.delete(db.doc(`userHouseholds/${uid}`));
+  });
   await writer.close();
 
   const result = uids.length > 0 ? await auth.deleteUsers(uids) : { successCount: 0, failureCount: 0 };

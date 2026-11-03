@@ -535,6 +535,14 @@ class RoomLedgerRepository internal constructor(
                     storeRefused(item.json, verified, now, tally)
                 }
 
+                // Compile fix only (core/domain-ledger M3 review): keeps the previous behaviour, a quarantine. The
+                // data-layer follow-up keeps held events in ledger_inbox and retries them instead.
+                is VerifiedRemote.Held -> {
+                    dropHeld(item)
+                    val refused = with(verified) { VerifiedRemote.Quarantined(eventId, hash, authorDeviceId, reason) }
+                    storeRefused(item.json, refused, now, tally)
+                }
+
                 is VerifiedRemote.Ok -> accept(verified, item, ok, tally)
             }
         }

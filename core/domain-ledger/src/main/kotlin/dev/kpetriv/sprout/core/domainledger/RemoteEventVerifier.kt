@@ -14,22 +14,30 @@ import kotlinx.serialization.json.longOrNull
  * 1. the tree decodes ([LedgerJson.decodeOrNull]) and its `schemaVersion` is one this client reads (1 or
  *    [Envelope.CURRENT_SCHEMA_VERSION]);
  * 2. the stored `hash` equals the hash recomputed over the stored tree ([HashChain.hashOf]);
- * 3. the author device is registered ([DeviceRegistry.device]);
- * 4. the device accepts the event's lamport ([RegisteredDevice.acceptsLamport]: pending devices never do, revoked
- *    devices only below their revocation lamport);
+ * 3. the author device is registered ([DeviceRegistry.device]). An unknown device is **not** a quarantine: the
+ *    registry mirror may simply lag behind the events, so the event is [VerifiedRemote.Held] and retried;
+ * 4. the device accepts the event's lamport ([RegisteredDevice.acceptsLamport]): a PENDING device's event is
+ *    [VerifiedRemote.Held] (the device may still be approved), a REVOKED device's event at or above its revocation
+ *    lamport is quarantined ([QuarantineReason.DEVICE_NOT_ACTIVE]);
  * 5. `authorUid` is the device owner's uid;
  * 6. the role is allowed: a PARENT-role envelope needs a PARENT device; a KID-role envelope is accepted from any
  *    device that passed 4 (kid mode on a parent device, D-M3-12);
- * 7. the device signature verifies over [signedPayloadOf] with the registered device key;
- * 8. a parent-only event ([isParentOnly]) carries a parent signature that verifies over [parentSignedPayloadOf]
- *    against at least one registered parent key that [covers][RegisteredParentKey.coversLamport] its lamport.
- *    There is **no from-lamport exemption** and [LedgerPolicy.requireParentSignature] is not consulted: pulled
- *    parent-only events always need it (ADR-0004, M2-review amendment);
- * 9. the lamport is at most `localMaxLamport + policy.maxLamportJump` (ADR-0004 §4).
+ * 7. a KID device writes only for its own kid: `envelope.kidId == device.kidId` ([QuarantineReason.KID_MISMATCH]);
+ * 8. the device signature verifies over [signedPayloadOf] with the registered device key;
+ * 9. a parent-only event ([isParentOnly]) carries a parent signature that verifies over [parentSignedPayloadOf]
+ *    against a registered parent key of **the authoring device** ([RegisteredParentKey.deviceId]) that
+ *    [covers][RegisteredParentKey.coversLamport] its lamport and whose fingerprint
+ *    [matches][RegisteredParentKey.matchesPublicKey] its public key. There is **no from-lamport exemption**
+ *    ([LedgerPolicy.parentSignatureRequiredFromLamport] is not consulted; ADR-0004, M2-review amendment). The one
+ *    exemption is the household's synced [LedgerPolicy.requireParentSignature] (D-M2-1): when it is false (a
+ *    household without a strong biometric), a PARENT-role event from a PARENT device needs no parent signature; the
+ *    role checks 6 and 7 still apply;
+ * 10. the lamport is at most `localMaxLamport + policy.maxLamportJump` (ADR-0004 §4).
  *
- * The chain link (`prevHash` against the stored head) is not checked here; [IngestOrdering] does that per batch.
+ * The chain link (`prevHash` against the stored head, forks) is not checked here; [IngestOrdering] does that per batch.
  *
- * @param policy only [LedgerPolicy.maxLamportJump] is used.
+ * @param policy the household's synced policy: [LedgerPolicy.maxLamportJump] and
+ *   [LedgerPolicy.requireParentSignature] are used.
  */
 class RemoteEventVerifier(
     private val registry: DeviceRegistry,
@@ -47,35 +55,40 @@ class RemoteEventVerifier(
      */
     suspend fun verify(json: JsonObject, localMaxLamport: Long): VerifiedRemote {
         val event = LedgerJson.decodeOrNull(json) ?: return quarantine(json, undecodableReason(json))
-        val reason = firstFailure(event, json, localMaxLamport)
-        return if (reason == null) {
-            VerifiedRemote.Ok(event, json)
-        } else {
-            with(event.envelope) { VerifiedRemote.Quarantined(eventId, hash, authorDeviceId, reason) }
-        }
+        return verifyDecoded(event, json, localMaxLamport)
     }
 
-    /** Checks 1 (schema version) to 9 for a decoded [event]; null when all pass. */
-    private suspend fun firstFailure(event: LedgerEvent, json: JsonObject, localMaxLamport: Long): QuarantineReason? {
+    /** Checks 1 (schema version) to 10 for a decoded [event]. */
+    private suspend fun verifyDecoded(event: LedgerEvent, json: JsonObject, localMaxLamport: Long): VerifiedRemote {
         val envelope = event.envelope
-        return when {
+        val intrinsic = when {
             envelope.schemaVersion !in SUPPORTED_SCHEMA_VERSIONS -> QuarantineReason.SCHEMA_UNSUPPORTED
-
             !hashMatches(json, envelope) -> QuarantineReason.HASH_MISMATCH
-
-            else -> when (val device = registry.device(envelope.authorDeviceId)) {
-                null -> QuarantineReason.UNKNOWN_DEVICE
-
-                else -> deviceFailure(device, event, json)
-                    ?: parentSignatureFailure(event, json)
-                    ?: QuarantineReason.LAMPORT_TOO_FAR_AHEAD.takeUnless {
-                        withinLamportBound(envelope.lamport, localMaxLamport)
-                    }
-            }
+            else -> null
+        }
+        val device = if (intrinsic == null) registry.device(envelope.authorDeviceId) else null
+        val reason = intrinsic ?: device?.takeUnless { it.status == DeviceStatus.Pending }?.let {
+            registeredDeviceFailure(it, event, json, localMaxLamport)
+        }
+        return when {
+            reason != null -> quarantined(envelope, reason)
+            device == null -> held(envelope, QuarantineReason.UNKNOWN_DEVICE)
+            device.status == DeviceStatus.Pending -> held(envelope, QuarantineReason.DEVICE_NOT_ACTIVE)
+            else -> VerifiedRemote.Ok(event, json)
         }
     }
 
-    /** Checks 4 to 7: what the registered [device] allows and whether it signed [json]. */
+    /** Checks 4 to 10 against a registered, not pending [device]; null when all pass. */
+    private suspend fun registeredDeviceFailure(
+        device: RegisteredDevice,
+        event: LedgerEvent,
+        json: JsonObject,
+        localMaxLamport: Long,
+    ): QuarantineReason? = deviceFailure(device, event, json)
+        ?: parentSignatureFailure(device, event, json)
+        ?: QuarantineReason.LAMPORT_TOO_FAR_AHEAD.takeUnless { withinLamportBound(event.lamport, localMaxLamport) }
+
+    /** Checks 4 (revoked only; pending is held before this) to 8: what the registered [device] allows and signed. */
     private fun deviceFailure(device: RegisteredDevice, event: LedgerEvent, json: JsonObject): QuarantineReason? {
         val envelope = event.envelope
         return when {
@@ -85,6 +98,8 @@ class RemoteEventVerifier(
 
             envelope.authorRole == Role.PARENT && device.role != Role.PARENT -> QuarantineReason.ROLE_NOT_ALLOWED
 
+            device.role == Role.KID && envelope.kidId != device.kidId -> QuarantineReason.KID_MISMATCH
+
             !verifies(device.publicKey, json, event.signatureBytes(), ::signedPayloadOf) ->
                 QuarantineReason.BAD_DEVICE_SIGNATURE
 
@@ -92,16 +107,28 @@ class RemoteEventVerifier(
         }
     }
 
-    /** Check 8: a parent-only event needs a parent signature by a registered key valid at its lamport. */
-    private suspend fun parentSignatureFailure(event: LedgerEvent, json: JsonObject): QuarantineReason? {
+    /**
+     * Check 9: a parent-only event needs a parent signature by a registered key of its authoring device, valid at
+     * its lamport, unless the household does not require parent signatures and a PARENT device wrote it as PARENT.
+     */
+    private suspend fun parentSignatureFailure(
+        device: RegisteredDevice,
+        event: LedgerEvent,
+        json: JsonObject,
+    ): QuarantineReason? {
+        val envelope = event.envelope
+        val exempt = !policy.requireParentSignature && device.role == Role.PARENT && envelope.authorRole == Role.PARENT
         val signature = event.parentSignatureBytes()?.takeIf { it.isNotEmpty() }
         return when {
-            !event.isParentOnly() -> null
+            !event.isParentOnly() || exempt -> null
 
             signature == null -> QuarantineReason.PARENT_SIGNATURE_MISSING
 
             registry.parentKeys().any { key ->
-                key.coversLamport(event.lamport) && verifies(key.publicKey, json, signature, ::parentSignedPayloadOf)
+                key.deviceId == envelope.authorDeviceId &&
+                    key.coversLamport(envelope.lamport) &&
+                    key.matchesPublicKey() &&
+                    verifies(key.publicKey, json, signature, ::parentSignedPayloadOf)
             } -> null
 
             else -> QuarantineReason.PARENT_SIGNATURE_INVALID
@@ -149,6 +176,12 @@ class RemoteEventVerifier(
             }
         }
 
+        fun quarantined(envelope: Envelope, reason: QuarantineReason) =
+            VerifiedRemote.Quarantined(envelope.eventId, envelope.hash, envelope.authorDeviceId, reason)
+
+        fun held(envelope: Envelope, reason: QuarantineReason) =
+            VerifiedRemote.Held(envelope.eventId, envelope.hash, envelope.authorDeviceId, reason)
+
         /** Best-effort ids of an undecodable document, for the audit view. */
         fun quarantine(json: JsonObject, reason: QuarantineReason) = VerifiedRemote.Quarantined(
             eventId = envelopeString(json, "eventId")?.let { runCatching { EventId(it) }.getOrNull() },
@@ -170,6 +203,19 @@ sealed interface VerifiedRemote {
     data class Ok(val event: LedgerEvent, val json: JsonObject) : VerifiedRemote
 
     /**
+     * Cannot be decided yet, for a reason that may go away: the author device is not in the registry mirror yet
+     * ([QuarantineReason.UNKNOWN_DEVICE]) or is still PENDING approval ([QuarantineReason.DEVICE_NOT_ACTIVE]). The
+     * data layer keeps the tree in its inbox (`ledger_inbox`) and verifies it again on a later ingest, after the
+     * registry has caught up. Never projected while held.
+     */
+    data class Held(
+        val eventId: EventId,
+        val hash: String,
+        val authorDeviceId: DeviceId,
+        val reason: QuarantineReason,
+    ) : VerifiedRemote
+
+    /**
      * Refused for [reason]; kept for the parent audit view and never projected. The ids are null only when the
      * document was too broken to read them.
      */
@@ -181,7 +227,10 @@ sealed interface VerifiedRemote {
     ) : VerifiedRemote
 }
 
-/** Why [RemoteEventVerifier] refused a pulled event, in the order the checks run. */
+/**
+ * Why a pulled event was refused ([RemoteEventVerifier], in the order its checks run, then [IngestOrdering]) or held
+ * ([VerifiedRemote.Held]).
+ */
 enum class QuarantineReason {
     /** Not a ledger event this client can decode (malformed, unknown type, or an old shape that no longer decodes). */
     UNDECODABLE,
@@ -192,10 +241,13 @@ enum class QuarantineReason {
     /** The stored hash is not the hash of the stored content. */
     HASH_MISMATCH,
 
-    /** The author device is not in the household registry. */
+    /** The author device is not in the household registry (yet): a [VerifiedRemote.Held] reason, never a quarantine. */
     UNKNOWN_DEVICE,
 
-    /** The device is pending, or was revoked at or before this event's lamport. */
+    /**
+     * The device is PENDING (a [VerifiedRemote.Held] reason) or was REVOKED at or before this event's lamport (a
+     * quarantine).
+     */
     DEVICE_NOT_ACTIVE,
 
     /** `authorUid` is not the uid the device is registered to. */
@@ -204,15 +256,27 @@ enum class QuarantineReason {
     /** A PARENT-role envelope from a device that is not registered as a parent device. */
     ROLE_NOT_ALLOWED,
 
+    /** A KID device wrote an event for a kid other than the one it is registered to. */
+    KID_MISMATCH,
+
     /** The device signature is missing or does not verify against the registered device key. */
     BAD_DEVICE_SIGNATURE,
 
     /** A parent-only event without a parent signature. */
     PARENT_SIGNATURE_MISSING,
 
-    /** A parent signature that no registered parent key valid at the event's lamport verifies. */
+    /**
+     * A parent signature that no registered parent key of the authoring device, valid at the event's lamport and
+     * matching its fingerprint, verifies.
+     */
     PARENT_SIGNATURE_INVALID,
 
     /** The lamport is further above the local maximum than [LedgerPolicy.maxLamportJump]. */
     LAMPORT_TOO_FAR_AHEAD,
+
+    /**
+     * The author equivocated: two or more different events of its chain link to the same `prevHash`. Every branch
+     * is refused ([IngestPlan.forked]), including one this device had already applied.
+     */
+    FORKED_CHAIN,
 }

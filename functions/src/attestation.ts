@@ -7,8 +7,15 @@ import {
   NonStandardAuthorizationList,
   NonStandardKeyDescription,
   SecurityLevel,
+  VerifiedBootState,
 } from '@peculiar/asn1-android';
-import { cryptoProvider, X509Certificate } from '@peculiar/x509';
+import {
+  BasicConstraintsExtension,
+  cryptoProvider,
+  KeyUsageFlags,
+  KeyUsagesExtension,
+  X509Certificate,
+} from '@peculiar/x509';
 import { log } from './log.js';
 
 cryptoProvider.set(webcrypto as unknown as Parameters<typeof cryptoProvider.set>[0]);
@@ -78,10 +85,25 @@ export const STATUS_LIST_URL = 'https://android.googleapis.com/attestation/statu
 
 export type AttestationLevel = 'STRONGBOX' | 'TEE' | 'SOFTWARE';
 
+export type BootState = 'VERIFIED' | 'SELF_SIGNED' | 'UNVERIFIED' | 'FAILED' | 'UNKNOWN';
+
+/** User-authentication tags of the attested key, from the authorization list of its security level. */
+export interface UserAuthentication {
+  /** NO_AUTH_REQUIRED is set: the key is usable without the user. */
+  readonly noAuthRequired: boolean;
+  /** USER_AUTH_TYPE bit mask (1 = password/PIN, 2 = biometric), undefined when absent. */
+  readonly userAuthType: number | undefined;
+  /** AUTH_TIMEOUT in seconds; undefined when absent (authentication per operation). */
+  readonly authTimeout: number | undefined;
+}
+
 export interface AttestationResult {
   readonly level: AttestationLevel;
   /** Whether the attested leaf key is exactly the submitted SPKI. Callers must refuse the device when false. */
   readonly keyMatches: boolean;
+  /** rootOfTrust.verifiedBootState; recorded (logged) only, never enforced. */
+  readonly verifiedBootState: BootState;
+  readonly userAuthentication: UserAuthentication;
 }
 
 export type AttestationFailure =
@@ -93,7 +115,9 @@ export type AttestationFailure =
   | 'NO_ATTESTATION_EXTENSION'
   | 'MALFORMED_EXTENSION'
   | 'CHALLENGE_MISMATCH'
-  | 'KEY_PROPERTIES';
+  | 'KEY_PROPERTIES'
+  | 'NOT_A_CA'
+  | 'MISPLACED_EXTENSION';
 
 /** A chain that must not be trusted. [reason] is safe to log; nothing from the certificates is. */
 export class AttestationError extends Error {
@@ -142,6 +166,55 @@ function parseChain(chain: readonly string[]): X509Certificate[] {
       throw new AttestationError('MALFORMED_CHAIN');
     }
   });
+}
+
+/**
+ * Every certificate after the leaf must be a CA: basicConstraints with cA = true, and keyCertSign when it carries a
+ * keyUsage extension. Otherwise an attested (non-CA) leaf key could sign a forged "leaf" with any key description.
+ */
+function checkIssuers(certs: readonly X509Certificate[]): void {
+  for (const cert of certs.slice(1)) {
+    let constraints: BasicConstraintsExtension | null;
+    let usage: KeyUsagesExtension | null;
+    try {
+      constraints = cert.getExtension(BasicConstraintsExtension);
+      usage = cert.getExtension(KeyUsagesExtension);
+    } catch {
+      throw new AttestationError('MALFORMED_CHAIN');
+    }
+    if (!constraints?.ca) throw new AttestationError('NOT_A_CA');
+    if (usage && (usage.usages & KeyUsageFlags.keyCertSign) === 0) throw new AttestationError('NOT_A_CA');
+  }
+}
+
+/** The key description extension must be on the leaf only (an intermediate carrying one is not a real chain). */
+function checkExtensionPlacement(certs: readonly X509Certificate[]): void {
+  if (certs.slice(1).some((cert) => cert.getExtension(id_ce_keyDescription) !== null)) {
+    throw new AttestationError('MISPLACED_EXTENSION');
+  }
+}
+
+function bootStateOf(list: NonStandardAuthorizationList): BootState {
+  switch (list.findProperty('rootOfTrust')?.verifiedBootState) {
+    case VerifiedBootState.verified:
+      return 'VERIFIED';
+    case VerifiedBootState.selfSigned:
+      return 'SELF_SIGNED';
+    case VerifiedBootState.unverified:
+      return 'UNVERIFIED';
+    case VerifiedBootState.failed:
+      return 'FAILED';
+    default:
+      return 'UNKNOWN';
+  }
+}
+
+function userAuthenticationOf(list: NonStandardAuthorizationList): UserAuthentication {
+  return {
+    noAuthRequired: list.findProperty('noAuthRequired') !== undefined,
+    userAuthType: list.findProperty('userAuthType'),
+    authTimeout: list.findProperty('authTimeout'),
+  };
 }
 
 function keyDescriptionOf(leaf: X509Certificate): NonStandardKeyDescription {
@@ -206,6 +279,8 @@ function checkKeyProperties(list: NonStandardAuthorizationList): void {
  *
  * 1. every certificate parses and is within its validity period;
  * 2. each certificate is signed by the next one, and the last one by a trust anchor (the embedded Google roots);
+ *    every certificate after the leaf is a CA (basicConstraints cA, keyCertSign when keyUsage is present) and only
+ *    the leaf carries the key description extension;
  * 3. no certificate is on the revocation list (a list that cannot be fetched counts as "unknown, allow", see
  *    [fetchStatusList]);
  * 4. the leaf carries the key description extension (1.3.6.1.4.1.11129.2.1.17) whose attestationChallenge equals
@@ -214,7 +289,9 @@ function checkKeyProperties(list: NonStandardAuthorizationList): void {
  *    origin GENERATED), read from the authorization list of the attested security level (hardware-enforced for TEE
  *    and StrongBox, software-enforced for a software keystore).
  *
- * Returns the security level and whether the leaf's SPKI equals [expectedSpki]; throws [AttestationError] otherwise.
+ * Returns the security level, whether the leaf's SPKI equals [expectedSpki], the user-authentication tags and the
+ * verified boot state (recorded only; a self-signed or unverified boot is not refused); throws [AttestationError]
+ * otherwise.
  */
 export async function verifyAttestation(
   chain: readonly string[],
@@ -230,6 +307,8 @@ export async function verifyAttestation(
   for (let i = 0; i < certs.length - 1; i++) {
     if (!(await signedBy(certs[i], certs[i + 1]))) throw new AttestationError('BAD_SIGNATURE');
   }
+  checkIssuers(certs);
+  checkExtensionPlacement(certs);
   const top = certs[certs.length - 1];
   const roots = options.roots ?? defaultRoots();
   let anchored = false;
@@ -253,10 +332,16 @@ export async function verifyAttestation(
   const challenge = Buffer.from(description.attestationChallenge.buffer);
   if (!challenge.equals(expectedChallenge)) throw new AttestationError('CHALLENGE_MISMATCH');
   const level = levelOf(description.attestationSecurityLevel);
-  checkKeyProperties(level === 'SOFTWARE' ? description.softwareEnforced : description.teeEnforced);
+  const enforced = level === 'SOFTWARE' ? description.softwareEnforced : description.teeEnforced;
+  checkKeyProperties(enforced);
 
   const leafSpki = Buffer.from(certs[0].publicKey.rawData);
-  return { level, keyMatches: leafSpki.equals(expectedSpki) };
+  return {
+    level,
+    keyMatches: leafSpki.equals(expectedSpki),
+    verifiedBootState: bootStateOf(enforced),
+    userAuthentication: userAuthenticationOf(enforced),
+  };
 }
 
 const DAY_MS = 24 * 60 * 60 * 1000;

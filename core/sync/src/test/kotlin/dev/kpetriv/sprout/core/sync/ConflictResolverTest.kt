@@ -63,7 +63,7 @@ class ConflictResolverTest {
     }
 
     @Test
-    fun submissionStatusPrecedenceBeatsLamport() {
+    fun submissionStatusRankBeatsLamport() {
         val approvedPayload = submission(SubmissionStatus.APPROVED).toPayload()
         val approved = a.envelope(DocTypes.CHORE_SUBMISSION, "sub-1", 5, approvedPayload)
         val laterSubmitted = kid.envelope(DocTypes.CHORE_SUBMISSION, "sub-1", 9, submission(note = "again").toPayload())
@@ -86,6 +86,30 @@ class ConflictResolverTest {
         val second = a.envelope(DocTypes.CHORE_SUBMISSION, "sub-1", 4, payload)
         assertEquals(Decision.Apply, resolve(first, second))
         assertEquals(Decision.Ignore, resolve(second, first))
+    }
+
+    @Test
+    fun sameStatusFallsBackToLastWriterWinsWhateverTheOtherFields() {
+        // Two parents decided concurrently: the later write wins, not the earlier decision.
+        val early = a.envelope(
+            DocTypes.CHORE_SUBMISSION,
+            "sub-1",
+            7,
+            submission(SubmissionStatus.APPROVED, decidedAtSeconds = 1, decidedBy = "p1").toPayload(),
+        )
+        val late = b.envelope(
+            DocTypes.CHORE_SUBMISSION,
+            "sub-1",
+            8,
+            submission(SubmissionStatus.APPROVED, decidedAtSeconds = 9, decidedBy = "p2").toPayload(),
+        )
+        assertEquals(Decision.Apply, resolve(early, late))
+        assertEquals(Decision.Ignore, resolve(late, early))
+        // Two kid edits: the later note wins.
+        val note1 = kid.envelope(DocTypes.CHORE_SUBMISSION, "sub-1", 3, submission(note = "zzz").toPayload())
+        val note2 = kid.envelope(DocTypes.CHORE_SUBMISSION, "sub-1", 4, submission(note = "aaa").toPayload())
+        assertEquals(Decision.Apply, resolve(note1, note2))
+        assertEquals(Decision.Ignore, resolve(note2, note1))
     }
 
     @Test

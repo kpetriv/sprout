@@ -1,11 +1,13 @@
 package dev.kpetriv.sprout.core.sync
 
+import dev.kpetriv.sprout.core.domainhousehold.SubmissionStatusPrecedence
 import dev.kpetriv.sprout.core.domainledger.DeviceStatus
 import dev.kpetriv.sprout.core.domainledger.RegisteredDevice
 import dev.kpetriv.sprout.core.domainledger.RegisteredParentKey
 import dev.kpetriv.sprout.core.model.DeviceId
 import dev.kpetriv.sprout.core.model.HouseholdId
 import dev.kpetriv.sprout.core.model.Role
+import dev.kpetriv.sprout.core.model.SubmissionStatus
 import dev.kpetriv.sprout.core.model.UserId
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -16,15 +18,30 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.longOrNull
 
 /**
- * An in-memory "server" shared by any number of [FakeSyncTransport]s, emulating what the Firestore rules and
- * Cloud Functions enforce (M3 §4):
- * - devices and parent keys are written by the test (standing in for the registration functions);
- * - events are create-only, keyed by `(eventId, hash)`: a repeat is accepted, nothing is ever overwritten;
- * - documents keep one copy per `docType/docId`, replaced only when [ConflictResolver] says the incoming copy wins
- *   (LWW on `(lamport, authorDeviceId)`, submission precedence, tombstones final); a losing write is accepted;
- * - every write must come from the device it names (`authorDeviceId` and `authorUid` equal the caller's), from a
- *   registered device that accepts the write's lamport, and a KID device may only write its own `SUBMITTED`
- *   submissions ([DocTypes.kidMayWrite]). Signatures are not checked here, as Firestore rules cannot; receivers do.
+ * An in-memory "server" shared by any number of [FakeSyncTransport]s. It mirrors the **backend rules**
+ * (`firestore/firestore.rules`, M3 §7) plus what `FirebaseSyncTransport` does around them, not the client's
+ * [ConflictResolver]:
+ *
+ * - **Client-side checks** (as the real transport does before writing): a malformed event is refused
+ *   [MALFORMED], a write for another household [WRONG_HOUSEHOLD], an unknown document type [UNKNOWN_DOC_TYPE], an
+ *   unsigned document [UNSIGNED].
+ * - **Author**: `authorUid` must be the caller's uid and `authorDeviceId` an **ACTIVE** device registered to that
+ *   uid. A PENDING or REVOKED device writes nothing: [PERMISSION_DENIED].
+ * - **Events** are create-only under their `eventId`. Re-sending a stored event (same hash) is accepted (the
+ *   transport reads the stored copy). A different copy under a taken id is kept as evidence under `eventId__hash`,
+ *   but only from a PARENT member; a KID member's conflicting copy is refused. A KID member writes only KID-role
+ *   events for its own kid; a PARENT-role event needs a PARENT member.
+ * - **Documents**: a PARENT member writes every type; a KID member only its own kid's `chore_submission` in status
+ *   `SUBMITTED`, under the submission's own id, never a tombstone, never with changed identity (`id`, `choreId`,
+ *   `dueOn`, `kidId`), and never over a stored copy that is decided, tombstoned or another kid's.
+ *   An update must also pass the update rule: a tombstone is never overwritten by a live copy; a tombstone replaces a
+ *   live copy regardless of lamport; between two live submissions the higher status rank wins and equal ranks fall
+ *   back to last-writer-wins; everything else is last-writer-wins on `(lamport, authorDeviceId)`.
+ *   A refused update is then read back, like the real transport does: when the stored copy beats the write under
+ *   [ConflictResolver] the push counts as accepted (nothing is stored), otherwise it is [PERMISSION_DENIED].
+ *
+ * Every rules refusal is [PERMISSION_DENIED], as Firestore reports it. Signatures are not checked here, as rules
+ * cannot; receivers do. [injectEvent] and [injectDocument] bypass every rule (a compromised server or a rules bug).
  *
  * Each collection has its own monotonic sequence; a pull returns what was written after the cursor's position in
  * each collection, at most [pageSize] per collection per page.
@@ -39,10 +56,23 @@ class FakeBackend(val householdId: HouseholdId, private val pageSize: Int = DEFA
 
     private class Stored<T>(val seq: Long, val value: T)
 
+    /** The envelope fields of a pushed event the rules look at. */
+    private class EventFields(
+        val eventId: String,
+        val hash: String,
+        val householdId: String,
+        val authorUid: String,
+        val authorDeviceId: String,
+        val authorRole: String,
+        val kidId: String,
+    )
+
     private val sequences = mutableMapOf<String, Long>()
     private val devices = LinkedHashMap<DeviceId, Stored<RegisteredDevice>>()
     private val parentKeys = LinkedHashMap<String, Stored<RegisteredParentKey>>()
     private val documents = LinkedHashMap<String, Stored<DocumentEnvelope>>()
+
+    /** Keyed by Firestore document id: `eventId`, or `eventId__hash` for a conflicting copy. */
     private val events = LinkedHashMap<String, Stored<JsonObject>>()
     private val partitioned = mutableSetOf<DeviceId>()
     private val signedOut = mutableSetOf<DeviceId>()
@@ -71,20 +101,21 @@ class FakeBackend(val householdId: HouseholdId, private val pageSize: Int = DEFA
         writeFlow.tryEmit(Write(PARENT_KEYS, null))
     }
 
-    /** Revokes [deviceId] from [atLamport]: its writes at or above it are refused, here and by receivers. */
+    /** Sets [deviceId]'s status, as the approve and revoke functions do. */
     @Synchronized
-    fun revoke(deviceId: DeviceId, atLamport: Long) {
+    fun setStatus(deviceId: DeviceId, status: DeviceStatus) {
         val device = requireNotNull(devices[deviceId]) { "unknown device" }.value
-        registerDevice(
-            RegisteredDevice(
-                device.deviceId,
-                device.owner,
-                device.publicKey,
-                DeviceStatus.Revoked(atLamport),
-                device.attestation,
-            ),
-        )
+        registerDevice(RegisteredDevice(device.deviceId, device.owner, device.publicKey, status, device.attestation))
     }
+
+    /** Approves a PENDING [deviceId] (`approveDevice`). */
+    fun approve(deviceId: DeviceId) = setStatus(deviceId, DeviceStatus.Active)
+
+    /**
+     * Revokes [deviceId] (`revokeDevice`): it writes nothing from now on; receivers still accept what it wrote below
+     * [atLamport].
+     */
+    fun revoke(deviceId: DeviceId, atLamport: Long) = setStatus(deviceId, DeviceStatus.Revoked(atLamport))
 
     /** [deviceId]'s transport can no longer reach the server: push and pull throw a transient error. */
     @Synchronized
@@ -120,10 +151,20 @@ class FakeBackend(val householdId: HouseholdId, private val pageSize: Int = DEFA
         storeDocument(envelope, author = null)
     }
 
-    /** Stores [event] bypassing every rule, for receiver-side tests. */
+    /**
+     * Stores [event] bypassing every rule, for receiver-side tests: under its `eventId`, or `eventId__hash` when the
+     * id is taken by another copy.
+     */
     @Synchronized
     fun injectEvent(event: JsonObject) {
-        storeEvent(event, author = null)
+        val fields = eventFieldsOf(event)
+        val eventId = fields?.eventId ?: envelopeString(event, "eventId").orEmpty()
+        val hash = fields?.hash ?: envelopeString(event, "hash").orEmpty()
+        val existing = events[eventId]?.value
+        when {
+            existing == null -> storeEvent(eventId, event, author = null)
+            envelopeString(existing, "hash") != hash -> storeEvent(conflictId(eventId, hash), event, author = null)
+        }
     }
 
     @Synchronized
@@ -132,6 +173,7 @@ class FakeBackend(val householdId: HouseholdId, private val pageSize: Int = DEFA
     @Synchronized
     fun document(docType: String, docId: String): DocumentEnvelope? = documents["$docType/$docId"]?.value
 
+    /** Every stored event, conflicting copies (`eventId__hash`) included, in write order. */
     @Synchronized
     fun events(): List<JsonObject> = events.values.map { it.value }
 
@@ -150,26 +192,15 @@ class FakeBackend(val householdId: HouseholdId, private val pageSize: Int = DEFA
         val rejected = mutableListOf<Pair<PushItemId, SyncError>>()
         for (event in events) {
             val id = PushItemId.ofEvent(event)
-            when (val code = eventRuleViolation(caller, event)) {
-                null -> {
-                    storeEvent(event, caller.deviceId)
-                    accepted += id
-                }
-
+            when (val code = pushEvent(caller, event)) {
+                null -> accepted += id
                 else -> rejected += id to SyncError.Permanent(code)
             }
         }
         for (document in documents) {
             val id = PushItemId.ofDocument(document)
-            when (val code = documentRuleViolation(caller, document)) {
-                null -> {
-                    val stored = this.documents[key(document)]?.value?.let(StoredDocument::of)
-                    if (ConflictResolver.resolve(stored, document) == ConflictResolver.Decision.Apply) {
-                        storeDocument(document, caller.deviceId)
-                    }
-                    accepted += id
-                }
-
+            when (val code = pushDocument(caller, document)) {
+                null -> accepted += id
                 else -> rejected += id to SyncError.Permanent(code)
             }
         }
@@ -199,6 +230,7 @@ class FakeBackend(val householdId: HouseholdId, private val pageSize: Int = DEFA
         )
     }
 
+    /** Who calls: the uid and role claim of the signed-in user, and the device its transport runs on. */
     internal class Caller(val deviceId: DeviceId, val uid: UserId, val role: Role)
 
     private fun checkReachable(caller: DeviceId) {
@@ -209,43 +241,152 @@ class FakeBackend(val householdId: HouseholdId, private val pageSize: Int = DEFA
         }
     }
 
-    private fun eventRuleViolation(caller: Caller, event: JsonObject): String? {
-        val envelope = event["envelope"] as? JsonObject ?: return MALFORMED
-        fun string(name: String) = (envelope[name] as? JsonPrimitive)?.takeIf { it.isString }?.content
-        val lamport = (envelope["lamport"] as? JsonPrimitive)?.takeUnless { it.isString }?.longOrNull
-        val device = devices[caller.deviceId]?.value
+    // ---- events ----
+
+    /** Null when accepted (stored, or already there); otherwise the refusal code. */
+    private fun pushEvent(caller: Caller, event: JsonObject): String? {
+        val fields = eventFieldsOf(event) ?: return MALFORMED
+        if (fields.householdId != householdId.value) return WRONG_HOUSEHOLD
+        val stored = events[fields.eventId]?.value
         return when {
-            string("eventId") == null || string("hash") == null || lamport == null -> MALFORMED
+            stored == null -> if (eventCreateAllowed(caller, fields)) {
+                storeEvent(fields.eventId, event, caller.deviceId)
+                null
+            } else {
+                PERMISSION_DENIED
+            }
 
-            string("householdId") != householdId.value -> WRONG_HOUSEHOLD
+            // Create-only: the write is refused, and the transport finds the same event already stored.
+            envelopeString(stored, "hash") == fields.hash -> null
 
-            string("authorDeviceId") != caller.deviceId.value || string("authorUid") != caller.uid.value ->
-                AUTHOR_MISMATCH
-
-            device == null || !device.acceptsLamport(lamport) -> DEVICE_NOT_ACTIVE
-
-            else -> null
+            else -> pushConflictingCopy(caller, fields, event)
         }
     }
 
-    private fun documentRuleViolation(caller: Caller, document: DocumentEnvelope): String? {
-        val device = devices[caller.deviceId]?.value
+    /** A different copy under a taken eventId: evidence under `eventId__hash`, from a PARENT member only. */
+    private fun pushConflictingCopy(caller: Caller, fields: EventFields, event: JsonObject): String? {
+        val id = conflictId(fields.eventId, fields.hash)
+        val stored = events[id]?.value
         return when {
-            document.householdId != householdId -> WRONG_HOUSEHOLD
-            !DocTypes.isKnown(document.docType) -> UNKNOWN_DOC_TYPE
-            document.signature == null -> UNSIGNED
-            document.authorDeviceId != caller.deviceId || document.authorUid != caller.uid -> AUTHOR_MISMATCH
-            device == null || !device.acceptsLamport(document.lamport) -> DEVICE_NOT_ACTIVE
-            caller.role == Role.PARENT && device.role == Role.PARENT -> null
-            caller.role == Role.KID && DocTypes.kidMayWrite(document, device) -> null
+            stored != null -> if (envelopeString(stored, "hash") == fields.hash) null else PERMISSION_DENIED
+
+            caller.role == Role.PARENT && eventCreateAllowed(caller, fields) -> {
+                storeEvent(id, event, caller.deviceId)
+                null
+            }
+
             else -> PERMISSION_DENIED
         }
     }
 
-    private fun storeEvent(event: JsonObject, author: DeviceId?) {
-        val key = PushItemId.ofEvent(event).value
-        if (key in events) return
-        events[key] = Stored(nextSeq(EVENTS), event)
+    private fun eventCreateAllowed(caller: Caller, fields: EventFields): Boolean {
+        val roleAllowed = fields.authorRole == Role.KID.name ||
+            (fields.authorRole == Role.PARENT.name && caller.role == Role.PARENT)
+        val kidAllowed = caller.role == Role.PARENT ||
+            (fields.authorRole == Role.KID.name && fields.kidId == memberKidIdOf(caller))
+        return fields.authorUid == caller.uid.value &&
+            isActiveDeviceOf(DeviceId(fields.authorDeviceId), caller.uid) &&
+            roleAllowed &&
+            kidAllowed
+    }
+
+    // ---- documents ----
+
+    /** Null when accepted (stored, or beaten by the stored copy); otherwise the refusal code. */
+    private fun pushDocument(caller: Caller, document: DocumentEnvelope): String? {
+        when {
+            !DocTypes.isKnown(document.docType) -> return UNKNOWN_DOC_TYPE
+            document.householdId != householdId -> return WRONG_HOUSEHOLD
+            document.signature == null -> return UNSIGNED
+        }
+        val stored = documents[key(document)]?.value
+        return when {
+            documentWriteAllowed(caller, document, stored) -> {
+                storeDocument(document, caller.deviceId)
+                null
+            }
+
+            // The transport reads the refused document back: a stored copy that wins makes the push a success.
+            stored != null && ConflictResolver.resolve(StoredDocument.of(stored), document) ==
+                ConflictResolver.Decision.Ignore -> null
+
+            else -> PERMISSION_DENIED
+        }
+    }
+
+    private fun documentWriteAllowed(caller: Caller, document: DocumentEnvelope, stored: DocumentEnvelope?): Boolean {
+        val roleMayWrite = when (caller.role) {
+            Role.PARENT -> true
+            Role.KID -> kidMayWrite(caller, document, stored)
+        }
+        return document.authorUid == caller.uid &&
+            isActiveDeviceOf(document.authorDeviceId, caller.uid) &&
+            roleMayWrite &&
+            (stored == null || updateAllowed(stored, document))
+    }
+
+    /**
+     * The kid gate: an undecided submission of the member's own kid under its own id, never a tombstone, and never
+     * over a stored copy that is decided, tombstoned, another kid's or of another identity.
+     */
+    private fun kidMayWrite(caller: Caller, document: DocumentEnvelope, stored: DocumentEnvelope?): Boolean {
+        val kidId = memberKidIdOf(caller) ?: return false
+        val payload = document.payload
+        val ownSubmitted = document.docType == DocTypes.CHORE_SUBMISSION &&
+            !document.deleted &&
+            payload.string("kidId") == kidId &&
+            payload.string("status") == SubmissionStatus.SUBMITTED.name &&
+            payload.string("id") == document.docId
+        val overUndecided = stored == null || (
+            !stored.deleted &&
+                stored.payload.string("kidId") == kidId &&
+                stored.payload.string("status") == SubmissionStatus.SUBMITTED.name &&
+                IDENTITY.all { stored.payload.string(it) == payload.string(it) }
+            )
+        return ownSubmitted && overUndecided
+    }
+
+    /**
+     * The document update rule: (tombstone never overwritten by live) ∧ (tombstone over live regardless of lamport)
+     * ∧ (submissions: higher status rank wins, equal → LWW) ∧ (otherwise LWW on `(lamport, authorDeviceId)`).
+     */
+    private fun updateAllowed(stored: DocumentEnvelope, incoming: DocumentEnvelope): Boolean = when {
+        stored.deleted && !incoming.deleted -> false
+
+        !stored.deleted && incoming.deleted -> true
+
+        !stored.deleted && incoming.docType == DocTypes.CHORE_SUBMISSION -> {
+            val newRank = rankOf(incoming.payload)
+            val oldRank = rankOf(stored.payload)
+            if (newRank != oldRank) newRank > oldRank else newerThan(stored, incoming)
+        }
+
+        else -> newerThan(stored, incoming)
+    }
+
+    private fun newerThan(stored: DocumentEnvelope, incoming: DocumentEnvelope): Boolean =
+        incoming.lamport > stored.lamport ||
+            (incoming.lamport == stored.lamport && incoming.authorDeviceId.value > stored.authorDeviceId.value)
+
+    private fun rankOf(payload: JsonObject): Int =
+        SubmissionStatus.entries.firstOrNull { it.name == payload.string("status") }
+            ?.let(SubmissionStatusPrecedence::rank)
+            ?: UNKNOWN_RANK
+
+    // ---- shared ----
+
+    private fun isActiveDeviceOf(deviceId: DeviceId, uid: UserId): Boolean {
+        val device = devices[deviceId]?.value ?: return false
+        return device.uid == uid && device.status == DeviceStatus.Active
+    }
+
+    /** The member's kid (`members/{uid}.kidId`), mirrored on the devices the functions registered for that uid. */
+    private fun memberKidIdOf(caller: Caller): String? =
+        devices.values.firstOrNull { it.value.uid == caller.uid && it.value.kidId != null }?.value?.kidId?.value
+
+    private fun storeEvent(id: String, event: JsonObject, author: DeviceId?) {
+        if (id in events) return
+        events[id] = Stored(nextSeq(EVENTS), event)
         writeFlow.tryEmit(Write(EVENTS, author))
     }
 
@@ -272,10 +413,33 @@ class FakeBackend(val householdId: HouseholdId, private val pageSize: Int = DEFA
         const val WRONG_HOUSEHOLD: String = "wrong-household"
         const val UNKNOWN_DOC_TYPE: String = "unknown-doc-type"
         const val UNSIGNED: String = "unsigned"
-        const val AUTHOR_MISMATCH: String = "author-mismatch"
-        const val DEVICE_NOT_ACTIVE: String = "device-not-active"
         const val PERMISSION_DENIED: String = "permission-denied"
 
         private const val WRITE_BUFFER = 256
+        private const val UNKNOWN_RANK = -1
+        private val IDENTITY = listOf("id", "choreId", "dueOn", "kidId")
+
+        private fun conflictId(eventId: String, hash: String) = "${eventId}__$hash"
+
+        private fun JsonObject.string(key: String): String? =
+            (this[key] as? JsonPrimitive)?.takeIf { it.isString }?.content
+
+        private fun envelopeString(event: JsonObject, name: String): String? =
+            (event["envelope"] as? JsonObject)?.string(name)
+
+        private fun eventFieldsOf(event: JsonObject): EventFields? {
+            val envelope = event["envelope"] as? JsonObject ?: return null
+            val lamport = (envelope["lamport"] as? JsonPrimitive)?.takeUnless { it.isString }?.longOrNull
+            if (lamport == null || lamport < 0) return null
+            return EventFields(
+                eventId = envelope.string("eventId") ?: return null,
+                hash = envelope.string("hash") ?: return null,
+                householdId = envelope.string("householdId") ?: return null,
+                authorUid = envelope.string("authorUid") ?: return null,
+                authorDeviceId = envelope.string("authorDeviceId") ?: return null,
+                authorRole = envelope.string("authorRole") ?: return null,
+                kidId = envelope.string("kidId") ?: return null,
+            )
+        }
     }
 }

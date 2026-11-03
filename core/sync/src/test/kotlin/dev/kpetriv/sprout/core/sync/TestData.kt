@@ -29,8 +29,8 @@ internal val SUBMITTED_AT: Instant = Instant.fromEpochSeconds(1_800_000_000)
 internal class TestIdentity(
     id: String,
     uid: String,
-    role: Role,
-    kidId: KidId? = null,
+    val role: Role,
+    val kidId: KidId? = null,
     status: DeviceStatus = DeviceStatus.Active,
 ) {
     val key = SoftwareDeviceKey()
@@ -79,6 +79,8 @@ internal class TestIdentity(
                 put("householdId", HOUSEHOLD.value)
                 put("authorDeviceId", deviceId.value)
                 put("authorUid", uid.value)
+                put("authorRole", role.name)
+                put("kidId", (kidId ?: KID_1).value)
             },
         )
     }

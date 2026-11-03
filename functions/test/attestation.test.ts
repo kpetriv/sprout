@@ -1,6 +1,6 @@
 import { randomBytes } from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { SecurityLevel } from '@peculiar/asn1-android';
+import { SecurityLevel, VerifiedBootState } from '@peculiar/asn1-android';
 import {
   AttestationError,
   GOOGLE_ATTESTATION_ROOTS_PEM,
@@ -9,9 +9,20 @@ import {
   type StatusList,
 } from '../src/attestation.js';
 import { setAttestationOptionsForTest } from '../src/registration.js';
-import { fakeChain, newKeyPair, spkiOf } from './attestationFixtures.js';
+import {
+  fakeChain,
+  forgedChain,
+  keyDescriptionExtension,
+  newKeyPair,
+  spkiOf,
+} from './attestationFixtures.js';
 import { call, db, expectCode, fns, newUser, req, resetEmulators } from './helpers.js';
-import { X509Certificate } from '@peculiar/x509';
+import {
+  BasicConstraintsExtension,
+  KeyUsageFlags,
+  KeyUsagesExtension,
+  X509Certificate,
+} from '@peculiar/x509';
 
 const noRevocations = () => Promise.resolve<StatusList | null>({ entries: {} });
 
@@ -29,7 +40,12 @@ describe('verifyAttestation (self-generated chain)', () => {
       roots: [fake.root],
       statusList: noRevocations,
     });
-    expect(result).toEqual({ level: 'TEE', keyMatches: true });
+    expect(result).toEqual({
+      level: 'TEE',
+      keyMatches: true,
+      verifiedBootState: 'VERIFIED',
+      userAuthentication: { noAuthRequired: false, userAuthType: undefined, authTimeout: undefined },
+    });
     expect(readAttestationChallenge(fake.chain).equals(challenge)).toBe(true);
   });
 
@@ -110,6 +126,94 @@ describe('verifyAttestation (self-generated chain)', () => {
       statusList: () => Promise.resolve(null),
     });
     expect(unknown.level).toBe('TEE');
+  });
+
+  it('rejects a forged leaf signed by a real attested (non-CA) leaf: [forged, real leaf, intermediate, root]', async () => {
+    const realKeys = await newKeyPair();
+    const real = await fakeChain({ challenge, leafKeys: realKeys });
+    // The attacker's own key description: any challenge, StrongBox, user authentication it does not have.
+    const forged = await forgedChain(real, realKeys, {
+      challenge,
+      securityLevel: SecurityLevel.strongBox,
+      userAuthType: 2,
+    });
+    await rejectsWith(
+      verifyAttestation(forged.chain, challenge, forged.leafSpki, { roots: [real.root], statusList: noRevocations }),
+      'NOT_A_CA',
+    );
+    // The genuine chain the forgery was built on verifies.
+    expect(
+      (await verifyAttestation(real.chain, challenge, real.leafSpki, { roots: [real.root], statusList: noRevocations }))
+        .keyMatches,
+    ).toBe(true);
+  });
+
+  it('rejects an intermediate that is not a CA or whose keyUsage lacks keyCertSign', async () => {
+    const notCa = await fakeChain({ challenge, intermediateExtensions: [new BasicConstraintsExtension(false)] });
+    await rejectsWith(
+      verifyAttestation(notCa.chain, challenge, notCa.leafSpki, { roots: [notCa.root], statusList: noRevocations }),
+      'NOT_A_CA',
+    );
+    const noConstraints = await fakeChain({ challenge, intermediateExtensions: [] });
+    await rejectsWith(
+      verifyAttestation(noConstraints.chain, challenge, noConstraints.leafSpki, {
+        roots: [noConstraints.root],
+        statusList: noRevocations,
+      }),
+      'NOT_A_CA',
+    );
+    const noCertSign = await fakeChain({
+      challenge,
+      intermediateExtensions: [
+        new BasicConstraintsExtension(true, undefined, true),
+        new KeyUsagesExtension(KeyUsageFlags.digitalSignature, true),
+      ],
+    });
+    await rejectsWith(
+      verifyAttestation(noCertSign.chain, challenge, noCertSign.leafSpki, {
+        roots: [noCertSign.root],
+        statusList: noRevocations,
+      }),
+      'NOT_A_CA',
+    );
+    const certSign = await fakeChain({
+      challenge,
+      intermediateExtensions: [
+        new BasicConstraintsExtension(true, undefined, true),
+        new KeyUsagesExtension(KeyUsageFlags.keyCertSign | KeyUsageFlags.cRLSign, true),
+      ],
+    });
+    expect(
+      (await verifyAttestation(certSign.chain, challenge, certSign.leafSpki, { roots: [certSign.root], statusList: noRevocations }))
+        .level,
+    ).toBe('TEE');
+  });
+
+  it('rejects a key description extension on a certificate other than the leaf', async () => {
+    const misplaced = await fakeChain({
+      challenge,
+      intermediateExtensions: [new BasicConstraintsExtension(true, undefined, true), keyDescriptionExtension({ challenge })],
+    });
+    await rejectsWith(
+      verifyAttestation(misplaced.chain, challenge, misplaced.leafSpki, { roots: [misplaced.root], statusList: noRevocations }),
+      'MISPLACED_EXTENSION',
+    );
+  });
+
+  it('reports the verified boot state without enforcing it, and the user-authentication tags', async () => {
+    const opts = (f: Awaited<ReturnType<typeof fakeChain>>) => ({ roots: [f.root], statusList: noRevocations });
+    const selfSigned = await fakeChain({ challenge, bootState: VerifiedBootState.selfSigned });
+    expect((await verifyAttestation(selfSigned.chain, challenge, selfSigned.leafSpki, opts(selfSigned))).verifiedBootState)
+      .toBe('SELF_SIGNED');
+    const unverified = await fakeChain({ challenge, bootState: VerifiedBootState.unverified });
+    expect((await verifyAttestation(unverified.chain, challenge, unverified.leafSpki, opts(unverified))).verifiedBootState)
+      .toBe('UNVERIFIED');
+    const biometric = await fakeChain({ challenge, userAuthType: 2, authTimeout: 0 });
+    expect((await verifyAttestation(biometric.chain, challenge, biometric.leafSpki, opts(biometric))).userAuthentication)
+      .toEqual({ noAuthRequired: false, userAuthType: 2, authTimeout: 0 });
+    const open = await fakeChain({ challenge, noAuthRequired: true });
+    expect((await verifyAttestation(open.chain, challenge, open.leafSpki, opts(open))).userAuthentication.noAuthRequired)
+      .toBe(true);
   });
 
   it('the production path rejects a chain not rooted at the embedded Google roots', async () => {

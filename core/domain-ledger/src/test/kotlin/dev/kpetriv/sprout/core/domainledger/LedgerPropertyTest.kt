@@ -134,9 +134,9 @@ class LedgerPropertyTest {
         assertTrue(conflicts.any { c -> c.copies.map { it.authorDeviceId }.toSet().size > 1 })
         assertTrue(conflicts.any { c -> c.copies.map { it.authorDeviceId }.toSet().size == 1 })
         assertTrue(conflicts.any { c -> c.copies.map { it.authorRole }.toSet() == setOf(Role.PARENT, Role.KID) })
-        // Both outcomes occur: a parent copy applied over kid copies, and nothing applied.
-        assertTrue(conflicts.any { it.applied != null })
-        assertTrue(conflicts.any { it.applied == null })
+        // A copy is always applied: a parent copy over kid copies, or the first of same-role copies.
+        assertTrue(conflicts.all { it.applied != null })
+        assertTrue(conflicts.any { c -> c.copies.map { it.authorRole }.toSet().size == 1 })
         // Every history rule fires somewhere.
         val violations = histories.flatMap { history ->
             project(history.events).anomalies
@@ -234,11 +234,11 @@ class LedgerPropertyTest {
  * `Long` sums. It trusts the generator for which events are statically invalid, and models only what the
  * generator produces.
  *
- * Conflicting ids: of the distinct copies of one id, the single parent copy is applied when every other copy is a
- * kid's; otherwise no copy is. Periods: the first applied event per claim wins, later ones are invalid. Time
- * credits: one that names a purchase is valid only if that purchase was applied earlier for the same kid and reward,
- * granted exactly its minutes, and was not redeemed yet. With a policy that requires parent signatures, parent-only
- * events without one are invalid as well.
+ * Conflicting ids: of the distinct copies of one id, the parent copy that sorts first by `(lamport, authorDeviceId,
+ * hash)` is applied, or the first copy overall when none is a parent's. Periods: the first applied event per claim
+ * wins, later ones are invalid. Time credits: one that names a purchase is valid only if that purchase was applied
+ * earlier for the same kid and reward, granted exactly its minutes, and was not redeemed yet. With a policy that
+ * requires parent signatures, parent-only events without one are invalid as well.
  */
 internal object ReferenceLedger {
     class Expected(
@@ -344,12 +344,9 @@ internal object ReferenceLedger {
 
     private fun winner(copies: List<LedgerEvent>): LedgerEvent? {
         val parents = copies.filter { it.envelope.authorRole == Role.PARENT }
-        val kids = copies.filter { it.envelope.authorRole == Role.KID }
-        return when {
-            copies.size == 1 -> copies[0]
-            parents.size == 1 && kids.size == copies.size - 1 -> parents[0]
-            else -> null
-        }
+        return parents.ifEmpty { copies }.minWithOrNull(
+            compareBy({ it.envelope.lamport }, { it.envelope.authorDeviceId.value }, { it.envelope.hash }),
+        )
     }
 
     fun deltas(event: LedgerEvent): List<Pair<AccountId, Long>> {

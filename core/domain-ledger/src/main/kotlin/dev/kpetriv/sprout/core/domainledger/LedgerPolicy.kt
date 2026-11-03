@@ -22,9 +22,13 @@ package dev.kpetriv.sprout.core.domainledger
  *   (ADR-0004). Off by default; the data layer turns it on once a parent authentication key exists. When on, an
  *   unsigned parent-only event is refused at validation and excluded when projecting
  *   ([Violation.ParentSignatureMissing]). This check is presence only; the data layer verifies the signature.
+ *   [RemoteEventVerifier] reads the household's **synced** value (D-M2-1): when false, a PARENT-role parent-only
+ *   event from a PARENT device needs no parent signature; when true, every pulled parent-only event needs one that
+ *   verifies, whatever [parentSignatureRequiredFromLamport] says.
  * @property parentSignatureRequiredFromLamport with [requireParentSignature], only parent-only events whose lamport
  *   is at least this value need the signature; null means every one does. The data layer sets it to the lamport at
- *   which the parent key was registered, so parent events written before a key existed stay valid.
+ *   which the parent key was registered, so parent events written before a key existed stay valid. Local validation
+ *   only: pulled events get no from-lamport exemption ([RemoteEventVerifier]).
  */
 data class LedgerPolicy(
     val dailyGameCap: Money = DEFAULT_DAILY_GAME_CAP,

@@ -146,7 +146,7 @@ class RoomRemoteApplier internal constructor(
     }
 
     private suspend fun applyAll(documents: List<DocumentEnvelope>, session: Session): DocumentApplyReport {
-        val verifier = RemoteDocumentVerifier(registry, check, maxLamportJump)
+        val verifier = RemoteDocumentVerifier(registry, check, maxLamportJump, session.householdId)
         val now = clock.now().toEpochMilliseconds()
         var localMax = deviceClock.current()
         var report = DocumentApplyReport()
@@ -157,6 +157,13 @@ class RoomRemoteApplier internal constructor(
                 continue
             }
             report += when (val verified = verifier.verify(envelope, localMax)) {
+                // Compile fix only (core/sync M3 review): keeps the previous behaviour, a rejection. The data-layer
+                // follow-up keeps held documents in document_inbox and retries them instead.
+                is VerifiedDocument.Held -> {
+                    reject(envelope, verified.reason.name, now)
+                    DocumentApplyReport(rejected = mapOf(verified.reason to 1))
+                }
+
                 is VerifiedDocument.Rejected -> {
                     reject(envelope, verified.reason.name, now)
                     if (verified.reason == DocumentRejection.LAMPORT_TOO_FAR_AHEAD) {

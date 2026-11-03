@@ -7,16 +7,27 @@ rules_version = '2';
 //   never trust a role, uid or household claimed inside client data.
 // - Every client write names its author: authorUid must be the caller and authorDeviceId an ACTIVE device registered
 //   to the caller in households/{hid}/devices (also written by Cloud Functions only).
-// - Ledger events are create-only. Documents (one collection per docType) are last-writer-wins on
-//   (lamport, authorDeviceId); deletion is a tombstone document (deleted == true), never a Firestore delete.
-// - Top-level collections (linkCodes, challenges, deletionRecords, rateLimits) and anything not matched below are
-//   closed to clients: there is no rule granting access, so the default deny applies.
+// - A member whose row carries tokensValidAfter (set by revokeDevice when a parent device is revoked) writes only
+//   with an ID token whose auth_time is not older than it: sessions signed in before the revocation are refused.
+// - Ledger events are create-only. Documents (one collection per docType) follow the client ConflictResolver
+//   (core/sync): a tombstone (deleted == true) is never overwritten by a live copy and a parent may tombstone a live
+//   document whatever its lamport; two live chore submissions compare status rank first (APPROVED > REJECTED >
+//   SUBMITTED); everything else is last-writer-wins on (lamport, authorDeviceId). Deletion is a tombstone document,
+//   never a Firestore delete.
+// - parentKeys are written by Cloud Functions only (registerParentKey, revokeDevice).
+// - Top-level collections (linkCodes, challenges, deletionRecords, rateLimits, userHouseholds) and anything not
+//   matched below are closed to clients: there is no rule granting access, so the default deny applies.
 //
 // Size limits: rules cannot measure a document's byte size. Events (target <= 16 KB) are bounded by a closed key
-// set, a length bound on every scalar string and a length bound on the only list (causedBy); list elements cannot be
-// measured. Documents (target payload <= 64 KB) are bounded by a closed top-level key set, string bounds on the
-// envelope fields and at most 64 top-level payload keys; nested payload values cannot be measured. Firestore's own
-// 1 MiB document limit is the hard ceiling in both cases.
+// set, a length bound on every scalar string and on causedBy (at most 16 ids of at most 128 characters). Documents
+// (target payload <= 64 KB) are bounded by a closed top-level key set, string bounds on the envelope fields and a
+// closed payload key set per docType (the Kotlin models' serial names) with a bound on every string and list; the
+// values of nested maps (schedule, reward, cadence, photoRef) are bounded by key count only. Firestore's own 1 MiB
+// document limit is the hard ceiling in both cases.
+//
+// Evaluation budget: a request may evaluate at most 1,000 expressions. The write rules therefore read the caller's
+// member row and the author device once and pass them down (m, d) instead of calling get() helpers repeatedly; a
+// write that runs over the budget is denied, so a new check on a hot path needs a test with a worst-case payload.
 service cloud.firestore {
   match /databases/{database}/documents {
 
@@ -34,17 +45,45 @@ service cloud.firestore {
 
     // Optional field k of map m: absent, null, or a string of at most max characters.
     function optString(m, k, max) {
-      return !(k in m) || m[k] == null || (m[k] is string && m[k].size() <= max);
+      return m.get(k, null) == null || (m[k] is string && m[k].size() <= max);
     }
 
     // Optional field k of map m: absent, null, or an integer.
     function optInt(m, k) {
-      return !(k in m) || m[k] == null || m[k] is int;
+      return m.get(k, null) == null || m[k] is int;
     }
 
-    // A client may stamp serverReceivedAt (FieldValue.serverTimestamp()) for pull cursors; it must be the server time.
+    // Optional field k of map m: absent, null, or a bool.
+    function optBool(m, k) {
+      return m.get(k, null) == null || m[k] is bool;
+    }
+
+    // Optional field k of map m: absent, null, or a map of at most maxKeys keys.
+    function optMap(m, k, maxKeys) {
+      return m.get(k, null) == null || (m[k] is map && m[k].size() <= maxKeys);
+    }
+
+    // Optional field k of map m: absent, null, or a list of at most maxSize elements.
+    function optList(m, k, maxSize) {
+      return m.get(k, null) == null || (m[k] is list && m[k].size() <= maxSize);
+    }
+
+    // 1 to 16 ids, each 1 to 128 characters of the id alphabet [A-Za-z0-9._-] (event ids are UUIDs). Rules have no
+    // loops, so the list is checked through its comma-joined form: the alphabet has no comma, so the regex sees
+    // exactly the elements, and splitting the joined string must give the list back (join turns a number into its
+    // digits, which the equality then rejects).
+    function idList16(l) {
+      return l is list && l.size() <= 16 && joinedIds(l.join(','), l);
+    }
+
+    function joinedIds(s, l) {
+      return s.matches('^[A-Za-z0-9._-]{1,128}(,[A-Za-z0-9._-]{1,128}){0,15}$') && s.split(',') == l;
+    }
+
+    // Every client write stamps serverReceivedAt (FieldValue.serverTimestamp()) for pull cursors: required, and it
+    // must be the server time.
     function serverStamp(m) {
-      return !('serverReceivedAt' in m) || m.serverReceivedAt == request.time;
+      return 'serverReceivedAt' in m && m.serverReceivedAt == request.time;
     }
 
     // docType of each document collection.
@@ -68,6 +107,7 @@ service cloud.firestore {
         return /databases/$(database)/documents/households/$(hid)/members/$(request.auth.uid);
       }
 
+      // The caller's member row. Reading it for a non-member fails the evaluation, which denies the request.
       function member() {
         return get(memberPath());
       }
@@ -76,28 +116,25 @@ service cloud.firestore {
         return signedIn() && exists(memberPath());
       }
 
-      function isParent() {
-        return isMember() && member().data.role == 'PARENT';
-      }
-
-      function isKid() {
-        return isMember() && member().data.role == 'KID';
-      }
-
       function devicePath(id) {
         return /databases/$(database)/documents/households/$(hid)/devices/$(id);
       }
 
-      function device(id) {
-        return get(devicePath(id));
+      // The caller's session is not older than the member's tokensValidAfter (epoch seconds), which revokeDevice sets
+      // when it revokes one of the member's parent devices; auth_time is the sign-in time, kept across token refresh.
+      function sessionIsFresh(m) {
+        return !('tokensValidAfter' in m) || request.auth.token.auth_time >= m.tokensValidAfter;
       }
 
-      // id is a registered device of the caller in this household and its status is ACTIVE (not PENDING, REVOKED).
-      function deviceIsActiveForCaller(id) {
-        return isHex64(id)
-          && exists(devicePath(id))
-          && device(id).data.uid == request.auth.uid
-          && device(id).data.status == 'ACTIVE';
+      // d (a device row) is registered to the caller, ACTIVE (not PENDING, REVOKED), and the caller's session (member
+      // row m) postdates any revocation of the caller's devices.
+      function activeForCaller(d, m) {
+        return d.uid == request.auth.uid && d.status == 'ACTIVE' && sessionIsFresh(m);
+      }
+
+      // id is a registered ACTIVE device of the caller (an unregistered id fails the get, which denies).
+      function deviceIsActiveForCaller(id, m) {
+        return isHex64(id) && activeForCaller(get(devicePath(id)).data, m);
       }
 
       // The household root document: written by functions only.
@@ -116,36 +153,21 @@ service cloud.firestore {
         allow write: if false;
       }
 
-      // Parent authorisation keys. A parent device adds its own key; only functions set revokedAtLamport.
+      // Parent authorisation keys: written by functions only (registerParentKey creates, revokeDevice stamps
+      // revokedAtLamport). Readable by members, who verify parent signatures against them.
       match /parentKeys/{fingerprint} {
-        function validParentKey() {
-          let k = request.resource.data;
-          return k.keys().hasAll(['publicKey', 'uid', 'deviceId', 'validFromLamport', 'registeredAt'])
-            && k.keys().hasOnly(['publicKey', 'uid', 'deviceId', 'validFromLamport', 'registeredAt', 'envelope',
-                                 'serverReceivedAt'])
-            && isHex64(fingerprint)
-            && k.uid == request.auth.uid
-            && deviceIsActiveForCaller(k.deviceId)
-            && boundedString(k.publicKey, 256)
-            && k.validFromLamport is int && k.validFromLamport >= 0
-            && k.registeredAt == request.time
-            && (!('envelope' in k) || (k.envelope is map && k.envelope.size() <= 16))
-            && serverStamp(k);
-        }
-
         allow read: if isMember();
-        allow create: if isParent() && validParentKey();
-        allow update, delete: if false;
+        allow create, update, delete: if false;
       }
 
-      // Ledger events: append-only. Doc id is eventId, or eventId__hash for a conflicting copy kept as evidence.
+      // Ledger events: append-only. Doc id is eventId, or eventId__hash for a conflicting copy kept as evidence; only a
+      // PARENT member stores such a copy (a kid creates events/{eventId} only).
       match /events/{eventDocId} {
-        function validEvent() {
-          let e = request.resource.data;
-          let m = member().data;
+        // e: the event; m: the caller's member row.
+        function validEvent(e, m) {
           return e.keys().hasAll(['schemaVersion', 'eventId', 'householdId', 'kidId', 'accountId', 'authorUid',
                                   'authorRole', 'authorDeviceId', 'createdAt', 'lamport', 'prevHash', 'hash',
-                                  'signature', 'type'])
+                                  'signature', 'type', 'serverReceivedAt'])
             && e.keys().hasOnly([
                  // Envelope (core/domain-ledger Envelope), flattened to the top level.
                  'schemaVersion', 'eventId', 'householdId', 'kidId', 'accountId', 'authorUid', 'authorRole',
@@ -159,12 +181,12 @@ service cloud.firestore {
                  'serverReceivedAt'])
             && e.schemaVersion in [1, 2]
             && boundedString(e.eventId, 128)
-            && (eventDocId == e.eventId || eventDocId == e.eventId + '__' + e.hash)
+            && (eventDocId == e.eventId || (m.role == 'PARENT' && eventDocId == e.eventId + '__' + e.hash))
             && e.householdId == hid
             && boundedString(e.kidId, 128)
             && boundedString(e.accountId, 256)
             && e.authorUid == request.auth.uid
-            && deviceIsActiveForCaller(e.authorDeviceId)
+            && deviceIsActiveForCaller(e.authorDeviceId, m)
             && e.createdAt is int
             && e.lamport is int && e.lamport >= 0
             && (e.prevHash == null || isHex64(e.prevHash))
@@ -182,17 +204,17 @@ service cloud.firestore {
             && optString(e, 'scheduleId', 128) && optString(e, 'periodKey', 64)
             && optString(e, 'gameId', 128) && optInt(e, 'score') && optString(e, 'playedOn', 32)
             && optString(e, 'rewardId', 128) && optInt(e, 'minutesGranted')
-            && optString(e, 'reason', 400) && optString(e, 'note', 400)
+            && optString(e, 'reason', 500) && optString(e, 'note', 500)
             && optString(e, 'toAccountId', 256) && optInt(e, 'principal')
             && optInt(e, 'annualRateBasisPoints') && optInt(e, 'days')
             && optString(e, 'sessionId', 128) && optInt(e, 'minutesUsed') && optInt(e, 'minutes')
             && optString(e, 'grantedBy', 128)
-            && (!('causedBy' in e) || (e.causedBy is list && e.causedBy.size() <= 64))
+            && (e.get('causedBy', null) == null || idList16(e.causedBy))
             && serverStamp(e);
         }
 
         allow read: if isMember();
-        allow create: if isMember() && validEvent();
+        allow create: if signedIn() && validEvent(request.resource.data, member().data);
         allow update, delete: if false;
       }
 
@@ -202,55 +224,172 @@ service cloud.firestore {
           return coll in docTypes();
         }
 
-        function validDocument() {
-          let d = request.resource.data;
-          return d.keys().hasAll(['schemaVersion', 'householdId', 'docType', 'docId', 'authorUid', 'authorDeviceId',
-                                  'lamport', 'deleted', 'payload', 'signature'])
+        // Payload key sets are the serial names of the Kotlin models (core/model Kid, ChoreSubmission,
+        // InterestPolicy; core/domain-ledger Account; core/domain-household Chore, Reward, AllowanceSchedule,
+        // SavingsGoal; core/database DocumentPayloads for household_policy). Every key is optional (absent or null)
+        // because the receivers validate the model; the rules bound kinds and sizes. Ids are at most 128 characters,
+        // titles 80, a kid's first name 40, free text (description, note, rejectionReason) 500.
+        function kidPayload(p) {
+          return p.keys().hasOnly(['id', 'householdId', 'firstName', 'avatarId', 'birthYearMonth', 'uiTier',
+                                   'archived'])
+            && optString(p, 'id', 128) && optString(p, 'householdId', 128) && optString(p, 'firstName', 40)
+            && optString(p, 'avatarId', 128) && optString(p, 'birthYearMonth', 16) && optString(p, 'uiTier', 32)
+            && optBool(p, 'archived');
+        }
+
+        function accountPayload(p) {
+          return p.keys().hasOnly(['id', 'kidId', 'currency', 'kind'])
+            && optString(p, 'id', 128) && optString(p, 'kidId', 128) && optString(p, 'currency', 32)
+            && optString(p, 'kind', 32);
+        }
+
+        function householdPolicyPayload(p) {
+          return p.keys().hasOnly(['fiatCurrency', 'requireParentSignature'])
+            && optString(p, 'fiatCurrency', 32) && optBool(p, 'requireParentSignature');
+        }
+
+        function chorePayload(p) {
+          return p.keys().hasOnly(['id', 'householdId', 'kidId', 'title', 'description', 'reward', 'schedule',
+                                   'createdAt', 'state'])
+            && optString(p, 'id', 128) && optString(p, 'householdId', 128) && optString(p, 'kidId', 128)
+            && optString(p, 'title', 80) && optString(p, 'description', 500)
+            && optMap(p, 'reward', 2) && optMap(p, 'schedule', 2) && optString(p, 'createdAt', 64)
+            && optString(p, 'state', 32)
+            && (p.get('schedule', null) == null || optList(p.schedule, 'daysOfWeek', 7));
+        }
+
+        function submissionPayload(p) {
+          return p.keys().hasOnly(['id', 'choreId', 'dueOn', 'kidId', 'submittedAt', 'note', 'photoRef', 'status',
+                                   'decidedAt', 'decidedBy', 'rejectionReason'])
+            && optString(p, 'id', 128) && optString(p, 'choreId', 128) && optString(p, 'dueOn', 32)
+            && optString(p, 'kidId', 128) && optString(p, 'submittedAt', 64) && optString(p, 'note', 500)
+            && p.get('status', null) in ['SUBMITTED', 'REJECTED', 'APPROVED']
+            && optString(p, 'decidedAt', 64) && optString(p, 'decidedBy', 128)
+            && optString(p, 'rejectionReason', 500)
+            && (p.get('photoRef', null) == null
+                || (p.photoRef is map && p.photoRef.keys().hasOnly(['fileName', 'sha256'])
+                    && optString(p.photoRef, 'fileName', 128) && optString(p.photoRef, 'sha256', 64)));
+        }
+
+        function rewardPayload(p) {
+          return p.keys().hasOnly(['id', 'householdId', 'title', 'kind', 'cost', 'currency', 'minutesGranted',
+                                   'active', 'forKids'])
+            && optString(p, 'id', 128) && optString(p, 'householdId', 128) && optString(p, 'title', 80)
+            && optString(p, 'kind', 32) && optInt(p, 'cost') && optString(p, 'currency', 32)
+            && optInt(p, 'minutesGranted') && optBool(p, 'active') && optList(p, 'forKids', 64);
+        }
+
+        function allowancePayload(p) {
+          return p.keys().hasOnly(['id', 'kidId', 'accountId', 'amount', 'currency', 'cadence', 'startsOn',
+                                   'active'])
+            && optString(p, 'id', 128) && optString(p, 'kidId', 128) && optString(p, 'accountId', 128)
+            && optInt(p, 'amount') && optString(p, 'currency', 32) && optMap(p, 'cadence', 2)
+            && optString(p, 'startsOn', 32) && optBool(p, 'active');
+        }
+
+        function savingsGoalPayload(p) {
+          return p.keys().hasOnly(['id', 'kidId', 'title', 'target', 'createdOn', 'achievedOn'])
+            && optString(p, 'id', 128) && optString(p, 'kidId', 128) && optString(p, 'title', 80)
+            && optInt(p, 'target') && optString(p, 'createdOn', 32) && optString(p, 'achievedOn', 32);
+        }
+
+        function interestPolicyPayload(p) {
+          return p.keys().hasOnly(['householdId', 'annualRateBasisPoints', 'accrualDay'])
+            && optString(p, 'householdId', 128) && optInt(p, 'annualRateBasisPoints') && optInt(p, 'accrualDay');
+        }
+
+        function validPayload(p) {
+          return p is map && (
+            coll == 'choreSubmissions' ? submissionPayload(p)
+            : coll == 'chores' ? chorePayload(p)
+            : coll == 'rewards' ? rewardPayload(p)
+            : coll == 'kids' ? kidPayload(p)
+            : coll == 'accounts' ? accountPayload(p)
+            : coll == 'householdPolicy' ? householdPolicyPayload(p)
+            : coll == 'allowanceSchedules' ? allowancePayload(p)
+            : coll == 'savingsGoals' ? savingsGoalPayload(p)
+            : coll == 'interestPolicy' && interestPolicyPayload(p));
+        }
+
+        // d: the written envelope; m: the caller's member row. Every top-level key is required.
+        function validDocument(d, m) {
+          return d.keys().size() == 11
             && d.keys().hasOnly(['schemaVersion', 'householdId', 'docType', 'docId', 'authorUid', 'authorDeviceId',
                                  'lamport', 'deleted', 'payload', 'signature', 'serverReceivedAt'])
-            && d.schemaVersion in [1]
+            && d.schemaVersion == 1
             && d.householdId == hid
             && d.docType == docTypes()[coll]
             && d.docId == docId
             && boundedString(d.docId, 256)
             && d.authorUid == request.auth.uid
-            && deviceIsActiveForCaller(d.authorDeviceId)
+            && deviceIsActiveForCaller(d.authorDeviceId, m)
             && d.lamport is int && d.lamport >= 0
             && d.deleted is bool
-            && d.payload is map && d.payload.size() <= 64
+            && validPayload(d.payload)
             && boundedString(d.signature, 200)
             && serverStamp(d);
         }
 
         // Last writer wins on (lamport, authorDeviceId): strictly newer, or same lamport and a greater device id.
-        function newerThanStored() {
-          let n = request.resource.data;
-          let o = resource.data;
+        function newerThan(n, o) {
           return n.lamport > o.lamport || (n.lamport == o.lamport && n.authorDeviceId > o.authorDeviceId);
         }
 
-        // A KID member writes only undecided submissions for their own kid under the submission's own id
-        // (core/sync DocTypes.kidMayWrite), never tombstones, and never overwrites a submission a parent already
-        // decided or another kid's submission.
-        function kidMayWrite(isUpdate) {
-          let p = request.resource.data.payload;
-          let k = member().data.kidId;
+        // SubmissionStatusPrecedence.rank: APPROVED > REJECTED > SUBMITTED; anything else ranks below them.
+        function statusRank(p) {
+          return {'SUBMITTED': 0, 'REJECTED': 1, 'APPROVED': 2}.get(p.get('status', ''), -1);
+        }
+
+        // n (written) wins over o (stored) under core/sync ConflictResolver's order:
+        // 1. a live copy never replaces a tombstone; a PARENT may tombstone a live document whatever the lamports;
+        // 2. between two live chore submissions of different status rank, the higher rank wins whatever the lamports;
+        // 3. otherwise last writer wins.
+        function winsConflict(n, o, m) {
+          return (o.deleted == false || n.deleted == true)
+            && ((m.role == 'PARENT' && n.deleted == true && o.deleted == false)
+                || (coll == 'choreSubmissions' && n.deleted == false && o.deleted == false
+                    ? rankWins(statusRank(n.payload), statusRank(o.payload), n, o)
+                    : newerThan(n, o)));
+        }
+
+        function rankWins(nr, sr, n, o) {
+          return nr > sr || (nr == sr && newerThan(n, o));
+        }
+
+        // A KID member (kid k) writes only undecided submissions for their own kid under the submission's own id
+        // (core/sync DocTypes.kidMayWrite), never tombstones; on update only over a live, undecided submission of
+        // their own kid whose identity (id, choreId, dueOn, kidId) stays the same (o: the stored copy, or null).
+        function kidMayWrite(n, k, o) {
+          let p = n.payload;
           return coll == 'choreSubmissions'
-            && request.resource.data.deleted == false
+            && n.deleted == false
             && p.kidId == k
             && p.status == 'SUBMITTED'
             && p.id == docId
-            && (!isUpdate || (resource.data.payload.kidId == k && resource.data.payload.status == 'SUBMITTED'));
+            && (o == null || kidMayOverwrite(p, k, o));
         }
 
-        function roleMayWrite(isUpdate) {
-          return isParent() || (isKid() && kidMayWrite(isUpdate));
+        function kidMayOverwrite(p, k, o) {
+          let op = o.payload;
+          return o.deleted == false
+            && op.get('kidId', null) == k
+            && op.get('status', null) == 'SUBMITTED'
+            && p.get('id', null) == op.get('id', null)
+            && p.get('choreId', null) == op.get('choreId', null)
+            && p.get('dueOn', null) == op.get('dueOn', null);
+        }
+
+        // n: written envelope; m: caller's member row; o: stored envelope on update, null on create.
+        function mayWrite(n, m, o) {
+          return validDocument(n, m)
+            && (o == null || winsConflict(n, o, m))
+            && (m.role == 'PARENT' || (m.role == 'KID' && kidMayWrite(n, m.kidId, o)));
         }
 
         allow read: if isDocCollection() && isMember();
-        allow create: if isDocCollection() && isMember() && validDocument() && roleMayWrite(false);
-        allow update: if isDocCollection() && isMember() && validDocument() && newerThanStored()
-                      && roleMayWrite(true);
+        allow create: if isDocCollection() && signedIn() && mayWrite(request.resource.data, member().data, null);
+        allow update: if isDocCollection() && signedIn()
+                      && mayWrite(request.resource.data, member().data, resource.data);
         allow delete: if false;
       }
     }

@@ -17,8 +17,8 @@ object Ledger {
      *
      * Duplicates are judged by content ([isSameEventAs]): a second copy of the same event is ignored, while
      * different events claiming one eventId are a [LedgerAnomaly.ConflictingDuplicate]. Of those, only
-     * [appliedCopyOf] is folded (at its own place in the order): the single copy from a PARENT device when every
-     * other copy comes from a KID device, otherwise none.
+     * [appliedCopyOf] is folded (at its own place in the order): a PARENT device's copy over KID copies, otherwise
+     * the first by `(lamport, authorDeviceId, hash)`.
      *
      * Events must already have passed chain and signature verification; this function does not check hashes or
      * verify parent signatures (with [LedgerPolicy.requireParentSignature] it only checks that parent-only events
@@ -26,8 +26,8 @@ object Ledger {
      *
      * @param accounts registered accounts, used for currency, ownership and kind checks.
      * @param roleOf the registered role of an author device ([DeviceRegistry]), used only to resolve conflicting
-     *   duplicates ([appliedCopyOf]); null when the device is unknown. The default knows no device, so no
-     *   conflicting copy is applied.
+     *   duplicates ([appliedCopyOf]); null when the device is unknown. The default knows no device, so of
+     *   conflicting copies the first by `(lamport, authorDeviceId, hash)` is applied.
      * @param trustEnvelopeRoles when [roleOf] returns null for a device, use the copy's self-declared
      *   [Envelope.authorRole] instead. Only for single-household fixtures and tests whose events never left this
      *   device (the in-memory repository, M1/M2 tests); a projection over pulled events must leave it false.
@@ -84,6 +84,10 @@ data class DuplicateCopy(
             DuplicateCopy(hash, kidId, authorUid, authorRole, authorDeviceId, lamport)
         }
 
+        /** The same tie-break as [appliedCopyOf]: `(lamport, authorDeviceId, hash)`. */
+        internal val CONFLICT_ORDER: Comparator<DuplicateCopy> =
+            compareBy({ it.lamport }, { it.authorDeviceId.value }, { it.hash })
+
         internal val ORDER: Comparator<DuplicateCopy> = compareBy(
             { it.hash },
             { it.authorDeviceId.value },
@@ -123,18 +127,18 @@ sealed interface LedgerAnomaly {
     /**
      * Different events (different hashes or content) claim the same [eventId]. [copies] lists every distinct copy
      * with its hash and author, sorted by hash, so a parent can see who reused the id. Whatever order they arrived
-     * in, at most [applied] reaches the balances ([appliedCopyOf]): the copy from a PARENT device when every other
-     * copy comes from a KID device (by registered role), otherwise none.
+     * in, only [applied] reaches the balances ([appliedCopyOf]): a PARENT device's copy over KID copies (by
+     * registered role), otherwise the first by `(lamport, authorDeviceId, hash)`.
      *
-     * @property applied the copy applied to balances, or null when none is. A projection always sets it from the
-     *   registered roles it was built with. The default (each copy's self-declared [DuplicateCopy.authorRole], the
-     *   answer of a projection with `trustEnvelopeRoles = true` and no registry) exists only for decoders of
-     *   anomalies persisted without it.
+     * @property applied the copy applied to balances (null only when [copies] is empty). A projection always sets
+     *   it from the registered roles it was built with. The default (each copy's self-declared
+     *   [DuplicateCopy.authorRole], the answer of a projection with `trustEnvelopeRoles = true` and no registry)
+     *   exists only for decoders of anomalies persisted without it.
      */
     data class ConflictingDuplicate(
         val eventId: EventId,
         val copies: List<DuplicateCopy>,
-        val applied: DuplicateCopy? = resolveConflict(copies) { it.authorRole },
+        val applied: DuplicateCopy? = resolveConflict(copies, { it.authorRole }, DuplicateCopy.CONFLICT_ORDER),
     ) : LedgerAnomaly
 }
 
@@ -356,7 +360,7 @@ private class ProjectionBuilder(private val base: ProjectionState, copies: Map<E
         if (lastApplied.let { it == null || LedgerOrdering.compare(it, event) < 0 }) lastApplied = event
         val copies = events[event.eventId].orEmpty()
         if (copies.size > 1) {
-            val applied = resolveConflict(copies, ::roleOf)
+            val applied = resolveConflict(copies, ::roleOf, CONFLICT_ORDER)
             reportConflict(event.eventId, copies, applied)
             if (applied?.isSameEventAs(event) != true) return
         }

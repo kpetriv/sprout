@@ -22,7 +22,9 @@ fun interface Jitter {
         /** "Equal jitter": half the delay, plus a random amount up to the other half. */
         fun equal(random: Random = Random.Default): Jitter = Jitter { delay ->
             val half = delay / 2
-            half + if (delay - half > 0) random.nextLong(delay - half + 1) else 0
+            val rest = delay - half
+            // rest is at most Long.MAX_VALUE / 2 + 1, so neither rest + 1 nor half + rest can overflow.
+            half + if (rest > 0) random.nextLong(rest + 1) else 0
         }
     }
 }
@@ -42,15 +44,15 @@ class ExponentialBackoff(
     }
 
     override fun delayMs(attempts: Int, retryAfterMs: Long?): Long {
-        // Doubling past maxMs only saturates; stop shifting before the Long overflows.
+        // Doubling saturates at maxMs; compare against half of it so the multiplication never overflows, even with
+        // maxMs near Long.MAX_VALUE.
         var delay = baseMs
-        repeat(attempts.coerceIn(0, MAX_DOUBLINGS)) { if (delay < maxMs) delay *= 2 }
-        val capped = delay.coerceAtMost(maxMs)
-        val jittered = jitter.apply(capped).coerceIn(0, maxMs)
+        repeat(attempts.coerceIn(0, MAX_DOUBLINGS)) { delay = if (delay > maxMs / 2) maxMs else delay * 2 }
+        val jittered = jitter.apply(delay).coerceIn(0, maxMs)
         return maxOf(jittered, (retryAfterMs ?: 0).coerceIn(0, maxMs))
     }
 
     private companion object {
-        const val MAX_DOUBLINGS = 62
+        const val MAX_DOUBLINGS = 63
     }
 }

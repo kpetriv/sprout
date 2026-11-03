@@ -1,4 +1,4 @@
-import { createHash, createPublicKey, randomBytes, randomInt, verify, type KeyObject } from 'node:crypto';
+import { createHash, createHmac, createPublicKey, randomBytes, randomInt, verify, type KeyObject } from 'node:crypto';
 import { HttpsError } from 'firebase-functions/v2/https';
 
 export function sha256(data: Buffer | string): Buffer {
@@ -98,7 +98,63 @@ export function normaliseLinkCode(value: unknown): string | null {
   return code;
 }
 
-/** Document id of a link code: hex SHA-256 of the normalised code. The code itself is never stored or logged. */
-export function linkCodeId(code: string): string {
-  return sha256Hex(code);
+/**
+ * Document id of a link code: hex HMAC-SHA256 of the normalised code under [key] (config.ts `linkCodeKey`). The code
+ * itself is never stored or logged, and without the key the id cannot be brute-forced back to the code.
+ */
+export function linkCodeId(code: string, key: string): string {
+  return createHmac('sha256', key).update(code, 'utf8').digest('hex');
+}
+
+/**
+ * Canonical JSON of a callable's signed arguments: object keys sorted by UTF-16 code unit (JavaScript's default
+ * sort), no whitespace, strings and numbers as `JSON.stringify` writes them. The arguments are ASCII ids, so the
+ * bytes are unambiguous for any JSON writer that sorts keys and escapes nothing else.
+ */
+export function canonicalJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`;
+  if (value !== null && typeof value === 'object') {
+    const entries = Object.entries(value as Record<string, unknown>)
+      .filter(([, v]) => v !== undefined)
+      .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+    return `{${entries.map(([k, v]) => `${JSON.stringify(k)}:${canonicalJson(v)}`).join(',')}}`;
+  }
+  return JSON.stringify(value);
+}
+
+/** Callables whose request a device signs (T7/T8), with the domain each signature is bound to. */
+export const SIGNED_CALLABLES = {
+  createLinkCode: 'sprout/create-link-code/v1',
+  revokeDevice: 'sprout/revoke-device/v1',
+  exportHousehold: 'sprout/export-household/v1',
+  deleteHousehold: 'sprout/delete-household/v1',
+} as const;
+
+export type SignedCallable = keyof typeof SIGNED_CALLABLES;
+
+/**
+ * The bytes a parent device signs for [callable]: `domain || 0x00 || hid || 0x00 || canonicalJson(args)` (UTF-8),
+ * where `args` are the callable's arguments other than `callerDeviceId` and `signature`.
+ */
+export function callablePayload(callable: SignedCallable, hid: string, args: Record<string, unknown>): Buffer {
+  return Buffer.concat([
+    Buffer.from(SIGNED_CALLABLES[callable], 'utf8'),
+    Buffer.from([0]),
+    Buffer.from(hid, 'utf8'),
+    Buffer.from([0]),
+    Buffer.from(canonicalJson(args), 'utf8'),
+  ]);
+}
+
+export const REGISTER_PARENT_KEY_DOMAIN = 'sprout/register-parent-key/v1';
+
+/** The bytes a parent device signs to register a parent key: `domain || 0x00 || hid || 0x00 || SPKI DER bytes`. */
+export function registerParentKeyPayload(hid: string, publicKey: Buffer): Buffer {
+  return Buffer.concat([
+    Buffer.from(REGISTER_PARENT_KEY_DOMAIN, 'utf8'),
+    Buffer.from([0]),
+    Buffer.from(hid, 'utf8'),
+    Buffer.from([0]),
+    publicKey,
+  ]);
 }

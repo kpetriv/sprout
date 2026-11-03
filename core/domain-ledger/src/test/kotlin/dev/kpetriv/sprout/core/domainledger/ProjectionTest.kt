@@ -195,17 +195,21 @@ class ProjectionTest {
     }
 
     @Test
-    fun aConflictingCopyOfAnEventIdExcludesBothCopies() {
+    fun ofTwoCopiesFromOneAuthorTheFirstByHashIsApplied() {
         val chore = parent.chore(100) as ChoreRewarded
         val evil = chore.copy(amount = Money(9_999)).mutateEnvelope { it.copy(hash = "f".repeat(64)) }
         val projection = project(listOf(evil, chore, evil))
         val conflict = assertIs<LedgerAnomaly.ConflictingDuplicate>(projection.anomalies.single())
         assertEquals(chore.eventId, conflict.eventId)
         assertEquals(listOf(chore.envelope.hash, "f".repeat(64)), conflict.copies.map { it.hash })
-        assertEquals(Money.ZERO, projection.balanceOf(Fixtures.main.id))
+        // Same lamport and device: the lower hash wins, on every device.
+        assertTrue(chore.envelope.hash < "f".repeat(64))
+        assertEquals(chore.envelope.hash, conflict.applied?.hash)
+        assertEquals(Money(100), projection.balanceOf(Fixtures.main.id))
         assertTrue(chore.eventId in projection)
-        // No copy wins, so the input order cannot matter, and re-applying either copy changes nothing.
+        // The input order cannot matter, and re-applying either copy changes nothing.
         assertEquals(projection, project(listOf(chore, evil)))
+        assertEquals(projection, project(listOf(evil)).apply(chore))
         assertEquals(projection, projection.apply(chore))
         assertEquals(projection, projection.apply(evil))
     }
@@ -213,11 +217,11 @@ class ProjectionTest {
     @Test
     fun sameHashButDifferentContentIsAlsoAConflict() {
         val chore = parent.chore(100) as ChoreRewarded
-        // A tampered copy that kept the stored hash: unverified input, but projection must not let it win either.
+        // A tampered copy that kept the stored hash: unverified input, reported as a conflict all the same.
         val tampered = chore.copy(amount = Money(9_999))
         val projection = project(listOf(chore, tampered))
         assertIs<LedgerAnomaly.ConflictingDuplicate>(projection.anomalies.single())
-        assertEquals(Money.ZERO, projection.balanceOf(Fixtures.main.id))
+        assertEquals(projection, project(listOf(tampered, chore)))
     }
 
     @Test
@@ -290,15 +294,20 @@ class ProjectionTest {
         assertEquals(registered, incremental)
         assertEquals(conflict, incremental.anomalies.single())
 
-        // Against a real kid copy, the kid device claiming PARENT does not win.
+        // Against a real kid copy, the kid device claiming PARENT does not win: both are KID copies by registry, so
+        // the first by (lamport, device, hash) applies, which is the real game.
         val game = kid.game(5)
         val claim = liar.writeWithId(game.eventId, Fixtures.main) {
             ChoreRewarded(it, Fixtures.gbp, Money(900), "fake", Fixtures.today)
         }
-        assertNull(appliedCopyOf(listOf(game, claim), Fixtures::roleOf))
+        assertTrue(game.lamport < claim.lamport)
+        assertEquals(game, appliedCopyOf(listOf(game, claim), Fixtures::roleOf))
         val byRegistry = Ledger.project(listOf(game, claim), Fixtures.accounts, roleOf = Fixtures::roleOf)
-        assertEquals(Money.ZERO, byRegistry.balanceOf(Fixtures.main.id))
-        assertNull(assertIs<LedgerAnomaly.ConflictingDuplicate>(byRegistry.anomalies.single()).applied)
+        assertEquals(Money(5), byRegistry.balanceOf(Fixtures.main.id))
+        assertEquals(
+            DuplicateCopy.of(game),
+            assertIs<LedgerAnomaly.ConflictingDuplicate>(byRegistry.anomalies.single()).applied,
+        )
         // The registry wins over trusted envelopes too; trusting envelopes alone would let the claim win.
         val bothWays = Ledger.project(
             listOf(game, claim),
@@ -312,51 +321,67 @@ class ProjectionTest {
     }
 
     @Test
-    fun withoutARegistryOrTrustedEnvelopesNoConflictingCopyIsApplied() {
+    fun withoutARegistryOrTrustedEnvelopesTheFirstCopyIsApplied() {
         val allowance = parent.allowance(500)
+        kid.observe(allowance.lamport)
         val reuse = kid.writeWithId(allowance.eventId, Fixtures.main) {
             RewardPurchased(it, Fixtures.gbp, Money(5), "toy")
         }
         val copies = listOf(allowance, reuse)
+        assertTrue(allowance.lamport < reuse.lamport)
         val unknown = Ledger.project(copies, Fixtures.accounts)
-        assertEquals(Money.ZERO, unknown.balanceOf(Fixtures.main.id))
-        assertNull(assertIs<LedgerAnomaly.ConflictingDuplicate>(unknown.anomalies.single()).applied)
-        assertNull(appliedCopyOf(copies) { null })
-        // One unregistered device is enough to apply nothing.
-        val parentOnly: (DeviceId) -> Role? = { if (it == Fixtures.parentPhone.deviceId) Role.PARENT else null }
-        assertNull(appliedCopyOf(copies, parentOnly))
+        assertEquals(Money(500), unknown.balanceOf(Fixtures.main.id))
+        val unknownConflict = assertIs<LedgerAnomaly.ConflictingDuplicate>(unknown.anomalies.single())
+        assertEquals(DuplicateCopy.of(allowance), unknownConflict.applied)
+        assertEquals(allowance, appliedCopyOf(copies) { null })
+        // One known parent copy wins over a copy whose device is unknown, whatever the order.
+        val kidOnly: (DeviceId) -> Role? = { if (it == Fixtures.kidTablet.deviceId) Role.PARENT else null }
+        assertEquals(reuse, appliedCopyOf(copies, kidOnly))
         // A single copy needs no roles at all.
         assertEquals(allowance, appliedCopyOf(listOf(allowance)) { null })
     }
 
     @Test
-    fun twoParentCopiesOrTwoKidCopiesApplyNeither() {
+    fun twoParentCopiesOrTwoKidCopiesApplyTheFirstByLamportDeviceAndHash() {
         val tablet = DeviceWriter(Fixtures.parentTablet)
         val chore = parent.chore(100)
+        tablet.observe(chore.lamport)
         val parentReuse = tablet.writeWithId(chore.eventId, Fixtures.main) {
             ChoreRewarded(it, Fixtures.gbp, Money(900), "other", Fixtures.today)
         }
-        val parents = project(listOf(chore, parentReuse))
-        assertEquals(Money.ZERO, parents.balanceOf(Fixtures.main.id))
-        assertNull(assertIs<LedgerAnomaly.ConflictingDuplicate>(parents.anomalies.single()).applied)
+        val parents = project(listOf(parentReuse, chore))
+        assertEquals(Money(100), parents.balanceOf(Fixtures.main.id))
+        val parentConflict = assertIs<LedgerAnomaly.ConflictingDuplicate>(parents.anomalies.single())
+        assertEquals(chore.envelope.hash, parentConflict.applied?.hash)
 
-        // A forged copy of a parent event plus a kid's reuse: two parent copies, so still none applies.
+        // A forged copy of a parent event plus a kid's reuse that sorts first ("kid-tablet" < "parent-phone" at the
+        // same lamport): the kid copy never beats a parent copy, and of the two parent copies the first by
+        // (lamport, device, hash) wins.
         val forged = (chore as ChoreRewarded).copy(amount = Money(1)).let {
             it.mutateEnvelope { e -> e.copy(hash = HashChain().hashOf(it)) }
         }
-        val kidReuse = kid.writeWithId(chore.eventId, Fixtures.main) {
+        val kidReuse = DeviceWriter(Fixtures.kidTablet, seed = 77).writeWithId(chore.eventId, Fixtures.main) {
             RewardPurchased(it, Fixtures.gbp, Money(1), "r")
         }
-        assertEquals(Money.ZERO, project(listOf(chore, forged, kidReuse)).balanceOf(Fixtures.main.id))
+        assertTrue(LedgerOrdering.compare(kidReuse, chore) < 0)
+        val expected = listOf(chore, forged).minBy { it.envelope.hash }
+        val mixed = project(listOf(chore, forged, kidReuse))
+        val mixedConflict = assertIs<LedgerAnomaly.ConflictingDuplicate>(mixed.anomalies.single())
+        assertEquals(expected.envelope.hash, mixedConflict.applied?.hash)
+        assertEquals(mixed, project(listOf(kidReuse, forged, chore)))
 
         val game = kid.game(10)
         val kidTwin = DeviceWriter(Fixtures.kidTablet.copy(deviceId = DeviceId("kid-phone"))).writeWithId(
             game.eventId,
             Fixtures.main,
         ) { GamePlayed(it, Fixtures.gbp, Money(20), "g", 1, Fixtures.today) }
+        assertEquals(game.lamport, kidTwin.lamport)
+        // Same lamport: "kid-phone" sorts before "kid-tablet".
         val kids = project(listOf(game, kidTwin))
-        assertEquals(Money.ZERO, kids.balanceOf(Fixtures.main.id))
-        assertNull(assertIs<LedgerAnomaly.ConflictingDuplicate>(kids.anomalies.single()).applied)
+        assertEquals(Money(20), kids.balanceOf(Fixtures.main.id))
+        val kidConflict = assertIs<LedgerAnomaly.ConflictingDuplicate>(kids.anomalies.single())
+        assertEquals(kidTwin.envelope.hash, kidConflict.applied?.hash)
+        assertEquals(kids, project(listOf(kidTwin, game)))
     }
 
     @Test

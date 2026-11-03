@@ -5,6 +5,7 @@ import dev.kpetriv.sprout.core.domainledger.DeviceStatus
 import dev.kpetriv.sprout.core.domainledger.RegisteredDevice
 import dev.kpetriv.sprout.core.domainledger.RegisteredParentKey
 import dev.kpetriv.sprout.core.model.DeviceId
+import dev.kpetriv.sprout.core.model.HouseholdId
 import dev.kpetriv.sprout.core.model.Role
 import dev.kpetriv.sprout.core.model.SubmissionStatus
 import dev.kpetriv.sprout.core.model.UserId
@@ -28,7 +29,8 @@ class RemoteDocumentVerifierTest {
 
         override suspend fun parentKeys(): List<RegisteredParentKey> = emptyList()
     }
-    private val verifier = RemoteDocumentVerifier(registry, SoftwareSignatureCheck, maxLamportJump = 100)
+    private val verifier =
+        RemoteDocumentVerifier(registry, SoftwareSignatureCheck, maxLamportJump = 100, householdId = HOUSEHOLD)
 
     private suspend fun verify(envelope: DocumentEnvelope, localMax: Long = 0) = verifier.verify(envelope, localMax)
 
@@ -50,17 +52,40 @@ class RemoteDocumentVerifierTest {
     }
 
     @Test
-    fun unknownDevice() = runTest {
+    fun unknownDeviceIsHeld() = runTest {
         val stranger = TestIdentity("stranger", "stranger-uid", Role.PARENT)
-        assertRejected(DocumentRejection.UNKNOWN_DEVICE, stranger.signed(DocTypes.REWARD, "reward-1", lamport = 5))
+        assertEquals(
+            VerifiedDocument.Held(DocumentRejection.UNKNOWN_DEVICE),
+            verify(stranger.signed(DocTypes.REWARD, "reward-1", lamport = 5)),
+        )
     }
 
     @Test
-    fun deviceNotActive() = runTest {
-        assertRejected(DocumentRejection.DEVICE_NOT_ACTIVE, pending.signed(DocTypes.REWARD, "reward-1", lamport = 5))
+    fun pendingDeviceIsHeldRevokedDeviceIsRejected() = runTest {
+        assertEquals(
+            VerifiedDocument.Held(DocumentRejection.DEVICE_NOT_ACTIVE),
+            verify(pending.signed(DocTypes.REWARD, "reward-1", lamport = 5)),
+        )
         assertRejected(DocumentRejection.DEVICE_NOT_ACTIVE, revoked.signed(DocTypes.REWARD, "reward-1", lamport = 10))
         // Written before the revocation: still valid.
         assertIs<VerifiedDocument.Ok>(verify(revoked.signed(DocTypes.REWARD, "reward-1", lamport = 9)))
+        // A pending device's forgery is not held: the signature is checked first.
+        val forged = pending.envelope(DocTypes.REWARD, "reward-1", lamport = 5).signWith(kid.key::sign)
+        assertRejected(DocumentRejection.BAD_SIGNATURE, forged)
+    }
+
+    @Test
+    fun wrongHousehold() = runTest {
+        val elsewhere = parent.envelope(DocTypes.REWARD, "reward-1", lamport = 5)
+            .copy(householdId = HouseholdId("household-2"))
+            .signWith(parent.key::sign)
+        assertRejected(DocumentRejection.WRONG_HOUSEHOLD, elsewhere)
+        // Checked before the device: an unknown device in another household is not held.
+        val stranger = TestIdentity("stranger", "stranger-uid", Role.PARENT)
+        val strangerElsewhere = stranger.envelope(DocTypes.REWARD, "reward-1", lamport = 5)
+            .copy(householdId = HouseholdId("household-2"))
+            .signWith(stranger.key::sign)
+        assertRejected(DocumentRejection.WRONG_HOUSEHOLD, strangerElsewhere)
     }
 
     @Test

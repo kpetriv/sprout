@@ -6,6 +6,7 @@ import dev.kpetriv.sprout.core.domainledger.RegisteredDevice
 import dev.kpetriv.sprout.core.domainledger.RegisteredParentKey
 import dev.kpetriv.sprout.core.domainledger.SignatureCheck
 import dev.kpetriv.sprout.core.model.DeviceId
+import dev.kpetriv.sprout.core.model.HouseholdId
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.longOrNull
@@ -16,20 +17,25 @@ import kotlinx.serialization.json.longOrNull
  * `(eventId, hash)`), since ledger verification and ingest belong to core/domain-ledger and core/database.
  *
  * [calls] records the order of applier calls (`registry`, `documents`, `events`, `retryHeld`, `saveCursor`) so tests
- * can assert the engine's sequence. Local writes go through [writeLocal], which takes the next lamport.
+ * can assert the engine's sequence. Documents the verifier holds (unknown or pending author) are kept and re-verified
+ * by [retryHeld]. Local writes go through [writeLocal], which takes the next lamport.
  */
-class RecordingApplier(check: SignatureCheck, maxLamportJump: Long = LedgerPolicy.DEFAULT_MAX_LAMPORT_JUMP) :
-    RemoteApplier,
+class RecordingApplier(
+    check: SignatureCheck,
+    householdId: HouseholdId,
+    maxLamportJump: Long = LedgerPolicy.DEFAULT_MAX_LAMPORT_JUMP,
+) : RemoteApplier,
     DeviceRegistry {
     private val devices = mutableMapOf<DeviceId, RegisteredDevice>()
     private val parentKeys = mutableMapOf<String, RegisteredParentKey>()
     private val documents = sortedMapOf<String, DocumentEnvelope>()
     private val events = LinkedHashMap<String, JsonObject>()
     private val rejections = mutableListOf<Pair<DocumentEnvelope, DocumentRejection>>()
+    private val heldDocuments = LinkedHashMap<String, DocumentEnvelope>()
     private val callLog = mutableListOf<String>()
     private var savedCursor = SyncCursor.START
     private var lamport = 0L
-    private val verifier = RemoteDocumentVerifier(this, check, maxLamportJump)
+    private val verifier = RemoteDocumentVerifier(this, check, maxLamportJump, householdId)
 
     /** Applier calls in order. */
     val calls: List<String> get() = synchronized(this) { callLog.toList() }
@@ -43,6 +49,9 @@ class RecordingApplier(check: SignatureCheck, maxLamportJump: Long = LedgerPolic
 
     /** Recorded events in arrival order. */
     fun events(): List<JsonObject> = synchronized(this) { events.values.toList() }
+
+    /** Documents the verifier held (unknown or pending author), keyed `docType/docId`; retried by [retryHeld]. */
+    fun heldDocuments(): List<DocumentEnvelope> = synchronized(this) { heldDocuments.values.toList() }
 
     /** Documents the verifier refused, with the reason. */
     fun rejections(): List<Pair<DocumentEnvelope, DocumentRejection>> = synchronized(this) { rejections.toList() }
@@ -76,15 +85,29 @@ class RecordingApplier(check: SignatureCheck, maxLamportJump: Long = LedgerPolic
 
     override suspend fun applyDocuments(documents: List<DocumentEnvelope>): DocumentApplyReport {
         synchronized(this) { callLog += "documents" }
+        return verifyAndStore(documents)
+    }
+
+    private suspend fun verifyAndStore(documents: List<DocumentEnvelope>): DocumentApplyReport {
         var report = DocumentApplyReport()
         for (envelope in documents) {
+            val key = "${envelope.docType}/${envelope.docId}"
             report += when (val verified = verifier.verify(envelope, localMaxLamport())) {
+                is VerifiedDocument.Held -> {
+                    synchronized(this) { heldDocuments[key] = envelope }
+                    DocumentApplyReport(held = 1)
+                }
+
                 is VerifiedDocument.Rejected -> {
-                    synchronized(this) { rejections += envelope to verified.reason }
+                    synchronized(this) {
+                        heldDocuments.remove(key)
+                        rejections += envelope to verified.reason
+                    }
                     DocumentApplyReport(rejected = mapOf(verified.reason to 1))
                 }
 
                 is VerifiedDocument.Ok -> synchronized(this) {
+                    heldDocuments.remove(key)
                     observe(envelope.lamport)
                     when (store(envelope)) {
                         ConflictResolver.Decision.Apply -> DocumentApplyReport(applied = 1)
@@ -107,9 +130,14 @@ class RecordingApplier(check: SignatureCheck, maxLamportJump: Long = LedgerPolic
         EventApplyReport(applied = applied, duplicates = duplicates)
     }
 
-    override suspend fun retryHeld(): EventApplyReport = synchronized(this) {
-        callLog += "retryHeld"
-        EventApplyReport()
+    /** Re-verifies held documents (the registry may have caught up); events are never held here. */
+    override suspend fun retryHeld(): EventApplyReport {
+        val held = synchronized(this) {
+            callLog += "retryHeld"
+            heldDocuments.values.toList()
+        }
+        if (held.isNotEmpty()) verifyAndStore(held)
+        return EventApplyReport()
     }
 
     override suspend fun cursor(): SyncCursor = synchronized(this) { savedCursor }

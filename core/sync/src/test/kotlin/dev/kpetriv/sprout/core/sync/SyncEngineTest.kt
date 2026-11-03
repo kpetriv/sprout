@@ -3,7 +3,11 @@ package dev.kpetriv.sprout.core.sync
 import dev.kpetriv.sprout.core.model.Role
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.async
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.emitAll
+import kotlinx.coroutines.flow.emptyFlow
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
@@ -18,7 +22,7 @@ class SyncEngineTest {
     private val parent = TestIdentity("parent-device", "parent-uid", Role.PARENT)
     private val log = mutableListOf<String>()
     private val transport = ScriptedTransport(log)
-    private val recording = RecordingApplier(SoftwareSignatureCheck)
+    private val recording = RecordingApplier(SoftwareSignatureCheck, HOUSEHOLD)
     private val applier = LoggingApplier(recording, log)
     private val outbox = InMemoryOutboxSource()
     private val clock = FakeSyncClock(start = 1_000_000)
@@ -185,7 +189,7 @@ class SyncEngineTest {
     }
 
     @Test
-    fun permanentRejectionIsAckedAndReported() = runTest {
+    fun permanentDocumentRejectionIsAckedAndReported() = runTest {
         val seq = outbox.enqueueDocument(parent.signed(DocTypes.REWARD, "reward-1", 1))
         val id = PushItemId("document/reward/reward-1")
         transport.outcomes[id] = SyncError.Permanent("permission-denied")
@@ -196,6 +200,52 @@ class SyncEngineTest {
         assertEquals(1, report.rejected)
         assertEquals(listOf(PushRejection(seq, id, "permission-denied")), report.rejections)
         assertTrue(outbox.rows().isEmpty())
+    }
+
+    @Test
+    fun permanentEventRejectionIsKeptAndBlocksTheOutbox() = runTest {
+        val first = outbox.enqueueEvent(parent.event("e1", 1))
+        val second = outbox.enqueueEvent(parent.event("e2", 2))
+        val later = (3..120).map { n -> outbox.enqueueEvent(parent.event("e$n", n.toLong())) }
+        val id = PushItemId.ofEvent(parent.event("e1", 1))
+        transport.outcomes[id] = SyncError.Permanent("permission-denied")
+
+        val report = engine.syncOnce()
+
+        assertEquals(SyncError.Permanent("permission-denied"), report.error)
+        assertEquals(listOf(PushRejection(first, id, "permission-denied", blocking = true)), report.rejections)
+        val row = outbox.row(first)!!
+        assertEquals(clock.nowMs + SyncEngine.EVENT_REJECTION_RETRY_MS, row.nextAttemptAtEpochMs)
+        assertEquals("permission-denied", row.lastError)
+        // Items of the same batch the server accepted are acked; the push stops before the next batch.
+        assertNull(outbox.row(second))
+        assertEquals(1, transport.pushedBatches.size)
+        assertTrue(later.drop(SyncEngine.PUSH_BATCH_SIZE - 2).all { outbox.row(it) != null })
+
+        // Nothing is due behind the blocked head until its retry time; then it is offered again.
+        assertEquals(0, engine.syncOnce().pushed)
+        transport.outcomes.remove(id)
+        clock.advanceBy(SyncEngine.EVENT_REJECTION_RETRY_MS)
+        val retried = engine.syncOnce()
+        assertNull(retried.error)
+        assertTrue(outbox.rows().isEmpty())
+    }
+
+    @Test
+    fun twoRowsWithTheSamePushIdAreSettledSeparately() = runTest {
+        // A document rewritten after its first row was taken for a push, or an outbox that keeps both rows.
+        val v1 = parent.signed(DocTypes.REWARD, "reward-1", 1)
+        val v2 = parent.signed(DocTypes.REWARD, "reward-1", 2)
+        val rows = InMemoryOutboxSourceWithDuplicates(listOf(OutboxItem.document(1, v1), OutboxItem.document(2, v2)))
+        val engine = SyncEngine(transport, rows, applier, clock, backoff = ExponentialBackoff(jitter = Jitter.None))
+        val id = PushItemId.ofDocument(v1)
+
+        val report = engine.syncOnce()
+
+        assertNull(report.error)
+        assertEquals(2, report.pushed)
+        assertEquals(listOf(listOf(id), listOf(id)), transport.pushedBatches, "never two of one id in a batch")
+        assertEquals(listOf(1L, 2L), rows.acked)
     }
 
     @Test
@@ -210,7 +260,7 @@ class SyncEngineTest {
     }
 
     @Test
-    fun unauthenticatedStops() = runTest {
+    fun unauthenticatedStopsWithoutCountingAnAttempt() = runTest {
         val first = outbox.enqueueEvent(parent.event("e1", 1))
         transport.outcomes[PushItemId.ofEvent(parent.event("e1", 1))] = SyncError.Unauthenticated
         repeat(120) { n -> outbox.enqueueEvent(parent.event("more$n", n + 2L)) }
@@ -218,13 +268,34 @@ class SyncEngineTest {
         val report = engine.syncOnce()
 
         assertEquals(SyncError.Unauthenticated, report.error)
-        assertEquals("unauthenticated", outbox.row(first)!!.lastError)
+        val row = outbox.row(first)!!
+        assertEquals(0, row.item.attempts)
+        assertEquals(0, row.nextAttemptAtEpochMs)
+        assertNull(row.lastError)
         assertEquals(1, transport.pushedBatches.size)
 
-        transport.pullError = SyncError.Unauthenticated
-        clock.advanceBy(10_000)
+        // A whole push refused for the session does not count either.
+        transport.outcomes.clear()
+        transport.pushError = SyncError.Unauthenticated
         assertEquals(SyncError.Unauthenticated, engine.syncOnce().error)
-        assertEquals(1, transport.pushedBatches.size, "nothing is pushed after a failed pull")
+        assertEquals(0, outbox.row(first)!!.item.attempts)
+
+        // Signed in again: the rest goes at once (99 were accepted in the first batch), no backoff to wait out.
+        transport.pushError = null
+        assertEquals(22, engine.syncOnce().pushed)
+        assertTrue(outbox.rows().isEmpty())
+
+        transport.pullError = SyncError.Unauthenticated
+        outbox.enqueueEvent(parent.event("after", 200))
+        assertEquals(SyncError.Unauthenticated, engine.syncOnce().error)
+        assertEquals(3, transport.pushedBatches.size, "nothing is pushed after a failed pull")
+    }
+
+    @Test
+    fun errorCodesAreKebabCase() {
+        val codes = listOf(SyncError.Transient(), SyncError.Unauthenticated, SyncError.HouseholdGone).map { it.code }
+        assertEquals(listOf("transient", "unauthenticated", "household-gone"), codes)
+        assertTrue(codes.all { it.matches(Regex("[a-z]+(-[a-z]+)*")) })
     }
 
     @Test
@@ -274,6 +345,40 @@ class SyncEngineTest {
     }
 
     @Test
+    fun aFailingChangeListenerIsResubscribedWithBackoff() = runTest {
+        var subscriptions = 0
+        val live = MutableSharedFlow<RemoteChange>(extraBufferCapacity = 16)
+        val flaky = object : SyncTransport by transport {
+            override fun changes(): Flow<RemoteChange> = flow {
+                subscriptions++
+                if (subscriptions <= 2) throw SyncException(SyncError.Transient())
+                emitAll(live)
+            }
+        }
+        val engine = SyncEngine(
+            flaky,
+            outbox,
+            applier,
+            clock,
+            backoff = ExponentialBackoff(baseMs = 1_000, maxMs = 60_000, jitter = Jitter.None),
+        )
+        engine.run(backgroundScope, emptyFlow())
+        runCurrent()
+        assertEquals(1, subscriptions)
+        advanceTimeBy(1_001)
+        assertEquals(2, subscriptions, "first retry after the base delay")
+        advanceTimeBy(1_001)
+        assertEquals(2, subscriptions, "the second retry waits twice as long")
+        advanceTimeBy(1_000)
+        assertEquals(3, subscriptions)
+
+        // Live updates are back.
+        live.emit(RemoteChange("events"))
+        advanceTimeBy(SyncEngine.DEFAULT_DEBOUNCE_MS + 1)
+        assertEquals(1, transport.pulledCursors.size)
+    }
+
+    @Test
     fun requestsDuringASyncRunExactlyOneMoreSync() = runTest {
         val gate = CompletableDeferred<Unit>()
         transport.beforePull = { gate.await() }
@@ -318,4 +423,19 @@ class SyncEngineTest {
         advanceTimeBy(10_000)
         runCurrent()
     }
+}
+
+/** An outbox that keeps two rows of one document (no upsert), recording acks. */
+private class InMemoryOutboxSourceWithDuplicates(items: List<OutboxItem>) : OutboxSource {
+    private val pending = items.toMutableList()
+    val acked = mutableListOf<Long>()
+
+    override suspend fun due(nowEpochMs: Long, limit: Int): List<OutboxItem> = pending.take(limit)
+
+    override suspend fun ack(seq: Long) {
+        acked += seq
+        pending.removeAll { it.seq == seq }
+    }
+
+    override suspend fun fail(seq: Long, error: SyncError, nextAttemptAtEpochMs: Long) = Unit
 }

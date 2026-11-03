@@ -15,10 +15,16 @@ interface RemoteApplier {
     /** Verifies each document and applies the ones [ConflictResolver] lets through. */
     suspend fun applyDocuments(documents: List<DocumentEnvelope>): DocumentApplyReport
 
-    /** Verifies and ingests ledger events: applied, duplicates, quarantined, or held for a missing predecessor. */
+    /**
+     * Verifies and ingests ledger events: applied, duplicates, quarantined (including forked chains), or held for a
+     * missing predecessor or an author device not yet known or approved.
+     */
     suspend fun applyEvents(events: List<JsonObject>): EventApplyReport
 
-    /** Retries held events whose gap may now be filled. */
+    /**
+     * Retries held events (a gap that may now be filled, an author device the registry now knows) and, where the
+     * implementation keeps them, held documents.
+     */
     suspend fun retryHeld(): EventApplyReport
 
     suspend fun cursor(): SyncCursor
@@ -29,10 +35,15 @@ interface RemoteApplier {
     suspend fun localMaxLamport(): Long
 }
 
+/**
+ * @property held documents [RemoteDocumentVerifier] could not decide yet ([VerifiedDocument.Held]: unknown or
+ *   pending author device), kept for a later retry.
+ */
 data class DocumentApplyReport(
     val applied: Int = 0,
     val ignored: Int = 0,
     val rejected: Map<DocumentRejection, Int> = emptyMap(),
+    val held: Int = 0,
 ) {
     val rejectedTotal: Int get() = rejected.values.sum()
 
@@ -42,6 +53,7 @@ data class DocumentApplyReport(
         rejected = (rejected.keys + other.rejected.keys).associateWith {
             rejected.getOrDefault(it, 0) + other.rejected.getOrDefault(it, 0)
         },
+        held = held + other.held,
     )
 }
 

@@ -5,6 +5,7 @@ import {
   readAttestationChallenge,
   verifyAttestation,
   type AttestationLevel,
+  type AttestationResult,
   type VerifyOptions,
 } from './attestation.js';
 import { allowUnattested, CHALLENGE_TTL_MS } from './config.js';
@@ -30,15 +31,45 @@ export async function issueChallenge(uid: string): Promise<{ challenge: string; 
   return { challenge: challenge.toString('base64'), expiresAt };
 }
 
+/** Extra requirements on an attested key beyond [verifyAttestation]'s. */
+export interface KeyPolicy {
+  /** Refuse a SOFTWARE keystore: the key must live in a TEE or StrongBox. */
+  readonly hardwareOnly?: boolean;
+  /**
+   * The key must require user authentication for every use with a biometric: USER_AUTH_TYPE includes biometric (2),
+   * NO_AUTH_REQUIRED absent and AUTH_TIMEOUT absent or 0 (the parent authorisation key, ADR-0004).
+   */
+  readonly biometricPerUse?: boolean;
+}
+
+const BIOMETRIC = 2;
+
+function policyViolation(result: AttestationResult, policy: KeyPolicy): string | undefined {
+  if (policy.hardwareOnly && result.level === 'SOFTWARE') return 'SOFTWARE_KEYSTORE';
+  if (policy.biometricPerUse) {
+    const auth = result.userAuthentication;
+    const biometric = auth.userAuthType !== undefined && (auth.userAuthType & BIOMETRIC) !== 0;
+    const perUse = auth.authTimeout === undefined || auth.authTimeout === 0;
+    if (auth.noAuthRequired || !biometric || !perUse) return 'USER_AUTH';
+  }
+  return undefined;
+}
+
 /**
- * The attestation level of a device key being registered by [uid].
+ * The attestation level of [key], being registered by [uid] (a device key or a parent key).
  *
  * Without a chain the key is accepted as `NONE` only where unattested keys are allowed (emulator or
  * `ALLOW_UNATTESTED=true`, D-M3-5); otherwise `failed-precondition`. With a chain, the leaf must carry the caller's
- * outstanding, unexpired challenge, the chain must verify ([verifyAttestation]) and the attested key must be the
- * submitted one. The challenge is consumed on success.
+ * outstanding, unexpired challenge, the chain must verify ([verifyAttestation]), the attested key must be the
+ * submitted one and [policy] must hold. The challenge is consumed on success. The verified boot state is logged,
+ * never enforced.
  */
-export async function attestDevice(uid: string, chainValue: unknown, key: DeviceKey): Promise<AttestationRecord> {
+export async function attestKey(
+  uid: string,
+  chainValue: unknown,
+  key: DeviceKey,
+  policy: KeyPolicy = {},
+): Promise<AttestationRecord> {
   if (chainValue === undefined || chainValue === null) {
     if (!allowUnattested()) throw new HttpsError('failed-precondition', 'Key attestation is required');
     return 'NONE';
@@ -52,22 +83,34 @@ export async function attestDevice(uid: string, chainValue: unknown, key: Device
   if (!stored.exists || !expiresAt || expiresAt.toMillis() < Date.now()) {
     throw new HttpsError('failed-precondition', 'No registration challenge outstanding');
   }
-  let result;
+  let result: AttestationResult;
   try {
     const challenge = readAttestationChallenge(chainValue);
     if (sha256Hex(challenge) !== stored.get('hash')) throw new AttestationError('CHALLENGE_MISMATCH');
     result = await verifyAttestation(chainValue, challenge, key.spki, verifyOptions);
   } catch (e) {
     if (e instanceof AttestationError) {
-      log.warn('attestation.rejected', { reason: e.reason, deviceId: key.deviceId });
+      log.warn('attestation.rejected', { reason: e.reason, keyId: key.deviceId });
       throw new HttpsError('permission-denied', 'Key attestation rejected');
     }
     throw e;
   }
-  if (!result.keyMatches) {
-    log.warn('attestation.rejected', { reason: 'KEY_MISMATCH', deviceId: key.deviceId });
+  const violation = result.keyMatches ? policyViolation(result, policy) : 'KEY_MISMATCH';
+  if (violation !== undefined) {
+    log.warn('attestation.rejected', { reason: violation, keyId: key.deviceId });
     throw new HttpsError('permission-denied', 'Key attestation rejected');
   }
+  log.info('attestation.verified', {
+    keyId: key.deviceId,
+    level: result.level,
+    verifiedBootState: result.verifiedBootState,
+    bootVerified: result.verifiedBootState === 'VERIFIED' || result.verifiedBootState === 'SELF_SIGNED',
+  });
   await challengeRef.delete();
   return result.level;
+}
+
+/** [attestKey] for a device key (no extra policy; D-M3-5). */
+export async function attestDevice(uid: string, chainValue: unknown, key: DeviceKey): Promise<AttestationRecord> {
+  return attestKey(uid, chainValue, key);
 }

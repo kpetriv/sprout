@@ -14,6 +14,8 @@ import {
   newUser,
   req,
   resetEmulators,
+  signed,
+  withProof,
 } from './helpers.js';
 
 beforeEach(async () => {
@@ -96,7 +98,7 @@ describe('exportHousehold', () => {
     await db.doc(`households/${h.hid}/rewards/r1`).set({ docId: 'r1', docType: 'reward', lamport: 1, payload: { title: 'Ice cream' } });
     await db.doc(`households/${h.hid}/parentKeys/${'7'.repeat(64)}`).set({ deviceId: h.device.deviceId, uid: h.parent.uid });
 
-    const bundle = await call(fns.exportHousehold, req(h.parent));
+    const bundle = await call(fns.exportHousehold, req(h.parent, withProof(h, 'exportHousehold')));
     expect(Object.keys(bundle).sort()).toEqual(
       ['collections', 'devices', 'events', 'exportedAt', 'household', 'members', 'parentKeys'].sort(),
     );
@@ -128,7 +130,7 @@ describe('exportHousehold', () => {
     const writer = db.bulkWriter();
     for (let i = 0; i < 11; i++) void writer.set(db.doc(`households/${h.hid}/chores/c${i}`), { payload: { blob } });
     await writer.close();
-    await expectCode(call(fns.exportHousehold, req(h.parent)), 'resource-exhausted');
+    await expectCode(call(fns.exportHousehold, req(h.parent, withProof(h, 'exportHousehold'))), 'resource-exhausted');
   });
 });
 
@@ -137,7 +139,7 @@ describe('deleteHousehold', () => {
     const h = await newHousehold();
     const linked = await linkKid(h);
     await addKid(h.hid, 'kid-b', 'Otto');
-    await call(fns.createLinkCode, req(h.parent, { kidId: 'kid-b' }));
+    await call(fns.createLinkCode, req(h.parent, withProof(h, 'createLinkCode', { kidId: 'kid-b' })));
     await call(fns.beginDeviceRegistration, req(h.parent));
     await db.doc(`households/${h.hid}/events/e1`).set({ eventId: 'e1', lamport: 1 });
     await db.doc(`households/${h.hid}/chores/c1`).set({ docId: 'c1' });
@@ -146,7 +148,9 @@ describe('deleteHousehold', () => {
 
     await expectCode(call(fns.deleteHousehold, req(h.parent, { confirmation: 'nope' })), 'invalid-argument');
     await expectCode(call(fns.deleteHousehold, req(linked.kid, { confirmation: h.hid })), 'permission-denied');
-    expect(await call(fns.deleteHousehold, req(h.parent, { confirmation: h.hid }))).toEqual({ deleted: true });
+    expect(
+      await call(fns.deleteHousehold, req(h.parent, withProof(h, 'deleteHousehold', { confirmation: h.hid }))),
+    ).toEqual({ deleted: true });
 
     const remaining = await db.doc(`households/${h.hid}`).listCollections();
     expect(remaining).toHaveLength(0);
@@ -167,8 +171,72 @@ describe('deleteHousehold', () => {
     // Apart from the deletion record (and hashed rate-limit rows) nothing of the household remains; the other
     // household is untouched.
     const topLevel = (await db.listCollections()).map((c) => c.id).sort();
-    expect(topLevel).toEqual(['deletionRecords', 'households', 'rateLimits']);
+    expect(topLevel).toEqual(['deletionRecords', 'households', 'rateLimits', 'userHouseholds']);
+    expect((await db.collection('userHouseholds').get()).docs.map((d) => d.id)).toEqual([other.parent.uid]);
     expect((await db.collection('households').get()).docs.map((d) => d.id)).toEqual([other.hid]);
     expect((await auth.getUser(other.parent.uid)).uid).toBe(other.parent.uid);
+  });
+});
+
+describe('createHousehold: one household per uid', () => {
+  it('records userHouseholds/{uid} and refuses a uid that already has a row', async () => {
+    const h = await newHousehold();
+    expect((await db.doc(`userHouseholds/${h.parent.uid}`).get()).data()).toEqual({ hid: h.hid });
+    const uid = await newUser();
+    await db.doc(`userHouseholds/${uid}`).set({ hid: 'elsewhere' });
+    await expectCode(
+      call(fns.createHousehold, req({ uid }, { fiatCurrency: 'EUR', devicePublicKey: newDevice().publicKey })),
+      'already-exists',
+    );
+    expect((await auth.getUser(uid)).customClaims ?? {}).toEqual({});
+  });
+});
+
+describe('exportHousehold device proof', () => {
+  it('requires the calling device\'s signature', async () => {
+    const h = await newHousehold();
+    await expectCode(call(fns.exportHousehold, req(h.parent)), 'invalid-argument');
+    await expectCode(call(fns.exportHousehold, req(h.parent, signed(newDevice(), 'exportHousehold', h.hid))), 'permission-denied');
+    await expectCode(
+      call(fns.exportHousehold, req(h.parent, { ...signed(newDevice(), 'exportHousehold', h.hid), callerDeviceId: h.device.deviceId })),
+      'permission-denied',
+    );
+    await expectCode(
+      call(fns.exportHousehold, req(h.parent, signed(h.device, 'exportHousehold', 'another-household'))),
+      'permission-denied',
+    );
+  });
+});
+
+describe('deleteHousehold: proof, recent sign-in and complete erasure', () => {
+  it('requires the calling device\'s signature and a sign-in within 5 minutes', async () => {
+    const h = await newHousehold();
+    const args = { confirmation: h.hid };
+    await expectCode(call(fns.deleteHousehold, req(h.parent, args)), 'invalid-argument');
+    await expectCode(
+      call(fns.deleteHousehold, req(h.parent, { ...args, ...signed(h.device, 'deleteHousehold', h.hid, { confirmation: 'x' }) })),
+      'permission-denied',
+    );
+    const stale = Math.floor(Date.now() / 1000) - 6 * 60;
+    await expectCode(
+      call(fns.deleteHousehold, req({ ...h.parent, authTime: stale }, withProof(h, 'deleteHousehold', args))),
+      'failed-precondition',
+    );
+    expect((await db.doc(`households/${h.hid}`).get()).exists).toBe(true);
+  });
+
+  it('erases revoked kids too: their user, challenge and userHouseholds row, found through the device registry', async () => {
+    const h = await newHousehold();
+    const linked = await linkKid(h);
+    await call(fns.revokeDevice, req(h.parent, withProof(h, 'revokeDevice', { deviceId: linked.device.deviceId })));
+    expect((await db.doc(`households/${h.hid}/members/${linked.kid.uid}`).get()).exists).toBe(false);
+    await db.doc(`challenges/${linked.kid.uid}`).set({ hash: 'x' });
+
+    await call(fns.deleteHousehold, req(h.parent, withProof(h, 'deleteHousehold', { confirmation: h.hid })));
+    await expect(auth.getUser(linked.kid.uid)).rejects.toMatchObject({ code: 'auth/user-not-found' });
+    await expect(auth.getUser(h.parent.uid)).rejects.toMatchObject({ code: 'auth/user-not-found' });
+    expect((await db.doc(`challenges/${linked.kid.uid}`).get()).exists).toBe(false);
+    expect((await db.collection('userHouseholds').get()).size).toBe(0);
+    expect((await db.doc(`households/${h.hid}`).listCollections())).toHaveLength(0);
   });
 });
