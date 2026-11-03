@@ -24,7 +24,7 @@ google-services.json
 *.p12
 .env
 .env.*
-functions/.runtimeconfig.json
+.vercel/
 
 # Claude local overrides
 .claude/settings.local.json

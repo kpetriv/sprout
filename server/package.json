@@ -1,0 +1,37 @@
+{
+  "name": "sprout-server",
+  "private": true,
+  "description": "Sprout server: household identity, device registry, linking, export and deletion over the Firebase callable protocol (Hono on Vercel, D-M3-29).",
+  "license": "UNLICENSED",
+  "type": "module",
+  "main": "dist/index.js",
+  "engines": {
+    "node": "22.x"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "dev": "tsx watch src/dev.ts",
+    "lint": "eslint . && tsc --noEmit -p tsconfig.json",
+    "test": "firebase emulators:exec --only auth,firestore --project demo-sprout \"vitest run\""
+  },
+  "dependencies": {
+    "@hono/node-server": "2.1.4",
+    "@hono/vercel": "1.0.1",
+    "@peculiar/asn1-android": "2.11.1",
+    "@peculiar/asn1-schema": "2.11.1",
+    "@peculiar/x509": "2.2.0",
+    "firebase-admin": "14.5.0",
+    "hono": "4.13.13",
+    "reflect-metadata": "0.2.2"
+  },
+  "devDependencies": {
+    "@eslint/js": "10.0.1",
+    "@types/node": "22.20.5",
+    "eslint": "10.13.0",
+    "firebase-tools": "15.34.0",
+    "tsx": "4.23.15",
+    "typescript": "6.0.3",
+    "typescript-eslint": "8.72.0",
+    "vitest": "5.0.5"
+  }
+}

@@ -103,10 +103,10 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
-  # Firestore rules and Cloud Functions tests against the Firebase emulators (docs/FIREBASE.md). Not part of the
-  # required check yet (D-M3-11).
+  # Firestore rules and server (callables, D-M3-29) tests against the Firebase emulators (docs/FIREBASE.md). Not part
+  # of the required check yet (D-M3-11).
   backend:
-    name: 'Backend: rules and functions tests'
+    name: 'Backend: rules and server tests'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -124,7 +124,7 @@ jobs:
           node-version: '24'
           cache: npm
           cache-dependency-path: |
-            functions/package-lock.json
+            server/package-lock.json
             firestore/package-lock.json
 
       # The emulators run on the JVM; firebase-tools 15 requires Java 21 or newer.
@@ -136,7 +136,7 @@ jobs:
 
       - name: Read the pinned firebase-tools version
         id: firebase-tools
-        run: echo "version=$(node -p "require('./functions/package-lock.json').packages['node_modules/firebase-tools'].version")" >> "$GITHUB_OUTPUT"
+        run: echo "version=$(node -p "require('./server/package-lock.json').packages['node_modules/firebase-tools'].version")" >> "$GITHUB_OUTPUT"
 
       - name: Cache emulator jars
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -144,8 +144,8 @@ jobs:
           path: ~/.cache/firebase/emulators
           key: firebase-emulators-${{ runner.os }}-${{ steps.firebase-tools.outputs.version }}
 
-      - name: Functions (install, lint, build, test)
-        working-directory: functions
+      - name: Server (install, lint, build, test)
+        working-directory: server
         run: |
           npm ci
           npm run lint
