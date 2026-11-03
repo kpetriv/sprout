@@ -148,8 +148,9 @@ class FirebaseSyncTransportChatTest {
         val changedMessage = transport().push(emptyList(), emptyList(), listOf(ChatData.message("m1", seq = 2)))
 
         assertEquals(2, again.accepted.size, "rejected: ${again.rejected}")
+        // A chunk is never refused for good (D-M4-22): it is retried with the backoff.
         assertEquals(
-            listOf(SyncError.Permanent("permission-denied"), SyncError.Permanent("permission-denied")),
+            listOf(SyncError.Transient(), SyncError.Permanent("permission-denied")),
             (changedChunk.rejected + changedMessage.rejected).map { it.second },
         )
     }
@@ -233,35 +234,92 @@ class FirebaseSyncTransportChatTest {
     }
 
     @Test
-    fun `a chunk over the daily budget is transient until midnight and stops the push`() = runTest {
+    fun `a chunk over the daily budget is transient until midnight and stops the chat lane only`() = runTest {
         seedHousehold()
         firestore.seed("households/h1/quotas/20261103", mapOf("chunks" to 60L, "last" to "x.0"))
         firestore.rule = { write, existing ->
             val quota = write.path.endsWith("/quotas/20261103")
             if (quota && ((existing?.get("chunks") as? Long) ?: 0) >= 60) FirestoreCode.PERMISSION_DENIED else null
         }
+        val chunk = ChatData.chunk("b1")
         val message = ChatData.message("m1", kind = MessageKind.PHOTO)
+        val events = listOf(TestData.event("evt-1"), TestData.event("evt-2"))
 
-        val result = transport().push(emptyList(), emptyList(), listOf(message), listOf(ChatData.chunk("b1")))
+        val result = transport().push(
+            listOf(PushItem.BlobChunk(chunk), PushItem.Message(message)) + events.map(PushItem::Event),
+        )
 
-        assertEquals(listOf(SyncError.Transient(retryAfterMs = 12 * 3_600_000L)), result.rejected.map { it.second })
-        assertTrue(result.accepted.isEmpty(), "the message behind the chunk is not processed")
-        assertNull(firestore.docs["households/h1/messages/m1"])
+        assertEquals(
+            listOf(PushItemId.ofBlobChunk(chunk) to SyncError.Transient(retryAfterMs = 12 * 3_600_000L)),
+            result.rejected,
+        )
+        assertNull(firestore.docs["households/h1/messages/m1"], "the message behind the chunk is not processed")
+        // The ledger lane does not wait for the chat lane (D-M4-22).
+        assertEquals(events.map(PushItemId::ofEvent), result.accepted)
+        assertNotNull(firestore.docs["households/h1/events/evt-2"])
     }
 
     @Test
-    fun `near midnight a refused chunk is retried against the neighbouring day`() = runTest {
+    fun `a refused event does not hold back the message behind it`() = runTest {
         seedHousehold()
+        firestore.rule = { write, _ -> if (write.path.endsWith("evt-1")) FirestoreCode.PERMISSION_DENIED else null }
+        val refused = TestData.event("evt-1")
+        val message = ChatData.message("m1")
+
+        val result = transport().push(
+            listOf(PushItem.Event(refused), PushItem.Event(TestData.event("evt-2")), PushItem.Message(message)),
+        )
+
+        assertEquals(listOf(PushItemId.ofEvent(refused) to SyncError.Permanent("permission-denied")), result.rejected)
+        assertEquals(listOf(PushItemId.ofMessage(message)), result.accepted)
+        assertNull(firestore.docs["households/h1/events/evt-2"], "the next event waits behind the refused one")
+        assertNotNull(firestore.docs["households/h1/messages/m1"])
+    }
+
+    @Test
+    fun `a chunk refused for another day is transient and its next attempt recomputes the day`() = runTest {
+        seedHousehold()
+        // The device's clock says 23:55 on the 3rd; the server's is already on the 4th: only that counter is accepted.
         now = java.time.Instant.parse("2026-11-03T23:55:00Z").toEpochMilli()
-        // The server's clock is already on the 4th: only that day's counter is accepted.
         firestore.rule = { write, _ ->
             if ("/quotas/" in write.path && !write.path.endsWith("20261104")) FirestoreCode.PERMISSION_DENIED else null
         }
+        val chunk = ChatData.chunk("b1")
 
-        val result = transport().push(emptyList(), emptyList(), emptyList(), listOf(ChatData.chunk("b1")))
+        val refused = transport().push(listOf(PushItem.BlobChunk(chunk)))
 
-        assertEquals(1, result.accepted.size, "rejected: ${result.rejected}")
+        // Not over the budget: the engine's backoff, never a permanent (blocking) refusal (audit A2-M3).
+        assertEquals(listOf(PushItemId.ofBlobChunk(chunk) to SyncError.Transient()), refused.rejected)
+        assertNull(firestore.docs["households/h1/blobs/b1.0"])
+
+        // A device whose date is days off is refused the same way: transient, so only its chat lane waits.
+        now = java.time.Instant.parse("2026-11-10T09:00:00Z").toEpochMilli()
+        val again = transport().push(listOf(PushItem.BlobChunk(chunk)))
+        assertEquals(SyncError.Transient(), again.rejected.single().second)
+
+        now = java.time.Instant.parse("2026-11-04T00:01:00Z").toEpochMilli()
+        val retried = transport().push(listOf(PushItem.BlobChunk(chunk)))
+
+        assertEquals(1, retried.accepted.size, "rejected: ${retried.rejected}")
         assertEquals(1L, firestore.docs.getValue("households/h1/quotas/20261104")["chunks"])
+    }
+
+    @Test
+    fun `a chunk refused with invalid-argument or an unreadable copy is transient too`() = runTest {
+        seedHousehold()
+        firestore.commitFailures += listOf(FirestoreCode.INVALID_ARGUMENT, FirestoreCode.INVALID_ARGUMENT)
+        val chunk = ChatData.chunk("b1")
+        val message = ChatData.message("m1", kind = MessageKind.PHOTO)
+
+        val invalid = transport().push(listOf(PushItem.BlobChunk(chunk), PushItem.Message(message)))
+
+        assertEquals(listOf(PushItemId.ofBlobChunk(chunk) to SyncError.Transient()), invalid.rejected)
+        assertTrue(invalid.accepted.isEmpty(), "the message waits behind its chunk")
+
+        firestore.rule = { write, _ -> if ("/blobs/" in write.path) FirestoreCode.PERMISSION_DENIED else null }
+        firestore.readFailures["households/h1/blobs/b1.0"] = FirestoreCode.PERMISSION_DENIED
+        val again = transport().push(listOf(PushItem.BlobChunk(chunk)))
+        assertEquals(SyncError.Transient(), again.rejected.single().second)
     }
 
     @Test

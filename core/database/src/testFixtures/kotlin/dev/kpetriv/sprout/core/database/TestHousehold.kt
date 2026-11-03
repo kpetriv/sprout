@@ -160,14 +160,14 @@ class TestHousehold(
     )
     val purge = PurgeLocalHouseholdUseCase(database, files, clock, Dispatchers.Unconfined)
 
-    val messageWrites = MessageWrites(database, clock, signer, authors, chatCrypto, signatureCheck)
     val blobWrites = BlobWrites(database, clock, signer, authors, chatCrypto, signatureCheck, blobCache)
+    val messageWrites = MessageWrites(database, clock, signer, authors, chatCrypto, signatureCheck, blobWrites)
     val chatBlobs = ChatBlobs(database, blobCache, chatCrypto, signatureCheck)
     val threadKeyWrites = ThreadKeyWrites(database, clock, signer, authors, chatCrypto)
     val threadKeyMaintenance = ThreadKeyMaintenance(database, sessions, chatCrypto, signatureCheck, threadKeyWrites)
     val messageReader = MessageReader(database)
     val chatThreads = ChatThreads(database)
-    val threadKeyStatus = ThreadKeyStatusReader(database, signatureCheck)
+    val threadKeyStatus = ThreadKeyStatusReader(database, signatureCheck, chatCrypto, Dispatchers.Unconfined)
 
     val timeBankStatus = TimeBankStatusReader(ledger, accounts)
     val startTimeBank = StartTimeBankUseCase(timeBankStatus, writer)

@@ -35,6 +35,18 @@ interface OutboxDao {
     )
     suspend fun head(limit: Int): List<OutboxHead>
 
+    /**
+     * The oldest [limit] rows of [kinds] (one outbox lane, D-M4-22) in `seq` order, due or not, without their `data`,
+     * like [head]: the caller stops at the first row of the lane that is not yet due.
+     */
+    @Query(
+        """
+        SELECT seq, kind, refId, payload, createdAtEpochMs, attempts, lastError, nextAttemptAtEpochMs, docType, docId,
+        lamport FROM outbox WHERE kind IN (:kinds) ORDER BY seq LIMIT :limit
+        """,
+    )
+    suspend fun headOf(kinds: List<OutboxKind>, limit: Int): List<OutboxHead>
+
     /** The bytes of row [seq] (a blob chunk's), or null. */
     @Query("SELECT data FROM outbox WHERE seq = :seq")
     suspend fun dataOf(seq: Long): ByteArray?

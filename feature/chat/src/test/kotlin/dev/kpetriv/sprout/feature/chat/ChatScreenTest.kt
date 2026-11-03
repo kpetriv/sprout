@@ -156,6 +156,22 @@ class ChatScreenTest {
     }
 
     @Test
+    fun `a replaced chat key says to remove and re-link the phone`() {
+        show(ChatPreviewData.kidKeyConflict(KidUiTier.SAPLING))
+
+        compose.onNodeWithText("This phone's chat key was replaced. Ask a parent to remove and re-link it.")
+            .assertIsDisplayed()
+        compose.onNodeWithText("Send").assertIsNotEnabled()
+    }
+
+    @Test
+    fun `a message that arrived late is labelled`() {
+        show(ChatPreviewData.parentSendStates())
+
+        compose.onNodeWithText("Arrived late").assertIsDisplayed()
+    }
+
+    @Test
     fun `a parent types, sends, attaches a photo and plays a voice note`() {
         show(ChatPreviewData.parentEmpty())
 

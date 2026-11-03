@@ -2,6 +2,7 @@ package dev.kpetriv.sprout.chat
 
 import android.content.Context
 import android.graphics.BitmapFactory
+import android.media.MediaDataSource
 import android.media.MediaPlayer
 import android.media.MediaRecorder
 import android.os.Build
@@ -16,6 +17,8 @@ import dev.kpetriv.sprout.core.database.ChatBlobs
 import dev.kpetriv.sprout.core.domainledger.chat.ChatLimits
 import dev.kpetriv.sprout.core.model.BlobId
 import dev.kpetriv.sprout.core.model.DeviceId
+import dev.kpetriv.sprout.core.model.KidId
+import dev.kpetriv.sprout.core.model.SubmissionId
 import dev.kpetriv.sprout.core.model.ThreadId
 import dev.kpetriv.sprout.core.sync.SyncTransport
 import dev.kpetriv.sprout.feature.chat.BlobLoader
@@ -25,6 +28,7 @@ import dev.kpetriv.sprout.feature.chat.VoiceRecorder
 import dev.kpetriv.sprout.feature.chores.RemotePhotoLoader
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -58,9 +62,9 @@ internal data class JpegSize(val width: Int, val height: Int) {
  * [BlobLoader] (chat media) and [RemotePhotoLoader] (chore photos in the approvals inbox), M4 §2: the local cache
  * first ([ChatBlobs.open]), otherwise the chunks from [SyncTransport.fetchBlob], verified, cached and decrypted by
  * [ChatBlobs.ingest]. Every blob is checked against what refers to it (audit M5): a chat blob against its message's
- * thread, author device and photo hash; a chore photo against the submission that names it (kid, submission, photo
- * hash, [ChatBlobs.chorePhotoExpectation]). A failure is a failed [Result] ([BlobUnavailableException] or the
- * transport's `SyncException`); nothing is logged.
+ * thread, author device and photo hash; a chore photo against the submission on screen (its kid, its id and its
+ * `photoRef.sha256`, audit A2-M1), never against whichever submission names the blob id. A failure is a failed
+ * [Result] ([BlobUnavailableException] or the transport's `SyncException`); nothing is logged.
  */
 class TransportBlobLoader @Inject constructor(private val blobs: ChatBlobs, private val transport: SyncTransport) :
     BlobLoader,
@@ -71,11 +75,13 @@ class TransportBlobLoader @Inject constructor(private val blobs: ChatBlobs, priv
         load(BlobId(blobId), BlobExpectation(target, author, expected.sha256))
     }
 
-    override suspend fun load(blobId: String): Result<ByteArray> = attempt {
-        val id = BlobId(blobId)
-        val expected = blobs.chorePhotoExpectation(id)
-            ?: throw BlobUnavailableException(BlobUnavailableException.Reason.INVALID)
-        load(id, expected)
+    override suspend fun load(
+        blobId: String,
+        kidId: KidId,
+        submissionId: SubmissionId,
+        sha256: String,
+    ): Result<ByteArray> = attempt {
+        load(BlobId(blobId), BlobExpectation(BlobTarget.ChorePhoto(kidId, submissionId), plaintextSha256 = sha256))
     }
 
     private suspend fun load(id: BlobId, expected: BlobExpectation): ByteArray =
@@ -92,12 +98,40 @@ class TransportBlobLoader @Inject constructor(private val blobs: ChatBlobs, priv
 }
 
 /**
+ * The temporary audio files of chat voice notes in `cacheDir` (audit A2-M2): the recorder's `voice*.m4a` (MediaRecorder
+ * needs a file to write to) and, from builds before fix pass 3, the player's `play*.m4a`. [sweep] deletes what a
+ * process death left behind; `AppInitializer` runs it at every start, and the wipe clears `cacheDir` as a whole.
+ */
+class VoiceTempFiles @Inject constructor(@param:ApplicationContext private val context: Context) {
+    /** A new, empty recording file in `cacheDir`. */
+    fun newRecording(): File = File.createTempFile(RECORDING_PREFIX, SUFFIX, context.cacheDir)
+
+    /** Deletes every leftover voice temp file in `cacheDir`; returns how many were deleted. */
+    fun sweep(): Int = sweep(context.cacheDir)
+
+    companion object {
+        internal const val RECORDING_PREFIX = "voice"
+        internal const val PLAYBACK_PREFIX = "play"
+        internal const val SUFFIX = ".m4a"
+
+        /** Deletes the voice temp files ([RECORDING_PREFIX] or [PLAYBACK_PREFIX], [SUFFIX]) directly in [directory]. */
+        internal fun sweep(directory: File): Int = directory.listFiles().orEmpty().count { file ->
+            file.isFile && file.name.endsWith(SUFFIX) &&
+                (file.name.startsWith(RECORDING_PREFIX) || file.name.startsWith(PLAYBACK_PREFIX)) && file.delete()
+        }
+    }
+}
+
+/**
  * [VoiceRecorder] over [MediaRecorder] (M4 §2): AAC-LC in an MPEG-4 container, mono 16 kHz at 32 kbps, stopping by
- * itself at [VoiceRecorder.MAX_DURATION_MS]. The recording goes to a temporary file in `cacheDir`, which is read
- * into memory on [stop] and deleted at once (also on [cancel] and on failure). One recording at a time.
+ * itself at [VoiceRecorder.MAX_DURATION_MS]. The recording goes to a temporary file in `cacheDir` ([VoiceTempFiles]),
+ * which is read into memory on [stop] and deleted on every path: after [stop] (also when it fails), on [cancel], when
+ * [start] fails or its caller is cancelled. A file a process death leaves behind is swept at the next start.
+ * One recording at a time.
  */
 class MediaVoiceRecorder @Inject constructor(
     @param:ApplicationContext private val context: Context,
+    private val tempFiles: VoiceTempFiles,
     @param:Dispatcher(SproutDispatchers.IO) private val dispatcher: CoroutineDispatcher,
 ) : VoiceRecorder {
     private var recorder: MediaRecorder? = null
@@ -107,12 +141,20 @@ class MediaVoiceRecorder @Inject constructor(
     @Volatile
     private var reachedMax = false
 
+    override suspend fun start(): Result<Unit> = try {
+        withContext(dispatcher) { startRecording() }
+    } catch (cancellation: CancellationException) {
+        // Cancelled while (or right after) starting: nothing may keep recording or stay on disk.
+        cancel()
+        throw cancellation
+    }
+
     @Suppress("TooGenericExceptionCaught") // MediaRecorder reports a busy or missing microphone as RuntimeException.
-    override suspend fun start(): Result<Unit> = withContext(dispatcher) {
+    private fun startRecording(): Result<Unit> {
         cancel()
         reachedMax = false
-        try {
-            val target = File.createTempFile(TEMP_PREFIX, TEMP_SUFFIX, context.cacheDir)
+        return try {
+            val target = tempFiles.newRecording()
             file = target
             val created = newRecorder().apply {
                 setAudioSource(MediaRecorder.AudioSource.MIC)
@@ -132,8 +174,6 @@ class MediaVoiceRecorder @Inject constructor(
             recorder = created
             startedAt = SystemClock.elapsedRealtime()
             Result.success(Unit)
-        } catch (cancellation: CancellationException) {
-            throw cancellation
         } catch (failure: Exception) {
             cancel()
             Result.failure(failure)
@@ -141,7 +181,7 @@ class MediaVoiceRecorder @Inject constructor(
     }
 
     @Suppress("TooGenericExceptionCaught") // stop() throws RuntimeException when nothing was recorded.
-    override suspend fun stop(): Result<VoiceClip> = withContext(dispatcher) {
+    override suspend fun stop(): Result<VoiceClip> = withContext(dispatcher + NonCancellable) {
         val active = recorder ?: return@withContext Result.failure(IllegalStateException("not recording"))
         val target = file
         val duration = (SystemClock.elapsedRealtime() - startedAt).coerceAtMost(VoiceRecorder.MAX_DURATION_MS)
@@ -153,8 +193,6 @@ class MediaVoiceRecorder @Inject constructor(
             active.release()
             val bytes = checkNotNull(target).readBytes()
             Result.success(VoiceClip(bytes, duration))
-        } catch (cancellation: CancellationException) {
-            throw cancellation
         } catch (failure: Exception) {
             active.release()
             Result.failure(failure)
@@ -183,34 +221,43 @@ class MediaVoiceRecorder @Inject constructor(
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) MediaRecorder(context) else MediaRecorder()
 
     private companion object {
-        const val TEMP_PREFIX = "voice"
-        const val TEMP_SUFFIX = ".m4a"
         const val SAMPLING_RATE = 16_000
         const val BIT_RATE = 32_000
     }
 }
 
 /**
- * [VoicePlayer] over [MediaPlayer]: the decrypted clip is written to a temporary file in `cacheDir` (MediaPlayer
- * needs a source it can seek), played, and the file deleted when playback ends, fails or is cancelled.
+ * A [MediaDataSource] over a decrypted clip in memory (audit A2-M2): MediaPlayer reads the bytes from here, so a
+ * decrypted voice note is never written to a file. The array stays the caller's; it is not copied or wiped.
  */
-class MediaVoicePlayer @Inject constructor(
-    @param:ApplicationContext private val context: Context,
-    @param:Dispatcher(SproutDispatchers.IO) private val dispatcher: CoroutineDispatcher,
-) : VoicePlayer {
+internal class ByteArrayMediaDataSource(private val bytes: ByteArray) : MediaDataSource() {
+    override fun readAt(position: Long, buffer: ByteArray, offset: Int, size: Int): Int {
+        if (position < 0 || position >= bytes.size) return END_OF_STREAM
+        val count = minOf(size.toLong(), bytes.size - position).toInt()
+        System.arraycopy(bytes, position.toInt(), buffer, offset, count)
+        return count
+    }
+
+    override fun getSize(): Long = bytes.size.toLong()
+
+    override fun close() = Unit
+
+    private companion object {
+        const val END_OF_STREAM = -1
+    }
+}
+
+/**
+ * [VoicePlayer] over [MediaPlayer]: the decrypted clip is played from memory ([ByteArrayMediaDataSource], audit
+ * A2-M2), never from a file, and the player is released when playback ends, fails or is cancelled.
+ */
+class MediaVoicePlayer @Inject constructor() : VoicePlayer {
     @Volatile
     private var player: MediaPlayer? = null
 
     override suspend fun play(bytes: ByteArray) {
         stop()
-        val file = withContext(dispatcher) {
-            File.createTempFile(TEMP_PREFIX, TEMP_SUFFIX, context.cacheDir).also { it.writeBytes(bytes) }
-        }
-        try {
-            playFile(file)
-        } finally {
-            withContext(dispatcher) { file.delete() }
-        }
+        playFrom(ByteArrayMediaDataSource(bytes))
     }
 
     override fun stop() {
@@ -222,7 +269,7 @@ class MediaVoicePlayer @Inject constructor(
     }
 
     @Suppress("SwallowedException") // A clip that cannot be played just ends; nothing to report or log.
-    private suspend fun playFile(file: File) = suspendCancellableCoroutine { continuation ->
+    private suspend fun playFrom(source: MediaDataSource) = suspendCancellableCoroutine { continuation ->
         val media = MediaPlayer()
         player = media
         val finish = {
@@ -237,18 +284,15 @@ class MediaVoicePlayer @Inject constructor(
         }
         continuation.invokeOnCancellation { stop() }
         try {
-            media.setDataSource(file.absolutePath)
+            media.setDataSource(source)
             media.prepare()
             media.start()
         } catch (failure: IOException) {
             finish()
         } catch (failure: IllegalStateException) {
             finish()
+        } catch (failure: IllegalArgumentException) {
+            finish()
         }
-    }
-
-    private companion object {
-        const val TEMP_PREFIX = "play"
-        const val TEMP_SUFFIX = ".m4a"
     }
 }

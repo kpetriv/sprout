@@ -59,8 +59,10 @@ import kotlin.io.encoding.Base64
  *   caller, exactly one of `threadId` (equal to `kidId`) and `submissionId`, a KID member only for its own `kidId`,
  *   a `kidId` with a stored `kid` document, `chunk` in 0..1, `chunks` in 1..2 (`chunk < chunks`), a hex `sha256`, and
  *   1 to [MAX_BLOB_CHUNK_BYTES] bytes of data. Identical re-sends are accepted. At most [DAILY_BLOB_CHUNKS] new chunks
- *   per household per UTC day ([nowEpochMs]), as the rules' `quotas/{yyyymmdd}` counter allows; a chunk over the cap
- *   is refused [SyncError.Transient] with a retry at the next UTC midnight, as the transport reports it.
+ *   per household per UTC day ([nowEpochMs]), as the rules' `quotas/{yyyymmdd}` counter allows. As the transport
+ *   reports it (D-M4-22), a chunk the rules refuse is [SyncError.Transient], never permanent: with a retry at the next
+ *   UTC midnight when the day's budget is used up, otherwise with the default backoff. Only a chunk the transport
+ *   refuses before writing (malformed, foreign household, unsigned) is permanent.
  * - **Thread keys** (`thread_key` documents, PARENT only like every non-submission type): never a tombstone; docId
  *   `"<threadId>.<epoch>.<createdByDeviceId>"`; `createdByDeviceId` is the author device; `lamport` at most
  *   [MAX_THREAD_KEY_LAMPORT]; an update only from the same author device (one creator per document, D-M4-3).
@@ -75,8 +77,9 @@ import kotlin.io.encoding.Base64
  *
  * **Push order** (like `FirebaseSyncTransport`): items are processed in the order given. After a permanent refusal of
  * an item whose kind [blocks on refusal][OutboxItem.Kind.blocksOnRefusal] (event, message, blob chunk), or a transient
- * one of any item, the rest of the push is left unprocessed (in neither result list). [injectEvent], [injectDocument], [injectMessage] and [injectBlobChunk] bypass every rule (a
- * compromised server or a rules bug).
+ * one of any item, the rest of that item's lane ([OutboxItem.Lane], D-M4-22) is left unprocessed (in neither result
+ * list); the other lane goes on. [injectEvent], [injectDocument], [injectMessage] and [injectBlobChunk] bypass every
+ * rule (a compromised server or a rules bug).
  *
  * Each collection has its own monotonic sequence; a pull returns what was written after the cursor's position in
  * each collection, at most [pageSize] per collection per page.
@@ -324,7 +327,9 @@ class FakeBackend(val householdId: HouseholdId, private val pageSize: Int = DEFA
         checkReachable(caller.deviceId)
         val accepted = mutableListOf<PushItemId>()
         val rejected = mutableListOf<Pair<PushItemId, SyncError>>()
+        val stopped = mutableSetOf<OutboxItem.Lane>()
         for (item in items) {
+            if (item.kind.lane in stopped) continue
             val error = when (item) {
                 is PushItem.Event -> pushEvent(caller, item.json)?.let(SyncError::Permanent)
                 is PushItem.Document -> pushDocument(caller, item.envelope)?.let(SyncError::Permanent)
@@ -335,8 +340,8 @@ class FakeBackend(val householdId: HouseholdId, private val pageSize: Int = DEFA
                 accepted += item.id
             } else {
                 rejected += item.id to error
-                // Head of line: the rest of the push waits behind a blocking or transient refusal.
-                if (error is SyncError.Transient || item.kind.blocksOnRefusal) break
+                // Head of line per lane: the rest of the lane waits behind a blocking or transient refusal.
+                if (error is SyncError.Transient || item.kind.blocksOnRefusal) stopped += item.kind.lane
             }
         }
         return PushResult(accepted, rejected)
@@ -631,8 +636,9 @@ class FakeBackend(val householdId: HouseholdId, private val pageSize: Int = DEFA
     // ---- blobs ----
 
     /**
-     * Null when accepted (stored, or the identical chunk already there); otherwise the refusal: permanent for the
-     * rules, transient (until the next UTC midnight) when the household's daily blob budget is used up.
+     * Null when accepted (stored, or the identical chunk already there); otherwise the refusal: permanent for what the
+     * transport refuses unsent; [SyncError.Transient] for a rules refusal (D-M4-22), until the next UTC midnight when
+     * the household's daily blob budget is used up.
      */
     private fun pushBlobChunk(caller: Caller, chunk: BlobChunkJson): SyncError? {
         val header = chunk.header
@@ -648,9 +654,9 @@ class FakeBackend(val householdId: HouseholdId, private val pageSize: Int = DEFA
         val now = nowEpochMs()
         val day = Math.floorDiv(now, DAY_MS)
         return when {
-            stored != null -> if (stored == chunk) null else SyncError.Permanent(PERMISSION_DENIED)
+            stored != null -> if (stored == chunk) null else SyncError.Transient()
 
-            !blobCreateAllowed(caller, chunk) -> SyncError.Permanent(PERMISSION_DENIED)
+            !blobCreateAllowed(caller, chunk) -> SyncError.Transient()
 
             blobChunksPerDay.getOrDefault(day, 0) >= DAILY_BLOB_CHUNKS ->
                 SyncError.Transient(retryAfterMs = (day + 1) * DAY_MS - now)

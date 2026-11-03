@@ -6,8 +6,8 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.serialization.json.JsonObject
 
 /**
- * An in-memory outbox with the [OutboxSource] contract: head-of-line [due], one row per document (a newer write of
- * the same document replaces a pending row and takes a new `seq`, like core/database's upsert), and
+ * An in-memory outbox with the [OutboxSource] contract: head-of-line [due] per lane, one row per document (a newer write
+ * of the same document replaces a pending row and takes a new `seq`, like core/database's upsert), and
  * [observeBlocked] as the contract describes it (any kind that [blocks on refusal][OutboxItem.Kind.blocksOnRefusal]).
  */
 class InMemoryOutboxSource : OutboxSource {
@@ -60,10 +60,25 @@ class InMemoryOutboxSource : OutboxSource {
     @Synchronized
     fun row(seq: Long): Row? = rows[seq]
 
-    override suspend fun due(nowEpochMs: Long, limit: Int): List<OutboxItem> = synchronized(this) {
-        rows.values.asSequence().takeWhile {
-            it.nextAttemptAtEpochMs <= nowEpochMs
-        }.take(limit).map { it.item }.toList()
+    override suspend fun due(nowEpochMs: Long, limit: Int, lanes: Set<OutboxItem.Lane>): List<OutboxItem> =
+        synchronized(this) {
+            lanes.flatMap { lane ->
+                rows.values.asSequence()
+                    .filter { it.item.kind.lane == lane }
+                    .takeWhile { it.nextAttemptAtEpochMs <= nowEpochMs }
+                    .take(limit)
+                    .toList()
+            }.sortedBy { it.item.seq }.take(limit).map { it.item }
+        }
+
+    /** Rejections passed to [ackRejected], in order. */
+    val ackedRejections: List<PushRejection> get() = synchronized(this) { rejectedAcks.toList() }
+
+    private val rejectedAcks = mutableListOf<PushRejection>()
+
+    override suspend fun ackRejected(seq: Long, rejection: PushRejection) {
+        synchronized(this) { rejectedAcks += rejection }
+        ack(seq)
     }
 
     override suspend fun ack(seq: Long) {

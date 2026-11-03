@@ -30,9 +30,11 @@ import javax.inject.Inject
 import kotlin.time.Instant
 
 /**
- * [OutboxSource] over the `outbox` table, **head of line** (D-M3-15): [due] reads rows in `seq` order and stops at the
- * first one whose `nextAttemptAtEpochMs` is after now, so an item waiting for its backoff holds back everything
- * queued after it and push order stays write order (a device's events form a hash chain). Rows are read without their
+ * [OutboxSource] over the `outbox` table, **head of line per lane** (D-M3-15, D-M4-22): the ledger lane
+ * (`LEDGER_EVENT`, `DOCUMENT`) and the chat lane (`MESSAGE`, `BLOB_CHUNK`) are read separately; within each, [due]
+ * reads rows in `seq` order and stops at the first one whose `nextAttemptAtEpochMs` is after now, so an item waiting
+ * for its backoff holds back everything queued after it in its lane, and each lane's push order stays its write order
+ * (a device's events form a hash chain). The two lanes' due rows are merged by `seq`. Rows are read without their
  * bytes; a blob chunk's bytes are loaded for that item only, and one call returns at most [MAX_CHUNKS_PER_BATCH]
  * chunks (review M5: at most 1.4 MB of chunk data in memory per batch). The rest follow in the next sync, which the
  * outbox trigger requests as soon as the acks leave a due head.
@@ -41,19 +43,25 @@ import kotlin.time.Instant
  * with its signed envelope; a `MESSAGE` row [OutboxItem.message] with its signed `MessageJson` tree; a `BLOB_CHUNK` row
  * [OutboxItem.blobChunk] with its signed header and bytes (queued before the message that names the blob). A row
  * whose payload no longer decodes can never be sent: it is deleted and audited `SYNC_REJECTED` (code [UNDECODABLE])
- * instead of blocking the queue. [ack] deletes; [fail] counts the attempt and
- * stores only the error's code.
+ * instead of blocking the queue. [ack] deletes; [ackRejected] deletes and writes the `SYNC_REJECTED` row in one
+ * transaction (audit A2-L3); [fail] counts the attempt and stores only the error's code.
  */
 class RoomOutboxSource @Inject constructor(private val database: SproutDatabase, private val clock: Clock) :
     OutboxSource {
     private val outbox = database.outboxDao()
     private val audit = database.auditLogDao()
 
-    override suspend fun due(nowEpochMs: Long, limit: Int): List<OutboxItem> {
+    override suspend fun due(nowEpochMs: Long, limit: Int, lanes: Set<OutboxItem.Lane>): List<OutboxItem> {
         require(limit > 0) { "limit must be positive" }
+        // Each lane is sorted, so a prefix of the merge is a prefix of each lane: head of line holds per lane.
+        return lanes.flatMap { dueOf(it, nowEpochMs, limit) }.sortedBy { it.seq }.take(limit)
+    }
+
+    /** Up to [limit] due items of [lane], in `seq` order, stopping at its first row not yet due. */
+    private suspend fun dueOf(lane: OutboxItem.Lane, nowEpochMs: Long, limit: Int): List<OutboxItem> {
         val items = ArrayList<OutboxItem>(limit)
         var chunks = 0
-        for (row in outbox.head(limit)) {
+        for (row in outbox.headOf(lane.outboxKinds, limit)) {
             val isChunk = row.kind == OutboxKind.BLOB_CHUNK
             if (row.nextAttemptAtEpochMs > nowEpochMs || (isChunk && chunks == MAX_CHUNKS_PER_BATCH)) break
             if (isChunk) chunks++
@@ -64,6 +72,19 @@ class RoomOutboxSource @Inject constructor(private val database: SproutDatabase,
     }
 
     override suspend fun ack(seq: Long) = outbox.delete(seq)
+
+    /**
+     * Drops a row the server refused for good (a document) **with** its `SYNC_REJECTED` audit row, in one transaction
+     * (audit A2-L3): a crash cannot leave the row gone without the refusal on record (`ThreadKeyWrites.settle` reads
+     * "row gone, no refusal" as confirmed). The row is written exactly as [auditRejections] writes it, so the report's
+     * later audit of the same rejection adds nothing.
+     */
+    override suspend fun ackRejected(seq: Long, rejection: PushRejection) {
+        database.withTransaction {
+            outbox.delete(seq)
+            auditOnce(rejection)
+        }
+    }
 
     override suspend fun fail(seq: Long, error: SyncError, nextAttemptAtEpochMs: Long) =
         outbox.markFailed(seq, error.code, nextAttemptAtEpochMs)
@@ -77,22 +98,26 @@ class RoomOutboxSource @Inject constructor(private val database: SproutDatabase,
     suspend fun auditRejections(rejections: List<PushRejection>) {
         if (rejections.isEmpty()) return
         database.withTransaction {
-            for (rejection in rejections) {
-                val details = rejectionDetails(rejection)
-                val target = rejection.id.value
-                if (audit.countExact(AuditAction.SYNC_REJECTED, target, details) == 0) audit(target, details)
-            }
+            rejections.forEach { auditOnce(it) }
         }
     }
 
+    /** One `SYNC_REJECTED` row for [rejection] unless an identical one exists. */
+    private suspend fun auditOnce(rejection: PushRejection) {
+        val details = rejectionDetails(rejection)
+        val target = rejection.id.value
+        if (audit.countExact(AuditAction.SYNC_REJECTED, target, details) == 0) audit(target, details)
+    }
+
     /**
-     * The item holding the outbox back (D-M3-33), for the dashboard's "sync blocked" state and the chat's "sending
-     * is blocked": the lowest queued `seq` of a kind that [blocks on refusal][OutboxItem.Kind.blocksOnRefusal] (a
-     * ledger event, a chat message or a blob chunk) with a blocking `SYNC_REJECTED` audit row ([auditRejections]), the
-     * latest code it was refused with, and when it was first refused. Null when nothing blocks; it clears as soon as
-     * the item is accepted (its row is acked) or removed (a discarded message, D-M4-19).
+     * The item holding an outbox lane back (D-M3-33, D-M4-22), for the dashboard's "sync blocked" state and the chat's
+     * "sending is blocked": the lowest queued `seq` of a kind that [blocks on refusal][OutboxItem.Kind.blocksOnRefusal]
+     * (a ledger event, a chat message or a blob chunk) with a blocking `SYNC_REJECTED` audit row ([auditRejections]),
+     * the latest code it was refused with, and when it was first refused; of [lane] only, or of either lane when null
+     * (both lanes can be blocked at once: the lower `seq` is shown). Null when nothing blocks; it clears as soon as the
+     * item is accepted (its row is acked) or removed (a discarded message, D-M4-19).
      */
-    fun observeBlocked(): Flow<BlockedPush?> = observeBlockedPush(database)
+    fun observeBlocked(lane: OutboxItem.Lane? = null): Flow<BlockedPush?> = observeBlockedPush(database, lane)
 
     private suspend fun itemOf(row: OutboxHead): OutboxItem? = when (row.kind) {
         OutboxKind.LEDGER_EVENT -> parseObjectOrNull(row.payload)?.let { OutboxItem.event(row.seq, it, row.attempts) }
@@ -199,22 +224,34 @@ internal fun blockingRejectionOf(row: AuditLogEntity): BlockingRejection? {
     return if (blocking && seq != null && code != null) BlockingRejection(seq, code, row.atEpochMs) else null
 }
 
-/** Kinds whose permanent refusal blocks the outbox (`OutboxItem.Kind.blocksOnRefusal`). */
+/** Kinds whose permanent refusal blocks their outbox lane (`OutboxItem.Kind.blocksOnRefusal`). */
 internal val BLOCKING_KINDS: List<OutboxKind> =
     listOf(OutboxKind.LEDGER_EVENT, OutboxKind.MESSAGE, OutboxKind.BLOB_CHUNK)
 
-/** See [RoomOutboxSource.observeBlocked]. */
-internal fun observeBlockedPush(database: SproutDatabase): Flow<BlockedPush?> = combine(
-    database.outboxDao().observeHeads(BLOCKING_KINDS),
+/** The outbox kinds queued in this lane (`OutboxItem.Kind.lane`, D-M4-22). */
+internal val OutboxItem.Lane.outboxKinds: List<OutboxKind>
+    get() = when (this) {
+        OutboxItem.Lane.LEDGER -> listOf(OutboxKind.LEDGER_EVENT, OutboxKind.DOCUMENT)
+        OutboxItem.Lane.CHAT -> listOf(OutboxKind.MESSAGE, OutboxKind.BLOB_CHUNK)
+    }
+
+/** [BLOCKING_KINDS] of [lane], or of both lanes when null. */
+private fun blockingKinds(lane: OutboxItem.Lane?): List<OutboxKind> =
+    if (lane == null) BLOCKING_KINDS else BLOCKING_KINDS.filter { it in lane.outboxKinds }
+
+/** See [RoomOutboxSource.observeBlocked]. The chat screens pass [OutboxItem.Lane.CHAT]. */
+internal fun observeBlockedPush(database: SproutDatabase, lane: OutboxItem.Lane? = null): Flow<BlockedPush?> = combine(
+    database.outboxDao().observeHeads(blockingKinds(lane)),
     database.auditLogDao().observeAction(AuditAction.SYNC_REJECTED),
     ::blockedPushOf,
 ).distinctUntilChanged()
 
 /** [RoomOutboxSource.observeBlocked] now, as a one-off read (inside or outside a transaction). */
-internal suspend fun currentBlockedPush(database: SproutDatabase): BlockedPush? = blockedPushOf(
-    database.outboxDao().headsOf(BLOCKING_KINDS),
-    database.auditLogDao().withAction(AuditAction.SYNC_REJECTED),
-)
+internal suspend fun currentBlockedPush(database: SproutDatabase, lane: OutboxItem.Lane? = null): BlockedPush? =
+    blockedPushOf(
+        database.outboxDao().headsOf(blockingKinds(lane)),
+        database.auditLogDao().withAction(AuditAction.SYNC_REJECTED),
+    )
 
 private fun blockedPushOf(heads: List<OutboxHead>, rows: List<AuditLogEntity>): BlockedPush? {
     val queued = heads.associateBy { it.seq }

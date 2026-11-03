@@ -15,6 +15,7 @@ import kotlinx.serialization.json.put
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
+import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -65,9 +66,12 @@ class FakeBackendRulesTest {
     private suspend fun FakeSyncTransport.pushChunks(vararg chunks: BlobChunkJson) =
         push(emptyList(), emptyList(), emptyList(), chunks.toList())
 
-    private fun codes(result: PushResult) = result.rejected.map { (it.second as SyncError.Permanent).code }
+    private fun codes(result: PushResult) = result.rejected.map { it.second.code }
 
     private val denied = listOf(FakeBackend.PERMISSION_DENIED)
+
+    /** How a rules refusal of a blob chunk is reported (D-M4-22): transient, never permanent. */
+    private val deferred = listOf(SyncError.Transient().code)
 
     @Test
     fun aParentCannotWriteRegistryDocuments() = runTest {
@@ -171,10 +175,14 @@ class FakeBackendRulesTest {
             listOf(PushItem.BlobChunk(chunk), PushItem.Message(refusedMessage)) + behind,
         )
 
-        assertEquals(listOf(PushItemId.ofBlobChunk(chunk)), result.accepted)
+        assertEquals(
+            listOf(PushItemId.ofBlobChunk(chunk), PushItemId.ofDocument(parent.signed(DocTypes.REWARD, "reward-1", 1))),
+            result.accepted,
+        )
         assertEquals(listOf(PushItemId.ofMessage(refusedMessage)), result.rejected.map { it.first })
-        assertTrue(backend.messages().isEmpty(), "nothing behind the refused message is written")
-        assertNull(backend.document(DocTypes.REWARD, "reward-1"))
+        assertTrue(backend.messages().isEmpty(), "nothing behind the refused message in the chat lane is written")
+        // The ledger lane does not wait for the chat lane (D-M4-22).
+        assertNotNull(backend.document(DocTypes.REWARD, "reward-1"))
     }
 
     @Test
@@ -318,8 +326,8 @@ class FakeBackendRulesTest {
         val chorePhoto = kid.blobChunk("b4", thread = null, kid = KID_1, submission = "sub-1")
 
         assertTrue(kidTransport.pushChunks(largest, second, chorePhoto).rejected.isEmpty())
-        assertEquals(denied, codes(kidTransport.pushChunks(oversize)))
-        assertEquals(denied, codes(kidTransport.pushChunks(otherKids)))
+        assertEquals(deferred, codes(kidTransport.pushChunks(oversize)))
+        assertEquals(deferred, codes(kidTransport.pushChunks(otherKids)))
         assertTrue(transport.pushChunks(parent.blobChunk("b5", thread = KID_2)).rejected.isEmpty())
         assertEquals(listOf("b1.0", "b1.1", "b4.0", "b5.0"), backend.blobs().map { it.docId })
     }
@@ -340,9 +348,9 @@ class FakeBackendRulesTest {
         )
         refused.forEachIndexed { index, bad ->
             val renamed = BlobChunkJson(bad.with("blobId", "bad-$index"), chunk.data)
-            assertEquals(denied, codes(transport.pushChunks(renamed)), "case $index")
+            assertEquals(deferred, codes(transport.pushChunks(renamed)), "case $index")
         }
-        assertEquals(denied, codes(transport.pushChunks(BlobChunkJson(header.with("blobId", "empty"), ByteArray(0)))))
+        assertEquals(deferred, codes(transport.pushChunks(BlobChunkJson(header.with("blobId", "empty"), ByteArray(0)))))
     }
 
     @Test
@@ -351,7 +359,7 @@ class FakeBackendRulesTest {
 
         assertTrue(transport.pushChunks(chunk).rejected.isEmpty())
         assertTrue(transport.pushChunks(chunk).rejected.isEmpty())
-        assertEquals(denied, codes(transport.pushChunks(parent.blobChunk("b1", size = 65))))
+        assertEquals(deferred, codes(transport.pushChunks(parent.blobChunk("b1", size = 65))))
     }
 
     @Test
@@ -371,7 +379,7 @@ class FakeBackendRulesTest {
     fun aBlobNamesAKidTheHouseholdHas() = runTest {
         val unknownKid = dev.kpetriv.sprout.core.model.KidId("kid-unknown")
 
-        assertEquals(denied, codes(transport.pushChunks(parent.blobChunk("b1", thread = unknownKid))))
+        assertEquals(deferred, codes(transport.pushChunks(parent.blobChunk("b1", thread = unknownKid))))
     }
 
     @Test
@@ -382,11 +390,12 @@ class FakeBackendRulesTest {
         stored.forEachIndexed { n, chunk -> assertTrue(transport.pushChunks(chunk).rejected.isEmpty(), "chunk $n") }
         val over = parent.blobChunk("over")
         val behind = parent.message("m1")
+        val event = parent.event("e1", 1)
 
-        val result = transport.push(listOf(PushItem.BlobChunk(over), PushItem.Message(behind)))
+        val result = transport.push(listOf(PushItem.BlobChunk(over), PushItem.Message(behind), PushItem.Event(event)))
 
         assertEquals(listOf(PushItemId.ofBlobChunk(over) to SyncError.Transient(23 * 3_600_000L)), result.rejected)
-        assertTrue(result.accepted.isEmpty(), "the push stops at the chunk over the budget")
+        assertEquals(listOf(PushItemId.ofEvent(event)), result.accepted, "the chat lane stops, the ledger lane goes on")
         // A re-send of a stored chunk is not a new chunk; the next UTC day has a fresh budget.
         assertTrue(transport.pushChunks(stored.first()).rejected.isEmpty())
         backend.nowEpochMs = { day + 86_400_000 }

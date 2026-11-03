@@ -31,7 +31,8 @@ sealed interface ChatUiState {
      * @property kidName the thread's kid; the parent's title.
      * @property messages oldest first: stored messages, then the ones still being handed to [MessageSender].
      * @property hasMore older messages exist ([ChatEvent.LoadOlder]).
-     * @property keyState [ThreadKeyState.WAITING_FOR_PARENT] disables sending and shows a banner.
+     * @property keyState anything but [ThreadKeyState.USABLE] disables sending and shows a banner (waiting for a
+     *   parent device, or [ThreadKeyState.KEY_CONFLICT]: remove and re-link this phone).
      * @property draft the free-text composer (Sprout, Sapling, parent).
      * @property selectedPreset the Seedling preset tile picked for [ChatEvent.SendSelection].
      * @property selectedEmoji the Seedling emoji picked for [ChatEvent.SendSelection].
@@ -79,6 +80,7 @@ enum class ChatError {
  * @property pending still being handed to [MessageSender] from this screen (not stored yet); a failed one can be
  *   retried or discarded.
  * @property fromParentPhone a kid's message written in kid mode on a parent's phone: labelled so.
+ * @property late accepted after its place in the thread had been skipped: labelled "Arrived late".
  */
 data class MessageUi(
     val id: String,
@@ -95,6 +97,7 @@ data class MessageUi(
     val authorName: String? = null,
     val pending: Boolean = false,
     val fromParentPhone: Boolean = false,
+    val late: Boolean = false,
 ) {
     val isVoice: Boolean get() = kind == MessageKind.VOICE && !locked
 

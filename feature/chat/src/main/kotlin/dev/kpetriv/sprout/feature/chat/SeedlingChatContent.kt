@@ -67,7 +67,7 @@ internal fun SeedlingChatContent(
 ) {
     val speak: ((String) -> Unit)? = if (readAloud !== ReadAloud.None) readAloud::speak else null
     Column(modifier = modifier.fillMaxSize()) {
-        if (!state.canSend) WaitingBanner(ChatMode.KID)
+        if (!state.canSend) WaitingBanner(ChatMode.KID, state.keyState)
         MessageList(
             state = state,
             onEvent = onEvent,

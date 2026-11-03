@@ -94,6 +94,8 @@ enum class SendState {
  * @property photoSha256 a PHOTO's lower-case hex SHA-256 from its signed content: the blob must decrypt to it.
  * @property fromParentPhone a kid's message written in kid mode on a parent's phone (D-M3-12): anyone holding that
  *   phone could have written it, so it is labelled.
+ * @property late accepted after the other devices had skipped its place in the thread (audit L3, A2-L1): labelled
+ *   "Arrived late"; its time shown is never earlier than its author's previous message.
  */
 data class ChatMessage(
     val id: String,
@@ -111,6 +113,7 @@ data class ChatMessage(
     val authorDeviceId: String? = null,
     val photoSha256: String? = null,
     val fromParentPhone: Boolean = false,
+    val late: Boolean = false,
 ) {
     override fun toString(): String =
         "ChatMessage(id=$id, direction=$direction, kind=$kind, sendState=$sendState, locked=$locked)"
@@ -180,6 +183,12 @@ enum class ThreadKeyState {
 
     /** No usable thread key yet: the device shows "waiting for a parent device" and does not send. */
     WAITING_FOR_PARENT,
+
+    /**
+     * The registry lists another chat key for this phone than the one it holds (D-M4-14, audit I2): no thread key will
+     * come, so the screen says to remove and re-link the phone, and does not send.
+     */
+    KEY_CONFLICT,
 }
 
 /** A recorded voice note: AAC-LC bytes and the length. */

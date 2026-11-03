@@ -1,7 +1,12 @@
 package dev.kpetriv.sprout.core.database
 
+import androidx.room.withTransaction
+import dev.kpetriv.sprout.core.crypto.Aead
+import dev.kpetriv.sprout.core.crypto.SymmetricKey
+import dev.kpetriv.sprout.core.crypto.chat.MessageCipher
 import dev.kpetriv.sprout.core.database.entity.AuditAction
 import dev.kpetriv.sprout.core.database.entity.MessageStatus
+import dev.kpetriv.sprout.core.database.entity.OutboxEntity
 import dev.kpetriv.sprout.core.database.entity.OutboxKind
 import dev.kpetriv.sprout.core.domainledger.JvmSha256Hasher
 import dev.kpetriv.sprout.core.domainledger.chat.BlobJson
@@ -30,6 +35,7 @@ import org.junit.After
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
+import java.security.GeneralSecurityException
 import kotlin.random.Random
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
@@ -180,6 +186,38 @@ class ChatWritesTest {
     }
 
     @Test
+    fun aBlockedLedgerItemQueuedEarlierNeverHidesABlockedMessage() = runTest {
+        linked()
+        // A ledger event refused for good, queued before the message (a lower seq), blocks the ledger lane only.
+        val eventSeq = kid.database.outboxDao().insert(
+            OutboxEntity(
+                kind = OutboxKind.LEDGER_EVENT,
+                refId = "event-1:h",
+                payload = "{}",
+                createdAtEpochMs = 0,
+                lamport = 1,
+            ),
+        )
+        kid.outbox.fail(eventSeq, SyncError.Permanent("permission-denied"), Long.MAX_VALUE)
+        kid.outbox.auditRejections(
+            listOf(PushRejection(eventSeq, PushItemId("event/event-1"), "permission-denied", blocking = true)),
+        )
+        val id = kid.messageWrites.send(THREAD_X, text("refused"))
+        val row = kid.database.outboxDao().all().single { it.kind == OutboxKind.MESSAGE }
+        assertTrue(eventSeq < row.seq)
+        assertEquals(MessageSendState.SENDING, kid.messageReader.observe(THREAD_X).first().messages.single().sendState)
+        assertFalse(kid.messageWrites.discard(id), "only the ledger lane is blocked")
+        kid.outbox.fail(row.seq, SyncError.Permanent("permission-denied"), Long.MAX_VALUE)
+        kid.outbox.auditRejections(
+            listOf(PushRejection(row.seq, PushItemId("message/${id.value}"), "permission-denied", blocking = true)),
+        )
+
+        assertEquals(MessageSendState.BLOCKED, kid.messageReader.observe(THREAD_X).first().messages.single().sendState)
+        assertTrue(kid.messageWrites.discard(id))
+        assertEquals(listOf(eventSeq), kid.database.outboxDao().all().map { it.seq }, "the event stays queued")
+    }
+
+    @Test
     fun onlyABlockedMessageCanBeDiscardedAndItsSeqStaysUsed() = runTest {
         linked()
         val id = kid.messageWrites.send(THREAD_X, text("refused"))
@@ -253,6 +291,98 @@ class ChatWritesTest {
         assertEquals(1, parent.threadKeyWrites.settle())
         assertTrue(parent.database.threadKeyDao().all().isEmpty())
         assertEquals(1, parent.database.auditLogDao().all().count { it.action == AuditAction.THREAD_KEY_WITHDRAWN })
+    }
+
+    @Test
+    fun aCrashBetweenTheAckAndTheRefusalAuditNeverConfirmsTheKey() = runTest {
+        registerChatDevices(parent, kid)
+        parent.addKid(KID_X.value)
+        parent.threadKeyMaintenance()
+        val document = parent.database.outboxDao().all().single {
+            it.kind == OutboxKind.DOCUMENT && it.docType == "thread_key"
+        }
+        val rejection =
+            PushRejection(document.seq, PushItemId("document/thread_key/${document.docId}"), "permission-denied")
+        // The process dies right after the refused document's ack: the ack and its audit row are one transaction
+        // (audit A2-L3), so neither is kept and the document is still queued.
+        assertFailsWith<IllegalStateException> {
+            parent.database.withTransaction {
+                parent.outbox.ackRejected(document.seq, rejection)
+                error("process died")
+            }
+        }
+        assertEquals(0, parent.threadKeyWrites.settle())
+        assertFalse(parent.threadKeyWrites.confirmed(requireNotNull(document.docId)), "still queued: not confirmed")
+        assertEquals(1, parent.database.threadKeyDao().all().size, "nor withdrawn")
+        assertFalse(parent.threadKeyStatus.observeSendable(THREAD_X).first())
+        // The refusal's ack and audit row land together: settling withdraws the key instead of confirming it.
+        parent.outbox.ackRejected(document.seq, rejection)
+        assertEquals(1, parent.threadKeyWrites.settle())
+        assertTrue(parent.database.threadKeyDao().all().isEmpty())
+    }
+
+    @Test
+    fun aMediaMessageQueuesItsBlobBeforeItselfInOneGo() = runTest {
+        linked()
+        val clip = Random(3).nextBytes(64)
+        val (messageId, blobId) = kid.messageWrites.sendWithBlob(THREAD_X, MessagePlaintext.Voice(1_500), clip)
+
+        val due = kid.outbox.due(Long.MAX_VALUE, limit = 10)
+        assertEquals(listOf(OutboxItem.Kind.BLOB_CHUNK, OutboxItem.Kind.MESSAGE), due.map { it.kind })
+        val message = requireNotNull(due.last().messageJson).envelope()
+        assertEquals(messageId, message.messageId)
+        assertEquals(blobId, message.blobId)
+        assertContentEquals(clip, kid.chatBlobs.open(blobId, threadBlob(kid, clip)))
+        parent.applier.applyMessages(kid.queuedMessages())
+        assertContentEquals(clip, parent.chatBlobs.ingest(blobId, kid.queuedBlobChunks(), threadBlob(kid, clip)))
+    }
+
+    @Test
+    fun aMediaMessageThatFailsAfterItsBlobWasEncryptedLeavesNoChunksAndNoCachedCopy() = runTest {
+        linked()
+        // The message itself cannot be written (here its encryption fails; in the app, a rotation in between or a
+        // crash): the blob's chunks were queued in the same transaction, so they roll back with it (audit A2-L4).
+        val failingMessages = MessageCipher(
+            object : Aead {
+                override fun encrypt(key: SymmetricKey, plaintext: ByteArray, associatedData: ByteArray): ByteArray =
+                    throw GeneralSecurityException("message encryption failed")
+
+                override fun decrypt(key: SymmetricKey, ciphertext: ByteArray, associatedData: ByteArray): ByteArray =
+                    throw GeneralSecurityException("unused")
+            },
+        )
+        val crypto = ChatCrypto(kid.chatCrypto.keyring, failingMessages, kid.chatCrypto.blobs, kid.encryptionKeys)
+        val blobs = with(kid) { BlobWrites(database, clock, signer, authors, crypto, signatureCheck, blobCache) }
+        val writes = with(kid) { MessageWrites(database, clock, signer, authors, crypto, signatureCheck, blobs) }
+
+        assertFailsWith<GeneralSecurityException> {
+            writes.sendWithBlob(THREAD_X, MessagePlaintext.Voice(1_000), byteArrayOf(1, 2, 3))
+        }
+
+        val queued = kid.database.outboxDao().all().map { it.kind }
+        assertTrue(OutboxKind.BLOB_CHUNK !in queued && OutboxKind.MESSAGE !in queued)
+        assertTrue(kid.database.blobDao().all().isEmpty(), "the cached copy is dropped")
+        assertTrue(kid.database.auditLogDao().all().none { it.action == AuditAction.BLOB_QUEUED })
+        assertFailsWith<IllegalArgumentException> {
+            kid.messageWrites.sendWithBlob(THREAD_X, text("no blob"), byteArrayOf(1))
+        }
+    }
+
+    @Test
+    fun aRegistryKeyThatIsNotThisDevicesShowsAKeyConflict() = runTest {
+        linked()
+        assertEquals(ThreadKeyAvailability.SENDABLE, kid.threadKeyStatus.observe(THREAD_X).first())
+        // No key for a new epoch yet: waiting.
+        val own = assertNotNull(kid.database.deviceDao().get(kid.deviceId))
+        kid.database.threadKeyDao().deleteAll()
+        assertEquals(ThreadKeyAvailability.WAITING, kid.threadKeyStatus.observe(THREAD_X).first())
+        // The registry later listed another key for this device (D-M4-14).
+        kid.database.deviceDao().upsert(own.copy(encryptionKeyConflict = true))
+        assertEquals(ThreadKeyAvailability.KEY_CONFLICT, kid.threadKeyStatus.observe(THREAD_X).first())
+        // Or the listed key is not the one this device holds.
+        val other = Random(9).nextBytes(32)
+        kid.database.deviceDao().upsert(own.copy(encryptionKey = other))
+        assertEquals(ThreadKeyAvailability.KEY_CONFLICT, kid.threadKeyStatus.observe(THREAD_X).first())
     }
 
     @Test

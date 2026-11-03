@@ -32,7 +32,7 @@ internal class ScriptedTransport(private val log: MutableList<String> = mutableL
 
     /**
      * Processes [items] in order like a real transport: after a permanent refusal of a kind that blocks the outbox,
-     * or a transient one, the rest stays unprocessed.
+     * or a transient one, the rest of that item's lane stays unprocessed (the other lane goes on).
      */
     override suspend fun push(items: List<PushItem>): PushResult {
         log += "push"
@@ -41,14 +41,18 @@ internal class ScriptedTransport(private val log: MutableList<String> = mutableL
         pushError?.let { throw SyncException(it) }
         val accepted = mutableListOf<PushItemId>()
         val rejected = mutableListOf<Pair<PushItemId, SyncError>>()
+        val stopped = mutableSetOf<OutboxItem.Lane>()
         for (item in items) {
+            if (item.kind.lane in stopped) continue
             val id = item.id
             val error = outcomes[id]
             when {
                 id !in outcomes -> accepted += id
                 error != null -> rejected += id to error
             }
-            if (error is SyncError.Transient || (error is SyncError.Permanent && item.kind.blocksOnRefusal)) break
+            if (error is SyncError.Transient || (error is SyncError.Permanent && item.kind.blocksOnRefusal)) {
+                stopped += item.kind.lane
+            }
         }
         return PushResult(accepted, rejected)
     }

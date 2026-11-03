@@ -45,7 +45,7 @@ class PendingPhotoUploads @Inject constructor(private val database: SproutDataba
  * ([RoomChoreRepository.attachPhotoBlobInTransaction]), chunks first so the push order sends the blob before the
  * submission that names it. A crash leaves either all of it or none of it; runs are serialised by one process-wide
  * lock, and a photo another run already marked, or whose submission was decided or re-photographed meanwhile, is
- * left alone (the transaction is rolled back; its cached copy is evicted in time). A photo whose thread has no usable
+ * left alone (the transaction is rolled back and its cached copy dropped). A photo whose thread has no usable
  * key yet stays pending (retried on the next run); one that no longer loads is skipped. Returns the photos attached
  * now.
  */
@@ -85,6 +85,7 @@ class UploadChorePhotosUseCase @Inject constructor(
             }
             blobId
         } catch (expected: NotAttached) {
+            blobs.dropCached(blobId)
             null
         }
     }

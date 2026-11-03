@@ -195,6 +195,20 @@ class ChatViewModelTest {
     }
 
     @Test
+    fun `a replaced chat key on this phone is shown and nothing is sent (I2)`() = runTest {
+        keys.state.value = ThreadKeyState.KEY_CONFLICT
+        val vm = kid(KidUiTier.SPROUT)
+        val state = ready(vm)
+
+        vm.onEvent(ChatEvent.DraftChanged("hello"))
+        vm.onEvent(ChatEvent.SendText)
+
+        assertEquals(ThreadKeyState.KEY_CONFLICT, state().keyState)
+        assertFalse(state().canSend)
+        assertTrue(sender.sent.isEmpty())
+    }
+
+    @Test
     fun `sprout text goes through the kindness filter and a nudge never blocks`() = runTest {
         filter.verdict = FilterVerdict.Nudge("Can we talk later?")
         val vm = kid(KidUiTier.SPROUT)
@@ -561,6 +575,17 @@ class ChatViewModelTest {
         val state = ready(viewModel())
 
         assertTrue(state().messages.single().fromParentPhone)
+    }
+
+    @Test
+    fun `a message that arrived late is labelled (A2-L1)`() = runTest {
+        reader.messages.value = listOf(
+            ChatTestData.text("m1", "hi"),
+            ChatTestData.text("m2", "late", minute = 1).copy(late = true),
+        )
+        val state = ready(viewModel())
+
+        assertEquals(listOf(false, true), state().messages.map { it.late })
     }
 
     @Test

@@ -6,7 +6,6 @@ import androidx.room.OnConflictStrategy
 import androidx.room.Query
 import androidx.room.Upsert
 import dev.kpetriv.sprout.core.database.entity.BlobEntity
-import dev.kpetriv.sprout.core.database.entity.ChoreSubmissionEntity
 import dev.kpetriv.sprout.core.database.entity.KidEntity
 import dev.kpetriv.sprout.core.database.entity.MessageEntity
 import dev.kpetriv.sprout.core.database.entity.MessageSeqEntity
@@ -103,6 +102,24 @@ interface MessageDao {
         """,
     )
     suspend fun storedAt(author: DeviceId, threadId: String, seq: Long): MessageEntity?
+
+    /** The visible message of [author] in [threadId] with the highest `seq` below [seq] (a late one's predecessor). */
+    @Query(
+        """
+        SELECT * FROM messages WHERE authorDeviceId = :author AND threadId = :threadId AND seq < :seq
+        AND status IN ('RECEIVED', 'LOCKED', 'SENT_LOCAL') ORDER BY seq DESC LIMIT 1
+        """,
+    )
+    suspend fun displayedBefore(author: DeviceId, threadId: String, seq: Long): MessageEntity?
+
+    /** The visible message of [author] in [threadId] with the lowest `seq` above [seq] (a late message's successor). */
+    @Query(
+        """
+        SELECT * FROM messages WHERE authorDeviceId = :author AND threadId = :threadId AND seq > :seq
+        AND status IN ('RECEIVED', 'LOCKED', 'SENT_LOCAL') ORDER BY seq LIMIT 1
+        """,
+    )
+    suspend fun displayedAfter(author: DeviceId, threadId: String, seq: Long): MessageEntity?
 
     @Query("SELECT * FROM message_seq WHERE threadId = :threadId AND authorDeviceId = :author")
     suspend fun seq(threadId: String, author: DeviceId): MessageSeqEntity?
@@ -208,10 +225,6 @@ interface ChatHouseholdDao {
     /** Whether kid [kidId] is archived (false while it is unknown); re-emits when that changes. */
     @Query("SELECT COUNT(*) > 0 FROM kids WHERE kidId = :kidId AND archived = 1")
     fun observeArchived(kidId: String): Flow<Boolean>
-
-    /** The submission whose uploaded photo is blob [blobId] (D-M4-15), for the photo's expected binding. */
-    @Query("SELECT * FROM chore_submissions WHERE photoBlobId = :blobId LIMIT 1")
-    suspend fun submissionWithBlob(blobId: String): ChoreSubmissionEntity?
 
     /**
      * Photos that are the current photo of a submission still waiting for a decision and not yet queued as a blob

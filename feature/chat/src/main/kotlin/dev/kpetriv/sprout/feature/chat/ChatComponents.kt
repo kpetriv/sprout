@@ -46,9 +46,12 @@ import java.time.format.FormatStyle
 import java.util.Locale
 import kotlin.time.Instant
 
-/** The banner while this device has no usable thread key; sending is off until it goes. */
+/**
+ * The banner while this device has no usable thread key; sending is off until it goes. [keyState]
+ * [ThreadKeyState.KEY_CONFLICT] says to remove and re-link the phone instead of waiting (audit I2).
+ */
 @Composable
-internal fun WaitingBanner(mode: ChatMode, modifier: Modifier = Modifier) {
+internal fun WaitingBanner(mode: ChatMode, keyState: ThreadKeyState, modifier: Modifier = Modifier) {
     Surface(color = MaterialTheme.colorScheme.tertiaryContainer, modifier = modifier.fillMaxWidth()) {
         Row(
             modifier = Modifier.padding(16.dp).semantics(mergeDescendants = true) {
@@ -60,9 +63,10 @@ internal fun WaitingBanner(mode: ChatMode, modifier: Modifier = Modifier) {
             Text(text = "🔒", style = MaterialTheme.typography.titleLarge, modifier = Modifier.clearAndSetSemantics { })
             Text(
                 text = stringResource(
-                    when (mode) {
-                        ChatMode.KID -> R.string.feature_chat_waiting_kid
-                        ChatMode.PARENT -> R.string.feature_chat_waiting_parent
+                    when {
+                        keyState == ThreadKeyState.KEY_CONFLICT -> R.string.feature_chat_key_conflict
+                        mode == ChatMode.KID -> R.string.feature_chat_waiting_kid
+                        else -> R.string.feature_chat_waiting_parent
                     },
                 ),
                 style = MaterialTheme.typography.bodyMedium,
@@ -179,6 +183,14 @@ private fun MessageBubble(
         if (message.fromParentPhone) {
             Text(
                 text = stringResource(R.string.feature_chat_from_parent_phone),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(horizontal = 8.dp),
+            )
+        }
+        if (message.late) {
+            Text(
+                text = stringResource(R.string.feature_chat_arrived_late),
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(horizontal = 8.dp),

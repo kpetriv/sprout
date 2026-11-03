@@ -48,8 +48,12 @@ import kotlinx.serialization.json.put
  *   (`displayedAtEpochMs`) is the signed `createdAt` raised to the previous message's. The author's `message_seq`
  *   moves to `seq + 1` and the device clock observes the lamport.
  * - **Duplicate** (a `seq` already applied): ignored, unless the `seq` was skipped after a gap timed out and nothing
- *   is stored for it: then it is accepted **late** (audit L3; no lamport check, marked late). A different message id
- *   for a `seq` that already has a stored message is equivocation, audited `MESSAGE_EQUIVOCATION` once.
+ *   is stored for it: then it is accepted **late** (audit L3, marked late and labelled "Arrived late" on screen). Its
+ *   lamport must fall between the author's displayed neighbours in the thread (above the previous `seq`'s, below the
+ *   next one's, audit A2-L1), else it is quarantined [OUT_OF_ORDER] and its `seq` is used up; its time shown is its
+ *   `createdAt` raised to the previous displayed message's, so an author cannot backdate it above older messages. A
+ *   different message id for a `seq` that already has a stored message is equivocation, audited
+ *   `MESSAGE_EQUIVOCATION` once.
  * - **Held** (a `seq` gap, an unknown or pending author device) and a lamport too far ahead (retryable, as for
  *   documents): kept as a HELD row with its ciphertext, never shown, verified again after every batch, registry pull
  *   and [retryHeld]. At most [MAX_HELD_PER_AUTHOR] per author device: beyond it the earliest received are dropped,
@@ -191,10 +195,19 @@ internal class ChatApplier(
     ): MessageApplyReport {
         val threadId = envelope.threadId.value
         val previous = messages.seq(threadId, envelope.authorDeviceId)
-        val outOfOrder = !late && previous != null && previous.lastLamport > 0 &&
-            envelope.lamport <= previous.lastLamport
+        val outOfOrder = if (late) {
+            !fitsBetweenNeighbours(envelope)
+        } else {
+            previous != null && previous.lastLamport > 0 && envelope.lamport <= previous.lastLamport
+        }
         if (outOfOrder) {
-            advanceSeq(envelope.threadId, envelope.authorDeviceId, envelope.seq + 1)
+            if (late) {
+                // The skipped seq is used up: a copy of it never comes back through the late path.
+                val base = requireNotNull(previous)
+                messages.upsertSeq(base.copy(skippedRanges = SkippedRanges.remove(base.skippedRanges, envelope.seq)))
+            } else {
+                advanceSeq(envelope.threadId, envelope.authorDeviceId, envelope.seq + 1)
+            }
             return quarantine(batch, envelope, OUT_OF_ORDER, held)
         }
         // The verifier bounded the lamport by localMax + maxLamportJump.
@@ -226,15 +239,29 @@ internal class ChatApplier(
     }
 
     /**
+     * Whether a late [envelope]'s lamport falls strictly between the author's displayed messages around its `seq` in
+     * the thread (audit A2-L1): above the previous one's and below the next one's, each when there is one.
+     */
+    private suspend fun fitsBetweenNeighbours(envelope: MessageEnvelope): Boolean {
+        val threadId = envelope.threadId.value
+        val before = messages.displayedBefore(envelope.authorDeviceId, threadId, envelope.seq)
+        val after = messages.displayedAfter(envelope.authorDeviceId, threadId, envelope.seq)
+        return (before == null || envelope.lamport > before.lamport) &&
+            (after == null || envelope.lamport < after.lamport)
+    }
+
+    /**
      * Moves the author's `message_seq` past [envelope] (or, for a [late] one, forgets its skipped `seq`); returns the
-     * time to show it at: its `createdAt`, raised to the previous message's unless it is late.
+     * time to show it at: its `createdAt`, raised to the previous message's (for a late one, the author's previous
+     * displayed message in the thread, audit A2-L1).
      */
     private suspend fun recordAccepted(envelope: MessageEnvelope, previous: MessageSeqEntity?, late: Boolean): Long {
         val createdAt = envelope.createdAt.toEpochMilliseconds()
         val base = previous ?: MessageSeqEntity(envelope.threadId.value, envelope.authorDeviceId, 1)
         if (late) {
             messages.upsertSeq(base.copy(skippedRanges = SkippedRanges.remove(base.skippedRanges, envelope.seq)))
-            return createdAt
+            val before = messages.displayedBefore(envelope.authorDeviceId, envelope.threadId.value, envelope.seq)
+            return maxOf(createdAt, before?.displayedAtEpochMs ?: 0)
         }
         val displayed = maxOf(createdAt, base.lastDisplayedAtEpochMs)
         messages.upsertSeq(

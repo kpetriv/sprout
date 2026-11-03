@@ -11,6 +11,7 @@ import dev.kpetriv.sprout.core.domainledger.toHex
 import dev.kpetriv.sprout.core.model.CalendarDate
 import dev.kpetriv.sprout.core.model.ChoreId
 import dev.kpetriv.sprout.core.model.ChoreSchedule
+import dev.kpetriv.sprout.core.model.SubmissionId
 import dev.kpetriv.sprout.core.model.SubmissionStatus
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -78,7 +79,8 @@ class ChorePhotoUploadsTest {
         assertEquals(upload.submissionId, header.submissionId)
         // The parent applies the re-signed submission, then fetches, verifies and decrypts the photo it names.
         parent.applier.applyDocuments(kid.queuedDocuments())
-        val expected = assertNotNull(parent.chatBlobs.chorePhotoExpectation(blobId))
+        val target = BlobTarget.ChorePhoto(KID_X, upload.submissionId)
+        val expected = BlobExpectation(target, plaintextSha256 = photo.sha256)
         assertContentEquals(bytes, parent.chatBlobs.ingest(blobId, kid.queuedBlobChunks(), expected))
         assertTrue(kid.uploadChorePhotos().isEmpty(), "never uploaded twice")
         assertNotNull(submission)
@@ -104,7 +106,8 @@ class ChorePhotoUploadsTest {
         parent.applier.applyDocuments(kid.queuedDocuments())
         val received = assertNotNull(parent.chores.getSubmission(submission.id))
         assertEquals(blobId.value, received.photoRef?.blobId)
-        val expected = assertNotNull(parent.chatBlobs.chorePhotoExpectation(blobId))
+        val ref = assertNotNull(received.photoRef)
+        val expected = BlobExpectation(BlobTarget.ChorePhoto(received.kidId, received.id), plaintextSha256 = ref.sha256)
         assertContentEquals(bytes, parent.chatBlobs.ingest(blobId, kid.queuedBlobChunks(), expected))
         // A blob whose bytes are not the submission's photo is refused.
         val other = BlobExpectation(
@@ -114,6 +117,35 @@ class ChorePhotoUploadsTest {
         assertEquals(
             BlobUnavailableException.Reason.INVALID,
             assertFailsWith<BlobUnavailableException> { parent.chatBlobs.open(blobId, other) }.reason,
+        )
+    }
+
+    @Test
+    fun aBlobNamedByTwoSubmissionsOpensOnlyForTheOneItWasUploadedFor() = runTest {
+        linkedWithChore()
+        val bytes = byteArrayOf(8, 9)
+        val photo = kid.photos.save(KID_X, bytes)
+        val genuine = kid.chores.submit(bed, today, photo = photo)
+        val (_, blobId) = kid.uploadChorePhotos().single()
+        parent.applier.applyDocuments(kid.queuedDocuments())
+        val chunks = kid.queuedBlobChunks()
+        // Another submission (a crafted one, audit A2-M1) names the same blob with the same hash: its binding is
+        // the submission on screen, which the blob's signed header and AAD do not name.
+        val copycat = BlobExpectation(
+            BlobTarget.ChorePhoto(KID_X, SubmissionId("copycat")),
+            plaintextSha256 = photo.sha256,
+        )
+        assertEquals(
+            BlobUnavailableException.Reason.INVALID,
+            assertFailsWith<BlobUnavailableException> { parent.chatBlobs.ingest(blobId, chunks, copycat) }.reason,
+        )
+        val genuineExpectation =
+            BlobExpectation(BlobTarget.ChorePhoto(KID_X, genuine.id), plaintextSha256 = photo.sha256)
+        assertContentEquals(bytes, parent.chatBlobs.ingest(blobId, chunks, genuineExpectation))
+        // Cached now: the copycat is still refused from the cache.
+        assertEquals(
+            BlobUnavailableException.Reason.INVALID,
+            assertFailsWith<BlobUnavailableException> { parent.chatBlobs.open(blobId, copycat) }.reason,
         )
     }
 

@@ -13,6 +13,7 @@ import dev.kpetriv.sprout.core.domainledger.RegisteredDevice
 import dev.kpetriv.sprout.core.model.BlobId
 import dev.kpetriv.sprout.core.model.HouseholdId
 import dev.kpetriv.sprout.core.model.KidId
+import dev.kpetriv.sprout.core.model.SubmissionId
 import dev.kpetriv.sprout.core.sync.BlobChunkJson
 import dev.kpetriv.sprout.core.sync.DocumentJsonCodec
 import dev.kpetriv.sprout.core.sync.PushItemId
@@ -75,8 +76,7 @@ class ChatAdaptersTest {
     /** The application scope the sender writes on (review M6). */
     private val appScope = CoroutineScope(SupervisorJob())
 
-    private fun TestHousehold.sender(mode: ChatMode?) =
-        RoomMessageSender(messageWrites, blobWrites, perspective(mode), appScope)
+    private fun TestHousehold.sender(mode: ChatMode?) = RoomMessageSender(messageWrites, perspective(mode), appScope)
 
     private fun expectation(message: ChatMessage) =
         ChatBlobExpectation(kidId, message.authorDeviceId, message.photoSha256)
@@ -203,8 +203,9 @@ class ChatAdaptersTest {
         assertTrue(missing.load("missing-blob", expectation(received)).isFailure)
         // A blob that is not the message's (another author claimed) is refused, even from the cache.
         assertTrue(loader.load(blobId, expectation(received.copy(authorDeviceId = kid.deviceId.value))).isFailure)
-        // As a chore photo loader, a blob no submission names is refused.
-        assertTrue(loader.load(blobId).isFailure)
+        // As a chore photo loader, a chat blob is refused: it is no submission's (audit A2-M1).
+        val sha = requireNotNull(received.photoSha256)
+        assertTrue(loader.load(blobId, kidId, SubmissionId("sub-1"), sha).isFailure)
     }
 
     @Test

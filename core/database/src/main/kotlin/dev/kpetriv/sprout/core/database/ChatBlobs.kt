@@ -27,6 +27,7 @@ import dev.kpetriv.sprout.core.model.SubmissionId
 import dev.kpetriv.sprout.core.model.ThreadId
 import dev.kpetriv.sprout.core.sync.BlobChunkJson
 import dev.kpetriv.sprout.core.time.Clock
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.JsonObject
@@ -149,6 +150,11 @@ class BlobCache(
     /** Whether [blobId] is in the index. */
     suspend fun contains(blobId: BlobId): Boolean = blobs.get(blobId.value) != null
 
+    /** Drops [blobId] from the cache (index row and file), if it is there. */
+    suspend fun remove(blobId: BlobId) {
+        blobs.get(blobId.value)?.let { drop(it) }
+    }
+
     @Suppress("ReturnCount") // One early return per failure.
     private suspend fun readOrNull(row: BlobEntity): ByteArray? {
         val sealed = withContext(dispatcher) {
@@ -225,8 +231,10 @@ class BlobCache(
  * [ThreadKeyStore.sendingKey] allows), splits them into chunks ([dev.kpetriv.sprout.core.crypto.chat.BlobCipher]),
  * signs every chunk header with the device key, and in one transaction under the device clock lock queues one
  * `BLOB_CHUNK` outbox row per chunk (with a `BLOB_QUEUED` audit row). The ciphertext also goes to the [cache], so this
- * device shows its own photos and voice notes without a download. Call it **before** sending the message that names
- * the blob: the outbox is pushed in order, so the blob reaches the server first.
+ * device shows its own photos and voice notes without a download. A chat message's blob goes through
+ * `MessageWrites.sendWithBlob`, which queues the chunks and the message in one transaction (audit A2-L4); a chore
+ * photo's through the upload use case, which attaches it to its submission in one transaction. The outbox is pushed
+ * in order, so the blob reaches the server before what names it.
  */
 @Suppress("LongParameterList") // The writer's collaborators.
 class BlobWrites @Inject constructor(
@@ -283,6 +291,21 @@ class BlobWrites @Inject constructor(
         val encrypted = key.use { crypto.blobs.encrypt(it, context, bytes) }
         cache.put(context, encrypted.sha256, encrypted.chunks.reduce { joined, chunk -> joined + chunk })
         return Prepared(author, context, encrypted)
+    }
+
+    /**
+     * Drops the cached copy of a [prepare]d blob that was never queued (its transaction was rolled back, audit A2-L4).
+     * Best effort: a copy left behind is only evicted later.
+     */
+    @Suppress("TooGenericExceptionCaught", "SwallowedException") // Cleanup must not hide the caller's failure.
+    internal suspend fun dropCached(blobId: BlobId) {
+        try {
+            cache.remove(blobId)
+        } catch (cancellation: CancellationException) {
+            throw cancellation
+        } catch (expected: Exception) {
+            // Evicted in time.
+        }
     }
 
     /**
@@ -371,18 +394,6 @@ class ChatBlobs @Inject constructor(
         val cached = cache.get(blobId) ?: return null
         if (!expected.matches(cached.context)) throw BlobUnavailableException(BlobUnavailableException.Reason.INVALID)
         return checked(decrypt(cached.context, listOf(cached.ciphertext), cached.sha256), expected)
-    }
-
-    /**
-     * What a chore photo blob must be (D-M4-15, audit M5): the submission that names [blobId] in its signed
-     * `photoRef`, of its kid, with the photo's SHA-256. Null when no submission names it.
-     */
-    suspend fun chorePhotoExpectation(blobId: BlobId): BlobExpectation? {
-        val submission = database.chatHouseholdDao().submissionWithBlob(blobId.value) ?: return null
-        return BlobExpectation(
-            target = BlobTarget.ChorePhoto(submission.kidId, submission.submissionId),
-            plaintextSha256 = submission.photoSha256,
-        )
     }
 
     /**

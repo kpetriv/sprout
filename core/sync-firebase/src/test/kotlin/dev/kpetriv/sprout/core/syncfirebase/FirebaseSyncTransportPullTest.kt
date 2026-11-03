@@ -94,6 +94,27 @@ class FirebaseSyncTransportPullTest {
     }
 
     @Test
+    fun `documents and events that do not decode are dropped and counted as malformed`() = runTest {
+        val good = TestData.document(docType = DocTypes.REWARD, docId = "r1")
+        transport().push(listOf(TestData.event("evt-1")), listOf(good))
+        val rewards = FirestoreLayout.collectionOf(DocTypes.REWARD)!!
+        firestore.seed(
+            "households/h1/$rewards/r2",
+            mapOf("not" to "a document", FirestoreFacade.SERVER_RECEIVED_AT to ServerTimestamp),
+        )
+        firestore.seed(
+            "households/h1/events/evt-2",
+            mapOf("not" to "an event", FirestoreFacade.SERVER_RECEIVED_AT to ServerTimestamp),
+        )
+
+        val page = transport().pull(SyncCursor.START)
+
+        assertEquals(listOf("r1"), page.documents.map { it.docId })
+        assertEquals(1, page.events.size)
+        assertEquals(2, page.malformed)
+    }
+
+    @Test
     fun `pages follow the cursor across writes that share a server time`() = runTest {
         // One batch: all five events share one serverReceivedAt, so only the document id orders them.
         transport().push((1..5).map { TestData.event("evt-$it") }, emptyList())

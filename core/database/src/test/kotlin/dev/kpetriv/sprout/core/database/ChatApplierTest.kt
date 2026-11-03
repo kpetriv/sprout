@@ -24,6 +24,7 @@ import dev.kpetriv.sprout.core.model.Role
 import dev.kpetriv.sprout.core.model.UserId
 import dev.kpetriv.sprout.core.sync.DocTypes
 import dev.kpetriv.sprout.core.sync.MessageApplyReport
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.runTest
 import org.junit.After
 import org.junit.Test
@@ -196,6 +197,72 @@ class ChatApplierTest {
             MessageApplyReport(duplicates = 1),
             kid.applier.applyMessages(listOf(MessageJson.toJsonObject(m1))),
         )
+    }
+
+    /**
+     * The parent sends three messages; the kid gets the first and the third, and after the gap timeout skips seq 2.
+     * Returns the three envelopes as sent.
+     */
+    private suspend fun withSkippedSecond(): List<MessageEnvelope> {
+        linked()
+        listOf("one", "two", "three").forEach { parent.messageWrites.send(THREAD_X, text(it)) }
+        val sent = parent.queuedMessages().map { it.envelope() }
+        kid.applier.applyDocuments(parent.queuedDocuments())
+        kid.applier.applyMessages(listOf(sent[0], sent[2]).map(MessageJson::toJsonObject))
+        kid.clock.advanceBy(25.hours)
+        kid.applier.retryHeld()
+        assertEquals(MessageStatus.RECEIVED, kid.row(sent[2].messageId.value)?.status)
+        return sent
+    }
+
+    @Test
+    fun aLateMessageIsShownNoEarlierThanTheAuthorsPreviousMessage() = runTest {
+        val (first, second, _) = withSkippedSecond()
+        // The skipped seq arrives late, signed with a createdAt a day before the first message.
+        val backdated = parent.resign(second) { it.copy(createdAt = first.createdAt - 24.hours) }
+
+        assertEquals(
+            MessageApplyReport(applied = 1),
+            kid.applier.applyMessages(listOf(MessageJson.toJsonObject(backdated))),
+        )
+
+        val late = assertNotNull(kid.row(second.messageId.value))
+        assertTrue(late.late)
+        assertEquals(text("two"), late.content())
+        assertEquals(kid.row(first.messageId.value)?.displayedAtEpochMs, late.displayedAtEpochMs, "clamped (A2-L1)")
+        val shown = kid.messageReader.observe(THREAD_X, 10).first().messages
+        assertEquals(listOf("one", "two", "three").map(::text), shown.map { it.content })
+        assertEquals(listOf(false, true, false), shown.map { it.late })
+    }
+
+    @Test
+    fun aLateMessageBelowThePreviousMessageIsQuarantinedAndItsSeqUsedUp() = runTest {
+        val (first, second, _) = withSkippedSecond()
+        val below = parent.resign(second) { it.copy(lamport = first.lamport) }
+
+        assertEquals(
+            MessageApplyReport(quarantined = 1),
+            kid.applier.applyMessages(listOf(MessageJson.toJsonObject(below))),
+        )
+        val row = assertNotNull(kid.row(second.messageId.value))
+        assertEquals(MessageStatus.QUARANTINED, row.status)
+        assertEquals(ChatApplier.OUT_OF_ORDER, row.reason)
+        // The seq is used up: another copy never comes back through the late path.
+        assertEquals("", kid.database.messageDao().seq(THREAD_X.value, parent.deviceId)?.skippedRanges)
+        kid.applier.applyMessages(listOf(MessageJson.toJsonObject(second)))
+        assertEquals(MessageStatus.QUARANTINED, kid.row(second.messageId.value)?.status)
+    }
+
+    @Test
+    fun aLateMessageAboveTheNextMessageIsQuarantined() = runTest {
+        val (_, second, third) = withSkippedSecond()
+        val above = parent.resign(second) { it.copy(lamport = third.lamport + 1) }
+
+        assertEquals(
+            MessageApplyReport(quarantined = 1),
+            kid.applier.applyMessages(listOf(MessageJson.toJsonObject(above))),
+        )
+        assertEquals(ChatApplier.OUT_OF_ORDER, kid.row(second.messageId.value)?.reason)
     }
 
     @Test

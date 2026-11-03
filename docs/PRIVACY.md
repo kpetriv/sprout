@@ -45,11 +45,11 @@ Sprout's Play audience is adults (18+). Kid mode is a feature the parent configu
 | Data | Why | Notes |
 |---|---|---|
 | Chat messages (text and preset messages) | Parent and child talk in the app (from M4) | Encrypted on the sending device with a key only the household's current devices hold (ADR-0008). We store ciphertext only and cannot read it. A phone removed from the household gets no key for messages written after its removal. |
-| Voice notes | Young children can talk instead of type (from M4) | Recorded only while the child holds the record button, at most 30 seconds, compressed on the phone, then encrypted like messages. The microphone permission is asked for the first time a voice note is recorded. The recording's temporary file is deleted as soon as it is encrypted. |
+| Voice notes | Young children can talk instead of type (from M4) | Recorded only while the child holds the record button, at most 30 seconds, compressed on the phone, then encrypted like messages. The microphone permission is asked for the first time a voice note is recorded. The recording's temporary file is deleted as soon as it is encrypted (and at the next start if the app was closed mid-recording); a voice note is played straight from memory, never written to a file. Removing the phone from the household also clears the app's cache. |
 | Photos in chat | A parent can share a photo from the phone's photo picker (from M4) | Shrunk on the phone (at most 1280 pixels), location and other photo metadata removed, then encrypted like messages. Only the photo you pick is read. |
 | Chore photos | Optional proof a chore is done | Encrypted on the child's phone with the same household keys and uploaded so a parent's phone can show it (from M4); deleted from the child's phone when the parent decides. Camera access is requested only when you attach a photo. |
 | Chat routing data | Delivering and ordering messages | Who sent a message to which child's thread, from which household device, when, its kind (text, preset, voice, photo) and size, and which household devices can decrypt it. Visible to our backend; the content is not. |
-| Read-aloud | Reading chat messages to young children | Uses the phone's own text-to-speech engine; nothing is sent to us. |
+| Read-aloud | Reading chat messages to young children | The message text is handed to the phone's own text-to-speech engine (the one chosen in the phone's settings). Sprout asks for an installed voice that works without a network, but cannot see what the engine does: if the phone is set up with an engine that synthesises speech online, that engine's provider may receive the text. Nothing is sent to us. |
 
 ### About the parent (from M3)
 

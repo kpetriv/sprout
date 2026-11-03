@@ -1,13 +1,12 @@
 package dev.kpetriv.sprout.chat
 
 import androidx.lifecycle.SavedStateHandle
-import dev.kpetriv.sprout.core.database.BlobTarget
-import dev.kpetriv.sprout.core.database.BlobWrites
 import dev.kpetriv.sprout.core.database.MessageSendState
 import dev.kpetriv.sprout.core.database.MessageWrites
 import dev.kpetriv.sprout.core.database.Session
 import dev.kpetriv.sprout.core.database.SessionStore
 import dev.kpetriv.sprout.core.database.StoredMessage
+import dev.kpetriv.sprout.core.database.ThreadKeyAvailability
 import dev.kpetriv.sprout.core.database.ThreadKeyStatusReader
 import dev.kpetriv.sprout.core.database.ThreadSummary
 import dev.kpetriv.sprout.core.domainledger.JvmSha256Hasher
@@ -112,6 +111,7 @@ class RoomMessageReader @Inject constructor(
             authorName = kidName.takeIf { !mine && authorRole == Role.KID },
             authorDeviceId = authorDeviceId.value,
             fromParentPhone = authorRole == Role.KID && authorDeviceRole == Role.PARENT,
+            late = late,
         )
         return when (val content = content) {
             is MessagePlaintext.Text -> base.copy(text = content.text)
@@ -131,8 +131,9 @@ class RoomMessageReader @Inject constructor(
 }
 
 /**
- * [MessageSender] over [MessageWrites]: media first goes through [BlobWrites.store] (encrypted with the thread key
- * and queued before the message that names it). In kid mode on a parent's phone the message is written as the kid
+ * [MessageSender] over [MessageWrites]: media goes through [MessageWrites.sendWithBlob], which encrypts it with the
+ * thread key and queues its chunks and the message that names it in one transaction (audit A2-L4: a failed send
+ * leaves no chunks queued). In kid mode on a parent's phone the message is written as the kid
  * (`asKid`, D-M3-12); a KID session always writes as its kid.
  *
  * Every write runs on the application scope, not cancellable (review M6): the screen waits for the result, but a
@@ -140,7 +141,6 @@ class RoomMessageReader @Inject constructor(
  */
 class RoomMessageSender @Inject constructor(
     private val writes: MessageWrites,
-    private val blobs: BlobWrites,
     private val perspective: ChatPerspective,
     @param:ApplicationScope private val scope: CoroutineScope,
 ) : MessageSender {
@@ -177,16 +177,13 @@ class RoomMessageSender @Inject constructor(
             is OutgoingMessage.Preset ->
                 writes.send(thread, MessagePlaintext.Preset(message.presetId, message.emoji), asKid = asKid)
 
-            is OutgoingMessage.Voice -> {
-                val blobId = blobs.store(BlobTarget.Thread(thread), message.clip.bytes)
-                writes.send(thread, MessagePlaintext.Voice(message.clip.durationMs), blobId, asKid)
-            }
+            is OutgoingMessage.Voice ->
+                writes.sendWithBlob(thread, MessagePlaintext.Voice(message.clip.durationMs), message.clip.bytes, asKid)
 
             is OutgoingMessage.Photo -> {
                 val size = JpegSize.of(message.jpeg)
                 val ref = ChatPhotoRef(JvmSha256Hasher.sha256(message.jpeg).toHex(), size.width, size.height)
-                val blobId = blobs.store(BlobTarget.Thread(thread), message.jpeg)
-                writes.send(thread, MessagePlaintext.Photo(ref, message.caption), blobId, asKid)
+                writes.sendWithBlob(thread, MessagePlaintext.Photo(ref, message.caption), message.jpeg, asKid)
             }
         }
     }
@@ -194,8 +191,16 @@ class RoomMessageSender @Inject constructor(
     private fun asKid(): Boolean = perspective.kidMode
 }
 
-/** [ThreadKeyStatus] over [ThreadKeyStatusReader]: not sendable means "waiting for a parent device". */
+/**
+ * [ThreadKeyStatus] over [ThreadKeyStatusReader]: not sendable means "waiting for a parent device", unless this
+ * phone's chat key conflicts with the registry (audit I2): then the screen asks to remove and re-link it.
+ */
 class RoomThreadKeyStatus @Inject constructor(private val reader: ThreadKeyStatusReader) : ThreadKeyStatus {
-    override fun observe(threadId: KidId): Flow<ThreadKeyState> = reader.observeSendable(ThreadId.of(threadId))
-        .map { if (it) ThreadKeyState.USABLE else ThreadKeyState.WAITING_FOR_PARENT }
+    override fun observe(threadId: KidId): Flow<ThreadKeyState> = reader.observe(ThreadId.of(threadId)).map {
+        when (it) {
+            ThreadKeyAvailability.SENDABLE -> ThreadKeyState.USABLE
+            ThreadKeyAvailability.WAITING -> ThreadKeyState.WAITING_FOR_PARENT
+            ThreadKeyAvailability.KEY_CONFLICT -> ThreadKeyState.KEY_CONFLICT
+        }
+    }
 }

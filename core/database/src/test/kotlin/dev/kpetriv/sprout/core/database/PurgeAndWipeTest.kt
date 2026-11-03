@@ -204,6 +204,28 @@ class PurgeAndWipeTest {
     }
 
     @Test
+    fun wipeClearsTheCacheDirectoryWithItsVoiceNoteTempFiles() = runTest {
+        val context = RuntimeEnvironment.getApplication()
+        val name = "wipe-cache-${UUID.randomUUID()}.db"
+        val database = fileDatabase(name)
+        val sessions = RoomSessionStore(database, household.clock)
+        val photos = File(context.noBackupFilesDir, "photos-${UUID.randomUUID()}")
+        val secrets = File(context.noBackupFilesDir, "secrets-${UUID.randomUUID()}").apply { mkdirs() }
+        val cache = File(context.cacheDir, "cache-${UUID.randomUUID()}").apply { mkdirs() }
+        val clip = File(cache, "play123.m4a").apply { writeBytes(byteArrayOf(1)) }
+        val nested = File(cache, "capture").apply { mkdirs() }
+        File(nested, "a.jpg").writeBytes(byteArrayOf(2))
+        val files = LocalDataFiles(context.getDatabasePath(name), photos, secrets)
+
+        assertTrue(WipeLocalDataUseCase(database, sessions, files, Dispatchers.Unconfined, cache)())
+
+        assertFalse(clip.exists())
+        assertFalse(nested.exists())
+        assertTrue(cache.isDirectory, "the directory itself stays")
+        cache.delete()
+    }
+
+    @Test
     fun purgeWithoutANewSessionAlsoRemovesTheTrialSession() = runTest {
         seedTrial()
         household.purge()

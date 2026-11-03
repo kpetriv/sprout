@@ -31,6 +31,14 @@ class ChatScreenshotTest : ScreenshotTest() {
         }
 
     @Test
+    fun `kid, this phone's chat key was replaced, sprout`() = screenshot.captureTiers(
+        "chat_kid_key_conflict",
+        tiers = listOf(KidUiTier.SPROUT),
+    ) { tier ->
+        ChatScreen(state = ChatPreviewData.kidKeyConflict(tier), onEvent = {})
+    }
+
+    @Test
     fun `kid, recording, every tier`() = screenshot.captureTiers("chat_kid_recording") { tier ->
         ChatScreen(state = ChatPreviewData.kidRecording(tier), onEvent = {}, readAloud = speech)
     }
@@ -62,9 +70,10 @@ class ChatScreenshotTest : ScreenshotTest() {
     }
 
     @Test
-    fun `parent thread, sending, failed and blocked`() = screenshot.captureLightDark("chat_parent_send_states") {
-        ChatScreen(state = ChatPreviewData.parentSendStates(), onEvent = {})
-    }
+    fun `parent thread, sending, failed, blocked and arrived late`() =
+        screenshot.captureLightDark("chat_parent_send_states") {
+            ChatScreen(state = ChatPreviewData.parentSendStates(), onEvent = {})
+        }
 
     @Test
     fun `parent thread, photo loading and unavailable`() = screenshot.captureLightDark("chat_parent_photos") {

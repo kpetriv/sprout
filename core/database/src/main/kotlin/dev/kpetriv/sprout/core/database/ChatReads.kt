@@ -1,7 +1,10 @@
 package dev.kpetriv.sprout.core.database
 
 import androidx.room.withTransaction
+import dev.kpetriv.sprout.core.common.Dispatcher
+import dev.kpetriv.sprout.core.common.SproutDispatchers
 import dev.kpetriv.sprout.core.database.dao.OutboxHead
+import dev.kpetriv.sprout.core.database.entity.DeviceEntity
 import dev.kpetriv.sprout.core.database.entity.MessageEntity
 import dev.kpetriv.sprout.core.database.entity.MessageStatus
 import dev.kpetriv.sprout.core.database.entity.OutboxKind
@@ -18,12 +21,16 @@ import dev.kpetriv.sprout.core.model.MessageId
 import dev.kpetriv.sprout.core.model.Role
 import dev.kpetriv.sprout.core.model.ThreadId
 import dev.kpetriv.sprout.core.model.UserId
+import dev.kpetriv.sprout.core.sync.OutboxItem
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.flowOn
+import java.security.MessageDigest
 import javax.inject.Inject
 import kotlin.time.Instant
 
@@ -37,7 +44,7 @@ enum class MessageSendState {
     FAILED,
 
     /**
-     * The server refused it (or its blob) for good and it holds back the outbox ([RoomOutboxSource.observeBlocked]):
+     * The server refused it (or its blob) for good and it holds back the chat lane ([RoomOutboxSource.observeBlocked]):
      * "sending is blocked"; [MessageWrites.discard] removes it (D-M4-19).
      */
     BLOCKED,
@@ -110,7 +117,7 @@ class MessageReader @Inject constructor(private val database: SproutDatabase) {
         return combine(
             database.messageDao().observeNewest(threadId.value, limit + 1),
             database.outboxDao().observeKind(OutboxKind.MESSAGE),
-            observeBlockedPush(database),
+            observeBlockedPush(database, OutboxItem.Lane.CHAT),
             database.deviceDao().observeAll(),
         ) { rows, queued, blocked, devices ->
             val pending = queued.associateBy { it.refId }
@@ -176,14 +183,32 @@ class ChatThreads @Inject constructor(private val database: SproutDatabase) {
     }
 }
 
+/** Whether this device can send in a thread, and why not ([ThreadKeyStatusReader.observe]). */
+enum class ThreadKeyAvailability {
+    /** A key this device may send with is here. */
+    SENDABLE,
+
+    /** No usable key yet: "waiting for a parent device". */
+    WAITING,
+
+    /**
+     * The registry lists another encryption key for this device than the one it holds, or this device lost its key
+     * (D-M4-14, audit I2): no thread key will ever be wrapped for it, so only removing and re-linking the phone helps.
+     */
+    KEY_CONFLICT,
+}
+
 /**
  * Whether this device can send in a thread (M4 §1.2, review H2): the latest epoch's key this device would send with
  * is here (its own only once the server confirmed it) and no latest wrap set holds a device that must not have it,
  * the kid's archiving included. False means "waiting for a parent device". The same rule as `MessageWrites`.
+ * [observe] also tells a key conflict of this device apart (audit I2).
  */
 class ThreadKeyStatusReader @Inject constructor(
     private val database: SproutDatabase,
     private val check: SignatureCheck,
+    private val crypto: ChatCrypto,
+    @param:Dispatcher(SproutDispatchers.IO) private val dispatcher: CoroutineDispatcher,
 ) {
     fun observeSendable(threadId: ThreadId): Flow<Boolean> = combine(
         database.threadKeyDao().observeThread(threadId.value),
@@ -198,6 +223,33 @@ class ThreadKeyStatusReader @Inject constructor(
             ThreadKeyStore.sendable(rows, session.deviceId, membership.excluded) != null
         }
     }.distinctUntilChanged()
+
+    /**
+     * [observeSendable] with the reason it is not: [ThreadKeyAvailability.KEY_CONFLICT] when this device's registry row
+     * was flagged with a different key ([DeviceEntity.encryptionKeyConflict]) or lists a key this device does not
+     * hold; otherwise [ThreadKeyAvailability.WAITING]. The local key is read off the main thread.
+     */
+    fun observe(threadId: ThreadId): Flow<ThreadKeyAvailability> = combine(
+        observeSendable(threadId),
+        database.deviceDao().observeAll(),
+        database.sessionDao().observe(),
+    ) { sendable, devices, session ->
+        val own = session?.let { current -> devices.firstOrNull { it.deviceId == current.deviceId } }
+        when {
+            sendable -> ThreadKeyAvailability.SENDABLE
+            own != null && keyConflict(own) -> ThreadKeyAvailability.KEY_CONFLICT
+            else -> ThreadKeyAvailability.WAITING
+        }
+    }.distinctUntilChanged().flowOn(dispatcher)
+
+    private suspend fun keyConflict(own: DeviceEntity): Boolean {
+        val listed = own.encryptionKey
+        return when {
+            own.encryptionKeyConflict -> true
+            listed == null -> false
+            else -> crypto.keyPairOrNull()?.use { MessageDigest.isEqual(it.publicKey.bytes, listed) } != true
+        }
+    }
 }
 
 private fun MessageEntity.toStored(

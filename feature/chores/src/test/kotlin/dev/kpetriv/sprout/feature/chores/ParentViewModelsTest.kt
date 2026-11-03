@@ -13,6 +13,7 @@ import dev.kpetriv.sprout.core.model.ChoreSchedule
 import dev.kpetriv.sprout.core.model.ChoreState
 import dev.kpetriv.sprout.core.model.DayOfWeek
 import dev.kpetriv.sprout.core.model.KidId
+import dev.kpetriv.sprout.core.model.SubmissionId
 import dev.kpetriv.sprout.core.model.SubmissionStatus
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
@@ -197,7 +198,9 @@ class ApprovalsViewModelTest {
     private val approver = FakeApprover(chores)
     private val requester = FakeRequester()
     private val decoded = FakeImageBitmap()
-    private val uploaded = mutableMapOf<String, ByteArray>()
+
+    /** Uploaded blobs by id: the submission each was uploaded for (its signed binding) and its plaintext. */
+    private val uploaded = mutableMapOf<String, Pair<SubmissionId?, ByteArray>>()
     private val fetched = mutableListOf<String>()
 
     private fun viewModel() = ApprovalsViewModel(
@@ -210,9 +213,14 @@ class ApprovalsViewModelTest {
         reasons = TestReasons,
         decoder = { decoded },
         fiat = { TestData.gbp },
-        remotePhotos = { blobId ->
+        remotePhotos = { blobId, _, submissionId, _ ->
             fetched += blobId
-            uploaded[blobId]?.let { Result.success(it) } ?: Result.failure(IllegalStateException("not found"))
+            val blob = uploaded[blobId]
+            when {
+                blob == null -> Result.failure(IllegalStateException("not found"))
+                blob.first != null && blob.first != submissionId -> Result.failure(IllegalStateException("invalid"))
+                else -> Result.success(blob.second)
+            }
         },
     )
 
@@ -250,7 +258,7 @@ class ApprovalsViewModelTest {
         val bytes = byteArrayOf(9, 8, 7)
         val sha = java.security.MessageDigest.getInstance("SHA-256").digest(bytes)
             .joinToString("") { "%02x".format(it) }
-        uploaded["blob-1"] = bytes
+        uploaded["blob-1"] = null to bytes
         val remote = dev.kpetriv.sprout.core.model.PhotoRef("synced.photo", sha, blobId = "blob-1")
         chores.submissions.value = listOf(TestData.submission(bed).copy(photoRef = remote))
         val state = assertIs<ApprovalsUiState.Ready>(subscribe(viewModel().state).value)
@@ -262,7 +270,7 @@ class ApprovalsViewModelTest {
     fun `an uploaded photo that does not match its hash or cannot be fetched keeps the fallback`() = runTest {
         val dishes = TestData.chore("dishes", "kid-leo", "Dishes")
         chores.chores.value = listOf(bed, dishes)
-        uploaded["tampered"] = byteArrayOf(1)
+        uploaded["tampered"] = null to byteArrayOf(1)
         chores.submissions.value = listOf(
             TestData.submission(bed).copy(
                 photoRef = dev.kpetriv.sprout.core.model.PhotoRef("a.photo", "c".repeat(64), blobId = "tampered"),
@@ -273,6 +281,48 @@ class ApprovalsViewModelTest {
         )
         val state = assertIs<ApprovalsUiState.Ready>(subscribe(viewModel().state).value)
         assertEquals(listOf(PhotoUi.OnKidDevice, PhotoUi.OnKidDevice), state.submissions.map { it.photo })
+    }
+
+    @Test
+    fun `an uploaded photo not on the server yet keeps the fallback and is fetched again later (D-M4-22)`() = runTest {
+        chores.chores.value = listOf(bed)
+        val bytes = byteArrayOf(4, 5, 6)
+        val sha = java.security.MessageDigest.getInstance("SHA-256").digest(bytes)
+            .joinToString("") { "%02x".format(it) }
+        val submission = TestData.submission(bed)
+            .copy(photoRef = dev.kpetriv.sprout.core.model.PhotoRef("late.photo", sha, blobId = "blob-late"))
+        chores.submissions.value = listOf(submission)
+        val vm = viewModel()
+        val state = subscribe(vm.state)
+        assertEquals(PhotoUi.OnKidDevice, assertIs<ApprovalsUiState.Ready>(state.value).submissions.single().photo)
+
+        // The chunks arrive (chat lane) after the submission; the next change of the submissions fetches again.
+        uploaded["blob-late"] = submission.id to bytes
+        chores.submissions.value = listOf(submission.copy(note = "done"))
+
+        assertEquals(PhotoUi.Loaded(decoded), assertIs<ApprovalsUiState.Ready>(state.value).submissions.single().photo)
+        assertEquals(listOf("blob-late", "blob-late"), fetched)
+    }
+
+    @Test
+    fun `a blob two submissions name opens only for the submission it was uploaded for (A2-M1)`() = runTest {
+        val dishes = TestData.chore("dishes", "kid-leo", "Dishes")
+        chores.chores.value = listOf(bed, dishes)
+        val bytes = byteArrayOf(9, 8, 7)
+        val sha = java.security.MessageDigest.getInstance("SHA-256").digest(bytes)
+            .joinToString("") { "%02x".format(it) }
+        val genuine = TestData.submission(bed, submittedAt = TestData.now)
+        val copycat = TestData.submission(dishes, submittedAt = TestData.now.plus(kotlin.time.Duration.parse("1h")))
+        uploaded["blob-1"] = genuine.id to bytes
+        // Both name the same blob with the same hash: the copycat claims the genuine submission's photo.
+        val ref = dev.kpetriv.sprout.core.model.PhotoRef("synced.photo", sha, blobId = "blob-1")
+        chores.submissions.value = listOf(genuine.copy(photoRef = ref), copycat.copy(photoRef = ref))
+
+        val state = assertIs<ApprovalsUiState.Ready>(subscribe(viewModel().state).value)
+
+        assertEquals(listOf("Dishes", "Make bed"), state.submissions.map { it.choreTitle })
+        assertEquals(listOf(PhotoUi.OnKidDevice, PhotoUi.Loaded(decoded)), state.submissions.map { it.photo })
+        assertEquals(listOf("blob-1", "blob-1"), fetched)
     }
 
     @Test

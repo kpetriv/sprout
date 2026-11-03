@@ -22,6 +22,7 @@
   <string name="feature_chat_empty">No messages yet. Say hello!</string>
   <string name="feature_chat_empty_seedling">Pick a picture below to say something.</string>
   <string name="feature_chat_waiting_kid">Waiting for a parent device. You can send messages once a parent\'s phone has set up this chat.</string>
+  <string name="feature_chat_key_conflict">This phone\'s chat key was replaced. Ask a parent to remove and re-link it.</string>
   <string name="feature_chat_waiting_parent">Setting up secure chat. It is ready once this phone has the chat key.</string>
   <string name="feature_chat_locked">Waiting for a parent device</string>
   <string name="feature_chat_sending">Sending…</string>
@@ -30,6 +31,7 @@
   <string name="feature_chat_discard">Delete</string>
   <string name="feature_chat_blocked">Sending is blocked</string>
   <string name="feature_chat_from_parent_phone">From a parent\'s phone</string>
+  <string name="feature_chat_arrived_late">Arrived late</string>
   <string name="feature_chat_load_older">Show older messages</string>
   <string name="feature_chat_preset_unknown">Message</string>
   <!-- A message bubble for accessibility: author, then content ("Mum: I love you"). -->

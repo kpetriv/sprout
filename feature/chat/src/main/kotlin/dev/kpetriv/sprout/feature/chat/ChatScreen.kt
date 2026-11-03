@@ -181,7 +181,7 @@ private fun TextThread(
     onAttachPhoto: (() -> Unit)?,
 ) {
     Column(modifier = Modifier.fillMaxSize()) {
-        if (!state.canSend) WaitingBanner(state.mode)
+        if (!state.canSend) WaitingBanner(state.mode, state.keyState)
         MessageList(state = state, onEvent = onEvent, modifier = Modifier.weight(1f))
         state.nudge?.let { NudgeCard(it, onEvent, modifier = Modifier.padding(bottom = 8.dp)) }
         if (presets) PresetChips(state, onEvent)

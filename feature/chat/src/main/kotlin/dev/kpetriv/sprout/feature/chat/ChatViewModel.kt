@@ -450,6 +450,7 @@ class ChatViewModel @Inject constructor(
         photo = if (kind == MessageKind.PHOTO && !locked) photoMap[blobId] ?: PhotoUi.Unavailable else null,
         authorName = authorName,
         fromParentPhone = fromParentPhone,
+        late = late,
     )
 
     private fun notify(notice: ChatNotice) = local.update { it.copy(notice = notice) }

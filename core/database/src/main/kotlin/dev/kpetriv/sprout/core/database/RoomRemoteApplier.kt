@@ -131,7 +131,10 @@ class RoomRemoteApplier internal constructor(
      * Mirrors one registry row, **pinning** what was seen first (audit H1, D-M4-16): a row whose device id is not the
      * SHA-256 of its public key is dropped (`DEVICE_REJECTED`); a known device's public key and verified encryption
      * key are never replaced (a different encryption key is kept out, the device is marked
-     * [DeviceEntity.encryptionKeyConflict] and so excluded from every thread, audited `DEVICE_KEY_CHANGED` once); a
+     * [DeviceEntity.encryptionKeyConflict] and so excluded from every thread, audited `DEVICE_KEY_CHANGED` once); its
+     * owner (`uid`, `role`, `kidId`) is pinned the same way (audit I1: the server writes a device row once and never
+     * changes its owner, so a change would turn, say, a known KID device into a PARENT that every thread wraps for;
+     * the first values are kept, the device is excluded, audited `DEVICE_KEY_CHANGED` with `key: "owner"` once); a
      * REVOKED device never becomes ACTIVE or PENDING again here, and its revocation lamport never moves up
      * (`DEVICE_REVOCATION_KEPT`).
      */
@@ -154,8 +157,8 @@ class RoomRemoteApplier internal constructor(
             else -> null
         }
         if (action != null) {
-            record(action, device.uid, device.deviceId, device.deviceId.value, now) {
-                put("role", device.role.name)
+            record(action, entity.uid, device.deviceId, device.deviceId.value, now) {
+                put("role", entity.role.name)
                 put("status", entity.status.name)
                 put("attestation", device.attestation.name)
             }
@@ -170,10 +173,11 @@ class RoomRemoteApplier internal constructor(
         val pinnedKey = existing.encryptionKey?.takeIf { existing.toRegistered().verifiedEncryptionKey(check) != null }
         val keyChanged = pinnedKey != null && incoming.encryptionKey != null &&
             !incoming.encryptionKey.contentEquals(pinnedKey)
-        val signingKeyChanged = !incoming.publicKey.contentEquals(existing.publicKey)
-        if ((keyChanged && !existing.encryptionKeyConflict) || signingKeyChanged) {
+        val changed = changedPin(existing, incoming, keyChanged)
+        // A changed signing key is audited every time; the other changes once, when the device is first excluded.
+        if (changed == PUBLIC_KEY || (changed != null && !existing.encryptionKeyConflict)) {
             record(AuditAction.DEVICE_KEY_CHANGED, existing.uid, existing.deviceId, existing.deviceId.value, now) {
-                put("key", if (signingKeyChanged) "publicKey" else "encryptionKey")
+                put("key", changed)
             }
         }
         val revoked = existing.status == RegistrationStatus.REVOKED
@@ -184,15 +188,31 @@ class RoomRemoteApplier internal constructor(
         }
         val keySource = if (pinnedKey != null) existing else incoming
         return incoming.copy(
+            uid = existing.uid,
+            role = existing.role,
+            kidId = existing.kidId,
             publicKey = existing.publicKey,
             status = if (revoked) RegistrationStatus.REVOKED else incoming.status,
             revokedAtLamport = if (revoked) keptRevocation(existing, incoming) else incoming.revokedAtLamport,
             encryptionKey = keySource.encryptionKey,
             encryptionKeySignature = keySource.encryptionKeySignature,
             encryptionKeyHouseholdId = keySource.encryptionKeyHouseholdId,
-            encryptionKeyConflict = existing.encryptionKeyConflict || keyChanged || signingKeyChanged,
+            encryptionKeyConflict = existing.encryptionKeyConflict || changed != null,
         )
     }
+
+    /**
+     * What [incoming] tries to change of what [existing] pins, as the `key` of the `DEVICE_KEY_CHANGED` audit row:
+     * the signing key, the verified encryption key ([encryptionKeyChanged]) or the owner (`uid`, `role`, `kidId`,
+     * audit I1); null when nothing pinned changes.
+     */
+    private fun changedPin(existing: DeviceEntity, incoming: DeviceEntity, encryptionKeyChanged: Boolean): String? =
+        when {
+            !incoming.publicKey.contentEquals(existing.publicKey) -> PUBLIC_KEY
+            encryptionKeyChanged -> "encryptionKey"
+            ownerOf(incoming) != ownerOf(existing) -> "owner"
+            else -> null
+        }
 
     /** A revoked device's revocation lamport: never moved up (that would admit more of its writes). */
     private fun keptRevocation(existing: DeviceEntity, incoming: DeviceEntity): Long? {
@@ -685,5 +705,11 @@ class RoomRemoteApplier internal constructor(
         const val MALFORMED_PAYLOAD: String = "MALFORMED_PAYLOAD"
 
         private val EMPTY = JsonObject(emptyMap())
+
+        /** The owner fields of a device row (pinned, audit I1). */
+        private fun ownerOf(device: DeviceEntity) = Triple(device.uid, device.role, device.kidId)
+
+        /** `DEVICE_KEY_CHANGED` key of a changed signing key. */
+        private const val PUBLIC_KEY = "publicKey"
     }
 }

@@ -22,17 +22,19 @@ import kotlinx.serialization.json.JsonPrimitive
 interface SyncTransport {
     /**
      * Sends [items] (ledger events as `LedgerJson` trees, signed documents, chat messages as `MessageJson` trees of
-     * core/domain-ledger `MessageEnvelope`, blob chunks as [BlobChunkJson]) **in list order**, which is outbox `seq`
-     * order: a transport never regroups them by kind, so a blob chunk queued before the message or chore submission
-     * that names its blob reaches the server first (M4 §3, review M2). Idempotent: an event already on the server under
-     * the same `(eventId, hash)`, a document the server's copy already beats, or a message or blob chunk already stored
-     * with the same content, is accepted.
+     * core/domain-ledger `MessageEnvelope`, blob chunks as [BlobChunkJson]) **in list order** within each outbox lane
+     * ([OutboxItem.Lane], D-M4-22), which is outbox `seq` order: a transport never reorders the items of one lane, so
+     * a blob chunk queued before the message that names its blob reaches the server first (M4 §3, review M2).
+     * Idempotent: an event already on the server under the same `(eventId, hash)`, a document the server's copy
+     * already beats, or a message or blob chunk already stored with the same content, is accepted.
      *
-     * **Head of line.** Once an item whose kind [blocks on refusal][OutboxItem.Kind.blocksOnRefusal] (an event, a
-     * message, a blob chunk) is refused with [SyncError.Permanent], every later item of the call is left unprocessed:
-     * it appears in neither list of the [PushResult], and the engine leaves it queued behind the refused one
-     * ([SyncEngine]). A refused document does not stop the call. Any other failure that ends the call early leaves the
-     * rest unprocessed too.
+     * **Head of line, per lane.** Once an item whose kind [blocks on refusal][OutboxItem.Kind.blocksOnRefusal] (an
+     * event, a message, a blob chunk) is refused with [SyncError.Permanent], or an item is refused with
+     * [SyncError.Transient] (a blob chunk the server refused: over the daily budget, or counted against another day),
+     * every later item **of its lane** is left unprocessed: it appears in neither list of the [PushResult], and the
+     * engine leaves it queued behind the refused one ([SyncEngine]). Items of the other lane go on. A refused document
+     * does not stop anything. A failure that is not about one item (the network, the session) ends the call and leaves
+     * the rest of both lanes unprocessed.
      */
     suspend fun push(items: List<PushItem>): PushResult = throw SyncException(SyncError.Transient())
 
@@ -155,8 +157,9 @@ class PullPage(
     val hasMore: Boolean,
     val messages: List<JsonObject> = emptyList(),
     /**
-     * Stored rows of this page the transport could not read into the lists above and dropped (a registry row whose
-     * id is not its key's fingerprint, a document that does not decode). Counted for the sync report only.
+     * Stored rows of this page the transport could not read into the lists above and dropped: a registry row that
+     * does not parse or whose id is not its key's fingerprint, a document or an event that does not decode (or a
+     * document stored under another type's collection or another id). Counted for the sync report only.
      */
     val malformed: Int = 0,
 )

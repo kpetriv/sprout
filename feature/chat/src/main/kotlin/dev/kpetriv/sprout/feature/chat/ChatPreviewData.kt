@@ -91,6 +91,9 @@ internal object ChatPreviewData {
         ),
     ).copy(keyState = ThreadKeyState.WAITING_FOR_PARENT)
 
+    /** This phone's chat key was replaced in the registry (audit I2): remove and re-link it. */
+    fun kidKeyConflict(tier: KidUiTier) = kidLocked(tier).copy(keyState = ThreadKeyState.KEY_CONFLICT)
+
     /** Seedling mid-recording; other tiers show the thread (they have no microphone). */
     fun kidRecording(tier: KidUiTier) = kidMessages(tier).copy(recording = RecordingUi(RECORDING_MS))
 
@@ -116,7 +119,10 @@ internal object ChatPreviewData {
         nudge = NudgeUi("You never let me do anything", "Can we talk about it later?"),
     )
 
-    /** A parent's own messages in every send state, and a kid message written on a parent's phone. */
+    /**
+     * A parent's own messages in every send state, a kid message written on a parent's phone and one that arrived
+     * late.
+     */
     fun parentSendStates() = base(
         ChatMode.PARENT,
         null,
@@ -125,6 +131,7 @@ internal object ChatPreviewData {
             mine("m2", 1, MessageKind.TEXT, SendState.SENDING).copy(text = "After homework"),
             mine("m3", 2, MessageKind.TEXT, SendState.FAILED).copy(text = "Apple or banana?"),
             mine("m4", 3, MessageKind.TEXT, SendState.BLOCKED).copy(text = "Bring your coat"),
+            theirs("m5", 4, "Leo", MessageKind.TEXT).copy(text = "I said thank you", late = true),
         ),
     )
 

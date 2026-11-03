@@ -4,6 +4,7 @@ import android.database.SQLException
 import dagger.Lazy
 import dev.kpetriv.sprout.BuildConfig
 import dev.kpetriv.sprout.chat.ChatMaintenance
+import dev.kpetriv.sprout.chat.VoiceTempFiles
 import dev.kpetriv.sprout.core.database.HouseholdBootstrap
 import dev.kpetriv.sprout.core.database.RoomLedgerRepository
 import dev.kpetriv.sprout.core.database.Session
@@ -28,7 +29,8 @@ import javax.inject.Singleton
 
 /**
  * One-time, process-start work, run off the main thread on the [ApplicationScope] (IO):
- * 0. clear the plaintext chore-photo capture cache ([ChorePhotoCache], ADR-0005), best effort: a capture a crash or a
+ * 0. clear the plaintext chore-photo capture cache ([ChorePhotoCache], ADR-0005) and sweep leftover voice note temp
+ *    files from `cacheDir` ([VoiceTempFiles], audit A2-M2), best effort: a capture or a recording a crash or a
  *    process death left behind never outlives the next start;
  * 1. initialise Firebase and install App Check (core/sync-firebase, M3 §5), best effort: the app works offline and
  *    sync retries later;
@@ -74,6 +76,7 @@ class AppInitializer internal constructor(
     private val resumeRemoval: () -> Boolean = { false },
     private val removing: () -> Boolean = { false },
     private val chatStartup: suspend () -> Unit = {},
+    private val sweepVoiceTempFiles: () -> Unit = {},
 ) : StartupStatus {
     @Inject
     @Suppress("LongParameterList") // One lazily built dependency per startup step.
@@ -90,6 +93,7 @@ class AppInitializer internal constructor(
         sync: Lazy<SyncController>,
         removals: Lazy<RemovalHandler>,
         chat: Lazy<ChatMaintenance>,
+        voiceTempFiles: Lazy<VoiceTempFiles>,
     ) : this(
         scope = scope,
         seedDemoHousehold = demoSeeding(householdBootstrap, BuildConfig.DEBUG),
@@ -104,6 +108,7 @@ class AppInitializer internal constructor(
         resumeRemoval = { removals.get().resume() },
         removing = { removals.get().isRemoving },
         chatStartup = { chat.get().atStartup() },
+        sweepVoiceTempFiles = { voiceTempFiles.get().sweep() },
     )
 
     private val started = AtomicBoolean(false)
@@ -148,6 +153,7 @@ class AppInitializer internal constructor(
     @Suppress("ReturnCount") // One check between each pair of steps.
     private suspend fun steps() {
         clearPhotoCacheBestEffort()
+        sweepVoiceTempFilesBestEffort()
         initialiseFirebaseBestEffort()
         if (resumeRemoval()) return
         var session = reconcileSession()
@@ -176,6 +182,16 @@ class AppInitializer internal constructor(
             clearPhotoCache()
         } catch (expected: Exception) {
             // Nothing to show: the capture flow clears the directory again before every capture.
+        }
+    }
+
+    /** Runs on the IO scope. A file system failure never fails startup; the next start sweeps again. */
+    @Suppress("TooGenericExceptionCaught", "SwallowedException")
+    private fun sweepVoiceTempFilesBestEffort() {
+        try {
+            sweepVoiceTempFiles()
+        } catch (expected: Exception) {
+            // Nothing to show or log.
         }
     }
 

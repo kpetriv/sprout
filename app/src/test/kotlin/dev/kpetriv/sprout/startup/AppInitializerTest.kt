@@ -276,4 +276,27 @@ class AppInitializerTest {
         assertEquals(StartupState.Ready, initializer.state.value)
         assertEquals(listOf("check", "plan", "schedule"), steps)
     }
+
+    @Test
+    fun `voice temp files are swept first at every start, and a failing sweep does not fail startup`() = scope.runTest {
+        var sweeps = 0
+        val initializer = AppInitializer(
+            scope,
+            null,
+            { steps += "check" },
+            planner,
+            scheduler,
+            reconcileSession = { trialSession() },
+            sweepVoiceTempFiles = {
+                sweeps += 1
+                steps += "sweep"
+                throw SecurityException("cache unavailable")
+            },
+        )
+        initializer.start()
+        advanceUntilIdle()
+        assertEquals(StartupState.Ready, initializer.state.value)
+        assertEquals(1, sweeps)
+        assertEquals(listOf("sweep", "check", "plan", "schedule"), steps)
+    }
 }
