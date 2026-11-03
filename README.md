@@ -125,7 +125,7 @@ Each milestone ends with green CI and a tagged build.
 | M2 Chores, rewards, tiers | Parent CRUD, kid today and shop (3 tiers), submit/approve, allowance, savings and interest, PIN/biometric lock with fingerprint-signed money events | Done |
 | M3 Sync and identity | Sync engine, Firebase transport, App Check, Credential Manager, the Sprout server (Spark plan), Firestore rules and emulator tests, device registry with key attestation, controls matrix, runbook | Done |
 | M4 Chat and time bank | E2EE threads, key rotation, Seedling presets and voice notes, chore photo upload, time bank with an ongoing notification | In review |
-| M5 Games | Three games, tier difficulty, daily cap, signed scoring events | Planned |
+| M5 Games | Three games, tier difficulty, daily cap, signed scoring events | In progress |
 | M6 AI | Gemini Nano integration, fallbacks, kindness check, suggestions, weekly summary | Planned |
 | M7 Showcase polish | Glance widget, adaptive layouts, Baseline Profiles, full screenshot coverage, accessibility, retention, export/delete | Planned |
 | M8 Play release | Privacy policy, data-safety form, security review, app signing, staged tracks | Planned |
