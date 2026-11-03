@@ -1,4 +1,100 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
   <string name="feature_games_title">Brain games</string>
+  <string name="feature_games_back">Back</string>
+  <string name="feature_games_loading">Loading games</string>
+  <string name="feature_games_error_load_failed">Something went wrong while loading games.</string>
+  <string name="feature_games_retry">Try again</string>
+  <!-- Content description of the Seedling read-aloud button. -->
+  <string name="feature_games_read_aloud">Read this to me</string>
+
+  <!-- Seedling coins: game credit counted in minor units ("+8 coins"). -->
+  <plurals name="feature_games_coins">
+    <item quantity="one">%1$d coin</item>
+    <item quantity="other">%1$d coins</item>
+  </plurals>
+  <plurals name="feature_games_coins_won">
+    <item quantity="one">+%1$d coin</item>
+    <item quantity="other">+%1$d coins</item>
+  </plurals>
+
+  <!-- Games -->
+  <string name="feature_games_kind_arithmetic">Numbers</string>
+  <string name="feature_games_kind_memory">Memory</string>
+  <string name="feature_games_kind_words">Word scramble</string>
+  <string name="feature_games_kind_arithmetic_seedling_description">Count and add</string>
+  <string name="feature_games_kind_arithmetic_description">Sums and times tables</string>
+  <string name="feature_games_kind_memory_seedling_description">Remember the pictures</string>
+  <string name="feature_games_kind_memory_description">Remember the order</string>
+  <string name="feature_games_kind_words_description">Put the letters back in order</string>
+  <!-- %1$s is a game name. -->
+  <string name="feature_games_play_game">Play %1$s</string>
+
+  <!-- Hub. %1$s is an amount ("23p"). -->
+  <string name="feature_games_remaining">You can still earn %1$s today</string>
+  <string name="feature_games_remaining_seedling">Coins you can still win today</string>
+  <!-- %1$s is a coin count ("23 coins"). -->
+  <string name="feature_games_remaining_seedling_spoken">You can still win %1$s today</string>
+  <string name="feature_games_cap_reached">Come back tomorrow, you can still play for fun</string>
+  <string name="feature_games_cap_reached_seedling">No more coins today. You can still play for fun!</string>
+
+  <!-- Start card -->
+  <plurals name="feature_games_rounds">
+    <item quantity="one">%1$d round</item>
+    <item quantity="other">%1$d rounds</item>
+  </plurals>
+  <string name="feature_games_timed">Timed</string>
+  <string name="feature_games_timed_description">Beat the clock in every round for a bonus</string>
+  <string name="feature_games_start">Start</string>
+  <string name="feature_games_unavailable">This game is not available yet.</string>
+
+  <!-- Rounds. "3 of 8". -->
+  <string name="feature_games_progress">%1$d of %2$d</string>
+  <string name="feature_games_progress_description">Round %1$d of %2$d</string>
+  <string name="feature_games_time_left">Time left</string>
+  <plurals name="feature_games_dots">
+    <item quantity="one">%1$d dot</item>
+    <item quantity="other">%1$d dots</item>
+  </plurals>
+  <!-- %1$s is a sum, such as "7 plus 5". -->
+  <string name="feature_games_question_description">What is %1$s?</string>
+  <string name="feature_games_answer_label">Your answer</string>
+  <string name="feature_games_minus">Plus or minus</string>
+  <string name="feature_games_check">Check</string>
+
+  <string name="feature_games_memory_watch">Watch carefully!</string>
+  <string name="feature_games_memory_tap">Now tap them in the same order</string>
+  <string name="feature_games_memory_hidden">Hidden</string>
+  <plurals name="feature_games_memory_tapped">
+    <item quantity="one">%1$d of %2$d tapped</item>
+    <item quantity="other">%1$d of %2$d tapped</item>
+  </plurals>
+
+  <string name="feature_games_word_prompt">Unscramble the word</string>
+  <!-- %1$s is a one-word category, such as "animal". -->
+  <string name="feature_games_word_hint">Hint: %1$s</string>
+  <string name="feature_games_word_clear">Clear</string>
+  <string name="feature_games_word_answer_label">Type the word</string>
+  <!-- %1$s is a letter. -->
+  <string name="feature_games_word_letter">Letter %1$s</string>
+  <!-- %1$s is the letters so far. -->
+  <string name="feature_games_word_answer_description">Your word: %1$s</string>
+  <string name="feature_games_word_answer_empty">No letters yet</string>
+
+  <!-- Result. %1$d correct rounds of %2$d. -->
+  <string name="feature_games_score">You got %1$d of %2$d!</string>
+  <string name="feature_games_perfect">Perfect!</string>
+  <string name="feature_games_timed_bonus">Timed bonus!</string>
+  <!-- %1$s is a signed amount ("+8p"). -->
+  <string name="feature_games_credited">You earned %1$s</string>
+  <string name="feature_games_clamped">You reached today\'s limit, so this game earned %1$s</string>
+  <string name="feature_games_clamped_seedling">That\'s all the coins for today!</string>
+  <string name="feature_games_capped">You\'ve earned all you can today. This one was for fun!</string>
+  <string name="feature_games_capped_seedling">No more coins today. This one was for fun!</string>
+  <string name="feature_games_no_account">Ask a parent to set up your money. This one was for fun.</string>
+  <string name="feature_games_refused">We couldn\'t save what you earned.</string>
+  <string name="feature_games_saving">Saving…</string>
+  <string name="feature_games_unknown">Check your wallet to see what you earned.</string>
+  <string name="feature_games_play_again">Play again</string>
+  <string name="feature_games_done">Done</string>
 </resources>

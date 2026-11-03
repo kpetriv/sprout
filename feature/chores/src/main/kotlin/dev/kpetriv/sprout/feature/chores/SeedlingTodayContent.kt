@@ -32,6 +32,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import dev.kpetriv.sprout.core.designsystem.theme.SproutTheme
 import dev.kpetriv.sprout.core.model.KidUiTier
+import dev.kpetriv.sprout.core.ui.Confetti
 import dev.kpetriv.sprout.core.ui.MoneyFormatter
 import dev.kpetriv.sprout.core.ui.ReadAloud
 import dev.kpetriv.sprout.core.ui.TierScaledText
