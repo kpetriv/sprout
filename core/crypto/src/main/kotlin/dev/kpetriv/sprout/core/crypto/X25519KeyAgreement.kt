@@ -39,8 +39,9 @@ class X25519KeyPair(val privateKey: X25519PrivateKey, val publicKey: X25519Publi
 class KeyAgreementException(message: String, cause: Throwable? = null) : GeneralSecurityException(message, cause)
 
 /**
- * X25519 Diffie-Hellman (RFC 7748), used at link time to derive household chat keys (M4). Named for the curve so
- * it does not clash with `javax.crypto.KeyAgreement`.
+ * X25519 Diffie-Hellman (RFC 7748), used to wrap chat thread keys per device (M4 §1.2). Named for the curve so it does
+ * not clash with `javax.crypto.KeyAgreement`. Two implementations: [JceX25519KeyAgreement] (JCE `XDH`, API 33+) and
+ * [TinkX25519KeyAgreement] (pure Java, every API level); [X25519KeyAgreements.select] picks one (D-M4-1).
  */
 interface X25519KeyAgreement {
     fun generateKeyPair(): X25519KeyPair

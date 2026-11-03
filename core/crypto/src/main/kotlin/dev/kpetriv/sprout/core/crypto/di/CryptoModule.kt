@@ -1,6 +1,7 @@
 package dev.kpetriv.sprout.core.crypto.di
 
 import android.content.Context
+import android.os.Build
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
@@ -15,17 +16,19 @@ import dev.kpetriv.sprout.core.crypto.AndroidKeystoreKeyWrapper
 import dev.kpetriv.sprout.core.crypto.AndroidKeystoreParentAuthKeyStore
 import dev.kpetriv.sprout.core.crypto.BiometricParentAuthAvailabilityChecker
 import dev.kpetriv.sprout.core.crypto.DeviceKeyStore
+import dev.kpetriv.sprout.core.crypto.EncryptionKeyStore
 import dev.kpetriv.sprout.core.crypto.FilesDirBlobStorage
 import dev.kpetriv.sprout.core.crypto.JceEcdsaVerifier
-import dev.kpetriv.sprout.core.crypto.JceX25519KeyAgreement
 import dev.kpetriv.sprout.core.crypto.KeystoreParentAuthorizer
 import dev.kpetriv.sprout.core.crypto.ParentAuthAvailabilityChecker
 import dev.kpetriv.sprout.core.crypto.ParentAuthKeyStore
 import dev.kpetriv.sprout.core.crypto.ParentAuthorizer
 import dev.kpetriv.sprout.core.crypto.SecretStore
+import dev.kpetriv.sprout.core.crypto.SecretStoreEncryptionKeyStore
 import dev.kpetriv.sprout.core.crypto.Verifier
 import dev.kpetriv.sprout.core.crypto.WrappedSecretStore
 import dev.kpetriv.sprout.core.crypto.X25519KeyAgreement
+import dev.kpetriv.sprout.core.crypto.X25519KeyAgreements
 import kotlinx.coroutines.CoroutineDispatcher
 import java.security.SecureRandom
 import javax.inject.Singleton
@@ -48,7 +51,13 @@ internal object CryptoModule {
 
     @Provides
     @Singleton
-    fun keyAgreement(random: SecureRandom): X25519KeyAgreement = JceX25519KeyAgreement(random)
+    fun keyAgreement(random: SecureRandom): X25519KeyAgreement =
+        X25519KeyAgreements.select(random, Build.VERSION.SDK_INT)
+
+    @Provides
+    @Singleton
+    fun encryptionKeyStore(secretStore: SecretStore, agreement: X25519KeyAgreement): EncryptionKeyStore =
+        SecretStoreEncryptionKeyStore(secretStore, agreement)
 
     @Provides
     @Singleton

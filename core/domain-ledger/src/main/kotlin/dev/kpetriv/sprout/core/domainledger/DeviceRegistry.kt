@@ -20,17 +20,31 @@ interface DeviceRegistry {
     suspend fun parentKeys(): List<RegisteredParentKey>
 }
 
-/** One registered device. [publicKey] is the X.509 SPKI DER of its P-256 signing key. */
+/**
+ * One registered device. [publicKey] is the X.509 SPKI DER of its P-256 signing key.
+ *
+ * [encryptionKey] (M4 §1.1) is the device's X25519 chat key with its binding signature, exactly as the registry row
+ * holds it; null until the device registered one. It is never trusted as stored: use [verifiedEncryptionKey], which
+ * checks the binding against [publicKey] and returns null when it fails.
+ */
 class RegisteredDevice(
     val deviceId: DeviceId,
     val owner: DeviceOwner,
     val publicKey: ByteArray,
     val status: DeviceStatus,
     val attestation: AttestationLevel,
+    val encryptionKey: BoundEncryptionKey? = null,
 ) {
     val uid: UserId get() = owner.uid
     val role: Role get() = owner.role
     val kidId: KidId? get() = owner.kidId
+
+    /**
+     * The raw 32-byte X25519 public key of this device when its binding verifies against the registered device key
+     * ([BoundEncryptionKey.verify]); null when there is no key or the binding fails (the key is then ignored).
+     */
+    fun verifiedEncryptionKey(check: SignatureCheck): ByteArray? =
+        encryptionKey?.takeIf { it.verify(check, deviceId, publicKey) }?.publicKey
 
     /** Whether an event or document authored by this device at [lamport] may be applied. */
     fun acceptsLamport(lamport: Long): Boolean = when (val s = status) {

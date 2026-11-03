@@ -129,3 +129,47 @@ value class ScheduleId(val value: String) {
 
     override fun toString(): String = value
 }
+
+/** A chat message (a random UUID chosen by the author device); the idempotency key of the `messages` lane (M4). */
+@Serializable
+@JvmInline
+value class MessageId(val value: String) {
+    init {
+        requireValidId("MessageId", value)
+    }
+
+    override fun toString(): String = value
+}
+
+/**
+ * A chat thread (M4 §1.2). There is one thread per kid and its id is the kid's id, so [of] and [kidId] convert both
+ * ways without a lookup.
+ */
+@Serializable
+@JvmInline
+value class ThreadId(val value: String) {
+    init {
+        requireValidId("ThreadId", value)
+    }
+
+    /** The kid this thread belongs to. */
+    val kidId: KidId get() = KidId(value)
+
+    override fun toString(): String = value
+
+    companion object {
+        /** The thread of [kidId]. */
+        fun of(kidId: KidId): ThreadId = ThreadId(kidId.value)
+    }
+}
+
+/** An encrypted blob (a chat photo or voice note, or a chore photo) stored as chunks in the `blobs` lane (M4 §2). */
+@Serializable
+@JvmInline
+value class BlobId(val value: String) {
+    init {
+        requireValidId("BlobId", value)
+    }
+
+    override fun toString(): String = value
+}

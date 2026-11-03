@@ -65,6 +65,8 @@ roborazzi = "1.77.0"
 timber = "5.0.1"
 # Argon2id PIN hashing (core/crypto). Android-only: bundles JNI libs (16 KB page aligned), no JVM fallback.
 argon2kt = "1.6.0"
+# Pure-Java X25519 fallback for API 28-32, where JCE "XDH" is not reliable (core/crypto, D-M4-1).
+tinkAndroid = "1.24.0"
 # SQLCipher for Android (core/database). The 4.x line on Maven Central; ships native libs, so JVM tests use plain Room.
 sqlcipherAndroid = "4.20.0"
 
@@ -140,6 +142,7 @@ roborazzi-compose = { module = "io.github.takahirom.roborazzi:roborazzi-compose"
 roborazzi-junit-rule = { module = "io.github.takahirom.roborazzi:roborazzi-junit-rule", version.ref = "roborazzi" }
 timber = { module = "com.jakewharton.timber:timber", version.ref = "timber" }
 argon2kt = { module = "com.lambdapioneer.argon2kt:argon2kt", version.ref = "argon2kt" }
+tink-android = { module = "com.google.crypto.tink:tink-android", version.ref = "tinkAndroid" }
 sqlcipher-android = { module = "net.zetetic:sqlcipher-android", version.ref = "sqlcipherAndroid" }
 
 # Only for the detekt configuration (see detektKotlin above).

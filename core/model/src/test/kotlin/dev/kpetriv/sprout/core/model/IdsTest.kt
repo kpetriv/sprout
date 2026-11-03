@@ -6,7 +6,16 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 
 class IdsTest {
-    private val constructors: List<(String) -> Any> = listOf(::HouseholdId, ::KidId, ::AccountId, ::DeviceId, ::UserId)
+    private val constructors: List<(String) -> Any> = listOf(
+        ::HouseholdId,
+        ::KidId,
+        ::AccountId,
+        ::DeviceId,
+        ::UserId,
+        ::MessageId,
+        ::ThreadId,
+        ::BlobId,
+    )
 
     @Test
     fun idsSerialiseAsBareStrings() {
@@ -86,5 +95,19 @@ class IdsTest {
     fun roleSerialisesByName() {
         assertEquals("\"PARENT\"", Json.encodeToString(Role.serializer(), Role.PARENT))
         assertEquals(Role.KID, Json.decodeFromString(Role.serializer(), "\"KID\""))
+    }
+
+    @Test
+    fun chatIdsSerialiseAsBareStrings() {
+        assertEquals("\"m-1\"", Json.encodeToString(MessageId.serializer(), MessageId("m-1")))
+        assertEquals(ThreadId("k-1"), Json.decodeFromString(ThreadId.serializer(), "\"k-1\""))
+        assertEquals(BlobId("b"), Json.decodeFromString(BlobId.serializer(), "\"b\""))
+    }
+
+    @Test
+    fun threadIdIsTheKidId() {
+        val kid = KidId("kid-7")
+        assertEquals("kid-7", ThreadId.of(kid).value)
+        assertEquals(kid, ThreadId.of(kid).kidId)
     }
 }
