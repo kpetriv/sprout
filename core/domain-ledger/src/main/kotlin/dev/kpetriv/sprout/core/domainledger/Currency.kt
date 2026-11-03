@@ -1,6 +1,19 @@
 package dev.kpetriv.sprout.core.domainledger
 
-/** What an account's [Money] amounts count: real money in an ISO 4217 currency, or screen-time minutes. */
+import kotlinx.serialization.KSerializer
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.descriptors.PrimitiveKind
+import kotlinx.serialization.descriptors.PrimitiveSerialDescriptor
+import kotlinx.serialization.descriptors.SerialDescriptor
+import kotlinx.serialization.encoding.Decoder
+import kotlinx.serialization.encoding.Encoder
+
+/**
+ * What an account's [Money] amounts count: real money in an ISO 4217 currency, or screen-time minutes.
+ * Serialises as a single string: the ISO code (`"GBP"`) or [CurrencySerializer.MINUTES] (`"minutes"`).
+ * Lower case can never collide with an ISO code. This form is part of the canonical event encoding.
+ */
+@Serializable(with = CurrencySerializer::class)
 sealed interface Currency {
     /**
      * Real money; amounts are minor units of [isoCode] (for example pence for GBP).
@@ -17,6 +30,27 @@ sealed interface Currency {
 
     /** Screen time; amounts are whole minutes. */
     data object Minutes : Currency
+}
+
+/** Encodes [Currency] as one string so the canonical event form stays flat and stable. */
+object CurrencySerializer : KSerializer<Currency> {
+    /** The serialised form of [Currency.Minutes]. */
+    const val MINUTES: String = "minutes"
+
+    override val descriptor: SerialDescriptor =
+        PrimitiveSerialDescriptor("dev.kpetriv.sprout.core.domainledger.Currency", PrimitiveKind.STRING)
+
+    override fun serialize(encoder: Encoder, value: Currency) = encoder.encodeString(
+        when (value) {
+            is Currency.Fiat -> value.isoCode
+            Currency.Minutes -> MINUTES
+        },
+    )
+
+    override fun deserialize(decoder: Decoder): Currency = when (val text = decoder.decodeString()) {
+        MINUTES -> Currency.Minutes
+        else -> Currency.Fiat(text)
+    }
 }
 
 /**

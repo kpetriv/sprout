@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+  <!-- Money and time amounts. %1$s is an already formatted number. -->
+  <plurals name="core_ui_coins">
+    <item quantity="one">%1$s coin</item>
+    <item quantity="other">%1$s coins</item>
+  </plurals>
+  <string name="core_ui_minutes_short">%1$s min</string>
+  <string name="core_ui_hours_short">%1$s h</string>
+  <string name="core_ui_hours_minutes_short">%1$s h %2$s min</string>
+
+  <!-- Seedling wording for ledger rows: plain words, never a minus sign. %1$s is the amount. -->
+  <string name="core_ui_event_got">You got %1$s</string>
+  <string name="core_ui_event_spent">You used %1$s</string>
+  <string name="core_ui_event_moved">You saved %1$s</string>
+
+  <!-- Accessibility. -->
+  <plurals name="core_ui_jar_state">
+    <item quantity="one">%1$d percent full</item>
+    <item quantity="other">%1$d percent full</item>
+  </plurals>
+  <plurals name="core_ui_savings_progress">
+    <item quantity="one">%1$d percent of your goal</item>
+    <item quantity="other">%1$d percent of your goal</item>
+  </plurals>
+  <string name="core_ui_savings_no_target">No goal amount set yet</string>
+  <string name="core_ui_event_row_description">%1$s, %2$s</string>
+</resources>

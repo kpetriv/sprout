@@ -1,0 +1,176 @@
+package dev.kpetriv.sprout.core.database
+
+import dev.kpetriv.sprout.core.domainledger.AccountKind
+import dev.kpetriv.sprout.core.domainledger.Currency
+import dev.kpetriv.sprout.core.domainledger.CurrencySerializer
+import dev.kpetriv.sprout.core.domainledger.EventId
+import dev.kpetriv.sprout.core.domainledger.LedgerJson
+import dev.kpetriv.sprout.core.domainledger.Money
+import dev.kpetriv.sprout.core.domainledger.Violation
+import dev.kpetriv.sprout.core.model.AccountId
+import dev.kpetriv.sprout.core.model.KidId
+import dev.kpetriv.sprout.core.model.Role
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonObjectBuilder
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.int
+import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.long
+import kotlinx.serialization.json.put
+
+/**
+ * Lossless JSON form of a [Violation] for the anomalies cache, so a stored [dev.kpetriv.sprout.core.domainledger
+ * .LedgerAnomaly.InvalidEvent] reads back equal to the projected one. `{"kind": <class name>, ...fields}`.
+ *
+ * Violations hold ids, amounts, field names and enum values only; never free text (the domain keeps the text
+ * itself out of them).
+ */
+@Suppress("CyclomaticComplexMethod", "LongMethod") // One branch per Violation type, in both directions.
+internal object ViolationCodec {
+    private const val KIND = "kind"
+
+    fun encode(violation: Violation): JsonObject = buildJsonObject {
+        put(KIND, violation::class.simpleName.orEmpty())
+        when (violation) {
+            is Violation.NonPositiveAmount -> money("amount", violation.amount)
+
+            is Violation.AmountTooLarge -> {
+                money("amount", violation.amount)
+                money("max", violation.max)
+            }
+
+            Violation.Overflow, Violation.ZeroAdjustment, Violation.SameAccountTransfer,
+            Violation.InvalidInterestTerms, Violation.TimeBankAlreadyRunning, Violation.TimeBankEmpty,
+            Violation.TimeBankNotRunning,
+            -> Unit
+
+            is Violation.BlankText -> put("field", violation.field)
+
+            is Violation.TextTooLong -> {
+                put("field", violation.field)
+                put("maxLength", violation.maxLength)
+            }
+
+            is Violation.InvalidText -> put("field", violation.field)
+
+            is Violation.InterestMismatch -> {
+                money("expected", violation.expected)
+                money("actual", violation.actual)
+            }
+
+            is Violation.ParentOnly -> {
+                put("eventType", violation.eventType)
+                put("authorRole", violation.authorRole.name)
+            }
+
+            is Violation.UnknownAccount -> put("accountId", violation.accountId.value)
+
+            is Violation.CurrencyMismatch -> {
+                put("accountId", violation.accountId.value)
+                currency("expected", violation.expected)
+                currency("actual", violation.actual)
+            }
+
+            is Violation.KidMismatch -> {
+                put("accountId", violation.accountId.value)
+                put("expected", violation.expected.value)
+                put("actual", violation.actual.value)
+            }
+
+            is Violation.WrongAccountKind -> {
+                put("accountId", violation.accountId.value)
+                put("expected", violation.expected.name)
+                put("actual", violation.actual.name)
+            }
+
+            is Violation.DuplicateEvent -> put("eventId", violation.eventId.value)
+
+            is Violation.LamportTooFarAhead -> {
+                put("latest", violation.latest)
+                put("actual", violation.actual)
+                put("maxJump", violation.maxJump)
+            }
+
+            is Violation.InsufficientFunds -> {
+                put("accountId", violation.accountId.value)
+                money("available", violation.available)
+                money("requested", violation.requested)
+            }
+
+            is Violation.DailyCapExceeded -> {
+                money("cap", violation.cap)
+                money("alreadyCredited", violation.alreadyCredited)
+                money("requested", violation.requested)
+            }
+        }
+    }
+
+    /** The violation [json] describes. Throws [IllegalArgumentException] for anything it cannot read. */
+    fun decode(json: JsonObject): Violation {
+        fun text(key: String) = json.getValue(key).jsonPrimitive.content
+        fun money(key: String) = Money(json.getValue(key).jsonPrimitive.long)
+        fun currency(key: String) = LedgerJson.json.decodeFromJsonElement(CurrencySerializer, json.getValue(key))
+        fun account() = AccountId(text("accountId"))
+        return when (val kind = text(KIND)) {
+            "NonPositiveAmount" -> Violation.NonPositiveAmount(money("amount"))
+
+            "AmountTooLarge" -> Violation.AmountTooLarge(money("amount"), money("max"))
+
+            "Overflow" -> Violation.Overflow
+
+            "ZeroAdjustment" -> Violation.ZeroAdjustment
+
+            "BlankText" -> Violation.BlankText(text("field"))
+
+            "TextTooLong" -> Violation.TextTooLong(text("field"), json.getValue("maxLength").jsonPrimitive.int)
+
+            "InvalidText" -> Violation.InvalidText(text("field"))
+
+            "SameAccountTransfer" -> Violation.SameAccountTransfer
+
+            "InvalidInterestTerms" -> Violation.InvalidInterestTerms
+
+            "InterestMismatch" -> Violation.InterestMismatch(money("expected"), money("actual"))
+
+            "ParentOnly" -> Violation.ParentOnly(text("eventType"), Role.valueOf(text("authorRole")))
+
+            "UnknownAccount" -> Violation.UnknownAccount(account())
+
+            "CurrencyMismatch" -> Violation.CurrencyMismatch(account(), currency("expected"), currency("actual"))
+
+            "KidMismatch" -> Violation.KidMismatch(account(), KidId(text("expected")), KidId(text("actual")))
+
+            "WrongAccountKind" ->
+                Violation.WrongAccountKind(
+                    account(),
+                    AccountKind.valueOf(text("expected")),
+                    AccountKind.valueOf(text("actual")),
+                )
+
+            "DuplicateEvent" -> Violation.DuplicateEvent(EventId(text("eventId")))
+
+            "LamportTooFarAhead" -> Violation.LamportTooFarAhead(
+                latest = json.getValue("latest").jsonPrimitive.long,
+                actual = json.getValue("actual").jsonPrimitive.long,
+                maxJump = json.getValue("maxJump").jsonPrimitive.long,
+            )
+
+            "InsufficientFunds" -> Violation.InsufficientFunds(account(), money("available"), money("requested"))
+
+            "DailyCapExceeded" -> Violation.DailyCapExceeded(money("cap"), money("alreadyCredited"), money("requested"))
+
+            "TimeBankAlreadyRunning" -> Violation.TimeBankAlreadyRunning
+
+            "TimeBankEmpty" -> Violation.TimeBankEmpty
+
+            "TimeBankNotRunning" -> Violation.TimeBankNotRunning
+
+            else -> throw IllegalArgumentException("Unknown violation kind $kind")
+        }
+    }
+
+    private fun JsonObjectBuilder.money(key: String, value: Money) = put(key, value.minorUnits)
+
+    private fun JsonObjectBuilder.currency(key: String, value: Currency) =
+        put(key, LedgerJson.json.encodeToJsonElement(CurrencySerializer, value))
+}

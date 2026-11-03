@@ -1,4 +1,93 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
   <string name="feature_wallet_title">Wallet</string>
+  <string name="feature_wallet_title_named">%1$s\'s wallet</string>
+  <string name="feature_wallet_back">Back</string>
+  <string name="feature_wallet_loading">Loading wallet</string>
+  <string name="feature_wallet_error_kid_not_found">We couldn\'t find this wallet.</string>
+  <string name="feature_wallet_error_load_failed">Something went wrong while loading the wallet.</string>
+  <string name="feature_wallet_retry">Try again</string>
+  <string name="feature_wallet_adjust">Adjust balance</string>
+  <plurals name="feature_wallet_anomalies">
+    <item quantity="one">%1$d ledger issue needs a look</item>
+    <item quantity="other">%1$d ledger issues need a look</item>
+  </plurals>
+
+  <!-- Seedling -->
+  <string name="feature_wallet_seedling_greeting">Hi %1$s!</string>
+  <string name="feature_wallet_jar_description">Your coin jar has %1$s</string>
+  <string name="feature_wallet_sun_description">%1$s of screen time</string>
+  <string name="feature_wallet_chores">Chores</string>
+  <string name="feature_wallet_shop">Shop</string>
+  <string name="feature_wallet_read_aloud">Read to me</string>
+  <string name="feature_wallet_recent_activity">Recent activity</string>
+  <string name="feature_wallet_read_aloud_coins">You have %1$s.</string>
+  <string name="feature_wallet_read_aloud_coins_and_minutes">You have %1$s and %2$s of screen time.</string>
+
+  <!-- Sprout and Sapling -->
+  <string name="feature_wallet_balance">Your money</string>
+  <string name="feature_wallet_screen_time">Screen time</string>
+  <string name="feature_wallet_savings">Savings</string>
+  <string name="feature_wallet_recent">Recent</string>
+  <string name="feature_wallet_history">History</string>
+  <string name="feature_wallet_history_empty">Nothing here yet.</string>
+  <string name="feature_wallet_accounts">Accounts</string>
+  <string name="feature_wallet_filter_all">All</string>
+  <string name="feature_wallet_interest_title">Interest</string>
+  <string name="feature_wallet_interest_earned">You\'ve earned %1$s interest so far.</string>
+  <string name="feature_wallet_interest_none">No interest earned yet.</string>
+  <string name="feature_wallet_interest_explainer">Interest is extra money added to your savings for leaving it there. The more you save, and the longer you wait, the more it grows.</string>
+  <string name="feature_wallet_budget_title">Budget</string>
+  <string name="feature_wallet_budget_placeholder">Budget and spending charts are coming soon.</string>
+  <string name="feature_wallet_export_csv">Export CSV</string>
+
+  <!-- Account names -->
+  <string name="feature_wallet_account_money">Money</string>
+  <string name="feature_wallet_account_minutes">Screen time</string>
+  <string name="feature_wallet_account_savings">Savings</string>
+
+  <!-- History row titles -->
+  <string name="feature_wallet_event_chores">Chore reward</string>
+  <string name="feature_wallet_event_allowance">Pocket money</string>
+  <string name="feature_wallet_event_games">Game reward</string>
+  <string name="feature_wallet_event_shop">Shop</string>
+  <string name="feature_wallet_event_savings">Moved to savings</string>
+  <string name="feature_wallet_event_interest">Interest</string>
+  <string name="feature_wallet_event_screen_time">Screen time used</string>
+  <string name="feature_wallet_event_adjustment">Adjustment</string>
+
+  <!-- Sapling filter chips -->
+  <string name="feature_wallet_filter_chores">Chores</string>
+  <string name="feature_wallet_filter_allowance">Pocket money</string>
+  <string name="feature_wallet_filter_games">Games</string>
+  <string name="feature_wallet_filter_shop">Shop</string>
+  <string name="feature_wallet_filter_savings">Savings</string>
+  <string name="feature_wallet_filter_interest">Interest</string>
+  <string name="feature_wallet_filter_screen_time">Screen time</string>
+  <string name="feature_wallet_filter_adjustment">Adjustments</string>
+
+  <!-- Manual adjustment (parent only) -->
+  <string name="feature_wallet_adjust_credit">Add</string>
+  <string name="feature_wallet_adjust_debit">Take away</string>
+  <string name="feature_wallet_adjust_amount">Amount</string>
+  <string name="feature_wallet_adjust_reason">Reason</string>
+  <string name="feature_wallet_adjust_reason_hint">For example: birthday money from Grandma</string>
+  <string name="feature_wallet_adjust_submit">Save</string>
+  <string name="feature_wallet_adjust_cancel">Cancel</string>
+  <string name="feature_wallet_adjust_saving">Saving</string>
+  <string name="feature_wallet_adjustment_saved">Adjustment saved</string>
+  <string name="feature_wallet_amount_not_a_number">Enter an amount like 2.50</string>
+  <string name="feature_wallet_amount_whole_only">Enter a whole amount</string>
+  <plurals name="feature_wallet_amount_too_many_decimals">
+    <item quantity="one">Use at most %1$d decimal place</item>
+    <item quantity="other">Use at most %1$d decimal places</item>
+  </plurals>
+  <string name="feature_wallet_amount_too_large">That amount is too large</string>
+  <string name="feature_wallet_amount_zero">Enter an amount above zero</string>
+  <string name="feature_wallet_reason_required">Add a reason</string>
+  <string name="feature_wallet_insufficient_funds">Only %1$s is available to take away</string>
+  <string name="feature_wallet_not_allowed">Only a parent can adjust balances</string>
+  <string name="feature_wallet_no_account">This kid has no money account yet</string>
+  <string name="feature_wallet_adjust_failed">Couldn\'t save the adjustment. Try again.</string>
+  <string name="feature_wallet_adjust_conflict">This change clashed with another device; ask a parent to check the history</string>
 </resources>
