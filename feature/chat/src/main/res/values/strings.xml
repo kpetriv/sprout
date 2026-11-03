@@ -1,4 +1,95 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
   <string name="feature_chat_title">Chat</string>
+  <string name="feature_chat_threads_title">Chats</string>
+  <string name="feature_chat_kid_title">Family chat</string>
+  <string name="feature_chat_back">Back</string>
+  <string name="feature_chat_loading">Loading chat</string>
+  <string name="feature_chat_error_load_failed">The chat could not be loaded.</string>
+  <string name="feature_chat_error_not_found">This chat is no longer available.</string>
+  <string name="feature_chat_retry">Try again</string>
+
+  <!-- Parent inbox -->
+  <string name="feature_chat_threads_empty">No chats yet. Add a kid in Settings to start chatting.</string>
+  <string name="feature_chat_thread_no_messages">No messages yet</string>
+  <plurals name="feature_chat_thread_unread">
+    <item quantity="one">%1$d new message</item>
+    <item quantity="other">%1$d new messages</item>
+  </plurals>
+  <string name="feature_chat_thread_last">Last message %1$s</string>
+
+  <!-- Thread -->
+  <string name="feature_chat_empty">No messages yet. Say hello!</string>
+  <string name="feature_chat_empty_seedling">Pick a picture below to say something.</string>
+  <string name="feature_chat_waiting_kid">Waiting for a parent device. You can send messages once a parent\'s phone has set up this chat.</string>
+  <string name="feature_chat_waiting_parent">Setting up secure chat. It is ready once this phone has the chat key.</string>
+  <string name="feature_chat_locked">Waiting for a parent device</string>
+  <string name="feature_chat_sending">Sending…</string>
+  <string name="feature_chat_failed">Not sent</string>
+  <string name="feature_chat_retry_send">Try again</string>
+  <string name="feature_chat_discard">Delete</string>
+  <string name="feature_chat_load_older">Show older messages</string>
+  <string name="feature_chat_preset_unknown">Message</string>
+  <!-- A message bubble for accessibility: author, then content ("Mum: I love you"). -->
+  <string name="feature_chat_message_from">%1$s: %2$s</string>
+  <string name="feature_chat_you">You</string>
+
+  <string name="feature_chat_voice_note">Voice note · %1$s</string>
+  <string name="feature_chat_play">Play voice note</string>
+  <string name="feature_chat_stop_playing">Stop voice note</string>
+  <string name="feature_chat_photo">Photo</string>
+  <string name="feature_chat_photo_loading">Loading photo</string>
+  <string name="feature_chat_photo_unavailable">Photo not available</string>
+
+  <string name="feature_chat_input_hint">Write a message</string>
+  <string name="feature_chat_send">Send</string>
+  <string name="feature_chat_attach_photo">Add a photo</string>
+
+  <!-- Seedling voice notes -->
+  <string name="feature_chat_record_described">Record a voice note. Hold to talk, or tap to start and tap again to send.</string>
+  <string name="feature_chat_recording_described">Recording. Tap to send.</string>
+  <plurals name="feature_chat_recording">
+    <item quantity="one">Recording… %1$d second left</item>
+    <item quantity="other">Recording… %1$d seconds left</item>
+  </plurals>
+  <string name="feature_chat_recording_cancel_hint">Slide away to cancel</string>
+
+  <!-- Kindness nudge (Sprout and Sapling). Never blocks sending. -->
+  <string name="feature_chat_nudge_title">Is that kind?</string>
+  <string name="feature_chat_nudge_body">Take a second look before you send it.</string>
+  <string name="feature_chat_nudge_suggestion">Maybe: “%1$s”</string>
+  <string name="feature_chat_nudge_send_anyway">Send anyway</string>
+  <string name="feature_chat_nudge_use">Use this</string>
+  <string name="feature_chat_nudge_edit">Edit</string>
+
+  <!-- Notices -->
+  <string name="feature_chat_notice_mic_permission">Voice notes need the microphone. You can allow it in Settings.</string>
+  <string name="feature_chat_notice_mic_unavailable">The microphone is not available right now.</string>
+  <string name="feature_chat_notice_recording_failed">The voice note could not be recorded.</string>
+  <string name="feature_chat_notice_voice_too_short">Hold the button while you talk.</string>
+  <string name="feature_chat_notice_playback_failed">The voice note could not be played.</string>
+  <string name="feature_chat_notice_photo_failed">That photo could not be added.</string>
+  <string name="feature_chat_notice_retry_failed">The message could not be sent again.</string>
+
+  <!-- The twelve presets (ids in ChatPresets; never change an id, only its text). -->
+  <string name="feature_chat_preset_hello">Hello!</string>
+  <string name="feature_chat_preset_love_you">I love you</string>
+  <string name="feature_chat_preset_miss_you">I miss you</string>
+  <string name="feature_chat_preset_yes">Yes</string>
+  <string name="feature_chat_preset_no">No</string>
+  <string name="feature_chat_preset_help">Can you help me?</string>
+  <string name="feature_chat_preset_hungry">I\'m hungry</string>
+  <string name="feature_chat_preset_come_home">When are you home?</string>
+  <string name="feature_chat_preset_play">Can we play?</string>
+  <string name="feature_chat_preset_happy">I\'m happy</string>
+  <string name="feature_chat_preset_sad">I\'m sad</string>
+  <string name="feature_chat_preset_good_night">Good night</string>
+
+  <!-- Emoji row names, for screen readers. -->
+  <string name="feature_chat_emoji_heart">Heart</string>
+  <string name="feature_chat_emoji_smile">Smile</string>
+  <string name="feature_chat_emoji_sad">Sad face</string>
+  <string name="feature_chat_emoji_thumbs_up">Thumbs up</string>
+  <string name="feature_chat_emoji_party">Party</string>
+  <string name="feature_chat_emoji_dog">Dog</string>
 </resources>
