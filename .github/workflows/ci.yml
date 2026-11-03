@@ -87,3 +87,59 @@ jobs:
           path: '**/src/test/screenshots/**'
           if-no-files-found: ignore
           retention-days: 7
+
+  # Firestore rules and Cloud Functions tests against the Firebase emulators (docs/FIREBASE.md). Not part of the
+  # required check yet (D-M3-11).
+  backend:
+    name: 'Backend: rules and functions tests'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node 24
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: |
+            functions/package-lock.json
+            firestore/package-lock.json
+
+      # The emulators run on the JVM; firebase-tools 15 requires Java 21 or newer.
+      - name: Set up JDK 21
+        uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Read the pinned firebase-tools version
+        id: firebase-tools
+        run: echo "version=$(node -p "require('./functions/package-lock.json').packages['node_modules/firebase-tools'].version")" >> "$GITHUB_OUTPUT"
+
+      - name: Cache emulator jars
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/firebase/emulators
+          key: firebase-emulators-${{ runner.os }}-${{ steps.firebase-tools.outputs.version }}
+
+      - name: Functions (install, lint, build, test)
+        working-directory: functions
+        run: |
+          npm ci
+          npm run lint
+          npm run build
+          npm test
+
+      - name: Firestore rules (install, lint, test)
+        working-directory: firestore
+        run: |
+          npm ci
+          npm run lint
+          npm test

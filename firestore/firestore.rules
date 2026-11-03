@@ -1,0 +1,258 @@
+rules_version = '2';
+
+// Sprout Firestore security rules (docs/milestones/M3.md §5 and §7, docs/FIREBASE.md "Document shapes").
+//
+// Trust model:
+// - Household membership and role come from households/{hid}/members/{uid}, written by Cloud Functions only. Rules
+//   never trust a role, uid or household claimed inside client data.
+// - Every client write names its author: authorUid must be the caller and authorDeviceId an ACTIVE device registered
+//   to the caller in households/{hid}/devices (also written by Cloud Functions only).
+// - Ledger events are create-only. Documents (one collection per docType) are last-writer-wins on
+//   (lamport, authorDeviceId); deletion is a tombstone document (deleted == true), never a Firestore delete.
+// - Top-level collections (linkCodes, challenges, deletionRecords, rateLimits) and anything not matched below are
+//   closed to clients: there is no rule granting access, so the default deny applies.
+//
+// Size limits: rules cannot measure a document's byte size. Events (target <= 16 KB) are bounded by a closed key
+// set, a length bound on every scalar string and a length bound on the only list (causedBy); list elements cannot be
+// measured. Documents (target payload <= 64 KB) are bounded by a closed top-level key set, string bounds on the
+// envelope fields and at most 64 top-level payload keys; nested payload values cannot be measured. Firestore's own
+// 1 MiB document limit is the hard ceiling in both cases.
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function isHex64(s) {
+      return s is string && s.matches('^[0-9a-f]{64}$');
+    }
+
+    function boundedString(s, max) {
+      return s is string && s.size() > 0 && s.size() <= max;
+    }
+
+    // Optional field k of map m: absent, null, or a string of at most max characters.
+    function optString(m, k, max) {
+      return !(k in m) || m[k] == null || (m[k] is string && m[k].size() <= max);
+    }
+
+    // Optional field k of map m: absent, null, or an integer.
+    function optInt(m, k) {
+      return !(k in m) || m[k] == null || m[k] is int;
+    }
+
+    // A client may stamp serverReceivedAt (FieldValue.serverTimestamp()) for pull cursors; it must be the server time.
+    function serverStamp(m) {
+      return !('serverReceivedAt' in m) || m.serverReceivedAt == request.time;
+    }
+
+    // docType of each document collection.
+    function docTypes() {
+      return {
+        'kids': 'kid',
+        'accounts': 'account',
+        'householdPolicy': 'household_policy',
+        'chores': 'chore',
+        'choreSubmissions': 'chore_submission',
+        'rewards': 'reward',
+        'allowanceSchedules': 'allowance_schedule',
+        'savingsGoals': 'savings_goal',
+        'interestPolicy': 'interest_policy'
+      };
+    }
+
+    match /households/{hid} {
+
+      function memberPath() {
+        return /databases/$(database)/documents/households/$(hid)/members/$(request.auth.uid);
+      }
+
+      function member() {
+        return get(memberPath());
+      }
+
+      function isMember() {
+        return signedIn() && exists(memberPath());
+      }
+
+      function isParent() {
+        return isMember() && member().data.role == 'PARENT';
+      }
+
+      function isKid() {
+        return isMember() && member().data.role == 'KID';
+      }
+
+      function devicePath(id) {
+        return /databases/$(database)/documents/households/$(hid)/devices/$(id);
+      }
+
+      function device(id) {
+        return get(devicePath(id));
+      }
+
+      // id is a registered device of the caller in this household and its status is ACTIVE (not PENDING, REVOKED).
+      function deviceIsActiveForCaller(id) {
+        return isHex64(id)
+          && exists(devicePath(id))
+          && device(id).data.uid == request.auth.uid
+          && device(id).data.status == 'ACTIVE';
+      }
+
+      // The household root document: written by functions only.
+      allow read: if isMember();
+      allow write: if false;
+
+      // Membership mirrors the custom claims; written by functions only. A member reads only their own row.
+      match /members/{uid} {
+        allow get: if signedIn() && request.auth.uid == uid;
+        allow list, write: if false;
+      }
+
+      // Device registry; written by functions only.
+      match /devices/{deviceId} {
+        allow read: if isMember();
+        allow write: if false;
+      }
+
+      // Parent authorisation keys. A parent device adds its own key; only functions set revokedAtLamport.
+      match /parentKeys/{fingerprint} {
+        function validParentKey() {
+          let k = request.resource.data;
+          return k.keys().hasAll(['publicKey', 'uid', 'deviceId', 'validFromLamport', 'registeredAt'])
+            && k.keys().hasOnly(['publicKey', 'uid', 'deviceId', 'validFromLamport', 'registeredAt', 'envelope',
+                                 'serverReceivedAt'])
+            && isHex64(fingerprint)
+            && k.uid == request.auth.uid
+            && deviceIsActiveForCaller(k.deviceId)
+            && boundedString(k.publicKey, 256)
+            && k.validFromLamport is int && k.validFromLamport >= 0
+            && k.registeredAt == request.time
+            && (!('envelope' in k) || (k.envelope is map && k.envelope.size() <= 16))
+            && serverStamp(k);
+        }
+
+        allow read: if isMember();
+        allow create: if isParent() && validParentKey();
+        allow update, delete: if false;
+      }
+
+      // Ledger events: append-only. Doc id is eventId, or eventId__hash for a conflicting copy kept as evidence.
+      match /events/{eventDocId} {
+        function validEvent() {
+          let e = request.resource.data;
+          let m = member().data;
+          return e.keys().hasAll(['schemaVersion', 'eventId', 'householdId', 'kidId', 'accountId', 'authorUid',
+                                  'authorRole', 'authorDeviceId', 'createdAt', 'lamport', 'prevHash', 'hash',
+                                  'signature', 'type'])
+            && e.keys().hasOnly([
+                 // Envelope (core/domain-ledger Envelope), flattened to the top level.
+                 'schemaVersion', 'eventId', 'householdId', 'kidId', 'accountId', 'authorUid', 'authorRole',
+                 'authorDeviceId', 'createdAt', 'lamport', 'prevHash', 'hash', 'signature', 'parentSignature',
+                 // Polymorphic discriminator and the event-specific fields of every LedgerEvent type (schema 1-2).
+                 'type', 'currency', 'amount', 'choreId', 'dueOn', 'scheduleId', 'periodKey', 'gameId', 'score',
+                 'playedOn', 'rewardId', 'minutesGranted', 'reason', 'toAccountId', 'principal',
+                 'annualRateBasisPoints', 'days', 'sessionId', 'minutesUsed', 'minutes', 'grantedBy', 'causedBy',
+                 'note',
+                 // Pull cursor.
+                 'serverReceivedAt'])
+            && e.schemaVersion in [1, 2]
+            && boundedString(e.eventId, 128)
+            && (eventDocId == e.eventId || eventDocId == e.eventId + '__' + e.hash)
+            && e.householdId == hid
+            && boundedString(e.kidId, 128)
+            && boundedString(e.accountId, 256)
+            && e.authorUid == request.auth.uid
+            && deviceIsActiveForCaller(e.authorDeviceId)
+            && e.createdAt is int
+            && e.lamport is int && e.lamport >= 0
+            && (e.prevHash == null || isHex64(e.prevHash))
+            && isHex64(e.hash)
+            && boundedString(e.signature, 200)
+            && optString(e, 'parentSignature', 200)
+            && boundedString(e.type, 64)
+            // A KID-role event may come from any member (kid mode on a parent device); a PARENT-role event only from
+            // a PARENT member. A KID member writes only for their own kid.
+            && (e.authorRole == 'KID' || (e.authorRole == 'PARENT' && m.role == 'PARENT'))
+            && (m.role == 'PARENT' || (e.authorRole == 'KID' && e.kidId == m.kidId))
+            // Event-specific scalar bounds.
+            && optString(e, 'currency', 32) && optInt(e, 'amount')
+            && optString(e, 'choreId', 128) && optString(e, 'dueOn', 32)
+            && optString(e, 'scheduleId', 128) && optString(e, 'periodKey', 64)
+            && optString(e, 'gameId', 128) && optInt(e, 'score') && optString(e, 'playedOn', 32)
+            && optString(e, 'rewardId', 128) && optInt(e, 'minutesGranted')
+            && optString(e, 'reason', 400) && optString(e, 'note', 400)
+            && optString(e, 'toAccountId', 256) && optInt(e, 'principal')
+            && optInt(e, 'annualRateBasisPoints') && optInt(e, 'days')
+            && optString(e, 'sessionId', 128) && optInt(e, 'minutesUsed') && optInt(e, 'minutes')
+            && optString(e, 'grantedBy', 128)
+            && (!('causedBy' in e) || (e.causedBy is list && e.causedBy.size() <= 64))
+            && serverStamp(e);
+        }
+
+        allow read: if isMember();
+        allow create: if isMember() && validEvent();
+        allow update, delete: if false;
+      }
+
+      // Signed documents (core/sync DocumentEnvelope), one collection per docType.
+      match /{coll}/{docId} {
+        function isDocCollection() {
+          return coll in docTypes();
+        }
+
+        function validDocument() {
+          let d = request.resource.data;
+          return d.keys().hasAll(['schemaVersion', 'householdId', 'docType', 'docId', 'authorUid', 'authorDeviceId',
+                                  'lamport', 'deleted', 'payload', 'signature'])
+            && d.keys().hasOnly(['schemaVersion', 'householdId', 'docType', 'docId', 'authorUid', 'authorDeviceId',
+                                 'lamport', 'deleted', 'payload', 'signature', 'serverReceivedAt'])
+            && d.schemaVersion in [1]
+            && d.householdId == hid
+            && d.docType == docTypes()[coll]
+            && d.docId == docId
+            && boundedString(d.docId, 256)
+            && d.authorUid == request.auth.uid
+            && deviceIsActiveForCaller(d.authorDeviceId)
+            && d.lamport is int && d.lamport >= 0
+            && d.deleted is bool
+            && d.payload is map && d.payload.size() <= 64
+            && boundedString(d.signature, 200)
+            && serverStamp(d);
+        }
+
+        // Last writer wins on (lamport, authorDeviceId): strictly newer, or same lamport and a greater device id.
+        function newerThanStored() {
+          let n = request.resource.data;
+          let o = resource.data;
+          return n.lamport > o.lamport || (n.lamport == o.lamport && n.authorDeviceId > o.authorDeviceId);
+        }
+
+        // A KID member writes only undecided submissions for their own kid under the submission's own id
+        // (core/sync DocTypes.kidMayWrite), never tombstones, and never overwrites a submission a parent already
+        // decided or another kid's submission.
+        function kidMayWrite(isUpdate) {
+          let p = request.resource.data.payload;
+          let k = member().data.kidId;
+          return coll == 'choreSubmissions'
+            && request.resource.data.deleted == false
+            && p.kidId == k
+            && p.status == 'SUBMITTED'
+            && p.id == docId
+            && (!isUpdate || (resource.data.payload.kidId == k && resource.data.payload.status == 'SUBMITTED'));
+        }
+
+        function roleMayWrite(isUpdate) {
+          return isParent() || (isKid() && kidMayWrite(isUpdate));
+        }
+
+        allow read: if isDocCollection() && isMember();
+        allow create: if isDocCollection() && isMember() && validDocument() && roleMayWrite(false);
+        allow update: if isDocCollection() && isMember() && validDocument() && newerThanStored()
+                      && roleMayWrite(true);
+        allow delete: if false;
+      }
+    }
+  }
+}

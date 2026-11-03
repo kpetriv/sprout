@@ -33,3 +33,8 @@ functions/.runtimeconfig.json
 **/out/
 **/reports/
 **/screenshots/diff/
+
+# Firebase emulator logs (written in the repo root when the emulators run)
+firebase-debug.log
+firestore-debug.log
+ui-debug.log

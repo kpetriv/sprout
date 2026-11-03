@@ -1,0 +1,22 @@
+{
+  "indexes": [
+    {
+      "collectionGroup": "events",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "authorDeviceId", "order": "ASCENDING" },
+        { "fieldPath": "lamport", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "linkCodes",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "hid", "order": "ASCENDING" },
+        { "fieldPath": "used", "order": "ASCENDING" },
+        { "fieldPath": "expiresAt", "order": "ASCENDING" }
+      ]
+    }
+  ],
+  "fieldOverrides": []
+}
