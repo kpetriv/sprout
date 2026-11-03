@@ -25,8 +25,9 @@ interface LedgerRepository {
      * Validates, verifies and stores [event]. Idempotent by content: the same event again (even re-signed) is
      * [AppendResult.Duplicate]. A different event under a stored eventId is [AppendResult.Conflict]: once it passes
      * chain and signature verification it is kept next to the stored copy, and projections report
-     * [LedgerAnomaly.ConflictingDuplicate] and apply only [appliedCopyOf] (the parent's copy when every other copy is
-     * a kid's, otherwise none) on every device, whatever order the copies arrive in.
+     * [LedgerAnomaly.ConflictingDuplicate] and apply only [appliedCopyOf] (the copy from a registered PARENT device
+     * when every other copy comes from a KID device, otherwise none) on every device, whatever order the copies
+     * arrive in.
      */
     suspend fun append(event: LedgerEvent): AppendResult
 

@@ -20,9 +20,16 @@ import kotlin.time.Duration.Companion.seconds
 class LedgerPropertyTest {
     private val seeds = 0 until 150
 
+    // Every generated device is a fixture device whose registered role matches its envelopes, so registry roles
+    // and the reference model's envelope roles agree.
+    private fun project(events: List<LedgerEvent>, policy: LedgerPolicy = LedgerPolicy()) =
+        Ledger.project(events, Fixtures.accounts, policy, Fixtures::roleOf)
+
+    private fun emptyProjection() = Projection.empty(Fixtures.accounts, roleOf = Fixtures::roleOf)
+
     @Test
     fun projectionMatchesTheReferenceLedger() = forAllHistories { seed, history, _ ->
-        assertMatchesReference(seed, history, Ledger.project(history.events, Fixtures.accounts))
+        assertMatchesReference(seed, history, project(history.events))
     }
 
     @Test
@@ -34,7 +41,7 @@ class LedgerPropertyTest {
             assertMatchesReference(
                 seed,
                 unsigned,
-                Ledger.project(unsigned.events, Fixtures.accounts, required),
+                project(unsigned.events, required),
                 required,
             )
             // A cut-off lamport: only unsigned parent-only events at or above it are excluded.
@@ -42,15 +49,15 @@ class LedgerPropertyTest {
             assertMatchesReference(
                 seed,
                 unsigned,
-                Ledger.project(unsigned.events, Fixtures.accounts, cutOff),
+                project(unsigned.events, cutOff),
                 cutOff,
             )
             // Signing parent devices: the policy changes nothing.
             val signed = StreamGenerator(seed, FakeParentAuthorization()).generate(Random(seed).nextInt(1, 40))
-            val projection = Ledger.project(signed.events, Fixtures.accounts, required)
+            val projection = project(signed.events, required)
             assertMatchesReference(seed, signed, projection, required)
             assertEquals(
-                Ledger.project(signed.events, Fixtures.accounts).balances,
+                project(signed.events).balances,
                 projection.balances,
                 "seed $seed",
             )
@@ -59,16 +66,16 @@ class LedgerPropertyTest {
 
     @Test
     fun anyPermutationProjectsToTheSameResult() = forAllHistories { seed, history, random ->
-        val expected = Ledger.project(history.events, Fixtures.accounts)
+        val expected = project(history.events)
         repeat(3) {
-            assertEquals(expected, Ledger.project(history.events.shuffled(random), Fixtures.accounts), "seed $seed")
+            assertEquals(expected, project(history.events.shuffled(random)), "seed $seed")
         }
     }
 
     @Test
     fun incrementalFoldingInAnyArrivalOrderMatchesTheReference() = forAllHistories { seed, history, random ->
         for (arrival in listOf(history.events.sortedWith(LedgerOrdering), history.events.shuffled(random))) {
-            val incremental = arrival.fold(Projection.empty(Fixtures.accounts)) { projection, event ->
+            val incremental = arrival.fold(emptyProjection()) { projection, event ->
                 projection.apply(event)
             }
             assertMatchesReference(seed, history, incremental)
@@ -79,16 +86,16 @@ class LedgerPropertyTest {
     fun foldingInBatchesMatchesTheReference() = forAllHistories { seed, history, random ->
         val arrival = history.events.shuffled(random)
         val split = random.nextInt(arrival.size + 1)
-        val stepwise = Projection.empty(Fixtures.accounts).apply(arrival.take(split)).apply(arrival.drop(split))
+        val stepwise = emptyProjection().apply(arrival.take(split)).apply(arrival.drop(split))
         assertMatchesReference(seed, history, stepwise)
     }
 
     @Test
     fun redeliveredAndReSignedEventsChangeNothing() = forAllHistories { seed, history, random ->
         val replays = history.events.filter { random.nextBoolean() }.map { it.withSignature(random.nextBytes(8)) }
-        val projection = Ledger.project((history.events + replays + history.events).shuffled(random), Fixtures.accounts)
+        val projection = project((history.events + replays + history.events).shuffled(random))
         assertMatchesReference(seed, history, projection)
-        assertEquals(Ledger.project(history.events, Fixtures.accounts), projection, "seed $seed")
+        assertEquals(project(history.events), projection, "seed $seed")
     }
 
     @Test
@@ -110,7 +117,7 @@ class LedgerPropertyTest {
     @Test
     fun generatedHistoriesCoverEveryAnomalyType() {
         val histories = seeds.map { StreamGenerator(it).generate(40) }
-        val kinds = histories.flatMap { Ledger.project(it.events, Fixtures.accounts).anomalies.map { a -> a::class } }
+        val kinds = histories.flatMap { project(it.events).anomalies.map { a -> a::class } }
         assertEquals(
             setOf(
                 LedgerAnomaly.OverdraftDetected::class,
@@ -122,10 +129,7 @@ class LedgerPropertyTest {
         )
         // Both kinds of conflict occur: ids reused across authors, and forged copies of one author's event.
         val conflicts = histories.flatMap { history ->
-            Ledger.project(
-                history.events,
-                Fixtures.accounts,
-            ).anomalies.filterIsInstance<LedgerAnomaly.ConflictingDuplicate>()
+            project(history.events).anomalies.filterIsInstance<LedgerAnomaly.ConflictingDuplicate>()
         }
         assertTrue(conflicts.any { c -> c.copies.map { it.authorDeviceId }.toSet().size > 1 })
         assertTrue(conflicts.any { c -> c.copies.map { it.authorDeviceId }.toSet().size == 1 })
@@ -135,7 +139,7 @@ class LedgerPropertyTest {
         assertTrue(conflicts.any { it.applied == null })
         // Every history rule fires somewhere.
         val violations = histories.flatMap { history ->
-            Ledger.project(history.events, Fixtures.accounts).anomalies
+            project(history.events).anomalies
                 .filterIsInstance<LedgerAnomaly.InvalidEvent>().flatMap { it.violations }
         }.map { it::class }.toSet()
         for (kind in listOf(
@@ -149,7 +153,7 @@ class LedgerPropertyTest {
         // And screen-time credits are applied too.
         assertTrue(
             histories.any { history ->
-                Ledger.project(history.events, Fixtures.accounts).rewardGrants.values.any { it.creditedBy != null }
+                project(history.events).rewardGrants.values.any { it.creditedBy != null }
             },
         )
     }

@@ -13,8 +13,12 @@ class ProjectionTest {
     private val parent = DeviceWriter(Fixtures.parentPhone)
     private val kid = DeviceWriter(Fixtures.kidTablet)
 
+    // M1/M2 semantics: no device registry, so conflicts are resolved by the envelopes' own roles (opted in).
     private fun project(events: List<LedgerEvent>, policy: LedgerPolicy = LedgerPolicy()) =
-        Ledger.project(events, Fixtures.accounts, policy)
+        Ledger.project(events, Fixtures.accounts, policy, trustEnvelopeRoles = true)
+
+    private fun empty(policy: LedgerPolicy = LedgerPolicy()) =
+        Projection.empty(Fixtures.accounts, policy, trustEnvelopeRoles = true)
 
     @Test
     fun creditsAndDebitsFoldIntoBalances() {
@@ -268,6 +272,64 @@ class ProjectionTest {
     }
 
     @Test
+    fun parentWinsJudgesCopiesByRegisteredDeviceRoleNotTheEnvelope() {
+        val allowance = parent.allowance(500)
+        // A kid device that writes authorRole = PARENT on everything.
+        val liar = DeviceWriter(Fixtures.kidTablet.copy(role = Role.PARENT), seed = 99)
+        val reuse = liar.writeWithId(allowance.eventId, Fixtures.main) {
+            RewardPurchased(it, Fixtures.gbp, Money(5), "toy")
+        }
+        // By envelope both copies claim PARENT; by registry only the parent phone is a parent device.
+        assertEquals(allowance, appliedCopyOf(listOf(allowance, reuse), Fixtures::roleOf))
+        val registered = Ledger.project(listOf(allowance, reuse), Fixtures.accounts, roleOf = Fixtures::roleOf)
+        assertEquals(Money(500), registered.balanceOf(Fixtures.main.id))
+        val conflict = assertIs<LedgerAnomaly.ConflictingDuplicate>(registered.anomalies.single())
+        assertEquals(DuplicateCopy.of(allowance), conflict.applied)
+        // Kept across incremental applies and the rebuild a conflicting copy forces.
+        val incremental = Projection.empty(Fixtures.accounts, roleOf = Fixtures::roleOf).apply(reuse).apply(allowance)
+        assertEquals(registered, incremental)
+        assertEquals(conflict, incremental.anomalies.single())
+
+        // Against a real kid copy, the kid device claiming PARENT does not win.
+        val game = kid.game(5)
+        val claim = liar.writeWithId(game.eventId, Fixtures.main) {
+            ChoreRewarded(it, Fixtures.gbp, Money(900), "fake", Fixtures.today)
+        }
+        assertNull(appliedCopyOf(listOf(game, claim), Fixtures::roleOf))
+        val byRegistry = Ledger.project(listOf(game, claim), Fixtures.accounts, roleOf = Fixtures::roleOf)
+        assertEquals(Money.ZERO, byRegistry.balanceOf(Fixtures.main.id))
+        assertNull(assertIs<LedgerAnomaly.ConflictingDuplicate>(byRegistry.anomalies.single()).applied)
+        // The registry wins over trusted envelopes too; trusting envelopes alone would let the claim win.
+        val bothWays = Ledger.project(
+            listOf(game, claim),
+            Fixtures.accounts,
+            roleOf = Fixtures::roleOf,
+            trustEnvelopeRoles = true,
+        )
+        assertEquals(byRegistry, bothWays)
+        val trusted = Ledger.project(listOf(game, claim), Fixtures.accounts, trustEnvelopeRoles = true)
+        assertEquals(Money(900), trusted.balanceOf(Fixtures.main.id))
+    }
+
+    @Test
+    fun withoutARegistryOrTrustedEnvelopesNoConflictingCopyIsApplied() {
+        val allowance = parent.allowance(500)
+        val reuse = kid.writeWithId(allowance.eventId, Fixtures.main) {
+            RewardPurchased(it, Fixtures.gbp, Money(5), "toy")
+        }
+        val copies = listOf(allowance, reuse)
+        val unknown = Ledger.project(copies, Fixtures.accounts)
+        assertEquals(Money.ZERO, unknown.balanceOf(Fixtures.main.id))
+        assertNull(assertIs<LedgerAnomaly.ConflictingDuplicate>(unknown.anomalies.single()).applied)
+        assertNull(appliedCopyOf(copies) { null })
+        // One unregistered device is enough to apply nothing.
+        val parentOnly: (DeviceId) -> Role? = { if (it == Fixtures.parentPhone.deviceId) Role.PARENT else null }
+        assertNull(appliedCopyOf(copies, parentOnly))
+        // A single copy needs no roles at all.
+        assertEquals(allowance, appliedCopyOf(listOf(allowance)) { null })
+    }
+
+    @Test
     fun twoParentCopiesOrTwoKidCopiesApplyNeither() {
         val tablet = DeviceWriter(Fixtures.parentTablet)
         val chore = parent.chore(100)
@@ -387,8 +449,8 @@ class ProjectionTest {
             val events = (p.written + k.written).shuffled(random)
             for (policy in policies) {
                 val projection = project(events, policy)
-                assertEquals(projection, Projection.empty(Fixtures.accounts, policy).apply(events.shuffled(random)))
-                events.fold(Projection.empty(Fixtures.accounts, policy)) { acc, e ->
+                assertEquals(projection, empty(policy).apply(events.shuffled(random)))
+                events.fold(empty(policy)) { acc, e ->
                     LedgerRules.validate(e, acc)
                     acc.apply(e)
                 }
@@ -509,7 +571,7 @@ class ProjectionTest {
     fun incrementalApplyMatchesAFullProjection() {
         val events = listOf(parent.chore(100), kid.game(10), kid.purchase(30), parent.interest(2), kid.transfer(20))
             .sortedWith(LedgerOrdering)
-        val incremental = events.fold(Projection.empty(Fixtures.accounts)) { p, e ->
+        val incremental = events.fold(empty()) { p, e ->
             assertTrue(p.isInOrder(e))
             p.apply(e)
         }

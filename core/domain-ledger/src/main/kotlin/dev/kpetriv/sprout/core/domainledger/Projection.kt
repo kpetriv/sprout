@@ -17,19 +17,27 @@ object Ledger {
      *
      * Duplicates are judged by content ([isSameEventAs]): a second copy of the same event is ignored, while
      * different events claiming one eventId are a [LedgerAnomaly.ConflictingDuplicate]. Of those, only
-     * [appliedCopyOf] is folded (at its own place in the order): the single parent copy when every other copy is a
-     * kid's, otherwise none.
+     * [appliedCopyOf] is folded (at its own place in the order): the single copy from a PARENT device when every
+     * other copy comes from a KID device, otherwise none.
      *
      * Events must already have passed chain and signature verification; this function does not check hashes or
      * verify parent signatures (with [LedgerPolicy.requireParentSignature] it only checks that parent-only events
      * carry one).
      *
      * @param accounts registered accounts, used for currency, ownership and kind checks.
+     * @param roleOf the registered role of an author device ([DeviceRegistry]), used only to resolve conflicting
+     *   duplicates ([appliedCopyOf]); null when the device is unknown. The default knows no device, so no
+     *   conflicting copy is applied.
+     * @param trustEnvelopeRoles when [roleOf] returns null for a device, use the copy's self-declared
+     *   [Envelope.authorRole] instead. Only for single-household fixtures and tests whose events never left this
+     *   device (the in-memory repository, M1/M2 tests); a projection over pulled events must leave it false.
      */
     fun project(
         events: List<LedgerEvent>,
         accounts: Collection<Account> = emptyList(),
         policy: LedgerPolicy = LedgerPolicy(),
+        roleOf: (DeviceId) -> Role? = { null },
+        trustEnvelopeRoles: Boolean = false,
     ): Projection {
         val copies = LinkedHashMap<EventId, List<LedgerEvent>>()
         for (event in events) {
@@ -39,7 +47,7 @@ object Ledger {
         // At most one copy of a conflicting id is folded (chosen from the copies alone), so the order among them
         // does not matter.
         val ordered = copies.values.flatten().sortedWith(LedgerOrdering)
-        val builder = ProjectionBuilder(Projection.empty(accounts, policy).state, copies)
+        val builder = ProjectionBuilder(Projection.empty(accounts, policy, roleOf, trustEnvelopeRoles).state, copies)
         ordered.forEach(builder::fold)
         return builder.build()
     }
@@ -115,13 +123,19 @@ sealed interface LedgerAnomaly {
     /**
      * Different events (different hashes or content) claim the same [eventId]. [copies] lists every distinct copy
      * with its hash and author, sorted by hash, so a parent can see who reused the id. Whatever order they arrived
-     * in, at most [applied] reaches the balances ([appliedCopyOf]): the parent's copy when every other copy is a
-     * kid's, otherwise none.
+     * in, at most [applied] reaches the balances ([appliedCopyOf]): the copy from a PARENT device when every other
+     * copy comes from a KID device (by registered role), otherwise none.
+     *
+     * @property applied the copy applied to balances, or null when none is. A projection always sets it from the
+     *   registered roles it was built with. The default (each copy's self-declared [DuplicateCopy.authorRole], the
+     *   answer of a projection with `trustEnvelopeRoles = true` and no registry) exists only for decoders of
+     *   anomalies persisted without it.
      */
-    data class ConflictingDuplicate(val eventId: EventId, val copies: List<DuplicateCopy>) : LedgerAnomaly {
-        /** The copy applied to balances, or null when none is. Derived from [copies]. */
-        val applied: DuplicateCopy? get() = resolveConflict(copies) { it.authorRole }
-    }
+    data class ConflictingDuplicate(
+        val eventId: EventId,
+        val copies: List<DuplicateCopy>,
+        val applied: DuplicateCopy? = resolveConflict(copies) { it.authorRole },
+    ) : LedgerAnomaly
 }
 
 /**
@@ -186,7 +200,13 @@ class Projection internal constructor(internal val state: ProjectionState) {
         return if (added.all(builder::tryAdd)) {
             builder.build()
         } else {
-            Ledger.project(state.events.values.flatten() + added, accounts.values, policy)
+            Ledger.project(
+                state.events.values.flatten() + added,
+                accounts.values,
+                policy,
+                state.roleOf,
+                state.trustEnvelopeRoles,
+            )
         }
     }
 
@@ -213,23 +233,30 @@ class Projection internal constructor(internal val state: ProjectionState) {
         "Projection(balances=${balances.values}, timeBanks=${timeBanks.values}, anomalies=$anomalies)"
 
     companion object {
-        fun empty(accounts: Collection<Account> = emptyList(), policy: LedgerPolicy = LedgerPolicy()): Projection =
-            Projection(
-                ProjectionState(
-                    policy = policy,
-                    accounts = accounts.associateBy { it.id },
-                    balances = emptyMap(),
-                    timeBanks = emptyMap(),
-                    dailyGameCredits = emptyMap(),
-                    anomalies = emptyList(),
-                    rewardGrants = emptyMap(),
-                    claimedPeriods = emptyMap(),
-                    events = emptyMap(),
-                    openOverdrafts = emptySet(),
-                    lastApplied = null,
-                    maxLamport = 0,
-                ),
-            )
+        /** An empty projection; [roleOf] and [trustEnvelopeRoles] as in [Ledger.project], kept for every [apply]. */
+        fun empty(
+            accounts: Collection<Account> = emptyList(),
+            policy: LedgerPolicy = LedgerPolicy(),
+            roleOf: (DeviceId) -> Role? = { null },
+            trustEnvelopeRoles: Boolean = false,
+        ): Projection = Projection(
+            ProjectionState(
+                policy = policy,
+                roleOf = roleOf,
+                trustEnvelopeRoles = trustEnvelopeRoles,
+                accounts = accounts.associateBy { it.id },
+                balances = emptyMap(),
+                timeBanks = emptyMap(),
+                dailyGameCredits = emptyMap(),
+                anomalies = emptyList(),
+                rewardGrants = emptyMap(),
+                claimedPeriods = emptyMap(),
+                events = emptyMap(),
+                openOverdrafts = emptySet(),
+                lastApplied = null,
+                maxLamport = 0,
+            ),
+        )
     }
 }
 
@@ -256,9 +283,13 @@ fun Projection.anomaliesFor(kidId: KidId): List<LedgerAnomaly> {
  * @property events every distinct copy folded in, by eventId; more than one copy means a conflict.
  * @property openOverdrafts accounts whose latest [LedgerAnomaly.OverdraftDetected] is still open (the balance has
  *   not been back to zero or above since). The open anomaly is always the last one for its account.
+ * @property roleOf registered author-device roles, and [trustEnvelopeRoles] whether to fall back to the envelope's
+ *   role; see [Ledger.project].
  */
 internal data class ProjectionState(
     val policy: LedgerPolicy,
+    val roleOf: (DeviceId) -> Role?,
+    val trustEnvelopeRoles: Boolean,
     val accounts: Map<AccountId, Account>,
     val balances: Map<AccountId, Balance>,
     val timeBanks: Map<KidId, TimeBankState>,
@@ -325,8 +356,9 @@ private class ProjectionBuilder(private val base: ProjectionState, copies: Map<E
         if (lastApplied.let { it == null || LedgerOrdering.compare(it, event) < 0 }) lastApplied = event
         val copies = events[event.eventId].orEmpty()
         if (copies.size > 1) {
-            reportConflict(event.eventId, copies)
-            if (appliedCopyOf(copies)?.isSameEventAs(event) != true) return
+            val applied = resolveConflict(copies, ::roleOf)
+            reportConflict(event.eventId, copies, applied)
+            if (applied?.isSameEventAs(event) != true) return
         }
         val violations =
             LedgerRules.staticViolations(event, base.accounts, balances, requireKnownAccounts = false, base.policy)
@@ -357,12 +389,19 @@ private class ProjectionBuilder(private val base: ProjectionState, copies: Map<E
         ),
     )
 
-    private fun reportConflict(eventId: EventId, copies: List<LedgerEvent>) {
+    private fun reportConflict(eventId: EventId, copies: List<LedgerEvent>, applied: LedgerEvent?) {
         if (reportedConflicts.add(eventId)) {
             val listed = copies.map(DuplicateCopy::of).sortedWith(DuplicateCopy.ORDER)
-            anomalies += LedgerAnomaly.ConflictingDuplicate(eventId, listed)
+            anomalies += LedgerAnomaly.ConflictingDuplicate(eventId, listed, applied?.let(DuplicateCopy::of))
         }
     }
+
+    /**
+     * The role [appliedCopyOf] judges a copy by: its author device's registered role, falling back to the copy's
+     * self-declared role only when the projection was built with `trustEnvelopeRoles`.
+     */
+    private fun roleOf(copy: LedgerEvent): Role? = base.roleOf(copy.envelope.authorDeviceId)
+        ?: copy.envelope.authorRole.takeIf { base.trustEnvelopeRoles }
 
     /** Plans every posting of [event]; throws [ArithmeticException] on overflow, before anything is written. */
     private fun plan(event: LedgerEvent): List<BalanceUpdate> = event.postings.map { posting ->

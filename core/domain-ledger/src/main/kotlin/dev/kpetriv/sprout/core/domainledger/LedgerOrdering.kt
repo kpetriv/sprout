@@ -1,5 +1,6 @@
 package dev.kpetriv.sprout.core.domainledger
 
+import dev.kpetriv.sprout.core.model.DeviceId
 import dev.kpetriv.sprout.core.model.Role
 
 /**
@@ -36,24 +37,30 @@ private fun LedgerEvent.withoutSignature(): LedgerEvent =
  * The copy of one eventId that projections apply, given every distinct copy of it ([isSameEventAs] tells copies
  * apart), or null when none is applied:
  * - a single copy is applied;
- * - when copies conflict and **exactly one** is authored by [Role.PARENT] while every other copy is authored by
- *   [Role.KID], the parent's copy is applied and the kid copies are excluded. A kid device that reuses a parent's
- *   eventId (seen on a shared tablet, or replayed from sync) therefore cannot cancel the parent's event;
- * - otherwise (all copies share a role, or several parent copies) **none** is applied.
+ * - when copies conflict and **exactly one** comes from a device whose role [roleOf] reports as [Role.PARENT]
+ *   while [roleOf] reports [Role.KID] for every other copy's device, the parent device's copy is applied and the
+ *   kid copies are excluded. A kid device that reuses a parent's eventId (seen on a shared tablet, or replayed from
+ *   sync) therefore cannot cancel the parent's event;
+ * - otherwise (all copies share a role, several parent copies, or any copy whose device role is unknown) **none**
+ *   is applied.
+ *
+ * [roleOf] must answer from the household's device registry (ADR-0004 M2-review amendment, M3 §2), never from the
+ * envelope's self-declared `authorRole`: a kid device that writes `authorRole = PARENT` on its copy is still a KID
+ * device. Pulled parent-only copies only get this far when [RemoteEventVerifier] verified their parent signature.
  *
  * Every conflict is still reported as a [LedgerAnomaly.ConflictingDuplicate] listing all copies. The rule depends
- * only on the set of copies, never on arrival order, so every device converges. Until receivers verify the parent
- * signature (ADR-0004, schema version 2), `authorRole` is self-declared: a kid device that also claims PARENT on its
- * copy makes two parent copies, and then nothing is applied.
+ * only on the set of copies and the registry, never on arrival order, so every device converges.
  */
-fun appliedCopyOf(copies: List<LedgerEvent>): LedgerEvent? = resolveConflict(copies) { it.envelope.authorRole }
+fun appliedCopyOf(copies: List<LedgerEvent>, roleOf: (DeviceId) -> Role?): LedgerEvent? =
+    resolveConflict(copies) { roleOf(it.envelope.authorDeviceId) }
 
-/** [appliedCopyOf] over any copy representation; [role] reads the author role of a copy. */
-internal inline fun <T> resolveConflict(copies: List<T>, role: (T) -> Role): T? {
+/** [appliedCopyOf] over any copy representation; [role] reads the verified author role of a copy (null: unknown). */
+internal inline fun <T> resolveConflict(copies: List<T>, role: (T) -> Role?): T? {
     if (copies.size <= 1) return copies.singleOrNull()
-    val parents = copies.filter { role(it) == Role.PARENT }
-    val kids = copies.count { role(it) == Role.KID }
-    return parents.singleOrNull()?.takeIf { kids == copies.size - 1 }
+    val roles = copies.map(role)
+    val parents = roles.count { it == Role.PARENT }
+    val kids = roles.count { it == Role.KID }
+    return if (parents == 1 && kids == copies.size - 1) copies[roles.indexOf(Role.PARENT)] else null
 }
 
 /**
@@ -62,7 +69,8 @@ internal inline fun <T> resolveConflict(copies: List<T>, role: (T) -> Role): T? 
  *   outbox retries and duplicate pulls safe;
  * - adding a different event under an id already present records a **conflict**: every distinct copy is kept, the
  *   id is listed in [conflictingIds], and [Ledger.project] of [sorted] reports [LedgerAnomaly.ConflictingDuplicate]
- *   and applies at most [appliedCopyOf] (the single parent copy when every other copy is a kid's; otherwise none).
+ *   and applies at most [appliedCopyOf] (the single copy from a PARENT device when every other copy comes from a
+ *   KID device; otherwise none).
  *   The choice depends only on the copies, never on arrival order, so every device converges.
  */
 class LedgerEventSet private constructor(private val byId: Map<EventId, List<LedgerEvent>>) {

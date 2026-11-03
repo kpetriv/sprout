@@ -255,7 +255,7 @@ class RoomLedgerRepository internal constructor(
     }
 
     private suspend fun project(stored: List<LedgerEvent>, policy: LedgerPolicy): Projection =
-        Ledger.project(stored, accounts.all().map { it.toDomain() }, policy)
+        Ledger.project(stored, accounts.all().map { it.toDomain() }, policy, trustEnvelopeRoles = true)
 
     /**
      * True when [event] continues its author's stored chain: it links to the head, its hash is right, and its
@@ -414,9 +414,9 @@ private fun withoutUnverifiableParentSignature(event: LedgerEvent, active: Activ
 /** What [RoomLedgerRepository.snapshot] read: verified events, registered accounts and the policy in force. */
 internal class LedgerSnapshot(val events: List<LedgerEvent>, val accounts: List<Account>, val policy: LedgerPolicy) {
     /** The household projection of every event. */
-    val projection: Projection by lazy { Ledger.project(events, accounts, policy) }
+    val projection: Projection by lazy { Ledger.project(events, accounts, policy, trustEnvelopeRoles = true) }
 
     /** The projection of only the events [include] keeps (for example those created up to some day). */
     fun projectionOf(include: (LedgerEvent) -> Boolean): Projection =
-        Ledger.project(events.filter(include), accounts, policy)
+        Ledger.project(events.filter(include), accounts, policy, trustEnvelopeRoles = true)
 }
