@@ -177,7 +177,7 @@ class RoomLedgerRepositoryTest {
 
         // Another kid's device reuses the id for that kid's own account.
         val reused = kid.writeWithId(chore.eventId, otherMain) {
-            GamePlayed(it, Fixtures.gbp, Money(5), "g", 1, Fixtures.today)
+            GamePlayed(it, Fixtures.gbp, Money(5), Fixtures.GAME_ID, Fixtures.GAME_SCORE, Fixtures.today)
         }
         assertIs<AppendResult.Conflict>(repository.append(reused))
 

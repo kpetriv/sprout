@@ -31,13 +31,18 @@ object Ledger {
      * @param trustEnvelopeRoles when [roleOf] returns null for a device, use the copy's self-declared
      *   [Envelope.authorRole] instead. Only for single-household fixtures and tests whose events never left this
      *   device (the in-memory repository, M1/M2 tests); a projection over pulled events must leave it false.
+     * @param receivedAt the backend's `serverReceivedAt` stamp of pulled events, by [Envelope.hash]. A [GamePlayed]
+     *   with a stamp whose `playedOn` is outside [PlayedOnWindow] of the stamp's UTC date is excluded and reported as
+     *   [LedgerAnomaly.PlayedOnOutOfRange] (D-M5-5). An event without one (the author's own copy) is not checked.
      */
+    @Suppress("LongParameterList") // The events and everything a projection is judged by.
     fun project(
         events: List<LedgerEvent>,
         accounts: Collection<Account> = emptyList(),
         policy: LedgerPolicy = LedgerPolicy(),
         roleOf: (DeviceId) -> Role? = { null },
         trustEnvelopeRoles: Boolean = false,
+        receivedAt: Map<String, Instant> = emptyMap(),
     ): Projection {
         val copies = LinkedHashMap<EventId, List<LedgerEvent>>()
         for (event in events) {
@@ -47,7 +52,8 @@ object Ledger {
         // At most one copy of a conflicting id is folded (chosen from the copies alone), so the order among them
         // does not matter.
         val ordered = copies.values.flatten().sortedWith(LedgerOrdering)
-        val builder = ProjectionBuilder(Projection.empty(accounts, policy, roleOf, trustEnvelopeRoles).state, copies)
+        val empty = Projection.empty(accounts, policy, roleOf, trustEnvelopeRoles, receivedAt)
+        val builder = ProjectionBuilder(empty.state, copies)
         ordered.forEach(builder::fold)
         return builder.build()
     }
@@ -119,6 +125,19 @@ sealed interface LedgerAnomaly {
         val currency: Currency,
         val eventId: EventId,
         val excess: Money,
+    ) : LedgerAnomaly
+
+    /**
+     * A pulled [GamePlayed] dated outside [PlayedOnWindow] of [receivedOn], the UTC date the server received it
+     * (D-M5-5). The whole event was excluded: a kid device cannot backdate plays onto older days' unused cap, or
+     * post-date them onto days to come. The authoring device applies its own copy (it has no server stamp); see
+     * ADR-0009 for that residual divergence.
+     */
+    data class PlayedOnOutOfRange(
+        val kidId: KidId,
+        val eventId: EventId,
+        val playedOn: CalendarDate,
+        val receivedOn: CalendarDate,
     ) : LedgerAnomaly
 
     /** An event broke a static rule (or overflowed) and was excluded from balances. */
@@ -194,13 +213,21 @@ class Projection internal constructor(internal val state: ProjectionState) {
         return copies.any { it.isSameEventAs(event) }
     }
 
-    /** This projection with [event] folded in. Equal to [Ledger.project] of every folded event plus [event]. */
-    fun apply(event: LedgerEvent): Projection = apply(listOf(event))
+    /**
+     * This projection with [event] folded in. Equal to [Ledger.project] of every folded event plus [event]; see the
+     * other [apply] for [receivedAt].
+     */
+    fun apply(event: LedgerEvent, receivedAt: Map<String, Instant> = emptyMap()): Projection =
+        apply(listOf(event), receivedAt)
 
-    /** This projection with [events] folded in. Equal to [Ledger.project] of every folded event plus [events]. */
-    fun apply(events: Iterable<LedgerEvent>): Projection {
+    /**
+     * This projection with [events] folded in. Equal to [Ledger.project] of every folded event plus [events], with
+     * [receivedAt] (server stamps of pulled events among [events], by hash) added to the stamps it already knows.
+     */
+    fun apply(events: Iterable<LedgerEvent>, receivedAt: Map<String, Instant> = emptyMap()): Projection {
         val added = events.toList()
-        val builder = ProjectionBuilder(state, state.events)
+        val base = if (receivedAt.isEmpty()) state else state.copy(receivedAt = state.receivedAt + receivedAt)
+        val builder = ProjectionBuilder(base, base.events)
         return if (added.all(builder::tryAdd)) {
             builder.build()
         } else {
@@ -210,6 +237,7 @@ class Projection internal constructor(internal val state: ProjectionState) {
                 policy,
                 state.roleOf,
                 state.trustEnvelopeRoles,
+                base.receivedAt,
             )
         }
     }
@@ -237,17 +265,22 @@ class Projection internal constructor(internal val state: ProjectionState) {
         "Projection(balances=${balances.values}, timeBanks=${timeBanks.values}, anomalies=$anomalies)"
 
     companion object {
-        /** An empty projection; [roleOf] and [trustEnvelopeRoles] as in [Ledger.project], kept for every [apply]. */
+        /**
+         * An empty projection; [roleOf], [trustEnvelopeRoles] and [receivedAt] as in [Ledger.project], kept for every
+         * [apply].
+         */
         fun empty(
             accounts: Collection<Account> = emptyList(),
             policy: LedgerPolicy = LedgerPolicy(),
             roleOf: (DeviceId) -> Role? = { null },
             trustEnvelopeRoles: Boolean = false,
+            receivedAt: Map<String, Instant> = emptyMap(),
         ): Projection = Projection(
             ProjectionState(
                 policy = policy,
                 roleOf = roleOf,
                 trustEnvelopeRoles = trustEnvelopeRoles,
+                receivedAt = receivedAt,
                 accounts = accounts.associateBy { it.id },
                 balances = emptyMap(),
                 timeBanks = emptyMap(),
@@ -274,6 +307,8 @@ fun Projection.anomaliesFor(kidId: KidId): List<LedgerAnomaly> {
 
             is LedgerAnomaly.DailyCapExceeded -> anomaly.kidId == kidId
 
+            is LedgerAnomaly.PlayedOnOutOfRange -> anomaly.kidId == kidId
+
             is LedgerAnomaly.InvalidEvent -> concerns(anomaly.eventId)
 
             is LedgerAnomaly.ConflictingDuplicate -> anomaly.copies.any { it.kidId == kidId }
@@ -289,11 +324,13 @@ fun Projection.anomaliesFor(kidId: KidId): List<LedgerAnomaly> {
  *   not been back to zero or above since). The open anomaly is always the last one for its account.
  * @property roleOf registered author-device roles, and [trustEnvelopeRoles] whether to fall back to the envelope's
  *   role; see [Ledger.project].
+ * @property receivedAt server receive stamps of pulled events by hash; see [Ledger.project].
  */
 internal data class ProjectionState(
     val policy: LedgerPolicy,
     val roleOf: (DeviceId) -> Role?,
     val trustEnvelopeRoles: Boolean,
+    val receivedAt: Map<String, Instant>,
     val accounts: Map<AccountId, Account>,
     val balances: Map<AccountId, Balance>,
     val timeBanks: Map<KidId, TimeBankState>,
@@ -413,8 +450,21 @@ private class ProjectionBuilder(private val base: ProjectionState, copies: Map<E
         BalanceUpdate(posting, before, before + posting.delta)
     }
 
-    /** A game is credited whole if it fits under the day's cap, and excluded whole if it does not (M5). */
+    /**
+     * A game is excluded whole if it was pulled with a server stamp too far from its `playedOn` (D-M5-5); otherwise
+     * credited whole if it fits under the day's cap, and excluded whole if it does not (M5).
+     */
     private fun applyGame(event: GamePlayed) {
+        val receivedOn = base.receivedAt[event.envelope.hash]?.let(PlayedOnWindow::utcDateOf)
+        if (receivedOn != null && !PlayedOnWindow.contains(event.playedOn, receivedOn)) {
+            anomalies += LedgerAnomaly.PlayedOnOutOfRange(
+                kidId = event.envelope.kidId,
+                eventId = event.eventId,
+                playedOn = event.playedOn,
+                receivedOn = receivedOn,
+            )
+            return
+        }
         val key = DailyGameKey(event.envelope.kidId, event.playedOn, event.currency)
         val credited = dailyGame[key] ?: Money.ZERO
         // credited never exceeds the cap and both are non-negative, so this cannot overflow.

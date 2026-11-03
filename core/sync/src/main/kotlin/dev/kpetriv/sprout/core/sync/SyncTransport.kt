@@ -8,6 +8,7 @@ import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlin.time.Instant
 
 /**
  * Moves outbox changes to the backend and remote changes back (ADR-0001, M3 §4). The sync engine only talks to this
@@ -145,6 +146,15 @@ sealed interface PushItem {
 data class PushResult(val accepted: List<PushItemId>, val rejected: List<Pair<PushItemId, SyncError>>)
 
 /**
+ * One pulled ledger event: its `LedgerJson` tree as stored (without the server stamp, which no hash or signature
+ * covers) and the backend's [serverReceivedAt] stamp. The stamp is set by the server (the rules require
+ * `request.time`), so every device sees the same one for the same stored document; receivers judge a game's
+ * `playedOn` against its UTC date (D-M5-5, `Ledger.project`'s `receivedAt`). Null only when the transport has no
+ * stamp to give (a test transport, or a document stored without one).
+ */
+data class PulledEvent(val json: JsonObject, val serverReceivedAt: Instant? = null)
+
+/**
  * One page of a pull: registry entries, documents, events and chat messages (`MessageJson` trees, cursor key
  * `messages`) added or changed after the requested cursor. Pull again from [next] while [hasMore].
  */
@@ -152,7 +162,7 @@ class PullPage(
     val devices: List<RegisteredDevice>,
     val parentKeys: List<RegisteredParentKey>,
     val documents: List<DocumentEnvelope>,
-    val events: List<JsonObject>,
+    val events: List<PulledEvent>,
     val next: SyncCursor,
     val hasMore: Boolean,
     val messages: List<JsonObject> = emptyList(),

@@ -19,12 +19,14 @@ import dev.kpetriv.sprout.core.model.DeviceId
 import dev.kpetriv.sprout.core.model.HouseholdId
 import dev.kpetriv.sprout.core.model.ThreadId
 import kotlinx.serialization.json.JsonObject
+import kotlin.time.Instant
 
 /**
  * One device's local store for engine-level convergence tests: documents go through [RecordingApplier] (the real
  * [RemoteDocumentVerifier] and [ConflictResolver]); ledger events go through the real [RemoteEventVerifier] and
  * [IngestOrdering], with a minimal in-memory stand-in for core/database's ingest (stored events, `ledger_inbox`,
- * quarantine, fork handling). Balances come from [Ledger.project] over the applied events with registry roles.
+ * quarantine, fork handling). Balances come from [Ledger.project] over the applied events with registry roles and
+ * the server stamps the events were pulled with.
  *
  * Remote lamports are observed by [lamport], the clock the device's own `DeviceWriter` writes with.
  */
@@ -39,7 +41,8 @@ internal class LedgerApplier(
     private class StoredEvent(val event: LedgerEvent, var quarantine: QuarantineReason?)
 
     private val stored = LinkedHashMap<Pair<EventId, String>, StoredEvent>()
-    private val inbox = LinkedHashMap<Pair<EventId, String>, JsonObject>()
+    private val inbox = LinkedHashMap<Pair<EventId, String>, PulledEvent>()
+    private val stamps = LinkedHashMap<String, Instant>()
     private val undecodable = mutableListOf<JsonObject>()
 
     /** The device's own write, stored as applied (an outbox row is queued by the caller). */
@@ -64,7 +67,8 @@ internal class LedgerApplier(
     suspend fun projection(): Projection {
         val events = synchronized(this) { stored.values.filter { it.quarantine == null }.map { it.event } }
         val roles = events.map { it.envelope.authorDeviceId }.toSet().associateWith { documents.device(it)?.role }
-        return Ledger.project(events, Fixtures.accounts, policy, roles::get)
+        val received = synchronized(this) { stamps.toMap() }
+        return Ledger.project(events, Fixtures.accounts, policy, roles::get, receivedAt = received)
     }
 
     override suspend fun applyRegistry(devices: List<RegisteredDevice>, parentKeys: List<RegisteredParentKey>) =
@@ -73,7 +77,7 @@ internal class LedgerApplier(
     override suspend fun applyDocuments(documents: List<DocumentEnvelope>): DocumentApplyReport =
         this.documents.applyDocuments(documents)
 
-    override suspend fun applyEvents(events: List<JsonObject>): EventApplyReport = ingest(events)
+    override suspend fun applyEvents(events: List<PulledEvent>): EventApplyReport = ingest(events)
 
     override suspend fun applyMessages(messages: List<JsonObject>): MessageApplyReport =
         documents.applyMessages(messages)
@@ -95,24 +99,25 @@ internal class LedgerApplier(
         synchronized(this) { stored.values.filter { it.quarantine == null }.maxOfOrNull { it.event.lamport } ?: 0 },
     )
 
-    private suspend fun ingest(jsons: List<JsonObject>): EventApplyReport {
-        val incoming = synchronized(this) { inbox.values.toList().also { inbox.clear() } } + jsons
+    private suspend fun ingest(pulled: List<PulledEvent>): EventApplyReport {
+        val incoming = synchronized(this) { inbox.values.toList().also { inbox.clear() } } + pulled
         val localMax = localMaxLamport()
         var report = EventApplyReport()
-        val ok = LinkedHashMap<Pair<EventId, String>, Pair<LedgerEvent, JsonObject>>()
-        for (json in incoming) {
+        val ok = LinkedHashMap<Pair<EventId, String>, Pair<LedgerEvent, PulledEvent>>()
+        for (item in incoming) {
+            val json = item.json
             when (val verified = verifier.verify(json, localMax)) {
                 is VerifiedRemote.Ok -> synchronized(this) {
                     val key = verified.event.key
                     if (key in stored || key in ok) {
                         report += EventApplyReport(duplicates = 1)
                     } else {
-                        ok[key] = verified.event to json
+                        ok[key] = verified.event to item
                     }
                 }
 
                 is VerifiedRemote.Held -> synchronized(this) {
-                    inbox[verified.eventId to verified.hash] = json
+                    inbox[verified.eventId to verified.hash] = item
                     report += EventApplyReport(held = 1)
                 }
 
@@ -129,10 +134,11 @@ internal class LedgerApplier(
         return report + synchronized(this) { applyPlanned(ok) }
     }
 
-    private fun applyPlanned(ok: Map<Pair<EventId, String>, Pair<LedgerEvent, JsonObject>>): EventApplyReport {
+    private fun applyPlanned(ok: Map<Pair<EventId, String>, Pair<LedgerEvent, PulledEvent>>): EventApplyReport {
         val plan = IngestOrdering.plan(ok.values.map { it.first }, ::headOf, ::successorsOf)
         for (event in plan.apply) {
             stored[event.key] = StoredEvent(event, null)
+            ok.getValue(event.key).second.serverReceivedAt?.let { stamps[event.envelope.hash] = it }
             lamport.observe(event.lamport)
         }
         plan.held.forEach { inbox[it.key] = ok.getValue(it.key).second }

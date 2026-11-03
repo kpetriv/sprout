@@ -15,6 +15,7 @@ import dev.kpetriv.sprout.core.model.ThreadId
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.longOrNull
+import kotlin.time.Instant
 
 /**
  * A [RemoteApplier] over in-memory maps, and the [DeviceRegistry] mirror it verifies against. Documents go through
@@ -39,6 +40,7 @@ class RecordingApplier(
     private val parentKeys = mutableMapOf<String, RegisteredParentKey>()
     private val documents = sortedMapOf<String, DocumentEnvelope>()
     private val events = LinkedHashMap<String, JsonObject>()
+    private val eventStamps = LinkedHashMap<String, Instant>()
     private val rejections = mutableListOf<Pair<DocumentEnvelope, DocumentRejection>>()
     private val heldDocuments = LinkedHashMap<String, DocumentEnvelope>()
     private val messages = LinkedHashMap<String, MessageEnvelope>()
@@ -62,6 +64,9 @@ class RecordingApplier(
 
     /** Recorded events in arrival order. */
     fun events(): List<JsonObject> = synchronized(this) { events.values.toList() }
+
+    /** The server stamps pulled events arrived with, by `eventId:hash` ([PushItemId.ofEvent]). */
+    fun eventStamps(): Map<String, Instant> = synchronized(this) { eventStamps.toMap() }
 
     /** Documents the verifier held (unknown or pending author), keyed `docType/docId`; retried by [retryHeld]. */
     fun heldDocuments(): List<DocumentEnvelope> = synchronized(this) { heldDocuments.values.toList() }
@@ -146,12 +151,14 @@ class RecordingApplier(
         return report
     }
 
-    override suspend fun applyEvents(events: List<JsonObject>): EventApplyReport = synchronized(this) {
+    override suspend fun applyEvents(events: List<PulledEvent>): EventApplyReport = synchronized(this) {
         callLog += "events"
         var applied = 0
         var duplicates = 0
-        for (event in events) {
-            if (this.events.putIfAbsent(PushItemId.ofEvent(event).value, event) == null) applied++ else duplicates++
+        for ((event, stamp) in events) {
+            val key = PushItemId.ofEvent(event).value
+            if (this.events.putIfAbsent(key, event) == null) applied++ else duplicates++
+            stamp?.let { eventStamps.putIfAbsent(key, it) }
             lamportOf(event)?.let(::observe)
         }
         EventApplyReport(applied = applied, duplicates = duplicates)

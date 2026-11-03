@@ -13,6 +13,9 @@ enum class AnomalyKind {
     DAILY_CAP_EXCEEDED,
     INVALID_EVENT,
     CONFLICTING_DUPLICATE,
+
+    /** A pulled game dated outside the played-on window of its server stamp (M5, D-M5-5). */
+    PLAYED_ON_OUT_OF_RANGE,
 }
 
 /**

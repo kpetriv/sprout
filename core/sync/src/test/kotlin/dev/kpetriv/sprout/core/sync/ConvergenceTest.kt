@@ -243,7 +243,7 @@ class ConvergenceTest {
         syncAll()
         kid.ledger {
             writeWithId(allowance.eventId, Fixtures.main) {
-                GamePlayed(it, Fixtures.gbp, Money(5), "g", 1, Fixtures.today)
+                GamePlayed(it, Fixtures.gbp, Money(5), Fixtures.GAME_ID, Fixtures.GAME_SCORE, Fixtures.today)
             }
         }
 
@@ -339,6 +339,43 @@ class ConvergenceTest {
             parentB.applier.quarantined(),
         )
         assertEquals(Money(300), parentB.balances().getValue(Fixtures.main.id).amount)
+    }
+
+    @Test
+    fun aGameThatReachesTheServerTooLongAfterItsDateIsExcludedByEveryReceiverWithoutBreakingTheChain() = runTest {
+        syncAll()
+        val day = 86_400_000L
+        // Offline for a week, then the sync: still inside the window.
+        kid.ledger { game(10, date = Fixtures.today) }
+        backend.nowEpochMs = { FakeBackend.DEFAULT_NOW_EPOCH_MS + 7 * day }
+        kid.sync()
+        // Another play dated on the fixtures' day reaches the server nine days later: outside the window.
+        val late = kid.ledger { game(12, date = Fixtures.today) }
+        backend.nowEpochMs = { FakeBackend.DEFAULT_NOW_EPOCH_MS + 9 * day }
+        kid.sync()
+        // The kid's chain goes on: a later purchase still applies everywhere.
+        kid.ledger { purchase(3) }
+        syncAll()
+
+        for (parent in listOf(parentA, parentB)) {
+            assertTrue(late.key in parent.applier.appliedKeys(), "stored, so the chain links")
+            assertTrue(parent.applier.quarantined().isEmpty())
+            val projection = parent.applier.projection()
+            assertEquals(Money(10 - 3), projection.balanceOf(Fixtures.main.id))
+            assertEquals(
+                listOf(
+                    LedgerAnomaly.PlayedOnOutOfRange(
+                        Fixtures.kid,
+                        late.eventId,
+                        Fixtures.today,
+                        Fixtures.today.plusDays(9),
+                    ),
+                ),
+                projection.anomalies,
+            )
+        }
+        // The author applies its own copy (it has no server stamp): the residual of ADR-0009.
+        assertEquals(Money(10 + 12 - 3), kid.balances().getValue(Fixtures.main.id).amount)
     }
 
     @Test
@@ -471,7 +508,7 @@ class ConvergenceTest {
             }
         } else {
             when (random.nextInt(2)) {
-                0 -> ledger { game(random.nextLong(1, 20)) }
+                0 -> ledger { game(random.nextLong(1, 16)) }
                 else -> ledger { purchase(random.nextLong(1, 40)) }
             }
         }

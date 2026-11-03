@@ -11,6 +11,7 @@ import dev.kpetriv.sprout.core.sync.DocTypes
 import dev.kpetriv.sprout.core.sync.DocumentEnvelope
 import dev.kpetriv.sprout.core.sync.OutboxItem
 import dev.kpetriv.sprout.core.sync.PullPage
+import dev.kpetriv.sprout.core.sync.PulledEvent
 import dev.kpetriv.sprout.core.sync.PushItem
 import dev.kpetriv.sprout.core.sync.PushItemId
 import dev.kpetriv.sprout.core.sync.PushResult
@@ -572,7 +573,9 @@ internal constructor(
         }
         val eventPage = page(hid, FirestoreLayout.EVENTS, cursor, next)
         hasMore = hasMore || eventPage.size >= pageSize
-        val events = eventPage.mapNotNull { StoredShapes.nestEvent(it.data) }
+        val events = eventPage.mapNotNull { doc ->
+            StoredShapes.nestEvent(doc.data)?.let { PulledEvent(it, doc.serverReceivedAt?.toInstant()) }
+        }
         malformed += eventPage.size - events.size
 
         val messages = when (val scope = messageScope(hid, deviceDocs)) {

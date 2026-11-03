@@ -67,13 +67,16 @@ class FirebaseSyncTransportPullTest {
     }
 
     @Test
-    fun `events round-trip to the exact tree that was pushed`() = runTest {
+    fun `events round-trip to the exact tree that was pushed, with their server stamp`() = runTest {
         val events = listOf(TestData.event("evt-1"), TestData.event("evt-2", lamport = 2))
         transport().push(events, emptyList())
 
         val page = transport().pull(SyncCursor.START)
 
-        assertEquals(events, page.events)
+        assertEquals(events, page.events.map { it.json })
+        // One batch, one server time; the stamp is kept beside the tree, never inside it.
+        val stamp = kotlin.time.Instant.parse("2023-11-14T22:13:20Z")
+        assertEquals(listOf(stamp, stamp), page.events.map { it.serverReceivedAt })
         assertFalse(page.hasMore)
     }
 
@@ -125,7 +128,7 @@ class FirebaseSyncTransportPullTest {
             val page = transport(pageSize = 2).pull(cursor)
             seen +=
                 page.events.map {
-                    it.getValue("envelope").toString().substringAfter("\"eventId\":\"").substringBefore('"')
+                    it.json.getValue("envelope").toString().substringAfter("\"eventId\":\"").substringBefore('"')
                 }
             cursor = page.next
             pages++

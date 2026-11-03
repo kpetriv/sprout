@@ -10,6 +10,7 @@ import {
   clean,
   document,
   event,
+  gamePlayed,
   HASH,
   HID,
   KID2_ID,
@@ -52,6 +53,12 @@ describe('events: create', () => {
 
   it('a kid creates a KID-role event for their own kid from their device', async () => {
     await assertSucceeds(put(asKid(env), kidEvent()));
+  });
+
+  it('a kid creates a game_played event for their own kid with the existing key set (M5)', async () => {
+    await assertSucceeds(put(asKid(env), gamePlayed()));
+    // The same keys a kid already writes: the ledger, not the rules, judges the credit (ADR-0009).
+    await assertFails(put(asKid(env), gamePlayed({ eventId: 'evt-game-2', kidId: KID2_ID })));
   });
 
   it('a parent stores a conflicting copy under eventId__hash; a server-stamped event is accepted', async () => {

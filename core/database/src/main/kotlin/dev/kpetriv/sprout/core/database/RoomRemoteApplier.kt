@@ -52,6 +52,7 @@ import dev.kpetriv.sprout.core.sync.DocumentJsonCodec
 import dev.kpetriv.sprout.core.sync.DocumentRejection
 import dev.kpetriv.sprout.core.sync.EventApplyReport
 import dev.kpetriv.sprout.core.sync.MessageApplyReport
+import dev.kpetriv.sprout.core.sync.PulledEvent
 import dev.kpetriv.sprout.core.sync.RemoteApplier
 import dev.kpetriv.sprout.core.sync.RemoteDocumentVerifier
 import dev.kpetriv.sprout.core.sync.StoredDocument
@@ -627,7 +628,7 @@ class RoomRemoteApplier internal constructor(
         { database.interestPolicyDao().upsert(it) },
     )
 
-    override suspend fun applyEvents(events: List<JsonObject>): EventApplyReport = ledger.ingest(events)
+    override suspend fun applyEvents(events: List<PulledEvent>): EventApplyReport = ledger.ingest(events)
 
     /** Verifies and stores pulled chat messages; see [ChatApplier]. */
     override suspend fun applyMessages(messages: List<JsonObject>): MessageApplyReport = chat.applyMessages(messages)

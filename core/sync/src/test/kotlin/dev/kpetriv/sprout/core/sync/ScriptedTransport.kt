@@ -81,7 +81,7 @@ internal class LoggingApplier(private val inner: RemoteApplier, private val log:
         return inner.applyDocuments(documents)
     }
 
-    override suspend fun applyEvents(events: List<JsonObject>): EventApplyReport {
+    override suspend fun applyEvents(events: List<PulledEvent>): EventApplyReport {
         log += "events"
         return inner.applyEvents(events)
     }

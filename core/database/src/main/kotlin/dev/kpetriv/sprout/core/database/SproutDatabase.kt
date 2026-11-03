@@ -175,7 +175,10 @@ abstract class SproutDatabase : RoomDatabase() {
          * 6 (M4): chat (`messages`, `message_seq`, `thread_keys`, `read_marks`), the blob cache index (`blobs`),
          * `photos.blobId`, the registry mirror's encryption key columns and `outbox.data`. See
          * [Migrations.MIGRATION_5_6].
+         *
+         * 7 (M5): `ledger_events.serverReceivedAtEpochMs` and `ledger_inbox.serverReceivedAtEpochMs`, the server
+         * stamp of pulled events for the games' played-on window (D-M5-5). See [Migrations.MIGRATION_6_7].
          */
-        const val VERSION: Int = 6
+        const val VERSION: Int = 7
     }
 }

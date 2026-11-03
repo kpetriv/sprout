@@ -24,8 +24,10 @@ import dev.kpetriv.sprout.core.database.entity.RegistrationStatus
 import dev.kpetriv.sprout.core.database.usecase.ApproveSubmissionUseCase
 import dev.kpetriv.sprout.core.database.usecase.DrainPendingParentActionsUseCase
 import dev.kpetriv.sprout.core.database.usecase.DrainResult
+import dev.kpetriv.sprout.core.database.usecase.GameCapReader
 import dev.kpetriv.sprout.core.database.usecase.PendingPhotoUploads
 import dev.kpetriv.sprout.core.database.usecase.PlanScheduledActionsUseCase
+import dev.kpetriv.sprout.core.database.usecase.PlayGameUseCase
 import dev.kpetriv.sprout.core.database.usecase.PurchaseRewardUseCase
 import dev.kpetriv.sprout.core.database.usecase.PurgeLocalHouseholdUseCase
 import dev.kpetriv.sprout.core.database.usecase.ReconcileTimeBankUseCase
@@ -99,7 +101,10 @@ class TestHousehold(
     val authors: SessionAuthorProvider = SessionBackedAuthorProvider(sessions)
     val signatureCheck = VerifierSignatureCheck(JceEcdsaVerifier())
     val registry = RoomDeviceRegistry(database)
-    val ledger = RoomLedgerRepository(database, clock, signer, JceEcdsaVerifier())
+
+    /** The household's calendar, in UTC so dates do not depend on the machine running the tests. */
+    val calendar = HouseholdCalendar(clock) { ZoneOffset.UTC }
+    val ledger = RoomLedgerRepository(database, clock, signer, JceEcdsaVerifier(), calendar)
     val writer = RoomLedgerWriter(database, ledger, signer, authors, clock)
     val outbox = RoomOutboxSource(database, clock)
     private val random = SecureRandom()
@@ -156,7 +161,7 @@ class TestHousehold(
         pending,
         ledger,
         redeem,
-        HouseholdCalendar(clock) { ZoneOffset.UTC },
+        calendar,
     )
     val purge = PurgeLocalHouseholdUseCase(database, files, clock, Dispatchers.Unconfined)
 
@@ -173,6 +178,9 @@ class TestHousehold(
     val startTimeBank = StartTimeBankUseCase(timeBankStatus, writer)
     val stopTimeBank = StopTimeBankUseCase(timeBankStatus, writer, clock)
     val reconcileTimeBank = ReconcileTimeBankUseCase(ledger, timeBankStatus, writer, sessions, clock)
+
+    val playGame = PlayGameUseCase(accounts, ledger, writer, calendar)
+    val gameCap = GameCapReader(accounts, ledger, calendar)
 
     val photoUploads = PendingPhotoUploads(database)
     val uploadChorePhotos = UploadChorePhotosUseCase(photoUploads, photos, blobWrites, chores, authors)

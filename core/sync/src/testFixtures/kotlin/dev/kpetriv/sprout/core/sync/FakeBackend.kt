@@ -22,6 +22,7 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.longOrNull
 import kotlin.io.encoding.Base64
+import kotlin.time.Instant
 
 /**
  * An in-memory "server" shared by any number of [FakeSyncTransport]s. It mirrors the **backend rules**
@@ -89,9 +90,13 @@ class FakeBackend(val householdId: HouseholdId, private val pageSize: Int = DEFA
         require(pageSize > 0) { "pageSize must be positive" }
     }
 
-    /** The server clock (epoch ms) that decides the blob budget's UTC day; tests may replace it. */
+    /**
+     * The server clock (epoch ms): it decides the blob budget's UTC day and stamps every stored event's
+     * `serverReceivedAt`. Fixed at [DEFAULT_NOW_EPOCH_MS] (the ledger fixtures' day) so game events dated on the
+     * fixtures' day stay inside their played-on window whenever the tests run; tests may replace it.
+     */
     @Volatile
-    var nowEpochMs: () -> Long = System::currentTimeMillis
+    var nowEpochMs: () -> Long = { DEFAULT_NOW_EPOCH_MS }
 
     /** New blob chunks stored per UTC day (epoch day), as `quotas/{yyyymmdd}.chunks`. */
     private val blobChunksPerDay = mutableMapOf<Long, Int>()
@@ -117,8 +122,11 @@ class FakeBackend(val householdId: HouseholdId, private val pageSize: Int = DEFA
     private val parentKeys = LinkedHashMap<String, Stored<RegisteredParentKey>>()
     private val documents = LinkedHashMap<String, Stored<DocumentEnvelope>>()
 
-    /** Keyed by Firestore document id: `eventId`, or `eventId__hash` for a conflicting copy. */
-    private val events = LinkedHashMap<String, Stored<JsonObject>>()
+    /**
+     * Keyed by Firestore document id: `eventId`, or `eventId__hash` for a conflicting copy. Each with its
+     * `serverReceivedAt` stamp ([nowEpochMs] when stored), pulled with it as a [PulledEvent].
+     */
+    private val events = LinkedHashMap<String, Stored<PulledEvent>>()
 
     /** Keyed by `messageId`. */
     private val messages = LinkedHashMap<String, Stored<JsonObject>>()
@@ -270,17 +278,19 @@ class FakeBackend(val householdId: HouseholdId, private val pageSize: Int = DEFA
 
     /**
      * Stores [event] bypassing every rule, for receiver-side tests: under its `eventId`, or `eventId__hash` when the
-     * id is taken by another copy.
+     * id is taken by another copy. [serverReceivedAt] is its stamp (default: [nowEpochMs]).
      */
     @Synchronized
-    fun injectEvent(event: JsonObject) {
+    fun injectEvent(event: JsonObject, serverReceivedAt: Instant = Instant.fromEpochMilliseconds(nowEpochMs())) {
         val fields = eventFieldsOf(event)
         val eventId = fields?.eventId ?: envelopeString(event, "eventId").orEmpty()
         val hash = fields?.hash ?: envelopeString(event, "hash").orEmpty()
-        val existing = events[eventId]?.value
+        val existing = events[eventId]?.value?.json
         when {
-            existing == null -> storeEvent(eventId, event, author = null)
-            envelopeString(existing, "hash") != hash -> storeEvent(conflictId(eventId, hash), event, author = null)
+            existing == null -> storeEvent(eventId, event, author = null, serverReceivedAt)
+
+            envelopeString(existing, "hash") != hash ->
+                storeEvent(conflictId(eventId, hash), event, author = null, serverReceivedAt)
         }
     }
 
@@ -312,7 +322,7 @@ class FakeBackend(val householdId: HouseholdId, private val pageSize: Int = DEFA
 
     /** Every stored event, conflicting copies (`eventId__hash`) included, in write order. */
     @Synchronized
-    fun events(): List<JsonObject> = events.values.map { it.value }
+    fun events(): List<JsonObject> = events.values.map { it.value.json }
 
     @Synchronized
     fun isPartitioned(deviceId: DeviceId): Boolean = deviceId in partitioned
@@ -419,7 +429,7 @@ class FakeBackend(val householdId: HouseholdId, private val pageSize: Int = DEFA
     private fun pushEvent(caller: Caller, event: JsonObject): String? {
         val fields = eventFieldsOf(event) ?: return MALFORMED
         if (fields.householdId != householdId.value) return WRONG_HOUSEHOLD
-        val stored = events[fields.eventId]?.value
+        val stored = events[fields.eventId]?.value?.json
         return when {
             stored == null -> if (eventCreateAllowed(caller, fields)) {
                 storeEvent(fields.eventId, event, caller.deviceId)
@@ -438,7 +448,7 @@ class FakeBackend(val householdId: HouseholdId, private val pageSize: Int = DEFA
     /** A different copy under a taken eventId: evidence under `eventId__hash`, from a PARENT member only. */
     private fun pushConflictingCopy(caller: Caller, fields: EventFields, event: JsonObject): String? {
         val id = conflictId(fields.eventId, fields.hash)
-        val stored = events[id]?.value
+        val stored = events[id]?.value?.json
         return when {
             stored != null -> if (envelopeString(stored, "hash") == fields.hash) null else PERMISSION_DENIED
 
@@ -715,9 +725,14 @@ class FakeBackend(val householdId: HouseholdId, private val pageSize: Int = DEFA
     private fun memberKidIdOf(caller: Caller): String? =
         devices.values.firstOrNull { it.value.uid == caller.uid && it.value.kidId != null }?.value?.kidId?.value
 
-    private fun storeEvent(id: String, event: JsonObject, author: DeviceId?) {
+    private fun storeEvent(
+        id: String,
+        event: JsonObject,
+        author: DeviceId?,
+        serverReceivedAt: Instant = Instant.fromEpochMilliseconds(nowEpochMs()),
+    ) {
         if (id in events) return
-        events[id] = Stored(nextSeq(EVENTS), event)
+        events[id] = Stored(nextSeq(EVENTS), PulledEvent(event, serverReceivedAt))
         writeFlow.tryEmit(Write(EVENTS, author))
     }
 
@@ -737,6 +752,10 @@ class FakeBackend(val householdId: HouseholdId, private val pageSize: Int = DEFA
         const val DEVICES: String = "devices"
         const val PARENT_KEYS: String = "parentKeys"
         const val DOCUMENTS: String = "documents"
+
+        /** 2026-11-02T08:00:00Z, `Fixtures.start` of core/domain-ledger's test fixtures. */
+        const val DEFAULT_NOW_EPOCH_MS: Long = 1_793_606_400_000
+
         const val EVENTS: String = "events"
         const val MESSAGES: String = "messages"
         const val BLOBS: String = "blobs"
