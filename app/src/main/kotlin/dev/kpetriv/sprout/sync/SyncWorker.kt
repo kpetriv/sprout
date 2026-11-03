@@ -36,19 +36,27 @@ fun interface BackgroundSync {
 
 /**
  * [BackgroundSync] over the real session: no session, the trial session, a PENDING device (onboarding polls while it
- * waits) or a REVOKED one (it is being wiped) sync nothing. The report itself (audit, removal, planning) is handled
- * by [SyncReportProcessor], which the engine calls for every report, so a removal found here wipes without any UI.
+ * waits) or a REVOKED one (it is being wiped) sync nothing. While the [SyncPause] is held (a sign-in on the gate) it
+ * retries later. The report itself (audit, removal, planning) is handled by [SyncReportProcessor], which the engine
+ * calls for every report, so a removal found here wipes without any UI.
  */
-class SessionBackgroundSync @Inject constructor(private val sessions: SessionStore, private val runner: SyncRunner) :
-    BackgroundSync {
+class SessionBackgroundSync @Inject constructor(
+    private val sessions: SessionStore,
+    private val runner: SyncRunner,
+    private val pause: SyncPause,
+) : BackgroundSync {
     override suspend fun syncOnce(): BackgroundSyncOutcome {
         val session = sessions.get()
-        if (session == null || session.isLocalTrial || session.deviceStatus != RegistrationStatus.ACTIVE) {
-            return BackgroundSyncOutcome.DONE
-        }
-        return when (runner.syncOnce().error) {
-            null, is SyncError.Permanent, SyncError.HouseholdGone -> BackgroundSyncOutcome.DONE
-            is SyncError.Transient, SyncError.Unauthenticated -> BackgroundSyncOutcome.RETRY
+        val syncable = session != null && !session.isLocalTrial && session.deviceStatus == RegistrationStatus.ACTIVE
+        return when {
+            !syncable -> BackgroundSyncOutcome.DONE
+
+            pause.isPaused -> BackgroundSyncOutcome.RETRY
+
+            else -> when (runner.syncOnce().error) {
+                null, is SyncError.Permanent, SyncError.HouseholdGone -> BackgroundSyncOutcome.DONE
+                is SyncError.Transient, SyncError.Unauthenticated -> BackgroundSyncOutcome.RETRY
+            }
         }
     }
 }

@@ -461,4 +461,24 @@ describe('deviceStatus (no ID token)', () => {
     const other = newDevice();
     expect((await ask(h.hid, other.deviceId, statusSignature(other, h.hid), '198.51.100.1')).status).toBe('UNKNOWN');
   });
+
+  it('counts the per-device bucket only for requests whose signature verified', async () => {
+    const h = await newHousehold();
+    const forged = statusSignature(newDevice(), h.hid, h.device.deviceId);
+    // An unsigned flood from many addresses is refused without using up the device's own allowance.
+    for (let i = 0; i < 40; i++) {
+      await expectCode(ask(h.hid, h.device.deviceId, forged, `203.0.113.${i}`), 'permission-denied');
+    }
+    expect(await ask(h.hid, h.device.deviceId, statusSignature(h.device, h.hid), '203.0.113.250')).toEqual({
+      status: 'ACTIVE',
+      householdGone: false,
+    });
+  });
+
+  it('still counts every request against its address first', async () => {
+    const h = await newHousehold();
+    const forged = statusSignature(newDevice(), h.hid, h.device.deviceId);
+    for (let i = 0; i < 120; i++) await expectCode(ask(h.hid, h.device.deviceId, forged, '203.0.113.7'), 'permission-denied');
+    await expectCode(ask(h.hid, h.device.deviceId, statusSignature(h.device, h.hid), '203.0.113.7'), 'resource-exhausted');
+  });
 });

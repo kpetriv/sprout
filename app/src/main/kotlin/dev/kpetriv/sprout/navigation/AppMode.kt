@@ -8,6 +8,7 @@ import dev.kpetriv.sprout.core.database.KidRepository
 import dev.kpetriv.sprout.core.database.Session
 import dev.kpetriv.sprout.core.database.SessionStore
 import dev.kpetriv.sprout.core.database.entity.RegistrationStatus
+import dev.kpetriv.sprout.core.model.HouseholdId
 import dev.kpetriv.sprout.core.model.KidId
 import dev.kpetriv.sprout.core.model.KidUiTier
 import dev.kpetriv.sprout.core.model.Role
@@ -15,7 +16,6 @@ import dev.kpetriv.sprout.startup.StartupState
 import dev.kpetriv.sprout.startup.StartupStatus
 import dev.kpetriv.sprout.sync.GateState
 import dev.kpetriv.sprout.sync.Removal
-import dev.kpetriv.sprout.sync.ShellPreferences
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -62,12 +62,16 @@ fun interface ParentLock {
 
 /**
  * The shell's own state next to the session: the removal ([RemovalHandler.state]), the "Sign in again" gate
- * ([CredentialGate.state]) and the household whose parent setup is pending ([ParentSetupTracker.pending], a digest).
+ * ([CredentialGate.state]) and the household whose parent setup is pending ([ParentSetupTracker.pending], a digest,
+ * [ShellPreferences][dev.kpetriv.sprout.sync.ShellPreferences.digestOf]).
  */
 interface ShellSignals {
     val removal: StateFlow<Removal?>
     val gate: StateFlow<GateState?>
     val parentSetupPending: StateFlow<String?>
+
+    /** The digest [parentSetupPending] holds for [householdId] ([ShellPreferences.digestOf]). */
+    fun digestOf(householdId: HouseholdId): String
 }
 
 /** The signed-in session as the shell sees it: still loading, or the stored session (null when signed out). */
@@ -94,7 +98,13 @@ internal data class ShellState(
  * - a KID session is kid mode for its kid only, with no parent area;
  * - a PARENT session (the trial one included) is the parent area, or kid mode for [kidModeKid] on this phone.
  */
-internal fun appModeOf(session: SessionView, onboarding: Boolean, kidModeKid: KidId?, shell: ShellState): AppMode {
+internal fun appModeOf(
+    session: SessionView,
+    onboarding: Boolean,
+    kidModeKid: KidId?,
+    shell: ShellState,
+    digestOf: (HouseholdId) -> String,
+): AppMode {
     if (session !is SessionView.Loaded) return AppMode.Loading
     val current = session.session
     val real = current?.takeUnless { it.isLocalTrial }
@@ -111,7 +121,7 @@ internal fun appModeOf(session: SessionView, onboarding: Boolean, kidModeKid: Ki
 
         current.deviceStatus == RegistrationStatus.PENDING -> AppMode.Onboarding(canLeave = false)
 
-        real != null && shell.parentSetupPending == ShellPreferences.digestOf(real.householdId) ->
+        real != null && shell.parentSetupPending != null && shell.parentSetupPending == digestOf(real.householdId) ->
             AppMode.Onboarding(canLeave = false)
 
         kidModeKid != null -> AppMode.Kid(kidModeKid)
@@ -162,7 +172,7 @@ class ModeViewModel @Inject constructor(
         savedStateHandle.getStateFlow<String?>(KID_ID_KEY, null),
         combine(signals.removal, signals.gate, signals.parentSetupPending, ::ShellState),
     ) { session, onboardingNow, kidId, shell ->
-        appModeOf(session, onboardingNow, kidId?.let(::KidId), shell)
+        appModeOf(session, onboardingNow, kidId?.let(::KidId), shell, signals::digestOf)
     }.stateIn(viewModelScope, SharingStarted.Eagerly, AppMode.Loading)
 
     fun onEvent(event: ModeEvent) {

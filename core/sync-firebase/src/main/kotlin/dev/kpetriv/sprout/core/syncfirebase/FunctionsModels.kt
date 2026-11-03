@@ -69,7 +69,10 @@ internal data class DeleteHouseholdRequest(
 )
 
 @Serializable
-internal data class DeviceStatusRequest(val hid: HouseholdId, val deviceId: DeviceId, val signature: String)
+internal data class DeviceStatusRequest(val hid: HouseholdId, val deviceId: DeviceId, val signature: String) {
+    /** Says which fields are set, never their values (ids and a replayable signature). */
+    override fun toString(): String = "DeviceStatusRequest(<redacted>)"
+}
 
 @Serializable
 internal data class DeviceStatusResponse(val status: String, val householdGone: Boolean)

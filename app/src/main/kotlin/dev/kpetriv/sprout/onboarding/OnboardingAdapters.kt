@@ -180,7 +180,7 @@ class RoomOnboardingHousehold @Inject constructor(
 
     /** Only a mirror that belongs to [uid] in [householdId] answers (audit: the mirror has no household column). */
     override suspend fun activeDeviceOf(uid: UserId, householdId: HouseholdId): DeviceId? {
-        if (preferences.linkedAccount() != ShellPreferences.digestOf(householdId, uid)) return null
+        if (preferences.linkedAccount() != preferences.digestOf(householdId, uid)) return null
         val own = signer.deviceId()
         val entry = database.deviceDao().get(own)
         return own.takeIf { entry != null && entry.uid == uid && entry.status == RegistrationStatus.ACTIVE }
@@ -188,7 +188,7 @@ class RoomOnboardingHousehold @Inject constructor(
 
     override suspend fun saveSession(session: Session) {
         if (!session.isLocalTrial) {
-            val digest = ShellPreferences.digestOf(session.householdId, session.uid)
+            val digest = preferences.digestOf(session.householdId, session.uid)
             val linked = preferences.linkedAccount()
             // Rows of another account or household must never mix with this one's (D-M3-47).
             if (linked != null && linked != digest) localRows.clear()
@@ -204,6 +204,14 @@ class RoomOnboardingHousehold @Inject constructor(
     override suspend fun finishParentSetup() = parentSetup.finish()
 
     override suspend fun parentSetupPending(householdId: HouseholdId): Boolean = parentSetup.isPending(householdId)
+
+    /**
+     * Any registry mirror row (every pull starts with the registry, which holds at least this device), any pull
+     * cursor of [householdId], or an unsynced change: then a sync ran or data was written.
+     */
+    override suspend fun hasHouseholdData(householdId: HouseholdId): Boolean = database.deviceDao().count() > 0 ||
+        database.syncCursorDao().all(householdId).isNotEmpty() ||
+        database.outboxDao().count() > 0
 
     override suspend fun eraseLocalHousehold() = removals.remove(RemovalReason.SIGNED_OUT)
 }
@@ -253,7 +261,7 @@ private fun <T> Result<T>.mapAuthFailure(): Result<T> = recoverCatching { failur
             AuthError.UserDisabled -> OnboardingFailure.ACCOUNT_DISABLED
             AuthError.Network -> OnboardingFailure.NETWORK
             AuthError.TooManyRequests -> OnboardingFailure.TOO_MANY_ATTEMPTS
-            AuthError.SignedOut, AuthError.Unknown, null -> OnboardingFailure.UNKNOWN
+            AuthError.SignedOut, AuthError.UserMismatch, AuthError.Unknown, null -> OnboardingFailure.UNKNOWN
         },
     )
 }

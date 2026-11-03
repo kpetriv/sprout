@@ -17,7 +17,9 @@ class FirebaseAuthStateReader @Inject constructor(private val auth: FirebaseAuth
 
 /**
  * Restores the stored [Session] at process start and checks it against Firebase Auth (M3 §6, D-M3-47):
- * - the account is gone ([AuthState.UserGone]: household deleted, kid device revoked): removal, the phone wipes;
+ * - the account is gone ([AuthState.UserGone]: household deleted, kid device revoked, or merely disabled): the
+ *   "Sign in again" gate asks the registry first with the token-less `deviceStatus` ([CredentialCheck.credentialsLost])
+ *   and wipes only on REVOKED or a household that is gone; anything else stays gated (audit L6);
  * - another account is signed in, or the ID token names another household: the session changed, the phone wipes
  *   ([RemovalReason.SIGNED_OUT]) before anything else runs;
  * - no Firebase user although a real session is stored: the credentials were lost (a revoked refresh token signs the
@@ -38,8 +40,7 @@ class SessionReconciler @Inject constructor(
         val session = sessions.get()
         if (session == null || session.isLocalTrial) return session
         when (val state = auth.current()) {
-            AuthState.UserGone -> removals.remove(RemovalReason.HOUSEHOLD_GONE)
-            AuthState.SignedOut -> credentials.credentialsLost()
+            AuthState.UserGone, AuthState.SignedOut -> credentials.credentialsLost()
             is AuthState.SignedIn -> if (!matches(session, state)) removals.remove(RemovalReason.SIGNED_OUT)
         }
         return session

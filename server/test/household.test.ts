@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DOCUMENT_COLLECTIONS } from '../src/config.js';
 import { sha256Hex } from '../src/crypto.js';
 import {
@@ -15,6 +15,7 @@ import {
   req,
   resetEmulators,
   signed,
+  statusSignature,
   withProof,
 } from './helpers.js';
 
@@ -238,5 +239,33 @@ describe('deleteHousehold: proof, recent sign-in and complete erasure', () => {
     expect((await db.doc(`challenges/${linked.kid.uid}`).get()).exists).toBe(false);
     expect((await db.collection('userHouseholds').get()).size).toBe(0);
     expect((await db.doc(`households/${h.hid}`).listCollections())).toHaveLength(0);
+  });
+
+  describe('a deletion that fails half-way', () => {
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+
+    it('is recorded before anything is deleted, so a device still learns the household is gone', async () => {
+      const h = await newHousehold();
+      const linked = await linkKid(h);
+      vi.spyOn(auth, 'deleteUsers').mockRejectedValueOnce(new Error('auth backend unavailable'));
+
+      await expect(
+        call(fns.deleteHousehold, req(h.parent, withProof(h, 'deleteHousehold', { confirmation: h.hid }))),
+      ).rejects.toBeDefined();
+
+      expect((await db.doc(`households/${h.hid}`).get()).exists).toBe(false);
+      expect((await db.collection('deletionRecords').where('hidHash', '==', sha256Hex(h.hid)).get()).size).toBe(1);
+      const status = await call(
+        fns.deviceStatus,
+        req(null, {
+          hid: h.hid,
+          deviceId: linked.device.deviceId,
+          signature: statusSignature(linked.device, h.hid),
+        }),
+      );
+      expect(status).toEqual({ status: 'UNKNOWN', householdGone: true });
+    });
   });
 });

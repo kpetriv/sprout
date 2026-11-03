@@ -4,6 +4,7 @@ import androidx.lifecycle.SavedStateHandle
 import app.cash.turbine.test
 import dev.kpetriv.sprout.FakeKidRepository
 import dev.kpetriv.sprout.FakeSessionStore
+import dev.kpetriv.sprout.FakeShellPreferences
 import dev.kpetriv.sprout.FakeStartupStatus
 import dev.kpetriv.sprout.MainDispatcherRule
 import dev.kpetriv.sprout.REAL_HOUSEHOLD
@@ -19,7 +20,6 @@ import dev.kpetriv.sprout.startup.StartupState
 import dev.kpetriv.sprout.sync.GateState
 import dev.kpetriv.sprout.sync.Removal
 import dev.kpetriv.sprout.sync.RemovalReason
-import dev.kpetriv.sprout.sync.ShellPreferences
 import dev.kpetriv.sprout.trialSession
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.test.runTest
@@ -40,7 +40,10 @@ class ModeViewModelTest {
         override val removal = MutableStateFlow<Removal?>(null)
         override val gate = MutableStateFlow<GateState?>(null)
         override val parentSetupPending = MutableStateFlow<String?>(null)
+
+        override fun digestOf(householdId: HouseholdId): String = preferences.digestOf(householdId)
     }
+    private val preferences = FakeShellPreferences()
     private val startup = FakeStartupStatus()
 
     private fun viewModel(savedState: SavedStateHandle = handle) =
@@ -139,7 +142,13 @@ class ModeViewModelTest {
     fun `the derivation without a loaded session is loading`() {
         assertEquals(
             AppMode.Loading,
-            appModeOf(SessionView.Loading, onboarding = false, kidModeKid = null, shell = ShellState()),
+            appModeOf(
+                SessionView.Loading,
+                onboarding = false,
+                kidModeKid = null,
+                shell = ShellState(),
+                digestOf = { it.value },
+            ),
         )
     }
 
@@ -173,11 +182,11 @@ class ModeViewModelTest {
 
     @Test
     fun `a parent setup left unfinished by a process death returns to onboarding for that household only`() = runTest {
-        signals.parentSetupPending.value = ShellPreferences.digestOf(REAL_HOUSEHOLD)
+        signals.parentSetupPending.value = preferences.digestOf(REAL_HOUSEHOLD)
         val viewModel = viewModel()
         viewModel.mode.test {
             assertEquals(AppMode.Onboarding(canLeave = false), awaitItem())
-            signals.parentSetupPending.value = ShellPreferences.digestOf(HouseholdId("another"))
+            signals.parentSetupPending.value = preferences.digestOf(HouseholdId("another"))
             assertEquals(AppMode.Parent, awaitItem())
         }
     }

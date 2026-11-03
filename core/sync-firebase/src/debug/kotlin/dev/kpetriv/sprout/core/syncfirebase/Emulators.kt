@@ -2,10 +2,12 @@ package dev.kpetriv.sprout.core.syncfirebase
 
 import com.google.firebase.FirebaseApp
 import com.google.firebase.FirebaseException
+import com.google.firebase.auth.EmailAuthProvider
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.auth.FirebaseAuthInvalidCredentialsException
 import com.google.firebase.auth.FirebaseAuthInvalidUserException
 import com.google.firebase.auth.FirebaseAuthUserCollisionException
+import com.google.firebase.auth.FirebaseUser
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.functions.FirebaseFunctions
 import kotlinx.coroutines.tasks.await
@@ -37,6 +39,16 @@ internal object Emulators : EmulatorSupport {
             // With e-mail enumeration protection, an unknown account and a wrong password look the same.
             createAccount(auth, email, password, unknownOrWrong)
         }
+    }
+
+    override suspend fun reauthenticateWithEmailPassword(
+        user: FirebaseUser,
+        config: FirebaseConfig,
+        email: String,
+        password: String,
+    ) {
+        if (config.emulatorHost == null) throw AuthException(AuthError.NotAvailableInThisBuild)
+        user.reauthenticate(EmailAuthProvider.getCredential(email, password)).await()
     }
 
     private suspend fun createAccount(

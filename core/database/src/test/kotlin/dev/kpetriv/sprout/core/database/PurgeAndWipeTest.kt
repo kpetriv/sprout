@@ -160,7 +160,7 @@ class PurgeAndWipeTest {
         val files = LocalDataFiles(context.getDatabasePath(name), photos, secrets)
         assertTrue(files.databaseFile.exists())
 
-        WipeLocalDataUseCase(database, sessions, files, Dispatchers.Unconfined)()
+        assertTrue(WipeLocalDataUseCase(database, sessions, files, Dispatchers.Unconfined)(), "everything is gone")
 
         assertFalse(database.isOpen)
         assertTrue(files.databaseFiles.none { it.exists() })
@@ -173,6 +173,47 @@ class PurgeAndWipeTest {
         } finally {
             reopened.close()
             context.deleteDatabase(name)
+        }
+    }
+
+    @Test
+    fun aWipeOfAnAlreadyClosedDatabaseStillDeletesTheFiles() = runTest {
+        val context = RuntimeEnvironment.getApplication()
+        val name = "wipe-closed-${UUID.randomUUID()}.db"
+        val database = fileDatabase(name)
+        val sessions = RoomSessionStore(database, household.clock)
+        sessions.ensureLocalTrialSession(household.deviceId)
+        database.close()
+        val photos = File(context.noBackupFilesDir, "photos-${UUID.randomUUID()}")
+        val secrets = File(context.noBackupFilesDir, "secrets-${UUID.randomUUID()}").apply { mkdirs() }
+        File(secrets, "pin.hash.bin").writeBytes(byteArrayOf(1))
+        val files = LocalDataFiles(context.getDatabasePath(name), photos, secrets)
+
+        assertTrue(WipeLocalDataUseCase(database, sessions, files, Dispatchers.Unconfined)())
+        assertTrue(files.databaseFiles.none { it.exists() })
+        assertTrue(secrets.listFiles().orEmpty().isEmpty())
+    }
+
+    @Test
+    fun aWipeThatLeavesAFileBehindSaysSo() = runTest {
+        val context = RuntimeEnvironment.getApplication()
+        val name = "wipe-stuck-${UUID.randomUUID()}.db"
+        val database = fileDatabase(name)
+        val sessions = RoomSessionStore(database, household.clock)
+        val locked = File(context.noBackupFilesDir, "locked-${UUID.randomUUID()}").apply { mkdirs() }
+        val photos = File(locked, "photos").apply { mkdirs() }
+        File(photos, "a.photo").writeBytes(byteArrayOf(1))
+        val secrets = File(context.noBackupFilesDir, "secrets-${UUID.randomUUID()}").apply { mkdirs() }
+        val files = LocalDataFiles(context.getDatabasePath(name), photos, secrets)
+        // The photo directory's parent refuses deletions, so the photo directory itself cannot go.
+        check(photos.setWritable(false) && locked.setWritable(false))
+        try {
+            assertFalse(WipeLocalDataUseCase(database, sessions, files, Dispatchers.Unconfined)())
+            assertTrue(files.databaseFiles.none { it.exists() }, "the other files still go")
+        } finally {
+            locked.setWritable(true)
+            photos.setWritable(true)
+            locked.deleteRecursively()
         }
     }
 

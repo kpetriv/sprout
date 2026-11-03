@@ -65,7 +65,7 @@ annotation class LockScope
  * PINs are passed as [CharArray] and zeroed by the session before it returns.
  */
 @Singleton
-@Suppress("LongParameterList") // Collaborators, all injected; grouping them would only hide what the session uses.
+@Suppress("LongParameterList", "TooManyFunctions") // Collaborators, all injected; one function per lock action.
 class ParentSession @Inject constructor(
     private val pinStore: ParentPinStore,
     private val hasher: PinHasher,
@@ -415,6 +415,18 @@ class ParentSession @Inject constructor(
             // The next PIN attempt still sees the old count; biometric unlock keeps working.
         } catch (expected: IOException) {
             // Same.
+        }
+    }
+
+    /**
+     * Forgets what the session knew about the stored PIN and reads it again, locked: the app calls it after deleting a
+     * previous parent's PIN and lockout state, when another account's household replaced the local rows (audit L10),
+     * so the next parent sets their own PIN instead of meeting the old one.
+     */
+    suspend fun reload() {
+        mutex.withLock {
+            mutableState.value = ParentSessionState.Initializing
+            ensureInitialized()
         }
     }
 

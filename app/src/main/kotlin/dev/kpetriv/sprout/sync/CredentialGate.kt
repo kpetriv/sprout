@@ -75,6 +75,14 @@ interface GateAuth {
 
     suspend fun signInWithEmailPassword(email: String, password: String): Result<Unit>
 
+    /**
+     * Re-authenticates the **signed-in** user (`FirebaseUser.reauthenticate`): never replaces it; another account
+     * fails with [AuthError.UserMismatch].
+     */
+    suspend fun reauthenticateWithGoogle(activityContext: Context): Result<Unit>
+
+    suspend fun reauthenticateWithEmailPassword(email: String, password: String): Result<Unit>
+
     suspend fun signOut()
 }
 
@@ -91,6 +99,12 @@ class FirebaseGateAuth @Inject constructor(private val auth: FirebaseAuthSession
     override suspend fun signInWithEmailPassword(email: String, password: String): Result<Unit> =
         auth.signInWithEmailPassword(email, password)
 
+    override suspend fun reauthenticateWithGoogle(activityContext: Context): Result<Unit> =
+        auth.reauthenticateWithGoogle(activityContext)
+
+    override suspend fun reauthenticateWithEmailPassword(email: String, password: String): Result<Unit> =
+        auth.reauthenticateWithEmailPassword(email, password)
+
     override suspend fun signOut() = auth.signOut()
 }
 
@@ -99,21 +113,28 @@ class FirebaseGateAuth @Inject constructor(private val auth: FirebaseAuthSession
  * forced refresh refused with a credential error rather than a network error) is gated, and the device asks the
  * registry about itself with the token-less `deviceStatus` ([HouseholdAdminFunctions.deviceStatus]):
  * - REVOKED, or the household gone: removal, the phone wipes;
- * - ACTIVE or PENDING: sign in again with the **same** account (another account is signed out again), then one sync,
- *   and only then the app opens;
+ * - ACTIVE or PENDING: sign in again with the **same** account, then one sync, and only then the app opens;
  * - UNKNOWN or unreachable: stays gated with Retry.
- * The parent can also erase this phone's copy from the gate instead. A phone that never comes online stays gated with
- * its encrypted copy (THREAT_MODEL T7).
+ *
+ * The session cannot refresh, so there may be no current user to re-authenticate: the gate signs in, which replaces
+ * the Firebase user. It does so under the [SyncPause] (audit M-1): no sync runs from the moment the sign-in starts
+ * until the uid was compared, before anything else, and another account was signed out again; only then does sync
+ * resume. The parent can also erase this phone's copy from the gate instead ([eraseInstead], after the confirmation
+ * [SignInAgainViewModel][dev.kpetriv.sprout.navigation.SignInAgainViewModel] asks for), but not while a status check
+ * or a sign-in is in flight. A phone that never comes online stays gated with its encrypted copy (THREAT_MODEL T7).
  */
 @Singleton
 @Suppress("TooManyFunctions") // One function per gate action.
-class CredentialGate internal constructor(
+class CredentialGate
+@Suppress("LongParameterList") // Seams for each gate step; the injected constructor is the one the app uses.
+internal constructor(
     private val scope: CoroutineScope,
     private val sessions: SessionStore,
     private val auth: GateAuth,
     private val deviceStatus: suspend () -> Result<GateDeviceStatus>,
     private val removals: HouseholdRemovals,
     private val syncNow: suspend () -> Unit,
+    private val pause: SyncPause,
 ) : CredentialCheck {
     @Inject
     @Suppress("LongParameterList") // One collaborator per gate step.
@@ -124,6 +145,7 @@ class CredentialGate internal constructor(
         admin: Lazy<HouseholdAdminFunctions>,
         removals: HouseholdRemovals,
         sync: Lazy<SyncController>,
+        pause: SyncPause,
     ) : this(
         scope = scope,
         sessions = sessions,
@@ -131,6 +153,7 @@ class CredentialGate internal constructor(
         deviceStatus = { admin.get().deviceStatus().map { GateDeviceStatus(it.status, it.householdGone) } },
         removals = removals,
         syncNow = { sync.get().syncNow() },
+        pause = pause,
     )
 
     private val mutableState = MutableStateFlow<GateState?>(null)
@@ -174,8 +197,17 @@ class CredentialGate internal constructor(
         if (mutableState.value == GateState.Unreachable) credentialsLost()
     }
 
-    /** "Erase this phone's copy" instead of signing in. */
-    fun eraseInstead() = removals.remove(RemovalReason.SIGNED_OUT)
+    /** True while "Erase this phone's copy instead" may be offered: the registry answered and no sign-in runs. */
+    fun canEraseInstead(): Boolean = when (val gate = mutableState.value) {
+        GateState.Unreachable -> true
+        is GateState.SignInRequired -> !gate.busy
+        GateState.Checking, null -> false
+    }
+
+    /** "Erase this phone's copy" instead of signing in (once confirmed); ignored while [canEraseInstead] is false. */
+    fun eraseInstead() {
+        if (canEraseInstead()) removals.remove(RemovalReason.SIGNED_OUT)
+    }
 
     fun signInWithGoogle(activityContext: Context) = signIn { auth.signInWithGoogle(activityContext) }
 
@@ -217,24 +249,49 @@ class CredentialGate internal constructor(
     }
 
     /** Null when signed in as the session's account in its household and synced once; the failure otherwise. */
-    @Suppress("ReturnCount") // One early return per way the sign-in can end.
     private suspend fun attemptSignIn(block: suspend () -> Result<Unit>): GateFailure? {
         val session = realSession() ?: return null
-        val signedIn = guarded { block() } ?: Result.failure(AuthException(AuthError.Unknown))
-        signedIn.exceptionOrNull()?.let { return it.toGateFailure() }
-        val uid = (guarded { auth.current() } as? AuthState.SignedIn)?.uid
-        if (uid != session.uid) return wrongAccount()
-        val claims = guarded { auth.refresh() } ?: return GateFailure.FAILED
-        claims.exceptionOrNull()?.let { return it.toGateFailure() }
-        val householdId = claims.getOrNull()
-        if (householdId != session.householdId) {
-            // The account no longer belongs to this household (deleted and recreated, or removed from it).
-            removals.remove(RemovalReason.HOUSEHOLD_GONE)
-            return null
+        val outcome = guarded { pause.pausing { signInAs(session, block) } }
+            ?: SignInOutcome.Failed(GateFailure.FAILED)
+        return when (outcome) {
+            is SignInOutcome.Failed -> outcome.failure
+
+            SignInOutcome.HouseholdGone -> {
+                // The account no longer belongs to this household (deleted and recreated, or removed from it).
+                removals.remove(RemovalReason.HOUSEHOLD_GONE)
+                null
+            }
+
+            SignInOutcome.SignedIn -> {
+                // Sync before anything is shown: a revocation or deletion the sync finds wipes instead of opening.
+                guarded { syncNow() }
+                null
+            }
         }
-        // Sync before anything is shown: a revocation or deletion the sync finds wipes instead of opening.
-        guarded { syncNow() }
-        return null
+    }
+
+    /**
+     * Runs under the [SyncPause]: signs in, then compares the uid before anything else; another account is signed out
+     * again before sync can resume. Then the claims, with the session's account only.
+     */
+    @Suppress("ReturnCount") // One early return per way the sign-in can end.
+    private suspend fun signInAs(session: Session, block: suspend () -> Result<Unit>): SignInOutcome {
+        val signedIn = guarded { block() } ?: Result.failure(AuthException(AuthError.Unknown))
+        val uid = (guarded { auth.current() } as? AuthState.SignedIn)?.uid
+        if (uid != null && uid != session.uid) return SignInOutcome.Failed(wrongAccount())
+        signedIn.exceptionOrNull()?.let { return SignInOutcome.Failed(it.toGateFailure()) }
+        if (uid == null) return SignInOutcome.Failed(GateFailure.FAILED)
+        val claims = guarded { auth.refresh() } ?: return SignInOutcome.Failed(GateFailure.FAILED)
+        claims.exceptionOrNull()?.let { return SignInOutcome.Failed(it.toGateFailure()) }
+        return if (claims.getOrNull() != session.householdId) SignInOutcome.HouseholdGone else SignInOutcome.SignedIn
+    }
+
+    private sealed interface SignInOutcome {
+        data object SignedIn : SignInOutcome
+
+        data object HouseholdGone : SignInOutcome
+
+        data class Failed(val failure: GateFailure) : SignInOutcome
     }
 
     private suspend fun wrongAccount(): GateFailure {

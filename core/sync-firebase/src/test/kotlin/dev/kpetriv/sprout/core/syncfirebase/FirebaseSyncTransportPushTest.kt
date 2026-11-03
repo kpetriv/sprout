@@ -2,6 +2,8 @@ package dev.kpetriv.sprout.core.syncfirebase
 
 import dev.kpetriv.sprout.core.model.DeviceId
 import dev.kpetriv.sprout.core.model.HouseholdId
+import dev.kpetriv.sprout.core.model.Role
+import dev.kpetriv.sprout.core.model.UserId
 import dev.kpetriv.sprout.core.sync.DocTypes
 import dev.kpetriv.sprout.core.sync.PushItemId
 import dev.kpetriv.sprout.core.sync.SyncError
@@ -26,12 +28,17 @@ class FirebaseSyncTransportPushTest {
     private var refreshed: AuthState? = TestData.member()
     private var deviceId: DeviceId? = DeviceId(TestData.DEVICE)
 
+    /** The session's account; the default member's. */
+    private var sessionUid: UserId? = UserId(TestData.UID)
+
     private fun transport(batchSize: Int = FirebaseSyncTransport.MAX_BATCH_WRITES) = FirebaseSyncTransport(
         firestore = firestore,
         household = object : HouseholdScope {
             override suspend fun currentHouseholdId() = hid
 
             override suspend fun currentDeviceId() = deviceId
+
+            override suspend fun currentUserId() = sessionUid
         },
         foreground = MutableStateFlow(true),
         authProbe = { refreshed },
@@ -233,6 +240,51 @@ class FirebaseSyncTransportPushTest {
         val failure = assertFailsWith<SyncException> { transport().push(emptyList(), listOf(TestData.document())) }
 
         assertEquals(SyncError.HouseholdGone, failure.error)
+    }
+
+    @Test
+    fun `another account's claims are no evidence about this session's household`() = runTest {
+        firestore.rule = { _, _ -> FirestoreCode.PERMISSION_DENIED }
+        firestore.seed("households/h1/devices/${TestData.DEVICE}", mapOf("status" to "REVOKED"))
+        // Signed in over the session as an account of no household (or another one): unconfirmed, retried later.
+        refreshed = AuthState.SignedIn(UserId("someone-else"), isAnonymous = false, claims = Claims.NONE)
+        assertEquals(
+            SyncError.Transient(),
+            transport().push(listOf(TestData.event("evt-1")), emptyList()).rejected.single().second,
+        )
+        refreshed = AuthState.SignedIn(
+            UserId("someone-else"),
+            isAnonymous = false,
+            claims = Claims(HouseholdId("other-home"), Role.PARENT, kidId = null),
+        )
+        assertEquals(
+            SyncError.Transient(),
+            transport().push(emptyList(), listOf(TestData.document())).rejected.single().second,
+        )
+
+        // With the session's own account the same claims are evidence.
+        refreshed = TestData.member(hid = null)
+        assertEquals(
+            SyncError.HouseholdGone,
+            assertFailsWith<SyncException> { transport().push(listOf(TestData.event("evt-1")), emptyList()) }.error,
+        )
+    }
+
+    @Test
+    fun `claims are no evidence when the session's account is unknown`() = runTest {
+        firestore.rule = { _, _ -> FirestoreCode.PERMISSION_DENIED }
+        sessionUid = null
+        refreshed = TestData.member(hid = null)
+        assertEquals(
+            SyncError.Transient(),
+            transport().push(listOf(TestData.event("evt-1")), emptyList()).rejected.single().second,
+        )
+        // An account that is gone is still evidence (it carries no uid to compare).
+        refreshed = AuthState.UserGone
+        assertEquals(
+            SyncError.HouseholdGone,
+            assertFailsWith<SyncException> { transport().push(listOf(TestData.event("evt-1")), emptyList()) }.error,
+        )
     }
 
     @Test

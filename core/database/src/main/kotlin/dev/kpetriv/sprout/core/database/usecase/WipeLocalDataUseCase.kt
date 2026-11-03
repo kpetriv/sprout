@@ -18,9 +18,11 @@ import javax.inject.Inject
  * state). The Keystore keys stay: the device signing key keeps this device's identity, and the wrapping key is
  * useless without the blobs.
  *
- * It returns normally; the database instance is closed, so the caller must restart the process (which lands on
- * onboarding, since there is no session). Deleting is best effort per file: a file that cannot be deleted does not
- * stop the others.
+ * The database instance is closed afterwards, so the caller must restart the process (which lands on onboarding,
+ * since there is no session). Deleting is best effort per file: a file that cannot be deleted does not stop the
+ * others, and a database that cannot be cleared or closed does not stop the files. The result says whether the wipe
+ * is complete: true only when no database file, no photo directory and no `SecretStore` blob is left, so the caller
+ * can keep the removal and try again (audit L4).
  */
 class WipeLocalDataUseCase @Inject constructor(
     private val database: SproutDatabase,
@@ -28,21 +30,33 @@ class WipeLocalDataUseCase @Inject constructor(
     private val files: LocalDataFiles,
     @param:Dispatcher(SproutDispatchers.IO) private val dispatcher: CoroutineDispatcher,
 ) {
-    @Suppress("TooGenericExceptionCaught", "SwallowedException") // The files go whatever state the database is in.
-    suspend operator fun invoke() {
-        try {
+    /** Erases everything listed above; true when it is all gone. */
+    suspend operator fun invoke(): Boolean {
+        bestEffort {
             sessions.clear()
             database.syncCursorDao().deleteAll()
-        } catch (cancellation: CancellationException) {
-            throw cancellation
-        } catch (unreadable: Exception) {
-            // A database that cannot be read is deleted below anyway.
         }
-        database.close()
-        withContext(dispatcher) {
+        // A database that cannot be read, or is already closed, is deleted below anyway.
+        bestEffort { database.close() }
+        return withContext(dispatcher) {
             files.databaseFiles.forEach { it.delete() }
             files.photoDirectory.deleteRecursively()
             files.secretsDirectory.listFiles()?.forEach { it.deleteRecursively() }
+            files.databaseFiles.none { it.exists() } &&
+                !files.photoDirectory.exists() &&
+                files.secretsDirectory.listFiles().isNullOrEmpty()
+        }
+    }
+
+    // Dropped unlogged: a storage failure may carry personal data, and the files go whatever state the database is in.
+    @Suppress("TooGenericExceptionCaught", "SwallowedException")
+    private suspend fun bestEffort(step: suspend () -> Unit) {
+        try {
+            step()
+        } catch (cancellation: CancellationException) {
+            throw cancellation
+        } catch (failure: Exception) {
+            // See above.
         }
     }
 }

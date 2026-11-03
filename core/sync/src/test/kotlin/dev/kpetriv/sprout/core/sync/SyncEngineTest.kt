@@ -473,6 +473,36 @@ class SyncEngineTest {
         assertEquals(1, maxInside)
     }
 
+    @Test
+    fun exclusiveWaitsForTheSyncInFlightAndHoldsOffTheNextOne() = runTest {
+        val pulling = CompletableDeferred<Unit>()
+        transport.beforePull = { pulling.await() }
+        val steps = mutableListOf<String>()
+        val inFlight = backgroundScope.async { engine.syncOnce().also { steps += "first sync done" } }
+        runCurrent()
+        val held = CompletableDeferred<Unit>()
+        val exclusive = backgroundScope.async {
+            engine.exclusive {
+                steps += "exclusive"
+                held.await()
+            }
+        }
+        runCurrent()
+        assertEquals(emptyList(), steps, "the sync in flight finishes first")
+
+        pulling.complete(Unit)
+        inFlight.await()
+        runCurrent()
+        val next = backgroundScope.async { engine.syncOnce().also { steps += "next sync done" } }
+        runCurrent()
+        assertEquals(listOf("first sync done", "exclusive"), steps, "no sync starts while it runs")
+
+        held.complete(Unit)
+        exclusive.await()
+        next.await()
+        assertEquals(listOf("first sync done", "exclusive", "next sync done"), steps)
+    }
+
     private fun TestScope.settle() {
         advanceTimeBy(10_000)
         runCurrent()

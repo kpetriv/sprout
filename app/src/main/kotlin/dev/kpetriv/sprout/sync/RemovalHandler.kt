@@ -6,10 +6,16 @@ import dagger.Lazy
 import dagger.hilt.android.qualifiers.ApplicationContext
 import dev.kpetriv.sprout.core.common.Dispatcher
 import dev.kpetriv.sprout.core.common.SproutDispatchers
+import dev.kpetriv.sprout.core.crypto.BlobStorage
+import dev.kpetriv.sprout.core.crypto.EncryptedLockoutStateStore
+import dev.kpetriv.sprout.core.crypto.FilesDirBlobStorage
+import dev.kpetriv.sprout.core.crypto.ParentAuthorizer
 import dev.kpetriv.sprout.core.database.LocalDataFiles
 import dev.kpetriv.sprout.core.database.SproutDatabase
 import dev.kpetriv.sprout.core.model.HouseholdId
 import dev.kpetriv.sprout.di.ApplicationScope
+import dev.kpetriv.sprout.feature.lock.EncryptedParentPinStore
+import dev.kpetriv.sprout.feature.lock.ParentSession
 import dev.kpetriv.sprout.work.PlanScheduledActionsWorker
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
@@ -47,8 +53,10 @@ class WorkManagerBackgroundWork @Inject constructor(@param:ApplicationContext pr
  * The one owner of the wipe (audit H1, review H5). A removal is stored durably ([ShellPreferences.setRemoval]) the
  * moment it is reported, whoever detects it (the sync loop, a background [SyncWorker] with no UI, the session check
  * at start, the "Sign in again" gate, sign-out); then, on the app scope, it stops [SyncController], cancels the
- * unique sync and planner work, erases this phone's household data ([LocalDataEraser]) and marks the removal wiped.
- * The first reason reported wins. A process that dies half-way resumes the wipe at the next start ([resume]).
+ * unique sync and planner work, erases this phone's household data ([LocalDataEraser]) and marks the removal wiped,
+ * but only once the eraser confirms that the database and the secrets are gone (audit L4): otherwise the removal stays
+ * stored unwiped, [failed] is set, and the wipe runs again at the next start ([resume]). The first reason reported
+ * wins. A process that dies half-way resumes the wipe at the next start too.
  *
  * The database is closed after the wipe, so the process must not go on using it: in the foreground the shell shows
  * the removed screen, whose "Continue" [acknowledge]s and restarts; in the background the process exits (the next
@@ -85,10 +93,14 @@ class RemovalHandler internal constructor(
     )
 
     private val mutableState = MutableStateFlow(preferences.removal())
+    private val mutableFailed = MutableStateFlow(false)
     private val wiping = AtomicBoolean(false)
 
     /** The removal under way or wiped, or null. */
     val state: StateFlow<Removal?> = mutableState.asStateFlow()
+
+    /** True when this process's wipe could not erase everything; the next start tries again. */
+    val failed: StateFlow<Boolean> = mutableFailed.asStateFlow()
 
     /** True once a removal was reported (wiped or not). */
     val isRemoving: Boolean get() = mutableState.value != null
@@ -124,40 +136,92 @@ class RemovalHandler internal constructor(
     private suspend fun wipe(removal: Removal) {
         bestEffort { stopSync() }
         bestEffort { work.cancelAll() }
-        bestEffort { eraser.erase() }
-        bestEffort { preferences.setLinkedAccount(null) }
-        bestEffort { preferences.setParentSetupPending(null) }
-        val wiped = removal.copy(wiped = true)
-        bestEffort { preferences.setRemoval(wiped) }
-        mutableState.value = wiped
+        if (bestEffort { eraser.erase() } == true) {
+            bestEffort { preferences.wipe() }
+            val wiped = removal.copy(wiped = true)
+            bestEffort { preferences.setRemoval(wiped) }
+            mutableState.value = wiped
+        } else {
+            // Something is left behind: the removal stays stored unwiped and the next start erases again.
+            mutableFailed.value = true
+            wiping.set(false)
+        }
         if (!inForeground()) exitProcess()
     }
 
     // Each step runs whatever the previous one did; a failure is dropped unlogged (it may carry personal data).
     @Suppress("TooGenericExceptionCaught", "SwallowedException")
-    private suspend fun bestEffort(step: suspend () -> Unit) {
-        try {
-            step()
-        } catch (cancellation: CancellationException) {
-            throw cancellation
-        } catch (failure: Exception) {
-            // See above.
-        }
+    private suspend fun <T> bestEffort(step: suspend () -> T): T? = try {
+        step()
+    } catch (cancellation: CancellationException) {
+        throw cancellation
+    } catch (failure: Exception) {
+        null
     }
 }
 
 /**
  * Clears every table and the photos in place, without closing the database (D-M3-47): used when a session of another
- * account or household is about to be saved over rows a wipe did not remove. The `SecretStore` blobs stay.
+ * account or household is about to be saved over rows a wipe did not remove. The previous parent's secrets go too
+ * ([ParentSecrets]: the PIN hash, its lockout state and the parent signing key, audit L10), so their PIN never guards
+ * the new account. The database and photo keys stay.
  */
 class LocalHouseholdRows @Inject constructor(
     private val database: SproutDatabase,
     private val files: LocalDataFiles,
+    private val parentSecrets: ParentSecrets,
     @param:Dispatcher(SproutDispatchers.IO) private val dispatcher: CoroutineDispatcher,
 ) {
-    suspend fun clear() = withContext(dispatcher) {
-        database.clearAllTables()
-        files.photoDirectory.listFiles()?.forEach { it.deleteRecursively() }
+    suspend fun clear() {
+        withContext(dispatcher) {
+            database.clearAllTables()
+            files.photoDirectory.listFiles()?.forEach { it.deleteRecursively() }
+        }
+        parentSecrets.clear()
+    }
+}
+
+/** The previous parent's local secrets, for [LocalHouseholdRows.clear]. */
+fun interface ParentSecrets {
+    suspend fun clear()
+}
+
+/**
+ * [ParentSecrets] over the `SecretStore` blobs of `feature/lock` (the PIN hash and the lockout state, each with its
+ * wrapped key), the parent signing key in the Keystore ([ParentAuthorizer.resetParentKey]; its registration lives in
+ * the tables just cleared) and [ParentSession.reload], so the parent lock asks for a new PIN.
+ */
+class StoredParentSecrets internal constructor(
+    private val storage: BlobStorage,
+    private val resetParentKey: suspend () -> Unit,
+    private val reloadParentLock: suspend () -> Unit,
+) : ParentSecrets {
+    @Inject
+    constructor(
+        @ApplicationContext context: Context,
+        @Dispatcher(SproutDispatchers.IO) dispatcher: CoroutineDispatcher,
+        authorizer: ParentAuthorizer,
+        parentSession: ParentSession,
+    ) : this(
+        storage = FilesDirBlobStorage(context, dispatcher),
+        resetParentKey = authorizer::resetParentKey,
+        reloadParentLock = parentSession::reload,
+    )
+
+    override suspend fun clear() {
+        PARENT_BLOBS.forEach { storage.delete(it) }
+        resetParentKey()
+        reloadParentLock()
+    }
+
+    companion object {
+        /** The parent's blobs in `FilesDirBlobStorage` (each data blob and the wrapped key it is encrypted under). */
+        val PARENT_BLOBS: List<String> = listOf(
+            EncryptedParentPinStore.SECRET_NAME,
+            EncryptedParentPinStore.HASH_BLOB,
+            EncryptedLockoutStateStore.SECRET_NAME,
+            EncryptedLockoutStateStore.STATE_BLOB,
+        )
     }
 }
 
@@ -172,11 +236,14 @@ class ParentSetupTracker @Inject constructor(private val preferences: ShellPrefe
     /** The digest of the household whose setup is pending ([ShellPreferences.digestOf]), or null. */
     val pending: StateFlow<String?> = mutablePending.asStateFlow()
 
-    fun start(householdId: HouseholdId) = set(ShellPreferences.digestOf(householdId))
+    fun start(householdId: HouseholdId) = set(preferences.digestOf(householdId))
 
     fun finish() = set(null)
 
-    fun isPending(householdId: HouseholdId): Boolean = mutablePending.value == ShellPreferences.digestOf(householdId)
+    fun isPending(householdId: HouseholdId): Boolean = mutablePending.value == preferences.digestOf(householdId)
+
+    /** The digest [pending] holds for [householdId]. */
+    fun digestOf(householdId: HouseholdId): String = preferences.digestOf(householdId)
 
     private fun set(digest: String?) {
         preferences.setParentSetupPending(digest)

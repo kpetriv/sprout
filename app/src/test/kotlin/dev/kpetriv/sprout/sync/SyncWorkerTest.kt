@@ -11,6 +11,7 @@ import dev.kpetriv.sprout.core.database.entity.RegistrationStatus
 import dev.kpetriv.sprout.core.sync.SyncError
 import dev.kpetriv.sprout.core.sync.SyncReport
 import dev.kpetriv.sprout.parentSession
+import dev.kpetriv.sprout.testPause
 import dev.kpetriv.sprout.trialSession
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -53,6 +54,8 @@ class SyncWorkerTest {
             syncs += 1
             return report
         }
+
+        override suspend fun <T> exclusive(block: suspend () -> T): T = block()
     }
 
     @Test
@@ -63,7 +66,7 @@ class SyncWorkerTest {
             SyncReport(householdGone = true, error = SyncError.HouseholdGone),
         )
             .forEach { report ->
-                val sync = SessionBackgroundSync(FakeSessionStore(parentSession()), Runner(report))
+                val sync = SessionBackgroundSync(FakeSessionStore(parentSession()), Runner(report), testPause())
                 assertEquals(ListenableWorker.Result.success(), worker(sync = sync).doWork())
             }
     }
@@ -71,12 +74,17 @@ class SyncWorkerTest {
     @Test
     fun `offline or signed out retries, then gives up after the last attempt`() = runTest {
         val offline =
-            SessionBackgroundSync(FakeSessionStore(parentSession()), Runner(SyncReport(error = SyncError.Transient())))
+            SessionBackgroundSync(
+                FakeSessionStore(parentSession()),
+                Runner(SyncReport(error = SyncError.Transient())),
+                testPause(),
+            )
         assertEquals(ListenableWorker.Result.retry(), worker(sync = offline).doWork())
         val signedOut =
             SessionBackgroundSync(
                 FakeSessionStore(parentSession()),
                 Runner(SyncReport(error = SyncError.Unauthenticated)),
+                testPause(),
             )
         assertEquals(ListenableWorker.Result.retry(), worker(sync = signedOut).doWork())
         assertEquals(
@@ -96,9 +104,19 @@ class SyncWorkerTest {
         ).forEach { session ->
             assertEquals(
                 ListenableWorker.Result.success(),
-                worker(sync = SessionBackgroundSync(FakeSessionStore(session), runner)).doWork(),
+                worker(sync = SessionBackgroundSync(FakeSessionStore(session), runner, testPause())).doWork(),
             )
         }
+        assertEquals(0, runner.syncs)
+    }
+
+    @Test
+    fun `while the sync pause is held the worker syncs nothing and retries later`() = runTest {
+        val runner = Runner(SyncReport())
+        val pause = testPause()
+        val sync = SessionBackgroundSync(FakeSessionStore(parentSession()), runner, pause)
+        val outcome = pause.pausing { sync.syncOnce() }
+        assertEquals(BackgroundSyncOutcome.RETRY, outcome)
         assertEquals(0, runner.syncs)
     }
 

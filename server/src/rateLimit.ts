@@ -15,9 +15,8 @@ const HOUR = 60 * 60 * 1000;
 /**
  * Per-callable limits (docs/FIREBASE.md "Rate limits", T6/T18). `uid` is keyed on the caller's uid, `ip` on the
  * client IP (requests without one share a stricter bucket, [noIpLimit]); redeemLinkCode also limits attempts per
- * code id (the HMAC of the code). deviceStatus has no user: it is keyed on the device id it asks about and the IP.
- * Values are deliberately low: every flow is a rare,
- * human-driven action.
+ * code id (the HMAC of the code). deviceStatus has no user: it is keyed on the IP, and on (hid, device id) once the
+ * signature verified. Values are deliberately low: every flow is a rare, human-driven action.
  */
 export const LIMITS = {
   createHousehold: { uid: { max: 5, windowMs: HOUR }, ip: { max: 20, windowMs: HOUR } },

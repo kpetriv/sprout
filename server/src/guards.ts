@@ -148,9 +148,19 @@ export function dataOf(request: CallableRequest): Record<string, unknown> {
 const ID = /^[A-Za-z0-9._-]{1,128}$/;
 const DEVICE_ID = /^[0-9a-f]{64}$/;
 
+/**
+ * A client-supplied id used as a Firestore document id: [ID]'s characters, and never `.`, `..` or a `__…__` id, which
+ * Firestore reserves or refuses as document ids.
+ */
 export function requireId(value: unknown, field: string): string {
-  if (typeof value !== 'string' || !ID.test(value)) throw new HttpsError('invalid-argument', `${field} is invalid`);
+  if (typeof value !== 'string' || !ID.test(value) || isReservedId(value)) {
+    throw new HttpsError('invalid-argument', `${field} is invalid`);
+  }
   return value;
+}
+
+function isReservedId(value: string): boolean {
+  return value === '.' || value === '..' || /^__.*__$/.test(value);
 }
 
 export function requireDeviceId(value: unknown, field: string): string {

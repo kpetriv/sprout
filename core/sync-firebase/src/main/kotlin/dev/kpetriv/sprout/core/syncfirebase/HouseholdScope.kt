@@ -2,6 +2,7 @@ package dev.kpetriv.sprout.core.syncfirebase
 
 import dev.kpetriv.sprout.core.model.DeviceId
 import dev.kpetriv.sprout.core.model.HouseholdId
+import dev.kpetriv.sprout.core.model.UserId
 import javax.inject.Inject
 import javax.inject.Qualifier
 
@@ -19,11 +20,21 @@ fun interface HouseholdScope {
      * is skipped. `app` implements it from the session.
      */
     suspend fun currentDeviceId(): DeviceId? = null
+
+    /**
+     * The account the synced session belongs to, or null when unknown. A forced token refresh's claims count as
+     * evidence about the household only when they are this account's ([FirebaseSyncTransport]'s membership check):
+     * another account's claims (one signed in over the session) say nothing about it. `app` implements it from the
+     * session; without it the claims are never evidence.
+     */
+    suspend fun currentUserId(): UserId? = null
 }
 
-/** [HouseholdScope] from the `hid` custom claim of the signed-in Firebase user (no device id). */
+/** [HouseholdScope] from the `hid` custom claim and uid of the signed-in Firebase user (no device id). */
 class ClaimsHouseholdScope @Inject constructor(private val session: FirebaseAuthSession) : HouseholdScope {
     override suspend fun currentHouseholdId(): HouseholdId? = (session.current() as? AuthState.SignedIn)?.claims?.hid
+
+    override suspend fun currentUserId(): UserId? = (session.current() as? AuthState.SignedIn)?.uid
 }
 
 /**

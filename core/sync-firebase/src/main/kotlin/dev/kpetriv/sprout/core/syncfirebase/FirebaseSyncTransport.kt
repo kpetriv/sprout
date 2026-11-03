@@ -405,9 +405,14 @@ internal constructor(
      * 2. this device's own `devices/{deviceId}` entry ([HouseholdScope.currentDeviceId]) reads `REVOKED`;
      * then [Membership.GONE]. Otherwise [Membership.READABLE] when `households/{hid}` can be read, else
      * [Membership.UNCONFIRMED]. A check that cannot be made (offline, refresh failed) is not evidence.
+     *
+     * The refreshed account must be the session's ([HouseholdScope.currentUserId]): when another account is signed in
+     * (or the session's account is unknown), nothing read with its credentials is evidence about this session, and
+     * the answer is [Membership.UNCONFIRMED] (audit M-2).
      */
     private suspend fun membership(hid: HouseholdId): Membership {
         val auth = authProbe.refreshedState()
+        if (auth is AuthState.SignedIn && auth.uid != household.currentUserId()) return Membership.UNCONFIRMED
         val gone = when (auth) {
             AuthState.UserGone -> true
             is AuthState.SignedIn -> auth.claims.hid != hid

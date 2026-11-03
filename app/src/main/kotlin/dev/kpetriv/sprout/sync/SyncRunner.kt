@@ -17,10 +17,15 @@ interface SyncRunner {
 
     /** One pull-then-push pass. */
     suspend fun syncOnce(): SyncReport
+
+    /** Runs [block] while no sync runs ([SyncEngine.exclusive]): waits for the sync in flight, holds off the next. */
+    suspend fun <T> exclusive(block: suspend () -> T): T
 }
 
 class EngineSyncRunner @Inject constructor(private val engine: SyncEngine) : SyncRunner {
     override fun run(scope: CoroutineScope, trigger: Flow<Unit>): Job = engine.run(scope, trigger)
 
     override suspend fun syncOnce(): SyncReport = engine.syncOnce()
+
+    override suspend fun <T> exclusive(block: suspend () -> T): T = engine.exclusive(block)
 }

@@ -6,6 +6,7 @@ import dev.kpetriv.sprout.core.sync.SyncError
 import dev.kpetriv.sprout.core.sync.SyncReport
 import dev.kpetriv.sprout.core.time.FakeClock
 import dev.kpetriv.sprout.parentSession
+import dev.kpetriv.sprout.testPause
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
@@ -27,13 +28,17 @@ class RemovalHandlerTest {
     }
     private val steps = mutableListOf<String>()
     private var foreground = true
+    private var erased = true
 
     private fun TestScope.handler() = RemovalHandler(
         scope = CoroutineScope(backgroundScope.coroutineContext + UnconfinedTestDispatcher(testScheduler)),
         preferences = preferences,
         stopSync = { steps += "stop sync" },
         work = { steps += "cancel work" },
-        eraser = { steps += "erase" },
+        eraser = {
+            steps += "erase"
+            erased
+        },
         inForeground = { foreground },
         exitProcess = { steps += "exit" },
     )
@@ -48,6 +53,40 @@ class RemovalHandlerTest {
         assertEquals(Removal(RemovalReason.DEVICE_REVOKED, wiped = true), handler.state.value)
         assertNull(preferences.linkedDigest, "no rows are left to belong to anyone")
         assertNull(preferences.parentSetup)
+        assertEquals(1, preferences.wipes, "the first pull is forgotten and the digest key replaced")
+    }
+
+    @Test
+    fun `a wipe that leaves something behind keeps the removal unwiped and runs again at the next start`() = runTest {
+        erased = false
+        preferences.firstPulls += dev.kpetriv.sprout.REAL_HOUSEHOLD
+        val handler = handler()
+        handler.remove(RemovalReason.HOUSEHOLD_GONE)
+
+        assertEquals(Removal(RemovalReason.HOUSEHOLD_GONE, wiped = false), preferences.storedRemoval)
+        assertEquals(Removal(RemovalReason.HOUSEHOLD_GONE, wiped = false), handler.state.value)
+        assertTrue(handler.failed.value)
+        assertEquals(0, preferences.wipes, "nothing is marked wiped")
+        handler.acknowledge()
+        assertEquals(Removal(RemovalReason.HOUSEHOLD_GONE, wiped = false), preferences.storedRemoval, "kept")
+
+        // The next start: the wipe runs again, and this time it erases everything.
+        steps.clear()
+        erased = true
+        val next = handler()
+        assertTrue(next.resume())
+        assertEquals(listOf("stop sync", "cancel work", "erase"), steps)
+        assertEquals(Removal(RemovalReason.HOUSEHOLD_GONE, wiped = true), preferences.storedRemoval)
+        assertFalse(next.failed.value)
+    }
+
+    @Test
+    fun `a failed wipe in the background still ends the process, so the next start retries`() = runTest {
+        erased = false
+        foreground = false
+        handler().remove(RemovalReason.DEVICE_REVOKED)
+        assertEquals(listOf("stop sync", "cancel work", "erase", "exit"), steps)
+        assertEquals(false, preferences.storedRemoval?.wiped)
     }
 
     @Test
@@ -106,9 +145,11 @@ class RemovalHandlerTest {
 
             override suspend fun syncOnce(): SyncReport =
                 SyncReport(householdGone = true, error = SyncError.HouseholdGone).also { processor.handle(it) }
+
+            override suspend fun <T> exclusive(block: suspend () -> T): T = block()
         }
 
-        val outcome = SessionBackgroundSync(FakeSessionStore(parentSession()), runner).syncOnce()
+        val outcome = SessionBackgroundSync(FakeSessionStore(parentSession()), runner, testPause()).syncOnce()
 
         assertEquals(BackgroundSyncOutcome.DONE, outcome)
         assertEquals(listOf("stop sync", "cancel work", "erase", "exit"), steps)

@@ -184,6 +184,13 @@ class HouseholdFunctionsTest {
     }
 
     @Test
+    fun `a deviceStatus request never prints its ids or signature`() {
+        val request = DeviceStatusRequest(HouseholdId("h1"), device, "c2lnbmF0dXJl")
+        assertEquals("DeviceStatusRequest(<redacted>)", request.toString())
+        assertFalse("h1" in request.toString())
+    }
+
+    @Test
     fun `the token-less transport speaks the callable protocol`() {
         assertEquals(
             "http://10.0.2.2:8787/deviceStatus",

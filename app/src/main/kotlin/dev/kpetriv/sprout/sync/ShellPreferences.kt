@@ -1,10 +1,13 @@
 package dev.kpetriv.sprout.sync
 
 import android.content.Context
+import android.util.Base64
 import dagger.hilt.android.qualifiers.ApplicationContext
 import dev.kpetriv.sprout.core.model.HouseholdId
 import dev.kpetriv.sprout.core.model.UserId
-import java.security.MessageDigest
+import java.security.SecureRandom
+import javax.crypto.Mac
+import javax.crypto.spec.SecretKeySpec
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -25,9 +28,12 @@ data class Removal(val reason: RemovalReason, val wiped: Boolean = false)
 
 /**
  * Plain (non-secret) app-shell state that must survive a wipe, which deletes the database and the `SecretStore`
- * blobs but not shared preferences. Holds no personal data: households and accounts are kept only as unsalted
- * SHA-256 digests ([digestOf]), used for equality checks, never shown or sent.
+ * blobs but not shared preferences. Holds no personal data: households and accounts are kept only as HMAC-SHA256
+ * digests under a random per-install key kept in the same preferences ([digestOf]), used for equality checks, never
+ * shown or sent; a wipe forgets them and replaces the key ([wipe]), so nothing links the household before it to the
+ * one after.
  */
+@Suppress("TooManyFunctions") // One getter and setter per stored value.
 interface ShellPreferences {
     /**
      * True once this device has belonged to a real household. Debug builds seed the demo trial household only on a
@@ -58,20 +64,40 @@ interface ShellPreferences {
     /** Stores [removal] durably (committed before returning); null clears it. */
     fun setRemoval(removal: Removal?)
 
+    /**
+     * The digest stored for [householdId] (and [uid] when given): hex HMAC-SHA256 of the ids, NUL-separated, under
+     * this install's digest key (generated on first use).
+     */
+    fun digestOf(householdId: HouseholdId, uid: UserId? = null): String
+
+    /**
+     * After a wipe: forgets the linked account, the first pull and the pending parent setup, and replaces the digest
+     * key. Keeps [wasLinked] and the [removal] (the removed screen still needs it).
+     */
+    fun wipe()
+
     companion object {
-        /** The digest stored for [householdId] (and [uid] when given): hex SHA-256 of the ids, NUL-separated. */
-        fun digestOf(householdId: HouseholdId, uid: UserId? = null): String {
+        /** The digest [digestOf] computes, under [key]. */
+        fun hmacDigest(key: ByteArray, householdId: HouseholdId, uid: UserId? = null): String {
             val text = listOfNotNull(householdId.value, uid?.value).joinToString("\u0000")
-            return MessageDigest.getInstance("SHA-256").digest(text.encodeToByteArray())
-                .joinToString("") { "%02x".format(it) }
+            val mac = Mac.getInstance(HMAC_ALGORITHM)
+            mac.init(SecretKeySpec(key, HMAC_ALGORITHM))
+            return mac.doFinal(text.encodeToByteArray()).joinToString("") { "%02x".format(it) }
         }
+
+        /** Bytes of a digest key. */
+        const val DIGEST_KEY_BYTES: Int = 32
+
+        private const val HMAC_ALGORITHM = "HmacSHA256"
     }
 }
 
 @Singleton
+@Suppress("TooManyFunctions") // One getter and setter per stored value.
 class SharedShellPreferences @Inject constructor(@param:ApplicationContext private val context: Context) :
     ShellPreferences {
     private val preferences by lazy { context.getSharedPreferences(FILE, Context.MODE_PRIVATE) }
+    private val random by lazy { SecureRandom() }
 
     override fun wasLinked(): Boolean = preferences.getBoolean(LINKED, false)
 
@@ -84,10 +110,9 @@ class SharedShellPreferences @Inject constructor(@param:ApplicationContext priva
     override fun setLinkedAccount(digest: String?) = commit { putString(LINKED_ACCOUNT, digest) }
 
     override fun firstPullDone(householdId: HouseholdId): Boolean =
-        preferences.getString(FIRST_PULL, null) == ShellPreferences.digestOf(householdId)
+        preferences.getString(FIRST_PULL, null) == digestOf(householdId)
 
-    override fun recordFirstPull(householdId: HouseholdId) =
-        commit { putString(FIRST_PULL, ShellPreferences.digestOf(householdId)) }
+    override fun recordFirstPull(householdId: HouseholdId) = commit { putString(FIRST_PULL, digestOf(householdId)) }
 
     override fun parentSetupPending(): String? = preferences.getString(PARENT_SETUP, null)
 
@@ -105,6 +130,39 @@ class SharedShellPreferences @Inject constructor(@param:ApplicationContext priva
         putBoolean(WIPED, removal?.wiped ?: false)
     }
 
+    override fun digestOf(householdId: HouseholdId, uid: UserId?): String =
+        ShellPreferences.hmacDigest(digestKey(), householdId, uid)
+
+    override fun wipe() = synchronized(this) {
+        commit {
+            remove(LINKED_ACCOUNT)
+            remove(FIRST_PULL)
+            remove(PARENT_SETUP)
+            putString(DIGEST_KEY, newKey())
+        }
+    }
+
+    /** This install's digest key, generated and stored once (a wipe replaces it). */
+    private fun digestKey(): ByteArray = synchronized(this) {
+        preferences.getString(DIGEST_KEY, null)?.let(::decodeKey) ?: run {
+            val key = newKey()
+            commit { putString(DIGEST_KEY, key) }
+            checkNotNull(decodeKey(key))
+        }
+    }
+
+    private fun newKey(): String = Base64.encodeToString(
+        ByteArray(ShellPreferences.DIGEST_KEY_BYTES).also(random::nextBytes),
+        Base64.NO_WRAP,
+    )
+
+    @Suppress("SwallowedException") // A malformed key is replaced; nothing to log.
+    private fun decodeKey(text: String): ByteArray? = try {
+        Base64.decode(text, Base64.NO_WRAP).takeIf { it.size == ShellPreferences.DIGEST_KEY_BYTES }
+    } catch (malformed: IllegalArgumentException) {
+        null
+    }
+
     private fun commit(change: android.content.SharedPreferences.Editor.() -> Unit) {
         // commit, not apply: a removal must be on disk before the wipe starts (a process death in between resumes it).
         check(preferences.edit().apply(change).commit()) { "shell preferences could not be saved" }
@@ -118,5 +176,6 @@ class SharedShellPreferences @Inject constructor(@param:ApplicationContext priva
         const val PARENT_SETUP = "parent_setup_pending"
         const val REMOVAL = "removal"
         const val WIPED = "removal_wiped"
+        const val DIGEST_KEY = "digest_key"
     }
 }

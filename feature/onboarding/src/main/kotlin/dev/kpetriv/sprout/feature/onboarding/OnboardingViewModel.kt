@@ -53,8 +53,10 @@ import javax.inject.Inject
  * so the trial outbox is never pushed into the real household.
  *
  * The parent's PIN and signing step is recorded as started ([OnboardingHousehold.startParentSetup]) before its
- * session is saved, so a process death on that step comes back to it. Back is ignored while a call runs; back while
- * waiting for approval erases whatever the polling sync pulled.
+ * session is saved, so a process death on that step comes back to it. Back is ignored while a call runs. Every exit
+ * from a PENDING session (back while waiting, a rejection) erases this phone's copy through the app's removal owner
+ * whenever household rows may be on it ([OnboardingHousehold.hasHouseholdData], audit L3); otherwise it drops the
+ * session and signs out.
  *
  * Nothing is logged; failures are [OnboardingFailure] codes only.
  */
@@ -321,9 +323,10 @@ class OnboardingViewModel @Inject constructor(
                 attemptOrNull { household.startParentSetup(householdId) }
                 show(OnboardingStep.ParentLock)
             } else {
-                attemptOrNull { sessions.clear() }
-                attemptOrNull { auth.signOut() }
+                // Revoked while waiting (or the session went): whatever the sync pulled is erased, not kept.
+                leavePending(householdId)
                 claims = null
+                pulledWhileWaiting = false
                 mutableState.value = OnboardingUiState(failure = OnboardingFailure.DEVICE_REJECTED)
             }
         }
@@ -443,17 +446,11 @@ class OnboardingViewModel @Inject constructor(
         if (step == OnboardingStep.ParentLock || step == OnboardingStep.FirstSync) return
         running?.cancel()
         waiting?.cancel()
-        val waitingForApproval = step is OnboardingStep.WaitingForApproval
-        val erase = waitingForApproval && pulledWhileWaiting
+        val pendingHousehold = claims?.householdId.takeIf { step is OnboardingStep.WaitingForApproval }
         viewModelScope.launch {
             when {
-                // The polling sync pulled household data: erase it (which also signs out) instead of keeping it.
-                erase -> attemptOrNull { household.eraseLocalHousehold() }
-
-                else -> {
-                    if (waitingForApproval) attemptOrNull { sessions.clear() }
-                    if (claims != null || step is OnboardingStep.KidCode) attemptOrNull { auth.signOut() }
-                }
+                pendingHousehold != null -> leavePending(pendingHousehold)
+                claims != null || step is OnboardingStep.KidCode -> attemptOrNull { auth.signOut() }
             }
             claims = null
         }
@@ -462,6 +459,21 @@ class OnboardingViewModel @Inject constructor(
         awaitingClaims = null
         pulledWhileWaiting = false
         mutableState.value = OnboardingUiState()
+    }
+
+    /**
+     * Leaves a PENDING session of [householdId]: when household rows may be on this phone (the polling sync pulled,
+     * or it cannot be ruled out), the app's removal owner erases them and signs out; otherwise the session is dropped
+     * and the account signed out.
+     */
+    private suspend fun leavePending(householdId: HouseholdId) {
+        val rows = pulledWhileWaiting || attemptOrNull { household.hasHouseholdData(householdId) } != false
+        if (rows) {
+            attemptOrNull { household.eraseLocalHousehold() }
+        } else {
+            attemptOrNull { sessions.clear() }
+            attemptOrNull { auth.signOut() }
+        }
     }
 
     /** A fresh pending registration key bound to a new server challenge. */
@@ -480,7 +492,8 @@ class OnboardingViewModel @Inject constructor(
             keys.discardPendingKey()
             throw OnboardingException(OnboardingFailure.UNKNOWN)
         }
-        keys.promotePendingKey()
+        // The key promoted must be the one the server accepted (a pending key replaced in between is not).
+        if (deviceIdOf(keys.promotePendingKey()) != local) throw OnboardingException(OnboardingFailure.UNKNOWN)
         return local
     }
 

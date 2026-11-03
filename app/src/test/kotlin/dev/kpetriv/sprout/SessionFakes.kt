@@ -8,6 +8,7 @@ import dev.kpetriv.sprout.core.model.HouseholdId
 import dev.kpetriv.sprout.core.model.KidId
 import dev.kpetriv.sprout.core.model.Role
 import dev.kpetriv.sprout.core.model.UserId
+import dev.kpetriv.sprout.sync.SyncPause
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlin.time.Instant
@@ -90,4 +91,29 @@ class FakeShellPreferences : dev.kpetriv.sprout.sync.ShellPreferences {
     override fun setRemoval(removal: dev.kpetriv.sprout.sync.Removal?) {
         storedRemoval = removal
     }
+
+    /** The digest key; [wipe] replaces it. */
+    var digestKey = ByteArray(dev.kpetriv.sprout.sync.ShellPreferences.DIGEST_KEY_BYTES) { 1 }
+    var wipes = 0
+
+    override fun digestOf(householdId: HouseholdId, uid: UserId?): String =
+        dev.kpetriv.sprout.sync.ShellPreferences.hmacDigest(digestKey, householdId, uid)
+
+    override fun wipe() {
+        wipes += 1
+        linkedDigest = null
+        parentSetup = null
+        firstPulls.clear()
+        digestKey = ByteArray(dev.kpetriv.sprout.sync.ShellPreferences.DIGEST_KEY_BYTES) { (wipes + 1).toByte() }
+    }
 }
+
+/** A [SyncPause] whose exclusion runs the block at once (no engine), with the pause flag as in the app. */
+fun testPause(onExclusive: () -> Unit = {}): SyncPause = SyncPause(
+    object : SyncPause.Exclusion {
+        override suspend fun <T> exclusive(block: suspend () -> T): T {
+            onExclusive()
+            return block()
+        }
+    },
+)

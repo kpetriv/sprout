@@ -44,6 +44,10 @@ interface OutboxDao {
     @Query("SELECT * FROM outbox ORDER BY seq")
     suspend fun all(): List<OutboxEntity>
 
+    /** Rows not yet accepted by the server (unsynced changes). */
+    @Query("SELECT COUNT(*) FROM outbox")
+    suspend fun count(): Int
+
     /** The `seq` of every queued row of [kind], in order. */
     @Query("SELECT seq FROM outbox WHERE kind = :kind ORDER BY seq")
     fun observeSeqs(kind: OutboxKind): Flow<List<Long>>

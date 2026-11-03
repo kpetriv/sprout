@@ -240,7 +240,7 @@ class MigrationTest {
     }
 
     @Test
-    fun migration4To5KeysTheCursorsByTheSessionsHousehold() = runTest {
+    fun migration4To5DropsEveryCursorEvenWithARealSession() = runTest {
         helper.createDatabase(TEST_DB, 4).use { db ->
             db.insertRow(
                 "session",
@@ -258,13 +258,13 @@ class MigrationTest {
         }
 
         helper.runMigrationsAndValidate(TEST_DB, 5, true, Migrations.MIGRATION_4_5).use { db ->
-            db.query("SELECT householdId, collection, cursor FROM sync_cursor ORDER BY collection").use { cursor ->
-                assertEquals(2, cursor.count)
+            db.query("SELECT COUNT(*) FROM sync_cursor").use { cursor ->
                 cursor.moveToFirst()
-                assertEquals("hh-real", cursor.getString(0))
-                assertEquals("devices", cursor.getString(1))
-                cursor.moveToNext()
-                assertEquals("2026-11-03T09:00:00Z|e1", cursor.getString(2))
+                assertEquals(0, cursor.getInt(0), "the next sync pulls everything again")
+            }
+            db.query("SELECT householdId FROM session").use { cursor ->
+                cursor.moveToFirst()
+                assertEquals("hh-real", cursor.getString(0), "the session itself stays")
             }
         }
     }

@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { assertEmulatorEnvironment, isEmulator } from '../src/config.js';
-import { clientIp, rateLimitIp, signedIn } from '../src/guards.js';
+import { clientIp, rateLimitIp, requireId, signedIn } from '../src/guards.js';
+import { HttpsError } from '../src/https.js';
 import type { CallableRequest } from '../src/https.js';
 import { noIpLimit } from '../src/rateLimit.js';
 import { call, expectCode, fns, newDevice, newUser, req, resetEmulators, type Who } from './helpers.js';
@@ -115,5 +116,30 @@ describe('emulator environment guard', () => {
     expect(() => assertEmulatorEnvironment({ FIREBASE_PROJECT_ID: 'demo-sprout', FIREBASE_AUTH_EMULATOR_HOST: 'x:1' })).toThrow();
     // The test process itself runs as the emulator.
     expect(() => assertEmulatorEnvironment()).not.toThrow();
+  });
+});
+
+describe('client-supplied ids', () => {
+  it('refuses the ids Firestore reserves or rejects as document ids with invalid-argument', () => {
+    for (const id of ['.', '..', '__x__', '__name__', '____']) {
+      expect(() => requireId(id, 'hid')).toThrow(HttpsError);
+      try {
+        requireId(id, 'hid');
+      } catch (failure) {
+        expect((failure as HttpsError).code).toBe('invalid-argument');
+      }
+    }
+  });
+
+  it('keeps every other id of the allowed characters', () => {
+    for (const id of ['hh-1', 'a.b', '_x_', '__x', 'x__', '...']) expect(requireId(id, 'hid')).toBe(id);
+  });
+
+  it('is enforced on the token-less status check', async () => {
+    const device = newDevice();
+    await expectCode(
+      call(fns.deviceStatus, req(null, { hid: '..', deviceId: device.deviceId, signature: 'AAAA' })),
+      'invalid-argument',
+    );
   });
 });

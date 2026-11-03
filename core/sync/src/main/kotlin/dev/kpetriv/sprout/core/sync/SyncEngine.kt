@@ -79,6 +79,13 @@ class SyncEngine(
     /** One full pull-then-push pass. Transport failures end up in the report; they are not thrown. */
     suspend fun syncOnce(): SyncReport = mutex.withLock { finish(sync()) }
 
+    /**
+     * Runs [block] while no sync runs: it waits for the sync in flight to finish, and no sync starts until [block]
+     * returns (later [syncOnce] calls and the [run] loop wait for it). For steps that must not overlap a sync, such
+     * as a sign-in that may replace the Firebase user. [block] must not call [syncOnce] (it would wait for itself).
+     */
+    suspend fun <T> exclusive(block: suspend () -> T): T = mutex.withLock { block() }
+
     /** Publishes [report] and hands it to [reportHandler], still under the mutex. */
     @Suppress("TooGenericExceptionCaught", "SwallowedException") // See the class comment.
     private suspend fun finish(report: SyncReport): SyncReport {

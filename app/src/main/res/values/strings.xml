@@ -37,6 +37,8 @@
   <string name="removed_wiping">Erasing the household’s data from this phone…</string>
   <string name="removed_wiped">The household’s data has been erased from this phone.</string>
   <string name="removed_continue">Continue</string>
+  <string name="removed_failed">Some of this phone’s data couldn’t be erased. Restart the app to try again.</string>
+  <string name="removed_restart">Restart</string>
 
   <!-- Sign in again (the account's credentials on this phone are gone) -->
   <string name="gate_title">Sign in again</string>
@@ -54,4 +56,18 @@
   <string name="gate_failure_cancelled">Sign-in was cancelled.</string>
   <string name="gate_failure_network">Couldn’t reach Sprout. Check the connection and try again.</string>
   <string name="gate_failure_failed">Something went wrong. Try again.</string>
+  <string name="gate_erase_title">Erase this phone’s copy?</string>
+  <string name="gate_erase_text">Your household stays in the cloud. This phone’s copy is erased and the app starts over.</string>
+  <plurals name="gate_erase_unsynced">
+    <item quantity="one">%1$d change made on this phone hasn’t synced yet. It will be lost.</item>
+    <item quantity="other">%1$d changes made on this phone haven’t synced yet. They will be lost.</item>
+  </plurals>
+  <string name="gate_erase_unsynced_unknown">Changes made on this phone that haven’t synced yet will be lost.</string>
+  <string name="gate_erase_unsynced_none">Everything on this phone has synced.</string>
+  <string name="gate_erase_pin">Parent PIN</string>
+  <string name="gate_erase_confirm">Erase</string>
+  <string name="gate_erase_cancel">Cancel</string>
+  <string name="gate_erase_wrong_pin">That PIN isn’t right.</string>
+  <string name="gate_erase_locked_out">Too many wrong PINs. Try again later.</string>
+  <string name="gate_erase_unavailable">The PIN can’t be checked on this phone right now.</string>
 </resources>

@@ -161,6 +161,8 @@ internal object CallableHttp {
         val connection = URI(url).toURL().openConnection() as HttpURLConnection
         try {
             connection.requestMethod = "POST"
+            // A redirect would resend the request (and its App Check token) somewhere else: refuse it instead.
+            connection.instanceFollowRedirects = false
             connection.connectTimeout = timeoutMs.toInt()
             connection.readTimeout = timeoutMs.toInt()
             connection.doOutput = true

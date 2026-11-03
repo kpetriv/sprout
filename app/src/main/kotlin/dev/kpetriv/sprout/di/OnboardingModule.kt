@@ -5,6 +5,7 @@ import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
 import dagger.hilt.components.SingletonComponent
+import dev.kpetriv.sprout.core.model.HouseholdId
 import dev.kpetriv.sprout.feature.onboarding.OnboardingAuth
 import dev.kpetriv.sprout.feature.onboarding.OnboardingHousehold
 import dev.kpetriv.sprout.feature.onboarding.ParentKeyRegistrar
@@ -46,6 +47,8 @@ internal abstract class OnboardingModule {
                 override val removal = removals.state
                 override val gate = gate.state
                 override val parentSetupPending = setup.pending
+
+                override fun digestOf(householdId: HouseholdId): String = setup.digestOf(householdId)
             }
     }
 }

@@ -45,6 +45,7 @@ import javax.inject.Singleton
  * messages (which can name the account) never leave this class.
  */
 @Singleton
+@Suppress("TooManyFunctions") // One function per sign-in, re-authentication and token operation.
 class FirebaseAuthSession @Inject constructor(
     private val bootstrap: FirebaseBootstrap,
     private val config: FirebaseConfig,
@@ -86,6 +87,31 @@ class FirebaseAuthSession @Inject constructor(
      * account picker is shown over it.
      */
     suspend fun signInWithGoogle(activityContext: Context): Result<Unit> = guarded {
+        auth.signInWithCredential(GoogleAuthProvider.getCredential(googleIdToken(activityContext), null)).await()
+    }
+
+    /**
+     * Re-authenticates the **signed-in** user with a Google ID token from Credential Manager
+     * (`FirebaseUser.reauthenticate`), refreshing its sign-in time (the server's 5-minute rule for `deleteHousehold`).
+     * The signed-in user is never replaced: another Google account fails with [AuthError.UserMismatch] and changes
+     * nothing. [AuthError.SignedOut] when nobody is signed in.
+     */
+    suspend fun reauthenticateWithGoogle(activityContext: Context): Result<Unit> = guarded {
+        val user = auth.currentUser ?: throw AuthException(AuthError.SignedOut)
+        user.reauthenticate(GoogleAuthProvider.getCredential(googleIdToken(activityContext), null)).await()
+    }
+
+    /**
+     * [reauthenticateWithGoogle]'s debug counterpart against the Auth emulator only ([EmulatorSupport]); refused with
+     * [AuthError.NotAvailableInThisBuild] everywhere else. Never creates an account.
+     */
+    suspend fun reauthenticateWithEmailPassword(email: String, password: String): Result<Unit> = guarded {
+        val user = auth.currentUser ?: throw AuthException(AuthError.SignedOut)
+        Emulators.reauthenticateWithEmailPassword(user, config, email, password)
+    }
+
+    /** A Google ID token from Credential Manager's account picker, shown over [activityContext]. Never logged. */
+    private suspend fun googleIdToken(activityContext: Context): String {
         val serverClientId = config.googleServerClientId ?: throw AuthException(AuthError.GoogleNotConfigured)
         val option = GetGoogleIdOption.Builder()
             .setServerClientId(serverClientId)
@@ -99,8 +125,7 @@ class FirebaseAuthSession @Inject constructor(
         ) {
             throw AuthException(AuthError.InvalidCredential)
         }
-        val idToken = GoogleIdTokenCredential.createFrom(credential.data).idToken
-        auth.signInWithCredential(GoogleAuthProvider.getCredential(idToken, null)).await()
+        return GoogleIdTokenCredential.createFrom(credential.data).idToken
     }
 
     /**
@@ -194,14 +219,24 @@ class FirebaseAuthSession @Inject constructor(
 
     private fun authErrorOf(failure: Exception): AuthError = when (failure) {
         is AuthException -> failure.error
+
         is GetCredentialCancellationException -> AuthError.Cancelled
+
         is NoCredentialException -> AuthError.NoCredential
+
         is GetCredentialException -> AuthError.Unknown
+
         is GoogleIdTokenParsingException -> AuthError.InvalidCredential
-        is FirebaseAuthInvalidUserException -> AuthError.UserDisabled
+
+        is FirebaseAuthInvalidUserException ->
+            if (isUserMismatch(failure.errorCode)) AuthError.UserMismatch else AuthError.UserDisabled
+
         is FirebaseAuthInvalidCredentialsException -> AuthError.InvalidCredential
+
         is FirebaseNetworkException -> AuthError.Network
+
         is FirebaseTooManyRequestsException -> AuthError.TooManyRequests
+
         else -> AuthError.Unknown
     }
 
@@ -210,5 +245,10 @@ class FirebaseAuthSession @Inject constructor(
         private val USER_GONE_CODES = setOf("ERROR_USER_NOT_FOUND", "ERROR_USER_DISABLED")
 
         fun isUserGone(errorCode: String): Boolean = errorCode in USER_GONE_CODES
+
+        /** The `errorCode` of a re-authentication made with another account than the signed-in one. */
+        private const val USER_MISMATCH_CODE = "ERROR_USER_MISMATCH"
+
+        fun isUserMismatch(errorCode: String): Boolean = errorCode == USER_MISMATCH_CODE
     }
 }

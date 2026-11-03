@@ -42,5 +42,13 @@ class FirebaseConfigTest {
         assertTrue(FirebaseAuthSession.isUserGone("ERROR_USER_DISABLED"))
         assertFalse(FirebaseAuthSession.isUserGone("ERROR_USER_TOKEN_EXPIRED"))
         assertFalse(FirebaseAuthSession.isUserGone("ERROR_INVALID_USER_TOKEN"))
+        assertFalse(FirebaseAuthSession.isUserGone("ERROR_USER_MISMATCH"))
+    }
+
+    @Test
+    fun `a re-authentication with another account is a mismatch, not a gone account`() {
+        assertTrue(FirebaseAuthSession.isUserMismatch("ERROR_USER_MISMATCH"))
+        assertFalse(FirebaseAuthSession.isUserMismatch("ERROR_USER_NOT_FOUND"))
+        assertFalse(FirebaseAuthSession.isUserMismatch("ERROR_USER_DISABLED"))
     }
 }

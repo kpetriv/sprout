@@ -6,6 +6,7 @@ import dev.kpetriv.sprout.core.domainledger.DeviceStatus
 import dev.kpetriv.sprout.core.model.HouseholdId
 import dev.kpetriv.sprout.core.model.KidId
 import dev.kpetriv.sprout.core.model.Role
+import dev.kpetriv.sprout.core.model.UserId
 import dev.kpetriv.sprout.core.sync.DocTypes
 import dev.kpetriv.sprout.core.sync.RemoteChange
 import dev.kpetriv.sprout.core.sync.SyncCursor
@@ -32,7 +33,11 @@ class FirebaseSyncTransportPullTest {
 
     private fun transport(pageSize: Int = FirebaseSyncTransport.PAGE_SIZE) = FirebaseSyncTransport(
         firestore = firestore,
-        household = { hid },
+        household = object : HouseholdScope {
+            override suspend fun currentHouseholdId() = hid
+
+            override suspend fun currentUserId() = UserId(TestData.UID)
+        },
         foreground = foreground,
         authProbe = { refreshed },
         pageSize = pageSize,
@@ -210,6 +215,10 @@ class FirebaseSyncTransportPullTest {
 
         // A refresh that cannot be made (offline) is no evidence.
         refreshed = null
+        assertEquals(SyncError.Transient(), pullError())
+
+        // Nor are the claims of another account signed in over the session.
+        refreshed = AuthState.SignedIn(UserId("someone-else"), isAnonymous = false, claims = Claims.NONE)
         assertEquals(SyncError.Transient(), pullError())
     }
 

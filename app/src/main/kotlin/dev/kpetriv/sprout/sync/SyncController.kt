@@ -18,6 +18,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.map
@@ -47,6 +48,9 @@ interface ForegroundState {
  * it; a cleared session stops it; a REVOKED session is a removal. Anything that fails the loop (a throwing trigger, a
  * store error) restarts it after a delay that doubles up to [MAX_RESTART_DELAY_MS] (review M3).
  *
+ * While the [SyncPause] is held (the "Sign in again" gate or the delete re-authentication is signing in), the loop is
+ * stopped and [syncNow] does nothing; it starts again when the pause ends.
+ *
  * Reports are handled by [SyncReportProcessor], which the engine calls for every report; [status] is its line.
  */
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -62,6 +66,7 @@ class SyncController @Inject constructor(
     private val preferences: ShellPreferences,
     private val foreground: ForegroundState,
     private val removals: HouseholdRemovals,
+    private val pause: SyncPause,
 ) {
     private val started = AtomicBoolean(false)
 
@@ -92,7 +97,7 @@ class SyncController @Inject constructor(
 
     /** One sync now; null when it could not run at all. Its report is processed like any other. */
     @Suppress("TooGenericExceptionCaught", "SwallowedException") // A store failure is reported as "no report".
-    suspend fun syncNow(): SyncReport? = if (stopped) {
+    suspend fun syncNow(): SyncReport? = if (stopped || pause.isPaused) {
         null
     } else {
         try {
@@ -132,14 +137,19 @@ class SyncController @Inject constructor(
     }
 
     private suspend fun followSessions() {
-        sessions.observe()
-            .map { it?.let(SyncedSession::of) }
+        var previous: SyncedSession? = null
+        combine(
+            sessions.observe().map { it?.let(SyncedSession::of) }.distinctUntilChanged(),
+            pause.paused,
+        ) { session, paused -> session to paused }
             .distinctUntilChanged()
-            .collectLatest { session ->
-                reports.resetStatus()
+            .collectLatest { (session, paused) ->
+                if (session != previous) reports.resetStatus()
+                previous = session
                 when {
                     session == null -> Unit
                     session.revoked -> removals.remove(RemovalReason.DEVICE_REVOKED)
+                    paused -> Unit
                     else -> runFor(session)
                 }
             }
@@ -149,7 +159,7 @@ class SyncController @Inject constructor(
         preferences.markLinked()
         // Backfill for sessions saved before the local rows' account was recorded.
         if (preferences.linkedAccount() == null) {
-            preferences.setLinkedAccount(ShellPreferences.digestOf(session.householdId, session.uid))
+            preferences.setLinkedAccount(preferences.digestOf(session.householdId, session.uid))
         }
         scheduler.schedulePeriodic()
         coroutineScope {

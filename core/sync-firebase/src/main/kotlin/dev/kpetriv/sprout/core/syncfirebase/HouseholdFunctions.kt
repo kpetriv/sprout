@@ -215,20 +215,6 @@ class HouseholdFunctions @Inject constructor(private val invoker: CallableInvoke
         const val DELETE_HOUSEHOLD: String = "deleteHousehold"
         const val DEVICE_STATUS: String = "deviceStatus"
 
-        /** The retired version 1 approval domain, kept only so [approvalPayload] still compiles. */
-        const val APPROVE_DEVICE_DOMAIN: String = "sprout/approve-device/v1"
-
-        /**
-         * The version 1 approval bytes, `"sprout/approve-device/v1" || 0x00 || deviceId`, which the server no longer
-         * accepts: approvals are now bound to the household and the ID token ([DeviceProof.approveDevicePayload]).
-         */
-        @Deprecated(
-            "The server refuses version 1 approvals; use HouseholdAdminFunctions.approveDevice (app) or " +
-                "DeviceProof.approveDevicePayload with the ID token hash.",
-        )
-        fun approvalPayload(deviceId: DeviceId): ByteArray =
-            APPROVE_DEVICE_DOMAIN.encodeToByteArray() + 0.toByte() + deviceId.value.encodeToByteArray()
-
         private const val DEFAULT_TIMEOUT_MS = 30_000L
 
         /** exportHousehold and deleteHousehold run up to 300 s on the server. */

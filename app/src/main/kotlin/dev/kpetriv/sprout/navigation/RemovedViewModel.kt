@@ -26,11 +26,12 @@ import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dev.kpetriv.sprout.R
 import dev.kpetriv.sprout.sync.AppRestarter
+import dev.kpetriv.sprout.sync.Removal
 import dev.kpetriv.sprout.sync.RemovalHandler
 import dev.kpetriv.sprout.sync.RemovalReason
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import javax.inject.Inject
 
@@ -38,38 +39,58 @@ import javax.inject.Inject
 sealed interface RemovedEvent {
     /** "Continue" once the data is erased: forget the removal and restart into onboarding. */
     data object Continue : RemovedEvent
+
+    /** "Restart" after a wipe that could not erase everything: the next start erases again. */
+    data object Restart : RemovedEvent
+}
+
+/** Where the wipe is. */
+enum class RemovedProgress {
+    WIPING,
+    WIPED,
+
+    /** Something could not be erased; the removal stays and the next start tries again (audit L4). */
+    FAILED,
 }
 
 /**
  * The blocking removed screen (M3 §6). The wipe itself is [RemovalHandler]'s, started the moment the removal was
  * reported (from sync, a worker, the session check, the gate or sign-out); this only shows its progress and, once the
- * data is gone, "Continue", which restarts the app into onboarding.
+ * data is gone, "Continue", which restarts the app into onboarding; after a wipe that failed, "Restart" restarts the
+ * app, whose start resumes the wipe.
  */
 @HiltViewModel
 class RemovedViewModel @Inject constructor(private val removals: RemovalHandler, private val restarter: AppRestarter) :
     ViewModel() {
-    /** True once the data is gone. */
-    val state: StateFlow<Boolean> = removals.state.map { it?.wiped == true }
-        .stateIn(viewModelScope, SharingStarted.Eagerly, removals.state.value?.wiped == true)
+    val state: StateFlow<RemovedProgress> = combine(removals.state, removals.failed, ::progressOf)
+        .stateIn(viewModelScope, SharingStarted.Eagerly, progressOf(removals.state.value, removals.failed.value))
 
     fun onEvent(event: RemovedEvent) {
         when (event) {
-            RemovedEvent.Continue -> if (state.value) {
+            RemovedEvent.Continue -> if (state.value == RemovedProgress.WIPED) {
                 removals.acknowledge()
                 restarter.restart()
             }
+
+            RemovedEvent.Restart -> if (state.value == RemovedProgress.FAILED) restarter.restart()
         }
+    }
+
+    private fun progressOf(removal: Removal?, failed: Boolean): RemovedProgress = when {
+        removal?.wiped == true -> RemovedProgress.WIPED
+        failed -> RemovedProgress.FAILED
+        else -> RemovedProgress.WIPING
     }
 }
 
 @Composable
 internal fun RemovedRoute(reason: RemovalReason, modifier: Modifier = Modifier) {
     val viewModel: RemovedViewModel = hiltViewModel()
-    val erased by viewModel.state.collectAsStateWithLifecycle()
+    val progress by viewModel.state.collectAsStateWithLifecycle()
     RemovedScreen(
         reason = reason,
-        erased = erased,
-        onContinue = { viewModel.onEvent(RemovedEvent.Continue) },
+        progress = progress,
+        onEvent = viewModel::onEvent,
         modifier = modifier,
     )
 }
@@ -77,8 +98,8 @@ internal fun RemovedRoute(reason: RemovalReason, modifier: Modifier = Modifier) 
 @Composable
 internal fun RemovedScreen(
     reason: RemovalReason,
-    erased: Boolean,
-    onContinue: () -> Unit,
+    progress: RemovedProgress,
+    onEvent: (RemovedEvent) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Surface(modifier = modifier.fillMaxSize()) {
@@ -109,12 +130,29 @@ internal fun RemovedScreen(
                 style = MaterialTheme.typography.bodyLarge,
                 textAlign = TextAlign.Center,
             )
-            if (erased) {
-                Text(stringResource(R.string.removed_wiped), textAlign = TextAlign.Center)
-                Button(onClick = onContinue) { Text(stringResource(R.string.removed_continue)) }
-            } else {
-                CircularProgressIndicator()
-                Text(stringResource(R.string.removed_wiping), textAlign = TextAlign.Center)
+            when (progress) {
+                RemovedProgress.WIPED -> {
+                    Text(stringResource(R.string.removed_wiped), textAlign = TextAlign.Center)
+                    Button(onClick = { onEvent(RemovedEvent.Continue) }) {
+                        Text(stringResource(R.string.removed_continue))
+                    }
+                }
+
+                RemovedProgress.FAILED -> {
+                    Text(
+                        stringResource(R.string.removed_failed),
+                        color = MaterialTheme.colorScheme.error,
+                        textAlign = TextAlign.Center,
+                    )
+                    Button(onClick = { onEvent(RemovedEvent.Restart) }) {
+                        Text(stringResource(R.string.removed_restart))
+                    }
+                }
+
+                RemovedProgress.WIPING -> {
+                    CircularProgressIndicator()
+                    Text(stringResource(R.string.removed_wiping), textAlign = TextAlign.Center)
+                }
             }
         }
     }

@@ -327,7 +327,7 @@ class OnboardingViewModelTest {
     }
 
     @Test
-    fun `a second phone that is revoked instead of approved is told so and goes back to the start`() = runTest {
+    fun `a second phone revoked instead of approved is told so, and what its sync pulled is erased`() = runTest {
         auth.claims[0] = parentClaims()
         val viewModel = viewModel()
         viewModel.signIn()
@@ -335,7 +335,34 @@ class OnboardingViewModelTest {
         runCurrent()
         assertEquals(OnboardingUiState(failure = OnboardingFailure.DEVICE_REJECTED), viewModel.state.value)
         assertNull(sessions.session.value)
+        assertTrue("erase" in log.calls, "the poll pulled: the removal owner erases and signs out")
+        assertFalse("clearSession" in log.calls)
+    }
+
+    @Test
+    fun `a rejection before anything was pulled drops the session and signs out`() = runTest {
+        household.syncSucceeds = false
+        auth.claims[0] = parentClaims()
+        val viewModel = viewModel()
+        viewModel.signIn()
+        sessions.session.value = sessions.session.value?.copy(deviceStatus = RegistrationStatus.REVOKED)
+        runCurrent()
+        assertEquals(OnboardingUiState(failure = OnboardingFailure.DEVICE_REJECTED), viewModel.state.value)
+        assertNull(sessions.session.value)
+        assertFalse("erase" in log.calls)
         assertTrue("signOut" in log.calls)
+    }
+
+    @Test
+    fun `back after a restart erases rows an earlier run pulled, though this run pulled nothing`() {
+        household.syncSucceeds = false
+        household.householdData = true
+        sessions.session.value =
+            Session(PARENT_UID, HOUSEHOLD, Role.PARENT, null, NEW_DEVICE, RegistrationStatus.PENDING, clock.now())
+        val viewModel = viewModel()
+        viewModel.onEvent(OnboardingEvent.Back)
+        assertTrue("erase" in log.calls)
+        assertFalse("clearSession" in log.calls)
     }
 
     @Test

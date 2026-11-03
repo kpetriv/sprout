@@ -6,6 +6,7 @@ import dev.kpetriv.sprout.core.database.entity.RegistrationStatus
 import dev.kpetriv.sprout.core.sync.SyncReport
 import dev.kpetriv.sprout.core.time.FakeClock
 import dev.kpetriv.sprout.parentSession
+import dev.kpetriv.sprout.testPause
 import dev.kpetriv.sprout.trialSession
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -40,7 +41,11 @@ class SyncControllerTest {
         }
 
         override suspend fun syncOnce(): SyncReport = SyncReport()
+
+        override suspend fun <T> exclusive(block: suspend () -> T): T = block()
     }
+
+    private val pause = testPause()
 
     private val sessions = FakeSessionStore()
     private val runner = FakeRunner()
@@ -89,6 +94,7 @@ class SyncControllerTest {
             override fun changes(): Flow<Boolean> = foregroundChanges
         },
         removals = { removals += it },
+        pause = pause,
     ).also { it.start() }
 
     @Test
@@ -108,7 +114,7 @@ class SyncControllerTest {
         assertEquals(1, periodic)
         assertEquals(true, preferences.linked, "a device that synced once never seeds the demo trial again")
         assertEquals(
-            ShellPreferences.digestOf(parentSession().householdId, parentSession().uid),
+            preferences.digestOf(parentSession().householdId, parentSession().uid),
             preferences.linkedDigest,
             "the account the local rows belong to is recorded",
         )
@@ -116,6 +122,24 @@ class SyncControllerTest {
         assertEquals(1, runner.started, "an approval of the same device keeps the loop")
         sessions.session.value = null
         assertEquals(0, runner.running)
+    }
+
+    @Test
+    fun `the sync pause stops the loop and syncNow until it ends, then the loop starts again`() = runTest {
+        sessions.session.value = parentSession()
+        val controller = controller()
+        assertEquals(1, runner.running)
+        val seen = mutableListOf<Any?>()
+
+        pause.pausing<Unit> {
+            seen += runner.running
+            seen += controller.syncNow()
+        }
+
+        assertEquals(listOf<Any?>(0, null), seen, "no loop and no one-off sync while paused")
+        assertEquals(1, runner.running, "the loop is back once the pause ends")
+        assertEquals(2, runner.started)
+        assertEquals(SyncReport(), controller.syncNow())
     }
 
     @Test

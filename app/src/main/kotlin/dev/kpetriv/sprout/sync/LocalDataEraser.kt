@@ -7,7 +7,8 @@ import javax.inject.Inject
 
 /** Erases this device's household data and signs out of Firebase (M3 §6); the caller restarts the app. */
 fun interface LocalDataEraser {
-    suspend fun erase()
+    /** True when the database, the photos and the secrets are verifiably gone. */
+    suspend fun erase(): Boolean
 }
 
 /**
@@ -20,7 +21,7 @@ class WipingLocalDataEraser @Inject constructor(
     private val auth: FirebaseAuthSession,
 ) : LocalDataEraser {
     @Suppress("TooGenericExceptionCaught", "SwallowedException") // The wipe must run whatever the sign-out does.
-    override suspend fun erase() {
+    override suspend fun erase(): Boolean {
         try {
             auth.signOut()
         } catch (cancellation: CancellationException) {
@@ -28,6 +29,6 @@ class WipingLocalDataEraser @Inject constructor(
         } catch (failure: Exception) {
             // Signed out locally anyway once the session is gone; nothing to log.
         }
-        wipe()
+        return wipe()
     }
 }

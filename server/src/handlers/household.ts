@@ -83,7 +83,8 @@ export interface ExportBundle {
 /**
  * exportHousehold({ callerDeviceId, signature }) → the household's data as one JSON bundle (right of access and
  * portability, PRIVACY.md; D-M3-7). Signed by an ACTIVE parent device over
- * `"sprout/export-household/v1" || 0x00 || hid || 0x00 || {}`. Refused with `resource-exhausted` above 4 MB
+ * `"sprout/export-household/v2" || 0x00 || hid || 0x00 || sha256(raw ID token) || 0x00 || {}` (crypto.ts
+ * `callablePayload`). Refused with `resource-exhausted` above 4 MB
  * (config.ts `MAX_EXPORT_BYTES`), below the host's 4.5 MB response limit.
  */
 export async function exportHousehold(request: CallableRequest): Promise<ExportBundle> {
@@ -124,14 +125,17 @@ export async function exportHousehold(request: CallableRequest): Promise<ExportB
 
 /**
  * deleteHousehold({ confirmation: hid, callerDeviceId, signature }) → { deleted: true }. Signed by an ACTIVE parent
- * device over `"sprout/delete-household/v1" || 0x00 || hid || 0x00 || {"confirmation":"<hid>"}`, from a session signed
- * in within the last 5 minutes (ID token `auth_time`; otherwise `failed-precondition`, sign in again).
+ * device over `"sprout/delete-household/v2" || 0x00 || hid || 0x00 || sha256(raw ID token) || 0x00 ||
+ * {"confirmation":"<hid>"}` (crypto.ts `callablePayload`), from a session signed in within the last 5 minutes (ID
+ * token `auth_time`; otherwise `failed-precondition`, sign in again).
  *
- * Deletes the `members` rows first (the rules key every client permission off them, so clients lose access before
- * anything else goes), then `households/{hid}` recursively, the household's outstanding link codes, and for every uid
- * that was a member or owns a registered device (a revoked kid's member row is already gone): its registration
- * challenge, its `userHouseholds` row and its Auth user (kids and parents, the caller included). Finally records the
- * deletion as `deletionRecords/{autoId}` with a hash of the id and counts only (right to erasure, PRIVACY.md).
+ * Records the deletion first, as `deletionRecords/{autoId}` with a hash of the id and counts only (right to erasure,
+ * PRIVACY.md), so a deletion that fails half-way still answers `householdGone` to `deviceStatus` (which reports it only
+ * when the household or the device is missing). Then deletes the `members` rows (the rules key every client
+ * permission off them, so clients lose access before anything else goes), `households/{hid}` recursively, the
+ * household's outstanding link codes, and for every uid that was a member or owns a registered device (a revoked
+ * kid's member row is already gone): its registration challenge, its `userHouseholds` row and its Auth user (kids and
+ * parents, the caller included). A retry after a partial failure records the deletion again (counts as then left).
  */
 export async function deleteHousehold(request: CallableRequest): Promise<{ deleted: true }> {
   const caller = await parent(request, 'deleteHousehold');
@@ -165,6 +169,9 @@ export async function deleteHousehold(request: CallableRequest): Promise<{ delet
     ]),
   ];
 
+  const hidHash = sha256Hex(hid);
+  await db.collection('deletionRecords').add({ hidHash, at: FieldValue.serverTimestamp(), counts });
+
   const memberWriter = db.bulkWriter();
   members.docs.forEach((m) => void memberWriter.delete(m.ref));
   await memberWriter.close();
@@ -182,8 +189,6 @@ export async function deleteHousehold(request: CallableRequest): Promise<{ delet
 
   const result = uids.length > 0 ? await auth.deleteUsers(uids) : { successCount: 0, failureCount: 0 };
 
-  const hidHash = sha256Hex(hid);
-  await db.collection('deletionRecords').add({ hidHash, at: FieldValue.serverTimestamp(), counts });
   log.info('household.deleted', {
     hidHash,
     ...counts,

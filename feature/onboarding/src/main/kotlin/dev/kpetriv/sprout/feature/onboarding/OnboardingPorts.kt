@@ -172,6 +172,12 @@ interface OnboardingHousehold {
     suspend fun parentSetupPending(householdId: HouseholdId): Boolean
 
     /**
+     * True when rows of [householdId] may be on this phone: anything a sync pulled (the registry mirror, pull cursors)
+     * or wrote. A phone waiting for approval that leaves onboarding erases them instead of keeping them (audit L3).
+     */
+    suspend fun hasHouseholdData(householdId: HouseholdId): Boolean
+
+    /**
      * Erases this phone's copy of the household (a phone that leaves onboarding after its sync pulled household data)
      * and signs out; the app then shows the erase screen and restarts.
      */

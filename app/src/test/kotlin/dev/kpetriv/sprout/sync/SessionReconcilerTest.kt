@@ -65,10 +65,11 @@ class SessionReconcilerTest {
     }
 
     @Test
-    fun `an account that is gone keeps the session and starts the wipe`() = runTest {
+    fun `an account that is gone asks the registry through the gate before anything is wiped`() = runTest {
         val store = FakeSessionStore(parentSession())
         assertEquals(parentSession(), reconcile(store, AuthState.UserGone))
-        assertEquals(listOf(RemovalReason.HOUSEHOLD_GONE), removals)
+        assertEquals(1, lost, "the gate runs the token-less deviceStatus and wipes only on REVOKED or gone")
+        assertEquals(emptyList(), removals)
         assertEquals(0, store.clears)
     }
 

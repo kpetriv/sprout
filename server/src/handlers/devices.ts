@@ -187,8 +187,10 @@ export type DeviceStatusValue = 'ACTIVE' | 'PENDING' | 'REVOKED' | 'UNKNOWN';
  * - Otherwise the signature must verify with the stored public key (`permission-denied` if not), whatever the status,
  *   and the answer is `{ status, householdGone: false }`.
  *
- * Nothing else is revealed (no role, uid, lamport or timestamps). Calls are limited per device id and per IP, counted
- * before anything is read.
+ * Nothing else is revealed (no role, uid, lamport or timestamps). Every call counts against its IP (or the shared
+ * no-address bucket) before anything is read; the per-device bucket, keyed on (hid, deviceId), counts only requests
+ * whose signature verified, so an unsigned flood cannot lock a device out of its own status check. An UNKNOWN answer
+ * is unsigned and verifies nothing (docs/FIREBASE.md says what it reveals).
  */
 export async function deviceStatus(
   request: CallableRequest,
@@ -199,7 +201,6 @@ export async function deviceStatus(
   const deviceId = requireDeviceId(data.deviceId, 'deviceId');
   const signature = decodeBase64(data.signature, 'signature', 256);
   const ip = clientIp(request);
-  await hit('deviceStatus', 'device', deviceId, LIMITS.deviceStatus.device);
   if (ip === null) {
     await hit('deviceStatus', 'noip', 'shared', noIpLimit('deviceStatus'));
   } else {
@@ -222,6 +223,8 @@ export async function deviceStatus(
     log.warn('device.statusRefused', { deviceId });
     throw new HttpsError('permission-denied', 'Device signature does not verify');
   }
+  // Counted only for a verified request, so nobody without the key can use up a device's allowance.
+  await hit('deviceStatus', 'device', `${hid}|${deviceId}`, LIMITS.deviceStatus.device);
   const stored: unknown = device.get('status');
   const status: DeviceStatusValue = stored === 'ACTIVE' || stored === 'PENDING' || stored === 'REVOKED' ? stored : 'UNKNOWN';
   log.info('device.statusChecked', { hid, deviceId, status, householdGone: false });

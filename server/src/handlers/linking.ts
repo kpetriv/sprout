@@ -13,7 +13,8 @@ import { deviceDocument } from './registry.js';
 /**
  * createLinkCode({ kidId, callerDeviceId, signature }) → { code, expiresAt }: an 8-character single-use code (10
  * minutes) a kid device redeems to join the household as that kid (T6). Signed by an ACTIVE parent device of the
- * caller over `"sprout/create-link-code/v1" || 0x00 || hid || 0x00 || {"kidId":"…"}`. Stored only as
+ * caller over `"sprout/create-link-code/v2" || 0x00 || hid || 0x00 || sha256(raw ID token) || 0x00 ||
+ * {"kidId":"…"}` (crypto.ts `callablePayload`). Stored only as
  * `linkCodes/{hmacSha256(LINK_CODE_HMAC_KEY, code)}`; the code is never logged. At most five live codes per household.
  */
 export async function createLinkCode(request: CallableRequest): Promise<{ code: string; expiresAt: number }> {

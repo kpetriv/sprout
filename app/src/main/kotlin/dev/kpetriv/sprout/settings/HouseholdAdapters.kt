@@ -33,6 +33,7 @@ import dev.kpetriv.sprout.sync.GateAuth
 import dev.kpetriv.sprout.sync.HouseholdRemovals
 import dev.kpetriv.sprout.sync.RemovalReason
 import dev.kpetriv.sprout.sync.SyncController
+import dev.kpetriv.sprout.sync.SyncPause
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
@@ -121,10 +122,10 @@ class SessionAccountControl @Inject constructor(
 /**
  * Settings → Household data over `exportHousehold` / `deleteHousehold` (with this device's proof), the "sign in again
  * to confirm" step and the wipe. The server answers `failed-precondition` to a deletion without a sign-in in the last
- * 5 minutes (D-M3-34): that is [AdminFailure.REAUTH_REQUIRED]. Signing in again must keep the session's account; a
- * different one is signed out again. After a deletion the wipe is the removal owner's ([HouseholdRemovals]): it runs
- * on the app scope, so the settings screen leaving composition when the session goes cannot cut it short, and the
- * erase screen then restarts the app.
+ * 5 minutes (D-M3-34): that is [AdminFailure.REAUTH_REQUIRED]. Confirming re-authenticates the session's own account
+ * ([RecentSignIn]); it never replaces it. After a deletion the wipe is the removal owner's ([HouseholdRemovals]): it
+ * runs on the app scope, so the settings screen leaving composition when the session goes cannot cut it short, and
+ * the erase screen then restarts the app.
  */
 class FunctionsHouseholdData @Inject constructor(
     private val admin: HouseholdAdminFunctions,
@@ -146,14 +147,17 @@ class FunctionsHouseholdData @Inject constructor(
 }
 
 /**
- * A fresh sign-in of the session's own parent account (for `deleteHousehold`'s 5-minute rule): Google in release,
- * the debug e-mail/password path against the Auth emulator (the current account's address, the typed password).
- * The uid must be unchanged afterwards; another account is signed out again ([AdminFailure.WRONG_ACCOUNT]).
+ * A fresh sign-in of the session's own parent account for `deleteHousehold`'s 5-minute rule (audit M-1): the signed-in
+ * user is **re-authenticated** (`FirebaseUser.reauthenticate`, [GateAuth.reauthenticateWithGoogle] in release, the
+ * debug e-mail/password path against the Auth emulator with the current account's address and the typed password),
+ * so it is never replaced; another account fails with [AdminFailure.WRONG_ACCOUNT] and changes nothing. It runs under
+ * the [SyncPause], so no sync overlaps it.
  */
 class RecentSignIn @Inject constructor(
     private val sessions: SessionStore,
     private val auth: GateAuth,
     private val accounts: AccountInfoReader,
+    private val pause: SyncPause,
 ) {
     val usesPassword: Boolean get() = auth.usesEmailPassword
 
@@ -161,24 +165,28 @@ class RecentSignIn @Inject constructor(
     suspend fun signInAgain(activityContext: Context, password: String?): Result<Unit> {
         val session = sessions.get()?.takeUnless { it.isLocalTrial }
             ?: return Result.failure(AdminException(AdminFailure.NOT_ALLOWED))
-        val signedIn = if (auth.usesEmailPassword) {
-            val email = accounts.accountInfo()?.email
-            if (email == null || password.isNullOrEmpty()) {
-                return Result.failure(AdminException(AdminFailure.SIGN_IN_FAILED))
-            }
-            auth.signInWithEmailPassword(email, password)
-        } else {
-            auth.signInWithGoogle(activityContext)
-        }
-        signedIn.exceptionOrNull()?.let { failure ->
-            val error = (failure as? AuthException)?.error
-            val code = if (error == AuthError.Network) AdminFailure.NETWORK else AdminFailure.SIGN_IN_FAILED
-            return Result.failure(AdminException(code))
-        }
-        val uid = (auth.current() as? AuthState.SignedIn)?.uid
-        if (uid != session.uid) {
-            auth.signOut()
+        if ((auth.current() as? AuthState.SignedIn)?.uid != session.uid) {
+            // Not the session's account (or nobody): nothing to re-authenticate; the gate handles a lost sign-in.
             return Result.failure(AdminException(AdminFailure.WRONG_ACCOUNT))
+        }
+        val email = if (auth.usesEmailPassword) accounts.accountInfo()?.email else null
+        if (auth.usesEmailPassword && (email == null || password.isNullOrEmpty())) {
+            return Result.failure(AdminException(AdminFailure.SIGN_IN_FAILED))
+        }
+        val reauthenticated = pause.pausing {
+            if (email != null && password != null) {
+                auth.reauthenticateWithEmailPassword(email, password)
+            } else {
+                auth.reauthenticateWithGoogle(activityContext)
+            }
+        }
+        reauthenticated.exceptionOrNull()?.let { failure ->
+            val code = when ((failure as? AuthException)?.error) {
+                AuthError.UserMismatch -> AdminFailure.WRONG_ACCOUNT
+                AuthError.Network -> AdminFailure.NETWORK
+                else -> AdminFailure.SIGN_IN_FAILED
+            }
+            return Result.failure(AdminException(code))
         }
         return Result.success(Unit)
     }

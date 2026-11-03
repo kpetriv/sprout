@@ -138,6 +138,9 @@ class FakeOnboardingHousehold(
     var syncSucceeds = true
     var setupPending: HouseholdId? = null
 
+    /** What [hasHouseholdData] answers: rows a sync (here or before a restart) may have left. */
+    var householdData = false
+
     /** Runs on every sync, for example to mirror an approval into the session. */
     var onSync: suspend () -> Unit = {}
 
@@ -177,6 +180,8 @@ class FakeOnboardingHousehold(
     }
 
     override suspend fun parentSetupPending(householdId: HouseholdId): Boolean = setupPending == householdId
+
+    override suspend fun hasHouseholdData(householdId: HouseholdId): Boolean = householdData
 
     override suspend fun eraseLocalHousehold() {
         log += "erase"

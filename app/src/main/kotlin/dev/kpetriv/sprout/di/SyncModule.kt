@@ -17,19 +17,23 @@ import dev.kpetriv.sprout.sync.BackgroundWork
 import dev.kpetriv.sprout.sync.CredentialCheck
 import dev.kpetriv.sprout.sync.CredentialGate
 import dev.kpetriv.sprout.sync.EngineSyncRunner
+import dev.kpetriv.sprout.sync.EraseConfirmation
 import dev.kpetriv.sprout.sync.FirebaseAuthStateReader
 import dev.kpetriv.sprout.sync.FirebaseGateAuth
 import dev.kpetriv.sprout.sync.ForegroundState
 import dev.kpetriv.sprout.sync.GateAuth
 import dev.kpetriv.sprout.sync.HouseholdRemovals
 import dev.kpetriv.sprout.sync.LocalDataEraser
+import dev.kpetriv.sprout.sync.LocalEraseConfirmation
 import dev.kpetriv.sprout.sync.OutboxSyncTrigger
+import dev.kpetriv.sprout.sync.ParentSecrets
 import dev.kpetriv.sprout.sync.ProcessAppRestarter
 import dev.kpetriv.sprout.sync.RejectionAuditor
 import dev.kpetriv.sprout.sync.RemovalHandler
 import dev.kpetriv.sprout.sync.SessionBackgroundSync
 import dev.kpetriv.sprout.sync.SharedShellPreferences
 import dev.kpetriv.sprout.sync.ShellPreferences
+import dev.kpetriv.sprout.sync.StoredParentSecrets
 import dev.kpetriv.sprout.sync.SyncRunner
 import dev.kpetriv.sprout.sync.SyncScheduler
 import dev.kpetriv.sprout.sync.SyncTrigger
@@ -87,6 +91,12 @@ internal abstract class SyncModule {
 
     @Binds
     abstract fun gateAuth(impl: FirebaseGateAuth): GateAuth
+
+    @Binds
+    abstract fun parentSecrets(impl: StoredParentSecrets): ParentSecrets
+
+    @Binds
+    abstract fun eraseConfirmation(impl: LocalEraseConfirmation): EraseConfirmation
 
     companion object {
 

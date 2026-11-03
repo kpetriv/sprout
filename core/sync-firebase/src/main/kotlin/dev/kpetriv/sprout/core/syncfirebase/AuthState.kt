@@ -92,6 +92,12 @@ sealed class AuthError(val code: String) {
     /** The account was disabled or deleted (a revoked kid device, a deleted household). */
     data object UserDisabled : AuthError("user-disabled")
 
+    /**
+     * A re-authentication ([FirebaseAuthSession.reauthenticateWithGoogle]) was made with another account than the
+     * signed-in one (`ERROR_USER_MISMATCH`). The signed-in user is unchanged.
+     */
+    data object UserMismatch : AuthError("user-mismatch")
+
     data object Network : AuthError("network")
 
     data object TooManyRequests : AuthError("too-many-requests")
