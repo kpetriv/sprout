@@ -87,6 +87,10 @@ class HouseholdScreenshotTest : ScreenshotTest() {
 
     @Test
     fun account() = screenshot.captureLightDark("settings_account") {
-        AccountScreen(AccountUiState(householdId = HouseholdId("hh7f3k2q9xabc")), onEvent = {}, onBack = {})
+        AccountScreen(
+            AccountUiState(email = "parent@example.com", householdId = HouseholdId("hh7f3k2q9xabc")),
+            onEvent = {},
+            onBack = {},
+        )
     }
 }

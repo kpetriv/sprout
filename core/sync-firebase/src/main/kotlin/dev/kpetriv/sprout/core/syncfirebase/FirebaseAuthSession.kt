@@ -49,7 +49,8 @@ class FirebaseAuthSession @Inject constructor(
     private val bootstrap: FirebaseBootstrap,
     private val config: FirebaseConfig,
     @param:ApplicationContext private val context: Context,
-) : AuthProbe {
+) : AuthProbe,
+    AccountInfoReader {
     private val auth: FirebaseAuth by lazy { FirebaseAuth.getInstance(bootstrap.ensureInitialised(context)) }
 
     /** Last claims read per uid, used when a fresh token cannot be fetched (offline with an expired token). */
@@ -109,6 +110,13 @@ class FirebaseAuthSession @Inject constructor(
     suspend fun signInWithEmailPassword(email: String, password: String): Result<Unit> = guarded {
         Emulators.signInWithEmailPassword(auth, config, email, password)
     }
+
+    /**
+     * The signed-in parent's [AccountInfo] (its e-mail address), for the Account screen only: read from the current
+     * user each time and kept nowhere. Null when signed out or anonymous.
+     */
+    override suspend fun accountInfo(): AccountInfo? =
+        auth.currentUser?.takeUnless { it.isAnonymous }?.let { AccountInfo(it.email?.takeIf(String::isNotBlank)) }
 
     /** Signs a kid device in anonymously (before it redeems a link code). */
     suspend fun signInAnonymously(): Result<Unit> = guarded { auth.signInAnonymously().await() }

@@ -119,6 +119,9 @@
   <string name="feature_parent_home_sync_last">Synced %1$s</string>
   <string name="feature_parent_home_sync_failing">Couldn’t sync just now. Sprout keeps trying.</string>
   <string name="feature_parent_home_sync_blocked">Sync is blocked: the server refused an entry from this phone (%1$s). Later entries from this phone wait behind it.</string>
+  <string name="feature_parent_home_signing_key_title">Signing key not registered with the household</string>
+  <string name="feature_parent_home_signing_key_text">Your fingerprint signing works on this phone, but the household never received the key, so your other devices can’t check your signatures. Retry in Settings with your PIN and fingerprint.</string>
+  <string name="feature_parent_home_signing_key_retry">Retry</string>
   <string name="feature_parent_home_devices_title">New device waiting</string>
   <string name="feature_parent_home_devices_text">A parent’s phone wants to join the household. Compare the code with that phone before approving.</string>
   <string name="feature_parent_home_devices_review">Review</string>
@@ -139,9 +142,11 @@
   <string name="feature_parent_home_reason_device_not_active">From a removed or unapproved phone</string>
   <string name="feature_parent_home_reason_wrong_account">Wrong account for its phone</string>
   <string name="feature_parent_home_reason_role">Not allowed from a kid’s phone</string>
+  <string name="feature_parent_home_reason_wrong_kid">Wrong kid for this phone</string>
   <string name="feature_parent_home_reason_bad_signature">Signature didn’t match</string>
   <string name="feature_parent_home_reason_parent_signature_missing">Missing a parent’s signature</string>
   <string name="feature_parent_home_reason_parent_signature_invalid">Parent’s signature didn’t match</string>
   <string name="feature_parent_home_reason_out_of_order">Out of order</string>
+  <string name="feature_parent_home_reason_conflicting_history">Conflicting history from this phone</string>
   <string name="feature_parent_home_reason_other">Didn’t pass the ledger’s checks</string>
 </resources>

@@ -50,6 +50,17 @@ class ParentHomeScreenshotTest : ScreenshotTest() {
     }
 
     @Test
+    fun `signing key not registered with the household`() =
+        screenshot.captureLightDark("parent_home_signing_key_not_registered") {
+            ParentHomeScreen(
+                ParentHomePreviewData.signingKeyNotRegistered(),
+                onEvent = {},
+                onSignNow = {},
+                links = ParentHomeLinks(),
+            )
+        }
+
+    @Test
     fun `sync blocked`() = screenshot.captureLightDark("parent_home_sync_blocked") {
         ParentHomeScreen(ParentHomePreviewData.syncBlocked(), onEvent = {}, onSignNow = {}, links = ParentHomeLinks())
     }

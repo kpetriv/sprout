@@ -16,7 +16,11 @@ import { log } from '../log.js';
 import { attestDevice, issueChallenge } from '../registration.js';
 import { deviceDocument } from './registry.js';
 
-/** beginDeviceRegistration() → { challenge }: 32 random bytes (base64) for the key attestation, valid 10 minutes. */
+/**
+ * beginDeviceRegistration() → { challenge }: 32 random bytes (base64) for a key attestation, valid 10 minutes. Its only
+ * effect is replacing `challenges/{uid}` (hash and expiry). The same challenge serves a device key (createHousehold,
+ * registerParentDevice, redeemLinkCode) and a parent authorisation key (registerParentKey); one is outstanding per uid.
+ */
 export async function beginDeviceRegistration(request: CallableRequest): Promise<{ challenge: string }> {
   const caller = await signedIn(request, 'beginDeviceRegistration');
   const { challenge } = await issueChallenge(caller.uid);

@@ -124,7 +124,7 @@ Release builds install the **Play Integrity** provider, debug builds the debug p
 
 - **A household with a single parent device has no in-app recovery** if that phone is lost: a new phone stays PENDING, and only an ACTIVE parent device can approve or revoke. Recovery is a manual operator procedure (`docs/RUNBOOK.md`).
 - **Reads are gated by membership, not by device.** Any signed-in session of a member uid reads the household, including a PENDING second phone of that account and a stolen phone that signs back in with the parent's Google account. Writes need an ACTIVE device. Accepted until App Check enforcement (M8); see the threat model.
-- **The client does not yet send an attestation chain for the parent key** (the key is created without an attestation challenge), so in production, where unattested keys are refused, `registerParentKey` fails and parent signing cannot be enabled. To be fixed before the first production build.
+- The parent key is created with the challenge from `beginDeviceRegistration` and its attestation chain is sent to `registerParentKey` (M3 final pass); a registration that fails is shown as "not registered with the household" with a retry that renews the key (D-M3-39). Only the emulator's software chain has exercised this path so far.
 - Revoking a parent device signs that parent out everywhere, the calling phone included.
 - No real device attestation chain is in the test fixtures yet; the Google-rooted path is tested only with a self-generated chain.
 - Rate limits and the HMAC key depend on server configuration (`LINK_CODE_HMAC_KEY`, Firestore TTL policies) that the code cannot check for itself.

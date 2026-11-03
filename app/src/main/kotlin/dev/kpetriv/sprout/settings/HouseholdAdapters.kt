@@ -12,6 +12,8 @@ import dev.kpetriv.sprout.core.database.SproutDatabase
 import dev.kpetriv.sprout.core.database.entity.DeviceEntity
 import dev.kpetriv.sprout.core.model.DeviceId
 import dev.kpetriv.sprout.core.model.KidId
+import dev.kpetriv.sprout.core.model.Role
+import dev.kpetriv.sprout.core.syncfirebase.AccountInfoReader
 import dev.kpetriv.sprout.core.syncfirebase.FunctionsError
 import dev.kpetriv.sprout.core.syncfirebase.FunctionsException
 import dev.kpetriv.sprout.core.syncfirebase.HouseholdFunctions
@@ -91,17 +93,20 @@ class FunctionsKidLinking @Inject constructor(private val admin: HouseholdAdminF
 }
 
 /**
- * Settings → Account over the session. The parent's e-mail is not available yet: core/sync-firebase's `AuthState`
- * deliberately carries no e-mail address, so the screen says "Signed in with your parent account" (seam: expose the
- * signed-in user's e-mail from `FirebaseAuthSession` and fill [AccountInfo.email] here).
+ * Settings → Account over the session. The parent's e-mail address is read on demand, each time the session is
+ * observed, from [AccountInfoReader] (`FirebaseAuthSession.accountInfo`): core/sync-firebase's `AuthState` carries no
+ * e-mail on purpose. It is personal data, so it only flows to the Account screen's state: never stored, never logged
+ * ([AccountInfo.toString] hides it). A kid session and the trial household show none.
  */
 class SessionAccountControl @Inject constructor(
     private val sessions: SessionStore,
     private val auth: dev.kpetriv.sprout.core.syncfirebase.FirebaseAuthSession,
+    private val accounts: AccountInfoReader,
 ) : AccountControl {
     override fun observe(): Flow<AccountInfo> = sessions.observe().map { session ->
+        val parent = session?.takeIf { !it.isLocalTrial && it.role == Role.PARENT }
         AccountInfo(
-            email = null,
+            email = parent?.let { accounts.accountInfo()?.email },
             householdId = session?.householdId?.takeUnless { session.isLocalTrial },
             trial = session?.isLocalTrial ?: false,
         )

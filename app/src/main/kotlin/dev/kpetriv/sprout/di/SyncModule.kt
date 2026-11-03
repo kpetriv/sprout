@@ -8,6 +8,8 @@ import dagger.Provides
 import dagger.hilt.InstallIn
 import dagger.hilt.components.SingletonComponent
 import dev.kpetriv.sprout.core.database.RoomOutboxSource
+import dev.kpetriv.sprout.core.syncfirebase.AccountInfoReader
+import dev.kpetriv.sprout.core.syncfirebase.FirebaseAuthSession
 import dev.kpetriv.sprout.sync.AppRestarter
 import dev.kpetriv.sprout.sync.AuthStateReader
 import dev.kpetriv.sprout.sync.BackgroundSync
@@ -56,6 +58,10 @@ internal abstract class SyncModule {
 
     @Binds
     abstract fun appRestarter(impl: ProcessAppRestarter): AppRestarter
+
+    /** The Account screen's e-mail address, read on demand and never stored (`FirebaseAuthSession.accountInfo`). */
+    @Binds
+    abstract fun accountInfoReader(impl: FirebaseAuthSession): AccountInfoReader
 
     @Binds
     abstract fun localDataEraser(impl: WipingLocalDataEraser): LocalDataEraser

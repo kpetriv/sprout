@@ -39,7 +39,8 @@ import javax.inject.Singleton
  * equals this one ([ConflictResolver]), is accepted (pushes are idempotent); an event whose id is taken by a
  * different hash is stored as the conflicting copy `events/{eventId}__{hash}`; anything else is
  * `Permanent("permission-denied")`. Parent keys are never pushed: the server registers them (`registerParentKey`,
- * D-M3-34) and the rules refuse client writes, so a `parent_key` document is `Permanent("unsupported")` unsent.
+ * D-M3-34) and the rules refuse client writes, so there is no `parent_key` document type and one is
+ * `Permanent("unknown-doc-type")` unsent.
  *
  * **Household gone** needs positive evidence ([membership]), because a bare `PERMISSION_DENIED` also follows a
  * revoked session (sign in again), a rules deploy or a clock skew: the account is gone ([AuthState.UserGone] from a
@@ -256,14 +257,8 @@ internal constructor(
         val collection = FirestoreLayout.collectionOf(envelope.docType)
         val fields = when {
             collection == null -> return Either.Rejected(id to SyncError.Permanent(UNKNOWN_DOC_TYPE))
-
             envelope.householdId != hid -> return Either.Rejected(id to SyncError.Permanent(WRONG_HOUSEHOLD))
-
-            // Server-registered only (D-M3-34): the rules refuse a client write to parentKeys.
-            envelope.docType == DocTypes.PARENT_KEY -> return Either.Rejected(id to SyncError.Permanent(UNSUPPORTED))
-
             envelope.signature == null -> return Either.Rejected(id to SyncError.Permanent(UNSIGNED))
-
             else -> StoredShapes.documentFields(envelope)
         }
         val data = fields + (FirestoreFacade.SERVER_RECEIVED_AT to ServerTimestamp)
@@ -477,9 +472,6 @@ internal constructor(
         const val WRONG_HOUSEHOLD: String = "wrong-household"
         const val UNKNOWN_DOC_TYPE: String = "unknown-doc-type"
         const val UNSIGNED: String = "unsigned"
-
-        /** A `parent_key` document: parent keys are registered by the server only (D-M3-34). */
-        const val UNSUPPORTED: String = "unsupported"
 
         private const val REVOKED = "REVOKED"
 

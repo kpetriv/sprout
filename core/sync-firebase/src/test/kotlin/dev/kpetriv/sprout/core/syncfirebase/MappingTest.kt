@@ -67,7 +67,7 @@ class MappingTest {
         assertEquals("households/h1/events/e1", FirestoreLayout.event(hid, "e1"))
         assertEquals("households/h1/events/e1__ff", FirestoreLayout.conflictingEvent(hid, "e1", "ff"))
         assertEquals("choreSubmissions", FirestoreLayout.collectionOf(DocTypes.CHORE_SUBMISSION))
-        assertEquals("parentKeys", FirestoreLayout.collectionOf(DocTypes.PARENT_KEY))
+        assertNull(FirestoreLayout.collectionOf("parent_key"), "parent keys are registry entries, not documents")
         assertNull(FirestoreLayout.collectionOf("gadget"))
         assertEquals(
             listOf(

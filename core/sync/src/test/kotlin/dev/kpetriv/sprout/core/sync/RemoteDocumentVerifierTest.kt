@@ -13,6 +13,7 @@ import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertSame
 
@@ -180,7 +181,9 @@ class RemoteDocumentVerifierTest {
             val expected = if (type == DocTypes.CHORE_SUBMISSION) Role.KID else Role.PARENT
             assertEquals(expected, DocTypes.writerRole(type))
         }
-        assertEquals(10, DocTypes.all.toSet().size)
+        // Nine client-written types; parent keys are server registry entries, not documents (D-M3-34).
+        assertEquals(9, DocTypes.all.toSet().size)
+        assertFalse(DocTypes.isKnown("parent_key"))
         assertFailsWith<IllegalArgumentException> { DocTypes.writerRole("nope") }
     }
 }

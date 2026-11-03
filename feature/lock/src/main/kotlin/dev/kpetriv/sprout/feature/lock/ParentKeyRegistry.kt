@@ -23,20 +23,39 @@ interface ParentKeyRegistry {
     /**
      * Registers [publicKey] as the household's parent key and turns required parent signatures on. Throws
      * [IllegalStateException] when a key is already registered: replacing one is [replaceParentKey]'s job.
+     *
+     * [attestationChain] is the key's Keystore attestation (DER certificates, leaf first) bound to the challenge from
+     * [ParentKeyChallengeSource]; empty when there was no challenge (trial household) or Keystore could not attest.
+     * The app sends it with the server registration (`registerParentKey`, D-M3-34).
      */
-    suspend fun registerParentKey(publicKey: PublicKeyBytes)
+    suspend fun registerParentKey(publicKey: PublicKeyBytes, attestationChain: List<ByteArray>)
 
     /**
      * Replaces the registered key with [publicKey] after a renewal, keeping the lamport from which signatures are
-     * required. Throws [IllegalStateException] when no key is registered.
+     * required. Throws [IllegalStateException] when no key is registered. [attestationChain] as for
+     * [registerParentKey].
      */
-    suspend fun replaceParentKey(publicKey: PublicKeyBytes)
+    suspend fun replaceParentKey(publicKey: PublicKeyBytes, attestationChain: List<ByteArray>)
 
     /**
      * Records the D-M2-1 state for a device without a usable strong biometric: the household policy exists with
      * parent signatures off. Never removes a registered key.
      */
     suspend fun recordSigningUnavailable()
+}
+
+/**
+ * The server's registration challenge for the parent key's Keystore attestation (`beginDeviceRegistration`,
+ * D-M3-34), fetched by [ParentKeyEnrolment] and [ParentKeyRenewal] after the PIN check and right before the key is
+ * created, so the 10-minute challenge is fresh when `registerParentKey` consumes it. The app adapts the callable.
+ */
+fun interface ParentKeyChallengeSource {
+    /**
+     * A fresh challenge, or null when there is no household session (the trial household): the key is then created
+     * without attestation and stays local. Throws when a household exists but the challenge cannot be fetched
+     * (offline): the key change fails and nothing changes.
+     */
+    suspend fun registrationChallenge(): ByteArray?
 }
 
 /** Whether this device can sign as the household's parent right now. See [ParentKeyStatusCheck]. */

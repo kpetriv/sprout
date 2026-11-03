@@ -195,6 +195,7 @@ private fun ParentArea(
                         onOpenKid = { kidId -> backStack.push(WalletKey(kidId, WalletMode.PARENT)) },
                         onSetUpSync = onSetUpSync,
                         onReviewDevice = { deviceId -> backStack.push(DevicesKey(deviceId)) },
+                        onRegisterSigningKey = { backStack.push(SecurityKey) },
                     )
                 }
                 parentEntries(backStack)
@@ -255,6 +256,13 @@ private fun EntryProviderScope<NavKey>.parentEntries(backStack: NavBackStack<Nav
             appVersion = BuildConfig.VERSION_NAME,
             initialSection = SettingsSection.DEVICES,
             reviewDeviceId = key.reviewDeviceId,
+        )
+    }
+    entry<SecurityKey> {
+        SettingsRoute(
+            onBack = pop,
+            appVersion = BuildConfig.VERSION_NAME,
+            initialSection = SettingsSection.PARENT_SECURITY,
         )
     }
 }

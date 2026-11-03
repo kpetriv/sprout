@@ -98,7 +98,7 @@ class FirebaseSyncTransportPushTest {
 
     @Test
     fun `every document type goes to its own collection`() = runTest {
-        val documents = DocTypes.all.filter { it != DocTypes.PARENT_KEY }.map { TestData.document(docType = it) }
+        val documents = DocTypes.all.map { TestData.document(docType = it) }
 
         transport().push(emptyList(), documents)
 
@@ -114,12 +114,12 @@ class FirebaseSyncTransportPushTest {
     @Test
     fun `a parent key document is never written - keys are registered by the server`() = runTest {
         val key = TestData.parentKeyDocument()
-        val unsigned = TestData.document(docType = DocTypes.PARENT_KEY, docId = "c".repeat(64), signature = null)
+        val unsigned = TestData.document(docType = "parent_key", docId = "c".repeat(64), signature = null)
 
         val result = transport().push(emptyList(), listOf(key, unsigned))
 
         assertEquals(
-            listOf(key, unsigned).map { PushItemId.ofDocument(it) to SyncError.Permanent("unsupported") },
+            listOf(key, unsigned).map { PushItemId.ofDocument(it) to SyncError.Permanent("unknown-doc-type") },
             result.rejected,
         )
         assertTrue(firestore.commits.isEmpty())

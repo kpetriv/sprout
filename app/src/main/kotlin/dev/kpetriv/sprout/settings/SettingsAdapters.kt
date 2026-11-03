@@ -92,8 +92,11 @@ internal fun ParentKeyChangeResult.toOutcome(): SigningKeyOutcome = when (this) 
  * Only `feature/lock`'s PIN-gated enrolment and renewal call the writing methods.
  *
  * In a real household (not the trial) the key is then also registered with the backend's `parentKeys` registry
- * ([BackendParentKeyRegistrar], M3 §1), best effort: the key reaches the other devices as a `parent_key` document
- * anyway, and a failure (offline) must not undo the local registration the PIN and fingerprint just proved.
+ * ([BackendParentKeyRegistrar], D-M3-34) with its attestation chain. That is best effort: a failure (offline,
+ * refused) must not undo the local registration the PIN and fingerprint just proved. It leaves the key "not
+ * registered with the household" ([HouseholdPolicyRepository.observeServerRegistrationPending]), shown on the
+ * dashboard and in Settings → Security with a retry that renews the key (D-M3-39); other devices learn a key only
+ * from the registry.
  */
 class HouseholdParentKeyRegistry @Inject constructor(
     private val policies: HouseholdPolicyRepository,
@@ -104,21 +107,21 @@ class HouseholdParentKeyRegistry @Inject constructor(
 ) : ParentKeyRegistry {
     override suspend fun registeredParentKey(): PublicKeyBytes? = policies.get()?.parentPublicKey?.let(::PublicKeyBytes)
 
-    override suspend fun registerParentKey(publicKey: PublicKeyBytes) {
+    override suspend fun registerParentKey(publicKey: PublicKeyBytes, attestationChain: List<ByteArray>) {
         check(policies.get()?.hasParentKey != true) { "A parent key is already registered" }
         useCase.register(publicKey.encoded)
-        publish(publicKey)
+        publish(publicKey, attestationChain)
     }
 
-    override suspend fun replaceParentKey(publicKey: PublicKeyBytes) {
+    override suspend fun replaceParentKey(publicKey: PublicKeyBytes, attestationChain: List<ByteArray>) {
         check(policies.get()?.hasParentKey == true) { "No parent key is registered" }
         useCase.register(publicKey.encoded)
-        publish(publicKey)
+        publish(publicKey, attestationChain)
     }
 
-    private suspend fun publish(publicKey: PublicKeyBytes) {
+    private suspend fun publish(publicKey: PublicKeyBytes, attestationChain: List<ByteArray>) {
         val session = sessions.get() ?: return
-        if (!session.isLocalTrial) registrar.register(publicKey.encoded)
+        if (!session.isLocalTrial) registrar.register(publicKey.encoded, attestationChain)
     }
 
     override suspend fun recordSigningUnavailable() {

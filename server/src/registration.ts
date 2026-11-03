@@ -63,6 +63,14 @@ function policyViolation(result: AttestationResult, policy: KeyPolicy): string |
  * outstanding, unexpired challenge, the chain must verify ([verifyAttestation]), the attested key must be the
  * submitted one and [policy] must hold. The challenge is consumed on success. The verified boot state is logged,
  * never enforced.
+ *
+ * Where unattested keys are allowed, a chain that passes every check except that it ends outside the Google roots
+ * (`UNTRUSTED_ROOT`: the Android emulator's software Keystore chain) is recorded as `NONE` with an
+ * `attestation.unverified` warning instead of being refused, since its claims prove nothing; the challenge must still
+ * be outstanding and match, the attested key must still be the submitted one, and the challenge is consumed. [policy]
+ * applies to verified chains only. Every other failure (CHALLENGE_MISMATCH, BAD_SIGNATURE, EXPIRED, REVOKED,
+ * KEY_MISMATCH, a policy violation on a verified chain, ...) is refused in every mode, and outside the emulator (with
+ * `ALLOW_UNATTESTED` unset) `UNTRUSTED_ROOT` is refused too.
  */
 export async function attestKey(
   uid: string,
@@ -87,13 +95,27 @@ export async function attestKey(
   try {
     const challenge = readAttestationChallenge(chainValue);
     if (sha256Hex(challenge) !== stored.get('hash')) throw new AttestationError('CHALLENGE_MISMATCH');
-    result = await verifyAttestation(chainValue, challenge, key.spki, verifyOptions);
+    result = await verifyAttestation(chainValue, challenge, key.spki, {
+      ...verifyOptions,
+      allowUntrustedRoot: allowUnattested(),
+    });
   } catch (e) {
     if (e instanceof AttestationError) {
       log.warn('attestation.rejected', { reason: e.reason, keyId: key.deviceId });
       throw new HttpsError('permission-denied', 'Key attestation rejected');
     }
     throw e;
+  }
+  if (!result.trusted) {
+    // Only reachable where unattested keys are allowed (allowUntrustedRoot above). The key is the submitted one and
+    // the chain carried the outstanding challenge, but nothing in it is vouched for: record it as unattested.
+    if (!result.keyMatches) {
+      log.warn('attestation.rejected', { reason: 'KEY_MISMATCH', keyId: key.deviceId });
+      throw new HttpsError('permission-denied', 'Key attestation rejected');
+    }
+    log.warn('attestation.unverified', { reason: 'UNTRUSTED_ROOT', keyId: key.deviceId });
+    await challengeRef.delete();
+    return 'NONE';
   }
   const violation = result.keyMatches ? policyViolation(result, policy) : 'KEY_MISMATCH';
   if (violation !== undefined) {

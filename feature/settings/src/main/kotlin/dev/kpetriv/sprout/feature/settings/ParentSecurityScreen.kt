@@ -81,7 +81,8 @@ fun ParentSecurityScreen(
 
 @Composable
 private fun SigningCard(state: ParentSecurityUiState, onEvent: (ParentSecurityEvent) -> Unit) {
-    val warning = state.signing == SigningStatus.UNAVAILABLE || state.signing == SigningStatus.KEY_INVALIDATED
+    val warning = state.signing == SigningStatus.UNAVAILABLE || state.signing == SigningStatus.KEY_INVALIDATED ||
+        state.signing == SigningStatus.NOT_REGISTERED_WITH_HOUSEHOLD
     val colors = if (warning) {
         CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.errorContainer,
@@ -96,7 +97,12 @@ private fun SigningCard(state: ParentSecurityUiState, onEvent: (ParentSecurityEv
                 text = stringResource(
                     when (state.signing) {
                         SigningStatus.UNAVAILABLE -> R.string.feature_settings_security_signing_unavailable_title
+
                         SigningStatus.KEY_INVALIDATED -> R.string.feature_settings_security_signing_invalidated_title
+
+                        SigningStatus.NOT_REGISTERED_WITH_HOUSEHOLD ->
+                            R.string.feature_settings_security_signing_not_shared_title
+
                         SigningStatus.ON, SigningStatus.NOT_SET_UP -> R.string.feature_settings_security_signing_title
                     },
                 ),
@@ -132,6 +138,7 @@ private fun SigningAction(state: ParentSecurityUiState, onEvent: (ParentSecurity
     val label = when (state.signing) {
         SigningStatus.NOT_SET_UP -> R.string.feature_settings_security_signing_register
         SigningStatus.KEY_INVALIDATED -> R.string.feature_settings_security_signing_renew
+        SigningStatus.NOT_REGISTERED_WITH_HOUSEHOLD -> R.string.feature_settings_security_signing_retry
         SigningStatus.ON, SigningStatus.UNAVAILABLE -> return
     }
     Button(onClick = { onEvent(ParentSecurityEvent.StartSigningKeyChange) }, enabled = !state.isRegistering) {
@@ -198,6 +205,8 @@ private fun ParentSecurityUiState.signingDetailRes(): Int = when (signing) {
     SigningStatus.NOT_SET_UP -> R.string.feature_settings_security_signing_not_set_up
 
     SigningStatus.KEY_INVALIDATED -> R.string.feature_settings_security_signing_invalidated
+
+    SigningStatus.NOT_REGISTERED_WITH_HOUSEHOLD -> R.string.feature_settings_security_signing_not_shared
 
     SigningStatus.UNAVAILABLE -> when (availability) {
         ParentAuthAvailability.NOT_ENROLLED -> R.string.feature_settings_security_signing_not_enrolled

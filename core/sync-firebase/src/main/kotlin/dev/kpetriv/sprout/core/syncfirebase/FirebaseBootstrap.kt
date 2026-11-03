@@ -59,7 +59,14 @@ class FirebaseBootstrap internal constructor(
         /** The Emulator Suite project (`.firebaserc`); `demo-` projects never reach production services. */
         const val DEMO_PROJECT_ID: String = "demo-sprout"
         private const val DEMO_APPLICATION_ID = "1:0:android:sprout"
-        private const val DEMO_API_KEY = "demo"
+
+        /**
+         * A format placeholder, not a secret: the emulator-only `demo-sprout` app needs *some* API key, and the
+         * Functions SDK's `firebase-iid` dependency refuses one that does not look like `AIza` + 35 characters of
+         * `[0-9A-Za-z_-]` (it throws before any request leaves the phone). This one has the right shape and is
+         * obviously fake; the emulators accept any key, and a `demo-` project never reaches a real service.
+         */
+        internal const val DEMO_API_KEY = "AIza" + "00000000000000000000000000000000000"
 
         const val AUTH_EMULATOR_PORT: Int = 9099
         const val FIRESTORE_EMULATOR_PORT: Int = 8080

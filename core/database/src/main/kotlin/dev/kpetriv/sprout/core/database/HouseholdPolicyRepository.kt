@@ -2,17 +2,26 @@ package dev.kpetriv.sprout.core.database
 
 import dev.kpetriv.sprout.core.crypto.DeviceSigner
 import dev.kpetriv.sprout.core.database.entity.AuditAction
+import dev.kpetriv.sprout.core.database.entity.AuditLogEntity
 import dev.kpetriv.sprout.core.database.entity.HouseholdPolicyEntity
 import dev.kpetriv.sprout.core.database.entity.ParentKeyEntity
 import dev.kpetriv.sprout.core.domainledger.Currency
 import dev.kpetriv.sprout.core.domainledger.EventAuthor
 import dev.kpetriv.sprout.core.domainledger.JvmSha256Hasher
+import dev.kpetriv.sprout.core.domainledger.LedgerJson
 import dev.kpetriv.sprout.core.domainledger.LedgerPolicy
 import dev.kpetriv.sprout.core.domainledger.toHex
 import dev.kpetriv.sprout.core.sync.DocTypes
 import dev.kpetriv.sprout.core.time.Clock
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
+import kotlinx.serialization.SerializationException
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.put
 import javax.inject.Inject
 import kotlin.time.Instant
@@ -96,6 +105,18 @@ interface HouseholdPolicyRepository {
      * The default does nothing (test fakes); the Room repository implements it.
      */
     suspend fun recordServerRegisteredKey(fingerprint: String, validFromLamport: Long): Boolean = false
+
+    /**
+     * True while this device's registered parent key is not known to the household (D-M3-39): a real household
+     * (not the trial), a key in the policy, and no [recordServerRegisteredKey] for that key's fingerprint, because the
+     * `registerParentKey` call after the local enrolment failed (offline, refused). Other devices then refuse this
+     * phone's parent signatures. It cannot be retried silently, since the attestation is bound to a consumed
+     * challenge: the parent re-enrols (Settings → Security, "Retry", which renews the key). False otherwise.
+     *
+     * The default is never pending (test fakes); the Room repository derives it from the policy, the session and the
+     * `PARENT_KEY_REGISTERED` audit rows with `server: true`.
+     */
+    fun observeServerRegistrationPending(): Flow<Boolean> = flowOf(false)
 }
 
 /**
@@ -134,7 +155,7 @@ class RoomHouseholdPolicyRepository @Inject constructor(
                 put("fromLamport", from)
                 put("validFromLamport", validFrom)
                 put("replacedKey", current.hasParentKey)
-                put("server", false)
+                put(SERVER_DETAIL, false)
             }
             database.parentKeyDao().upsert(
                 ParentKeyEntity(
@@ -160,6 +181,20 @@ class RoomHouseholdPolicyRepository @Inject constructor(
         }
     }
 
+    override fun observeServerRegistrationPending(): Flow<Boolean> = combine(
+        policies.observe(),
+        database.sessionDao().observe(),
+        database.auditLogDao().observeAction(AuditAction.PARENT_KEY_REGISTERED),
+    ) { policy, session, registrations ->
+        val key = policy?.parentPublicKey
+        if (key == null || session == null || session.householdId == LocalTrial.HOUSEHOLD) {
+            false
+        } else {
+            val fingerprint = JvmSha256Hasher.sha256(key).toHex()
+            registrations.none { it.target == fingerprint && it.deviceId == session.deviceId && it.isServerRecord() }
+        }
+    }.distinctUntilChanged()
+
     override suspend fun recordServerRegisteredKey(fingerprint: String, validFromLamport: Long): Boolean {
         require(validFromLamport >= 0) { "validFromLamport must not be negative" }
         val author = authors.currentAuthor()
@@ -176,7 +211,7 @@ class RoomHouseholdPolicyRepository @Inject constructor(
                 if (target > current) database.advanceDeviceLamport(author.deviceId, target)
                 writes.auditOnly(author, AuditAction.PARENT_KEY_REGISTERED, fingerprint) {
                     put("validFromLamport", validFromLamport)
-                    put("server", true)
+                    put(SERVER_DETAIL, true)
                 }
                 true
             }
@@ -212,6 +247,16 @@ class RoomHouseholdPolicyRepository @Inject constructor(
         return row.copy(lamport = lamport, stamp = stamp).also { policies.upsert(it) }
     }
 }
+
+/** A `PARENT_KEY_REGISTERED` row written by [RoomHouseholdPolicyRepository.recordServerRegisteredKey]. */
+private fun AuditLogEntity.isServerRecord(): Boolean = try {
+    val details = LedgerJson.json.parseToJsonElement(detailsJson) as? JsonObject
+    (details?.get(SERVER_DETAIL) as? JsonPrimitive)?.booleanOrNull == true
+} catch (expected: SerializationException) {
+    false
+}
+
+private const val SERVER_DETAIL = "server"
 
 internal fun HouseholdPolicyEntity.toDomain() = HouseholdPolicy(
     requireParentSignature = requireParentSignature,

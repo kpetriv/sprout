@@ -18,7 +18,10 @@ import { attestKey } from '../registration.js';
  * - With `attestationChain` (attested under the caller's outstanding challenge from beginDeviceRegistration) the key
  *   must be in a TEE or StrongBox and require biometric user authentication for every use (USER_AUTH_TYPE includes
  *   biometric, no AUTH_TIMEOUT or 0, no NO_AUTH_REQUIRED). Without one it is accepted as `attestation: NONE` only in
- *   the emulator or with `ALLOW_UNATTESTED=true`, otherwise `failed-precondition`.
+ *   the emulator or with `ALLOW_UNATTESTED=true`, otherwise `failed-precondition`. There too, a chain that does not
+ *   end in a Google root (the Android emulator's software Keystore) is recorded as `NONE` with an
+ *   `attestation.unverified` warning, the hardware and biometric policy then not applying; elsewhere it is refused
+ *   ([attestKey]).
  * - `validFromLamport` is one above the highest lamport of the household's events and documents, read in the write
  *   transaction, so the key can only authorise what is written after it.
  * - Registering the same key again for the same uid and device returns the stored row (idempotent retry); any other

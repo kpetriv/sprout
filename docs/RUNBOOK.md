@@ -39,7 +39,7 @@
 3. **Kid devices** need nothing: they keep syncing; they hold anything the lost phone writes after revocation as quarantined.
 4. **Re-adding a replacement phone:** sign in on it, then approve it from the remaining parent phone ("New device waiting", compare fingerprints).
 
-**The lost phone was the household's only parent device.** There is **no in-app recovery in M3**: a new phone registers PENDING, and only an ACTIVE parent device can approve it or revoke the old one. Operator recovery needs an Admin SDK script that does what `revokeDevice` and `approveDevice` do (REVOKED with the computed `revokedAtLamport`, parent keys stamped, `tokensValidAfter`, refresh tokens revoked, the new device ACTIVE) after verifying the requester controls the household's Google account. That script is **not written yet**; do not edit the registry by hand in the console. Until it exists the only fallback is deleting the household (§4), which loses its data.
+**The lost phone was the household's only parent device.** There is **no in-app recovery in M3**: a new phone registers PENDING, and only an ACTIVE parent device can approve it or revoke the old one. Operator recovery needs an Admin SDK script that does what `revokeDevice` and `approveDevice` do (REVOKED with the computed `revokedAtLamport`, parent keys stamped, `tokensValidAfter`, refresh tokens revoked, the new device ACTIVE) after verifying the requester controls the household's Google account. That script is **not written yet** (planned for M8, D-M3-42); do not edit the registry by hand in the console. Until it exists the only fallback is deleting the household (§4), which loses its data.
 
 ## 3. Kid device compromised (rooted, cloned, or in the wrong hands)
 

@@ -178,7 +178,7 @@ class HouseholdRepositoriesTest {
         // M3: the policy is a synced document; keys are registered by the server (D-M3-34), never queued as
         // documents, and kept locally so this device verifies its own parent signatures before the first pull.
         assertEquals(1, documents(DocTypes.HOUSEHOLD_POLICY).size)
-        assertEquals(0, documents(DocTypes.PARENT_KEY).size)
+        assertEquals(0, documents("parent_key").size)
         assertEquals(2, database.parentKeyDao().all().size)
     }
 
@@ -201,7 +201,7 @@ class HouseholdRepositoriesTest {
         assertFalse(household.policies.recordServerRegisteredKey("0".repeat(64), 7))
         assertTrue(household.policies.recordServerRegisteredKey(fingerprint, validFromLamport = 2))
         assertEquals(before + 39, database.deviceStateDao().get()?.lamport)
-        assertEquals(0, documents(DocTypes.PARENT_KEY).size)
+        assertEquals(0, documents("parent_key").size)
     }
 
     @Test

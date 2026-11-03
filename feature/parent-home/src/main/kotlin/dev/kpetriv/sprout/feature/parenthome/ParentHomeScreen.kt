@@ -57,6 +57,7 @@ import java.time.format.FormatStyle
  * @param requester one strong-biometric prompt per call, with the reason the drain gives (kid, amount, period),
  *   returning its single-use authorisation; the app passes `feature/lock`'s requester.
  * @param onOpenKid the kid's wallet in parent view, where their ledger anomalies are listed.
+ * @param onRegisterSigningKey "Signing key not registered with the household: Retry": Settings → Security.
  */
 @Suppress("LongParameterList") // One callback per destination the dashboard links to.
 @Composable
@@ -71,6 +72,7 @@ fun ParentHomeRoute(
     modifier: Modifier = Modifier,
     onSetUpSync: () -> Unit = {},
     onReviewDevice: (DeviceId) -> Unit = {},
+    onRegisterSigningKey: () -> Unit = {},
 ) {
     val links = ParentHomeLinks(
         onOpenChores,
@@ -81,6 +83,7 @@ fun ParentHomeRoute(
         onOpenKid,
         onSetUpSync,
         onReviewDevice,
+        onRegisterSigningKey,
     )
     val viewModel: ParentHomeViewModel = hiltViewModel()
     val state by viewModel.state.collectAsStateWithLifecycle()
@@ -149,7 +152,7 @@ private fun Dashboard(
         modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        HouseholdCards(state.household, links.onSetUpSync, links.onReviewDevice)
+        HouseholdCards(state.household, links)
         ApprovalsCard(state.pendingApprovals, links.onOpenApprovals)
         PendingActionsCard(state.pendingActions, state.signing, onSignNow)
         if (state.attention.isNotEmpty()) AttentionCard(state.attention, onDismiss)

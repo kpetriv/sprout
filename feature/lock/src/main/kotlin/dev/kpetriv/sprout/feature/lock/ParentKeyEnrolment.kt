@@ -68,10 +68,12 @@ fun interface ParentKeyProofPrompter {
  * Turns fingerprint signing on (audit H1, M1): the **only** way a parent key is first created and registered.
  *
  * [enrol] needs the parent PIN in the same call, verified under the PIN lockout inside an unlocked session (a
- * wrong PIN counts as a failed attempt). Then it deletes any stray local key, creates a new one (StrongBox first,
- * TEE otherwise), proves it with one strong-biometric prompt over a fresh, domain-separated challenge (signed and
- * verified against the new public key), and only then registers it with the household ([ParentKeyRegistry]), which
- * makes parent signatures required. It refuses to replace a registered key: that is [ParentKeyRenewal].
+ * wrong PIN counts as a failed attempt). Then it fetches the server's attestation challenge
+ * ([ParentKeyChallengeSource]), deletes any stray local key, creates a new one bound to that challenge (StrongBox
+ * first, TEE otherwise), proves it with one strong-biometric prompt over a fresh, domain-separated challenge (signed
+ * and verified against the new public key), and only then registers it, with its attestation chain, with the
+ * household ([ParentKeyRegistry]), which makes parent signatures required. It refuses to replace a registered key:
+ * that is [ParentKeyRenewal].
  *
  * Runs at PIN setup (with the PIN the parent just chose, see [enrolInBackground]) and from Settings ("Turn on").
  */
@@ -90,13 +92,17 @@ class ParentKeyEnrolment @Inject internal constructor(private val provisioner: P
 
 /**
  * Recovery after a fingerprint change (audit H2): replaces the registered parent key with a new one. Needs the
- * parent PIN in the same call (verified under the PIN lockout inside an unlocked session); then deletes the
- * invalidated (or mismatched) local key, creates a new one, proves it with one strong-biometric prompt, and
- * replaces the registered key, keeping the lamport from which signatures are required. Refuses when no key is
- * registered ([ParentKeyEnrolment] instead).
+ * parent PIN in the same call (verified under the PIN lockout inside an unlocked session); then fetches a new
+ * attestation challenge, deletes the invalidated (or mismatched) local key, creates a new one bound to the challenge,
+ * proves it with one strong-biometric prompt, and replaces the registered key (with the new attestation chain),
+ * keeping the lamport from which signatures are required. Refuses when no key is registered ([ParentKeyEnrolment]
+ * instead).
  *
- * Offered from Settings ("Fingerprint changed: renew signing key") and from the PIN screen after the fingerprint
- * reported [BiometricUnlockRequest.KeyInvalidated] ([renewInBackground]).
+ * Offered from Settings ("Fingerprint changed: renew signing key", and "Signing key not registered with the
+ * household: Retry" when the server registration failed, D-M3-39: the chain is bound to a consumed challenge, so a
+ * retry needs a new key) and from the PIN screen after the fingerprint reported
+ * [BiometricUnlockRequest.KeyInvalidated] ([renewInBackground]). A cancelled proof prompt leaves no key, so a retry
+ * that is cancelled turns into "renew signing key".
  */
 @Singleton
 class ParentKeyRenewal @Inject internal constructor(private val provisioner: ParentKeyProvisioner) {
@@ -115,6 +121,7 @@ internal class ParentKeyProvisioner @Inject constructor(
     private val authorizer: ParentAuthorizer,
     private val signer: ParentSigner,
     private val registry: ParentKeyRegistry,
+    private val challenges: ParentKeyChallengeSource,
     private val prompter: ParentKeyProofPrompter,
     private val random: SecureRandom,
     @LockScope private val scope: CoroutineScope,
@@ -172,13 +179,18 @@ internal class ParentKeyProvisioner @Inject constructor(
 
     /** After a verified PIN. Caller holds [mutex]. */
     private suspend fun createProveAndRegister(renew: Boolean): ParentKeyChangeResult {
+        // In this order (D-M3-34): the challenge first, while the current key is still in place (a failure here, such
+        // as being offline, changes nothing), then the key bound to it, the proof prompt and the registration, so the
+        // 10-minute challenge is fresh when the server consumes it.
+        val challenge = challenges.registrationChallenge()
         // A key that exists now was not made by this flow (or was invalidated): never trust it, start fresh.
         authorizer.resetParentKey()
-        val publicKey = authorizer.createParentKey()
+        val publicKey = authorizer.createParentKey(challenge)
         var kept = false
         try {
             prove(publicKey)
-            if (renew) registry.replaceParentKey(publicKey) else registry.registerParentKey(publicKey)
+            val chain = authorizer.parentKeyAttestationChain()
+            if (renew) registry.replaceParentKey(publicKey, chain) else registry.registerParentKey(publicKey, chain)
             kept = true
         } finally {
             if (!kept) deleteKeyBestEffort()

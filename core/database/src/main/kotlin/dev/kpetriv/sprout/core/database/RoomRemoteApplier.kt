@@ -76,7 +76,8 @@ import javax.inject.Inject
  *   unknown or PENDING is **held** in `document_inbox` (D-M3-31) and retried by [retryHeld]; one refused for a lamport
  *   too far ahead is audited and kept there too. Other refusals (another household included) get a
  *   `DOCUMENT_REJECTED` audit row (reason and ids only). Payloads that do not decode or whose ids disagree with the
- *   envelope, and `parent_key` documents, are ignored and audited the same way. At most [MAX_HELD_PER_AUTHOR] held
+ *   envelope are ignored and audited the same way; there is no `parent_key` document type (the
+ *   verifier refuses one as an unknown type). At most [MAX_HELD_PER_AUTHOR] held
  *   documents per author device are kept. Kept device-local: an allowance schedule's `lastPaidOn`, an account's
  *   `lastAccruedOn`, this device's parent key.
  * - [applyEvents] is [RoomLedgerRepository.ingest]; [retryHeld] retries held documents, then
@@ -319,19 +320,13 @@ class RoomRemoteApplier internal constructor(
                 reject(envelope, MALFORMED_PAYLOAD, now)
                 DocumentApplyReport(ignored = 1)
             }
-
-            Outcome.UNSUPPORTED -> {
-                reject(envelope, SERVER_REGISTERED_ONLY, now)
-                DocumentApplyReport(ignored = 1)
-            }
         }
 
-    private enum class Outcome { APPLIED, IGNORED, MALFORMED, UNSUPPORTED }
+    private enum class Outcome { APPLIED, IGNORED, MALFORMED }
 
     /**
      * Resolves and writes one verified document. Parent keys are registered only by the server (`registerParentKey`,
-     * D-M3-34) and reach this device through the registry pull: a `parent_key` document (the rules no longer let a
-     * client write one) is never applied, only audited ([Outcome.UNSUPPORTED]).
+     * D-M3-34) and reach this device through the registry pull, never as documents.
      */
     private suspend fun apply(envelope: DocumentEnvelope, session: Session): Outcome {
         val fallbackAuthor = session.deviceId
@@ -339,7 +334,6 @@ class RoomRemoteApplier internal constructor(
             DocTypes.KID -> applyKid(envelope, fallbackAuthor)
             DocTypes.ACCOUNT -> applyAccount(envelope, fallbackAuthor)
             DocTypes.HOUSEHOLD_POLICY -> applyHouseholdPolicy(envelope, fallbackAuthor)
-            DocTypes.PARENT_KEY -> Outcome.UNSUPPORTED
             DocTypes.CHORE -> applyChore(envelope, fallbackAuthor)
             DocTypes.CHORE_SUBMISSION -> applySubmission(envelope, fallbackAuthor)
             DocTypes.REWARD -> applyReward(envelope, fallbackAuthor)
@@ -585,9 +579,6 @@ class RoomRemoteApplier internal constructor(
     }
 
     companion object {
-        /** Audit reason for a `parent_key` document: parent keys come only from the server registry (D-M3-34). */
-        const val SERVER_REGISTERED_ONLY: String = "SERVER_REGISTERED_ONLY"
-
         /** Most rows `document_inbox` keeps per author device; beyond it the oldest are dropped (audited). */
         const val MAX_HELD_PER_AUTHOR: Int = RoomLedgerRepository.MAX_HELD_PER_AUTHOR
 

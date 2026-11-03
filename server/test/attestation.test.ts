@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { SecurityLevel, VerifiedBootState } from '@peculiar/asn1-android';
 import {
   AttestationError,
@@ -41,6 +41,7 @@ describe('verifyAttestation (self-generated chain)', () => {
       statusList: noRevocations,
     });
     expect(result).toEqual({
+      trusted: true,
       level: 'TEE',
       keyMatches: true,
       verifiedBootState: 'VERIFIED',
@@ -221,6 +222,26 @@ describe('verifyAttestation (self-generated chain)', () => {
     await rejectsWith(verifyAttestation(fake.chain, challenge, fake.leafSpki), 'UNTRUSTED_ROOT');
   });
 
+  it('allowUntrustedRoot reports an unanchored chain as untrusted and still runs every other check', async () => {
+    const lenient = { allowUntrustedRoot: true, statusList: noRevocations };
+    const fake = await fakeChain({ challenge });
+    const result = await verifyAttestation(fake.chain, challenge, fake.leafSpki, lenient);
+    expect(result).toMatchObject({ trusted: false, level: 'TEE', keyMatches: true });
+    // An anchored chain stays trusted with the option set.
+    expect((await verifyAttestation(fake.chain, challenge, fake.leafSpki, { ...lenient, roots: [fake.root] })).trusted)
+      .toBe(true);
+    await rejectsWith(verifyAttestation(fake.chain, randomBytes(32), fake.leafSpki, lenient), 'CHALLENGE_MISMATCH');
+    const broken = await fakeChain({ challenge, breakLeafSignature: true });
+    await rejectsWith(verifyAttestation(broken.chain, challenge, broken.leafSpki, lenient), 'BAD_SIGNATURE');
+    const expired = await fakeChain({ challenge, leafNotAfter: new Date(Date.now() - 60_000) });
+    await rejectsWith(verifyAttestation(expired.chain, challenge, expired.leafSpki, lenient), 'EXPIRED');
+    const revoked = { entries: { [fake.serials[0].toLowerCase().replace(/^0+/, '')]: { status: 'REVOKED' } } };
+    await rejectsWith(
+      verifyAttestation(fake.chain, challenge, fake.leafSpki, { ...lenient, statusList: () => Promise.resolve(revoked) }),
+      'REVOKED',
+    );
+  });
+
   it('embeds parseable Google roots (RSA-4096 and ECDSA P-384)', () => {
     const roots = GOOGLE_ATTESTATION_ROOTS_PEM.map((pem) => new X509Certificate(pem));
     expect(roots.map((r) => (r.publicKey.algorithm as { name: string }).name)).toEqual(['RSASSA-PKCS1-v1_5', 'ECDSA']);
@@ -238,11 +259,18 @@ describe('registration with attestation', () => {
     delete process.env.ALLOW_UNATTESTED;
   });
 
-  async function attested(uid: string, override?: { challenge?: Buffer; submitOther?: boolean }) {
+  /**
+   * A chain for [uid]'s new challenge. `untrustedRoot`: the chain's root is not a trust anchor (the embedded Google
+   * roots are used), as with the Android emulator's software Keystore.
+   */
+  async function attested(uid: string, override?: { challenge?: Buffer; submitOther?: boolean; untrustedRoot?: boolean }) {
     const { challenge } = await call(fns.beginDeviceRegistration, req({ uid }));
     const keys = await newKeyPair();
     const fake = await fakeChain({ challenge: override?.challenge ?? Buffer.from(challenge, 'base64'), leafKeys: keys });
-    setAttestationOptionsForTest({ roots: [fake.root], statusList: () => Promise.resolve(null) });
+    setAttestationOptionsForTest({
+      ...(override?.untrustedRoot ? {} : { roots: [fake.root] }),
+      statusList: () => Promise.resolve(null),
+    });
     const submitted = override?.submitOther ? await spkiOf(await newKeyPair()) : fake.leafSpki;
     return { chain: fake.chain, publicKey: submitted.toString('base64'), challenge };
   }
@@ -304,6 +332,66 @@ describe('registration with attestation', () => {
       req({ uid }, { fiatCurrency: 'EUR', devicePublicKey: publicKey }),
     );
     expect((await db.doc(`households/${hid}/devices/${deviceId}`).get()).get('attestation')).toBe('NONE');
+  });
+
+  describe('a chain that does not end in a Google root (the emulator software Keystore)', () => {
+    it('is recorded as NONE in emulator mode, with a warning, and consumes the challenge', async () => {
+      const uid = await newUser();
+      const a = await attested(uid, { untrustedRoot: true });
+      const lines: Record<string, unknown>[] = [];
+      const warn = vi
+        .spyOn(console, 'warn')
+        .mockImplementation((line: unknown) => void lines.push(JSON.parse(String(line)) as Record<string, unknown>));
+      try {
+        const { hid, deviceId } = await call(
+          fns.createHousehold,
+          req({ uid }, { fiatCurrency: 'EUR', devicePublicKey: a.publicKey, attestationChain: a.chain }),
+        );
+        expect((await db.doc(`households/${hid}/devices/${deviceId}`).get()).get('attestation')).toBe('NONE');
+        expect(lines).toContainEqual(
+          expect.objectContaining({ message: 'attestation.unverified', reason: 'UNTRUSTED_ROOT', keyId: deviceId }),
+        );
+      } finally {
+        warn.mockRestore();
+      }
+      expect((await db.doc(`challenges/${uid}`).get()).exists).toBe(false);
+    });
+
+    it('still needs the outstanding challenge and the submitted key in emulator mode', async () => {
+      const uid = await newUser();
+      const wrong = await attested(uid, { challenge: randomBytes(32), untrustedRoot: true });
+      await expectCode(
+        call(fns.createHousehold, req({ uid }, { fiatCurrency: 'EUR', devicePublicKey: wrong.publicKey, attestationChain: wrong.chain })),
+        'permission-denied',
+      );
+      const other = await attested(uid, { submitOther: true, untrustedRoot: true });
+      await expectCode(
+        call(fns.createHousehold, req({ uid }, { fiatCurrency: 'EUR', devicePublicKey: other.publicKey, attestationChain: other.chain })),
+        'permission-denied',
+      );
+      expect((await db.doc(`challenges/${uid}`).get()).exists, 'a refused chain leaves the challenge').toBe(true);
+      await db.doc(`challenges/${uid}`).delete();
+      await expectCode(
+        call(fns.createHousehold, req({ uid }, { fiatCurrency: 'EUR', devicePublicKey: other.publicKey, attestationChain: other.chain })),
+        'failed-precondition',
+      );
+    });
+
+    it('is refused when unattested keys are not allowed, accepted as NONE with ALLOW_UNATTESTED=true', async () => {
+      const uid = await newUser();
+      const a = await attested(uid, { untrustedRoot: true });
+      delete process.env.SPROUT_EMULATOR;
+      await expectCode(
+        call(fns.createHousehold, req({ uid }, { fiatCurrency: 'EUR', devicePublicKey: a.publicKey, attestationChain: a.chain })),
+        'permission-denied',
+      );
+      process.env.ALLOW_UNATTESTED = 'true';
+      const { hid, deviceId } = await call(
+        fns.createHousehold,
+        req({ uid }, { fiatCurrency: 'EUR', devicePublicKey: a.publicKey, attestationChain: a.chain }),
+      );
+      expect((await db.doc(`households/${hid}/devices/${deviceId}`).get()).get('attestation')).toBe('NONE');
+    });
   });
 
   it('outside the emulator a request without an App Check token is refused', async () => {

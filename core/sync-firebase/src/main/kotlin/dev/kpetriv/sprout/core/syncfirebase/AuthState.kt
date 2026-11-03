@@ -6,7 +6,10 @@ import dev.kpetriv.sprout.core.model.KidId
 import dev.kpetriv.sprout.core.model.Role
 import dev.kpetriv.sprout.core.model.UserId
 
-/** The Firebase Auth session as the app sees it. Never carries an e-mail address or a token. */
+/**
+ * The Firebase Auth session as the app sees it. Never carries an e-mail address or a token: the parent's address is
+ * [AccountInfo], read on demand for the Account screen only.
+ */
 sealed interface AuthState {
     data object SignedOut : AuthState
 
@@ -23,6 +26,27 @@ sealed interface AuthState {
      * revoked session is not this: it signs in again.
      */
     data object UserGone : AuthState
+}
+
+/**
+ * The signed-in parent account as the Settings → Account screen shows it, read on demand from [AccountInfoReader].
+ * Personal data: never stored (no database, preference or saved state), never logged, never sent anywhere, never put
+ * in [AuthState]. [toString] hides [email].
+ *
+ * @property email the account's e-mail address; null when the account has none.
+ */
+class AccountInfo(val email: String?) {
+    override fun equals(other: Any?): Boolean = other is AccountInfo && email == other.email
+
+    override fun hashCode(): Int = email.hashCode()
+
+    override fun toString(): String = "AccountInfo(email=${if (email == null) "none" else "<redacted>"})"
+}
+
+/** Reads [AccountInfo] for the signed-in account; [FirebaseAuthSession] in the app, a fake in tests. */
+fun interface AccountInfoReader {
+    /** The signed-in parent's account, or null when signed out or anonymous (a kid device). */
+    suspend fun accountInfo(): AccountInfo?
 }
 
 /**

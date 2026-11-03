@@ -84,25 +84,52 @@ class FakeParentKeyRegistry : ParentKeyRegistry {
     var replacements = 0
         private set
 
+    /** The attestation chain of the latest registration or replacement. */
+    var lastChain: List<ByteArray>? = null
+        private set
+
     override suspend fun registeredParentKey(): PublicKeyBytes? {
         if (unreadable) throw IOException("Simulated unreadable household policy")
         return key
     }
 
-    override suspend fun registerParentKey(publicKey: PublicKeyBytes) {
+    override suspend fun registerParentKey(publicKey: PublicKeyBytes, attestationChain: List<ByteArray>) {
         check(key == null) { "A parent key is already registered" }
         key = publicKey
+        lastChain = attestationChain
         registrations++
     }
 
-    override suspend fun replaceParentKey(publicKey: PublicKeyBytes) {
+    override suspend fun replaceParentKey(publicKey: PublicKeyBytes, attestationChain: List<ByteArray>) {
         checkNotNull(key) { "No parent key is registered" }
         key = publicKey
+        lastChain = attestationChain
         replacements++
     }
 
     override suspend fun recordSigningUnavailable() {
         signingUnavailableRecorded = true
+    }
+}
+
+/**
+ * The server's challenge, as the app's `beginDeviceRegistration` adapter would give it: [next] (null: no household
+ * session), or a failure when [failure] is set. [issued] lists every challenge handed out.
+ */
+class FakeChallengeSource : ParentKeyChallengeSource {
+    var next: ByteArray? = ByteArray(32) { (it + 1).toByte() }
+    var failure: Exception? = null
+    val issued = mutableListOf<ByteArray>()
+
+    /** Called with the challenge just issued, before the key is created (to check the order of calls). */
+    var onIssued: () -> Unit = {}
+
+    override suspend fun registrationChallenge(): ByteArray? {
+        failure?.let { throw it }
+        return next?.copyOf()?.also {
+            issued += it
+            onIssued()
+        }
     }
 }
 
@@ -149,6 +176,7 @@ class SessionFixture(
     val keyStatus = ParentKeyStatusCheck(authorizer, registry)
     val lockout = PinLockoutPolicy(lockoutStore, bootClock, keyStatus)
     val prompter = FakeProofPrompter()
+    val challenges = FakeChallengeSource()
     val settings = FakeLockSettings(lockWhenLeaving)
     val foreground = FakeAppForeground()
 
@@ -184,6 +212,7 @@ class SessionFixture(
         authorizer = authorizer,
         signer = ParentSigner(),
         registry = registry,
+        challenges = challenges,
         prompter = prompter,
         random = random,
         scope = scope,

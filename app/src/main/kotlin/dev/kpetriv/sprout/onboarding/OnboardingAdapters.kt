@@ -158,8 +158,8 @@ class LockParentSigningSetup @Inject constructor(
  */
 class FunctionsParentKeyRegistrar @Inject constructor(private val functions: HouseholdAdminFunctions) :
     ParentKeyRegistrar {
-    override suspend fun register(publicKey: ByteArray): Result<Unit> =
-        functions.registerParentKey(publicKey).map { }.mapFunctionsFailure()
+    override suspend fun register(publicKey: ByteArray, attestationChain: List<ByteArray>): Result<Unit> =
+        functions.registerParentKey(publicKey, attestationChain).map { }.mapFunctionsFailure()
 }
 
 private fun <T> Result<T>.mapAuthFailure(): Result<T> = recoverCatching { failure ->

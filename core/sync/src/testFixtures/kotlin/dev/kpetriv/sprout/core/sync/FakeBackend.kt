@@ -31,8 +31,11 @@ import kotlinx.serialization.json.longOrNull
  *   transport reads the stored copy). A different copy under a taken id is kept as evidence under `eventId__hash`,
  *   but only from a PARENT member; a KID member's conflicting copy is refused. A KID member writes only KID-role
  *   events for its own kid; a PARENT-role event needs a PARENT member.
- * - **Documents**: a PARENT member writes every type; a KID member only its own kid's `chore_submission` in status
- *   `SUBMITTED`, under the submission's own id, never a tombstone, never with changed identity (`id`, `choreId`,
+ * - **Server-only collections**: a document of a registry type (`parent_key`, `device`, `member`) or naming a
+ *   registry collection (`parentKeys`, `devices`, `members`) is [PERMISSION_DENIED] from every member, as the rules
+ *   let only the server write those (D-M3-34); only the [DocTypes.all] client types are writable at all.
+ * - **Documents**: a PARENT member writes every client type; a KID member only its own kid's `chore_submission` in
+ *   status `SUBMITTED`, under the submission's own id, never a tombstone, never with changed identity (`id`, `choreId`,
  *   `dueOn`, `kidId`), and never over a stored copy that is decided, tombstoned or another kid's.
  *   An update must also pass the update rule: a tombstone is never overwritten by a live copy; a tombstone replaces a
  *   live copy regardless of lamport; between two live submissions the higher status rank wins and equal ranks fall
@@ -295,8 +298,13 @@ class FakeBackend(val householdId: HouseholdId, private val pageSize: Int = DEFA
     /** Null when accepted (stored, or beaten by the stored copy); otherwise the refusal code. */
     private fun pushDocument(caller: Caller, document: DocumentEnvelope): String? {
         when {
+            // The rules: parentKeys, devices and members are written by the server only, whoever the caller is.
+            document.docType in SERVER_ONLY -> return PERMISSION_DENIED
+
             !DocTypes.isKnown(document.docType) -> return UNKNOWN_DOC_TYPE
+
             document.householdId != householdId -> return WRONG_HOUSEHOLD
+
             document.signature == null -> return UNSIGNED
         }
         val stored = documents[key(document)]?.value
@@ -418,6 +426,12 @@ class FakeBackend(val householdId: HouseholdId, private val pageSize: Int = DEFA
         private const val WRITE_BUFFER = 256
         private const val UNKNOWN_RANK = -1
         private val IDENTITY = listOf("id", "choreId", "dueOn", "kidId")
+
+        /**
+         * Registry types and collections only the server writes (`firestore/firestore.rules`): a client document
+         * naming one is refused by the rules, never stored.
+         */
+        val SERVER_ONLY: Set<String> = setOf("parent_key", "device", "member", PARENT_KEYS, DEVICES, "members")
 
         private fun conflictId(eventId: String, hash: String) = "${eventId}__$hash"
 

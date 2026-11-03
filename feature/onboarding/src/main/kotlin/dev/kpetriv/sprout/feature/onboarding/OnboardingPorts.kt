@@ -133,10 +133,11 @@ interface OnboardingHousehold {
 /**
  * Registers this device's parent authorisation key with the household's server-side registry (backend
  * `registerParentKey`, signed by the device key). The app calls it after `feature/lock`'s enrolment registered the key
- * locally; the key also syncs to other devices as a `parent_key` document.
+ * locally; other devices learn the key only from that registry (D-M3-34). [attestationChain] is the key's Keystore
+ * attestation (DER, leaf first), empty when it has none.
  */
 fun interface ParentKeyRegistrar {
-    suspend fun register(publicKey: ByteArray): Result<Unit>
+    suspend fun register(publicKey: ByteArray, attestationChain: List<ByteArray>): Result<Unit>
 }
 
 /** Fingerprint signing for a parent whose PIN already exists (the trial PIN), over `feature/lock`'s enrolment. */

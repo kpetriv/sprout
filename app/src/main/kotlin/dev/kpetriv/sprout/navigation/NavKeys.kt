@@ -42,6 +42,10 @@ data object SettingsKey : NavKey
 @Serializable
 data class DevicesKey(val reviewDeviceId: DeviceId? = null) : NavKey
 
+/** Settings → Security, opened from the dashboard's "Signing key not registered with the household" card. */
+@Serializable
+data object SecurityKey : NavKey
+
 // Kid area (no lock).
 
 /** Kid mode's landing screen: the kid's own wallet. */

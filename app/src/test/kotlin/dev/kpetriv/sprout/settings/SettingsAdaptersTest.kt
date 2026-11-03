@@ -35,28 +35,48 @@ class SettingsAdaptersTest {
     private val policies = InMemoryPolicies(gbp)
     private val sessions = FakeSessionStore(trialSession())
     private val published = mutableListOf<ByteArray>()
+    private val chains = mutableListOf<List<ByteArray>>()
+    private var backendResult: Result<Unit> = Result.success(Unit)
     private val registry = HouseholdParentKeyRegistry(
         policies = policies,
         useCase = RegisterParentKeyUseCase(policies),
         currency = { gbp },
         sessions = sessions,
-        registrar = { key ->
+        registrar = { key, chain ->
             published += key
-            Result.success(Unit)
+            chains += chain
+            backendResult
         },
     )
 
     @Test
     fun `a real household's parent key is also registered with the backend, the trial's never`() = runTest {
-        registry.registerParentKey(authorizer.createParentKey())
+        registry.registerParentKey(authorizer.createParentKey(), emptyList())
         assertEquals(emptyList(), published, "the trial household has no backend")
 
         policies.policy.value = null
         sessions.session.value = parentSession()
         authorizer.resetParentKey()
-        val key = authorizer.createParentKey()
-        registry.registerParentKey(key)
+        val key = authorizer.createParentKey(ByteArray(32) { 3 })
+        val chain = authorizer.parentKeyAttestationChain()
+        registry.registerParentKey(key, chain)
         assertEquals(listOf(key.encoded.toList()), published.map { it.toList() })
+        assertEquals(listOf(chain.map { it.toList() }), chains.map { sent -> sent.map { it.toList() } })
+    }
+
+    @Test
+    fun `a renewal sends the new key's chain, and a backend failure keeps the local registration`() = runTest {
+        sessions.session.value = parentSession()
+        val first = authorizer.createParentKey(ByteArray(32) { 1 })
+        registry.registerParentKey(first, authorizer.parentKeyAttestationChain())
+        authorizer.resetParentKey()
+        val renewed = authorizer.createParentKey(ByteArray(32) { 2 })
+        backendResult = Result.failure(IllegalStateException("offline"))
+
+        registry.replaceParentKey(renewed, authorizer.parentKeyAttestationChain())
+
+        assertEquals(renewed, registry.registeredParentKey(), "the PIN and fingerprint proved it; it stays")
+        assertTrue(chains.last()[0].contentEquals(FakeParentAuthorizer.FAKE_LEAF_PREFIX + ByteArray(32) { 2 }))
     }
 
     @Test
@@ -64,27 +84,29 @@ class SettingsAdaptersTest {
         assertNull(registry.registeredParentKey())
 
         val first = authorizer.createParentKey()
-        registry.registerParentKey(first)
+        registry.registerParentKey(first, emptyList())
         assertEquals(first, registry.registeredParentKey())
         assertTrue(policies.policy.value!!.requireParentSignature)
         // Registering over an existing key is refused: only renewal replaces it.
-        assertFailsWith<IllegalStateException> { registry.registerParentKey(first) }
+        assertFailsWith<IllegalStateException> { registry.registerParentKey(first, emptyList()) }
 
         authorizer.resetParentKey()
         val second = authorizer.createParentKey()
-        registry.replaceParentKey(second)
+        registry.replaceParentKey(second, emptyList())
         assertEquals(second, registry.registeredParentKey())
     }
 
     @Test
     fun `replacing without a registered key is refused`() = runTest {
-        assertFailsWith<IllegalStateException> { registry.replaceParentKey(authorizer.createParentKey()) }
+        assertFailsWith<IllegalStateException> { registry.replaceParentKey(authorizer.createParentKey(), emptyList()) }
         assertNull(policies.policy.value)
     }
 
     @Test
     fun `a key that is not EC P-256 is never registered`() = runTest {
-        assertFailsWith<IllegalArgumentException> { registry.registerParentKey(PublicKeyBytes(byteArrayOf(1, 2, 3))) }
+        assertFailsWith<IllegalArgumentException> {
+            registry.registerParentKey(PublicKeyBytes(byteArrayOf(1, 2, 3)), emptyList())
+        }
         assertNull(policies.policy.value)
     }
 

@@ -27,7 +27,6 @@ object FirestoreLayout {
         DocTypes.KID to "kids",
         DocTypes.ACCOUNT to "accounts",
         DocTypes.HOUSEHOLD_POLICY to "householdPolicy",
-        DocTypes.PARENT_KEY to PARENT_KEYS,
         DocTypes.CHORE to "chores",
         DocTypes.CHORE_SUBMISSION to "choreSubmissions",
         DocTypes.REWARD to "rewards",
@@ -44,11 +43,10 @@ object FirestoreLayout {
     fun collectionOf(docType: String): String? = collectionByDocType[docType]
 
     /**
-     * The plain document collections (every type except [DocTypes.PARENT_KEY]: parent keys are registry entries in
-     * [PARENT_KEYS], never synced as documents) in [DocTypes.applyOrder], paired with their type.
+     * The document collections in [DocTypes.applyOrder], paired with their type. Parent keys are registry entries in
+     * [PARENT_KEYS], written by the server and never synced as documents.
      */
     val documentCollections: List<Pair<String, String>> = DocTypes.all
-        .filter { it != DocTypes.PARENT_KEY }
         .sortedBy(DocTypes::applyOrder)
         .map { docType -> docType to collectionByDocType.getValue(docType) }
 

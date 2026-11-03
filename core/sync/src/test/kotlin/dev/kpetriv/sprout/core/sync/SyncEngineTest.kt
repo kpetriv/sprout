@@ -91,12 +91,18 @@ class SyncEngineTest {
         transport.pages += page(
             1,
             hasMore = false,
-            documents = listOf(DocTypes.REWARD, DocTypes.PARENT_KEY, DocTypes.CHORE, DocTypes.KID, DocTypes.ACCOUNT)
+            documents = listOf(
+                DocTypes.REWARD,
+                DocTypes.HOUSEHOLD_POLICY,
+                DocTypes.CHORE,
+                DocTypes.KID,
+                DocTypes.ACCOUNT,
+            )
                 .map { parent.signed(it, "doc-$it".replace('_', '-'), lamport = 1) },
         )
         engine.syncOnce()
         assertEquals(
-            listOf(DocTypes.KID, DocTypes.ACCOUNT, DocTypes.PARENT_KEY, DocTypes.CHORE, DocTypes.REWARD),
+            listOf(DocTypes.KID, DocTypes.ACCOUNT, DocTypes.HOUSEHOLD_POLICY, DocTypes.CHORE, DocTypes.REWARD),
             order,
         )
     }

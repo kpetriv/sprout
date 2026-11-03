@@ -16,4 +16,6 @@ data class ParentHomeLinks(
     val onSetUpSync: () -> Unit = {},
     /** "New device waiting": the approval sheet for that phone (Settings → Devices). */
     val onReviewDevice: (DeviceId) -> Unit = {},
+    /** "Signing key not registered with the household": Settings → Security, where "Retry" renews the key. */
+    val onRegisterSigningKey: () -> Unit = {},
 )

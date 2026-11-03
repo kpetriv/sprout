@@ -82,8 +82,9 @@ object TestData {
         signature = signature,
     )
 
+    /** A `parent_key` document as an old client or a forger would build it; no such type exists any more. */
     fun parentKeyDocument(fingerprint: String = "c".repeat(64), validFrom: Long = 7) = document(
-        docType = DocTypes.PARENT_KEY,
+        docType = "parent_key",
         docId = fingerprint,
         payload = buildJsonObject {
             put("publicKey", "AAAA")

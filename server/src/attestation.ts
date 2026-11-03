@@ -98,6 +98,12 @@ export interface UserAuthentication {
 }
 
 export interface AttestationResult {
+  /**
+   * Whether the chain ends in a trust anchor. Always true unless [VerifyOptions.allowUntrustedRoot] was set; when
+   * false nothing in the result can be trusted (anyone can build such a chain) and the caller may record the key
+   * only as unattested.
+   */
+  readonly trusted: boolean;
   readonly level: AttestationLevel;
   /** Whether the attested leaf key is exactly the submitted SPKI. Callers must refuse the device when false. */
   readonly keyMatches: boolean;
@@ -138,6 +144,12 @@ export interface VerifyOptions {
   /** Revocation list source; defaults to [fetchStatusList]. Null means "unknown". */
   readonly statusList?: () => Promise<StatusList | null>;
   readonly now?: Date;
+  /**
+   * Do not throw `UNTRUSTED_ROOT` when the chain ends outside the trust anchors; finish every other check and return
+   * `trusted: false` instead. Only for where unattested keys are allowed anyway (the emulator's software Keystore chain,
+   * D-M3-5); every other failure still throws.
+   */
+  readonly allowUntrustedRoot?: boolean;
 }
 
 // KeyMint / Keymaster tag values (hardware/interfaces/security/keymint/aidl, Tag.aidl and friends).
@@ -289,9 +301,9 @@ function checkKeyProperties(list: NonStandardAuthorizationList): void {
  *    origin GENERATED), read from the authorization list of the attested security level (hardware-enforced for TEE
  *    and StrongBox, software-enforced for a software keystore).
  *
- * Returns the security level, whether the leaf's SPKI equals [expectedSpki], the user-authentication tags and the
- * verified boot state (recorded only; a self-signed or unverified boot is not refused); throws [AttestationError]
- * otherwise.
+ * Returns whether the chain is anchored (always, unless [VerifyOptions.allowUntrustedRoot]), the security level,
+ * whether the leaf's SPKI equals [expectedSpki], the user-authentication tags and the verified boot state (recorded
+ * only; a self-signed or unverified boot is not refused); throws [AttestationError] otherwise.
  */
 export async function verifyAttestation(
   chain: readonly string[],
@@ -318,7 +330,7 @@ export async function verifyAttestation(
       break;
     }
   }
-  if (!anchored) throw new AttestationError('UNTRUSTED_ROOT');
+  if (!anchored && !options.allowUntrustedRoot) throw new AttestationError('UNTRUSTED_ROOT');
 
   const status = await (options.statusList ?? fetchStatusList)();
   if (status) {
@@ -337,6 +349,7 @@ export async function verifyAttestation(
 
   const leafSpki = Buffer.from(certs[0].publicKey.rawData);
   return {
+    trusted: anchored,
     level,
     keyMatches: leafSpki.equals(expectedSpki),
     verifiedBootState: bootStateOf(enforced),

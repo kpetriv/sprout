@@ -74,6 +74,14 @@ object ParentHomePreviewData {
         ),
     )
 
+    /** A synced household whose parent signing key never reached the server (D-M3-39). */
+    fun signingKeyNotRegistered(): ParentHomeUiState.Ready = empty().copy(
+        household = HouseholdStatus(
+            sync = SyncLine(Instant.parse("2026-11-03T09:41:00Z"), blockedCode = null, failing = false),
+            signingKeyNotRegistered = true,
+        ),
+    )
+
     /** Key of the skipped allowance in [needsAttention]. */
     const val SKIPPED_KEY: String = "allowance/leo-weekly/2026-W30"
 

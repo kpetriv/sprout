@@ -31,6 +31,7 @@
   <string name="feature_settings_message_goal_deleted">Goal deleted. The savings stay in the account.</string>
   <string name="feature_settings_message_pin_changed">PIN changed</string>
   <string name="feature_settings_message_key_registered">Fingerprint signing is on</string>
+  <string name="feature_settings_message_key_not_shared">Signing is on here, but the household didn\'t get the key. Retry when you\'re online.</string>
   <string name="feature_settings_message_save_failed">Couldn\'t save. Please try again.</string>
 
   <!-- Field errors -->
@@ -140,6 +141,9 @@
   <string name="feature_settings_security_signing_invalidated_title">Fingerprint changed: renew signing key</string>
   <string name="feature_settings_security_signing_invalidated">A fingerprint was added or removed on this device, so the old signing key stopped working. Renew it with your PIN to keep signing money changes.</string>
   <string name="feature_settings_security_signing_renew">Renew signing key</string>
+  <string name="feature_settings_security_signing_not_shared_title">Signing key not registered with the household</string>
+  <string name="feature_settings_security_signing_not_shared">Your signing key works on this phone, but the household never received it, so your other devices can\'t check your signatures. Retry with your PIN and fingerprint to make a new key and register it.</string>
+  <string name="feature_settings_security_signing_retry">Retry</string>
   <string name="feature_settings_security_signing_pin_enrol">Enter your PIN to turn on fingerprint signing</string>
   <string name="feature_settings_security_signing_pin_renew">Enter your PIN to renew the signing key</string>
   <string name="feature_settings_security_lock_title">Lock when leaving the app</string>

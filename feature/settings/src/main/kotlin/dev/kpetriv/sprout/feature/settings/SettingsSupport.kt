@@ -67,6 +67,9 @@ enum class SettingsMessage {
     GOAL_DELETED,
     PIN_CHANGED,
     KEY_REGISTERED,
+
+    /** The key works on this device, but the household's server did not take it (offline): retry later. */
+    KEY_NOT_SHARED,
     SAVE_FAILED,
 }
 

@@ -5,12 +5,15 @@ import dev.kpetriv.sprout.core.model.Role
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 
-/** The synced document collections ([DocumentEnvelope.docType]) and who may write them (M3 §3). */
+/**
+ * The synced document collections ([DocumentEnvelope.docType]) and who may write them (M3 §3). Every type here is one a
+ * client writes; parent keys, devices and members are registry entries the server writes (D-M3-34) and reach devices
+ * through the registry pull, never as documents, so there is no `parent_key` type.
+ */
 object DocTypes {
     const val KID: String = "kid"
     const val ACCOUNT: String = "account"
     const val HOUSEHOLD_POLICY: String = "household_policy"
-    const val PARENT_KEY: String = "parent_key"
     const val CHORE: String = "chore"
     const val CHORE_SUBMISSION: String = "chore_submission"
     const val REWARD: String = "reward"
@@ -19,14 +22,13 @@ object DocTypes {
     const val INTEREST_POLICY: String = "interest_policy"
 
     /**
-     * Every known type, in the order a pulled page is applied: the household's structure (kids, accounts, policy,
-     * parent keys) first, so documents and events that refer to it find it.
+     * Every known type, in the order a pulled page is applied: the household's structure (kids, accounts, policy)
+     * first, so documents and events that refer to it find it.
      */
     val all: List<String> = listOf(
         KID,
         ACCOUNT,
         HOUSEHOLD_POLICY,
-        PARENT_KEY,
         CHORE,
         CHORE_SUBMISSION,
         REWARD,

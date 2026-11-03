@@ -13,6 +13,7 @@ import dev.kpetriv.sprout.core.syncfirebase.HouseholdFunctions
 import dev.kpetriv.sprout.core.syncfirebase.LinkCode
 import dev.kpetriv.sprout.core.syncfirebase.ParentKeyRegistration
 import dev.kpetriv.sprout.core.syncfirebase.RevokedDevice
+import dev.kpetriv.sprout.feature.lock.ParentKeyChallengeSource
 import kotlinx.serialization.json.JsonObject
 import javax.inject.Inject
 
@@ -54,11 +55,32 @@ class HouseholdAdminFunctions @Inject constructor(
      * Registers this device's parent authorisation key ([publicKey], X.509 SPKI DER) with the server's registry
      * (clients cannot write `parentKeys`, D-M3-34), then records the server's `validFromLamport` locally
      * ([HouseholdPolicyRepository.recordServerRegisteredKey]) so later parent signatures are covered on every device.
+     *
+     * [attestationChain] is the key's Keystore attestation (DER, leaf first) for the challenge [registrationChallenge]
+     * issued; when it is empty (Keystore could not attest) no `attestationChain` field is sent, and the server applies
+     * its rule for unattested keys (accepted as `NONE` only in the emulator).
      */
-    suspend fun registerParentKey(publicKey: ByteArray): Result<ParentKeyRegistration> = withSession { session ->
+    suspend fun registerParentKey(
+        publicKey: ByteArray,
+        attestationChain: List<ByteArray>,
+    ): Result<ParentKeyRegistration> = withSession { session ->
         val signature = signer.sign(DeviceProof.registerParentKeyPayload(session.householdId, publicKey))
-        functions.registerParentKey(publicKey, attestationChain = null, deviceId = session.deviceId, signature)
-            .onSuccess { policies.recordServerRegisteredKey(it.fingerprint, it.validFromLamport) }
+        functions.registerParentKey(
+            publicKey,
+            attestationChain = attestationChain.takeIf { it.isNotEmpty() },
+            deviceId = session.deviceId,
+            signature,
+        ).onSuccess { policies.recordServerRegisteredKey(it.fingerprint, it.validFromLamport) }
+    }
+
+    /**
+     * A fresh attestation challenge for the parent key (`beginDeviceRegistration`; its only effect is replacing the
+     * caller's `challenges/{uid}`, so no dedicated callable is needed). Null in the trial household, which has no
+     * server: the key is then created without attestation.
+     */
+    suspend fun registrationChallenge(): Result<ByteArray>? {
+        if (sessions.get()?.takeUnless { it.isLocalTrial } == null) return null
+        return functions.beginDeviceRegistration()
     }
 
     private suspend fun <T> withSession(block: suspend (Session) -> Result<T>): Result<T> {
@@ -66,4 +88,13 @@ class HouseholdAdminFunctions @Inject constructor(
             ?: return Result.failure(FunctionsException(FunctionsError.Unauthenticated))
         return block(session)
     }
+}
+
+/**
+ * `feature/lock`'s [ParentKeyChallengeSource] over [HouseholdAdminFunctions.registrationChallenge]: null in the trial
+ * household; a failed call throws its [FunctionsException], so the key change fails before any key is touched.
+ */
+class ServerParentKeyChallengeSource @Inject constructor(private val admin: HouseholdAdminFunctions) :
+    ParentKeyChallengeSource {
+    override suspend fun registrationChallenge(): ByteArray? = admin.registrationChallenge()?.getOrThrow()
 }

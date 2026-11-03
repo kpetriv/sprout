@@ -148,7 +148,7 @@ class FirebaseEmulatorTransportTest {
         // A parent_key document is refused unsent; the server-written key is seeded instead.
         val parentKey = TestData.parentKeyDocument(FINGERPRINT).copy(householdId = HouseholdId(HID))
         val refused = blocking { transport.push(emptyList(), listOf(parentKey)) }
-        assertEquals(listOf(FirebaseSyncTransport.UNSUPPORTED), refused.rejected.map { it.second.code })
+        assertEquals(listOf(FirebaseSyncTransport.UNKNOWN_DOC_TYPE), refused.rejected.map { it.second.code })
         seed(
             "households/$HID/parentKeys?documentId=$FINGERPRINT",
             mapOf(

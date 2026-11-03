@@ -6,9 +6,7 @@ import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.withContext
 import java.security.KeyPair
 import java.security.KeyPairGenerator
-import java.security.KeyStoreException
 import java.security.PrivateKey
-import java.security.ProviderException
 import java.security.spec.ECGenParameterSpec
 import android.security.keystore.KeyProperties as AndroidKeyProperties
 
@@ -50,13 +48,9 @@ class AndroidKeystoreDeviceKeyStore internal constructor(
     @Synchronized
     private fun regenerate(challenge: ByteArray): DeviceRegistrationMaterial {
         val alias = KeyAliases.DEVICE_SIGNING_V2
-        val pair = try {
-            generate(alias) { setAttestationChallenge(challenge) }
-        } catch (e: ProviderException) {
-            // Keystore without attestation support refuses the challenge: register an unattested key instead.
-            generateUnattested(alias, e)
-        } catch (e: KeyStoreException) {
-            generateUnattested(alias, e)
+        // Keystore without attestation support refuses the challenge: register an unattested key instead.
+        val pair = generateWithAttestationFallback(challenge, cleanUp = { keystore.delete(alias) }) { attest ->
+            generate(alias) { if (attest != null) setAttestationChallenge(attest) }
         }
         val handle = handleFor(pair.private, pair.public.encoded, alias)
         cached = handle
@@ -65,18 +59,9 @@ class AndroidKeystoreDeviceKeyStore internal constructor(
         return DeviceRegistrationMaterial(handle.publicKey, attestationChain(alias))
     }
 
-    private fun generateUnattested(alias: String, cause: Exception): KeyPair = try {
-        generate(alias) {}
-    } catch (e: ProviderException) {
-        e.addSuppressed(cause)
-        throw e
-    }
-
     /** The attestation chain of [alias], leaf first; empty when Keystore only holds a self-signed certificate. */
-    private fun attestationChain(alias: String): List<ByteArray> {
-        val chain = keystore.keyStore.getCertificateChain(alias).orEmpty()
-        return if (chain.size < 2) emptyList() else chain.map { it.encoded }
-    }
+    private fun attestationChain(alias: String): List<ByteArray> =
+        attestationChainOf(keystore.keyStore.getCertificateChain(alias))
 
     @Synchronized
     private fun loadOrCreate(): SigningKeyHandle {

@@ -184,6 +184,73 @@ class ParentKeyEnrolmentTest {
     }
 
     @Test
+    fun `enrolment binds the new key to a fresh server challenge and registers its chain`() = test {
+        val f = unlocked()
+        var keysWhenIssued = -1
+        f.challenges.onIssued = { keysWhenIssued = f.authorizer.keysCreated }
+
+        assertEquals(ParentKeyChangeResult.Registered, f.enrolment.enrol(PIN.toCharArray()))
+
+        val challenge = f.challenges.issued.single()
+        assertEquals(0, keysWhenIssued, "the challenge is fetched before the key is created")
+        assertTrue(challenge.contentEquals(f.authorizer.keyChallenge), "the key is bound to that challenge")
+        val chain = assertNotNull(f.registry.lastChain)
+        assertEquals(2, chain.size)
+        assertTrue(chain[0].contentEquals(FakeParentAuthorizer.FAKE_LEAF_PREFIX + challenge), "leaf first")
+    }
+
+    @Test
+    fun `without a household session the key is unattested and the chain empty`() = test {
+        val f = unlocked()
+        f.challenges.next = null
+
+        assertEquals(ParentKeyChangeResult.Registered, f.enrolment.enrol(PIN.toCharArray()))
+
+        assertNull(f.authorizer.keyChallenge)
+        assertEquals(emptyList(), f.registry.lastChain)
+    }
+
+    @Test
+    fun `a Keystore that cannot attest registers the key with an empty chain`() = test {
+        val f = unlocked()
+        f.authorizer.canAttest = false
+
+        assertEquals(ParentKeyChangeResult.Registered, f.enrolment.enrol(PIN.toCharArray()))
+
+        assertEquals(emptyList(), f.registry.lastChain)
+        assertEquals(1, f.registry.registrations)
+    }
+
+    @Test
+    fun `a challenge that cannot be fetched changes nothing, not even a working key`() = test {
+        val f = unlocked()
+        val working = f.enrolKeyDirectly()
+        f.challenges.failure = java.io.IOException("offline")
+
+        assertEquals(ParentKeyChangeResult.Failed, f.renewal.renew(PIN.toCharArray()))
+
+        assertEquals(working, f.authorizer.existingParentPublicKey())
+        assertEquals(working, f.registry.key)
+        assertEquals(0, f.prompter.prompts)
+        assertEquals(ParentKeyStatus.READY, f.session.parentKeyStatus())
+    }
+
+    @Test
+    fun `renewal sends a new key with a chain for a new challenge`() = test {
+        val f = unlocked()
+        f.enrolment.enrol(PIN.toCharArray())
+        val first = f.challenges.issued.single()
+        f.challenges.next = ByteArray(32) { 42 }
+
+        assertEquals(ParentKeyChangeResult.Registered, f.renewal.renew(PIN.toCharArray()))
+
+        val second = f.challenges.issued.last()
+        assertFalse(first.contentEquals(second))
+        assertTrue(assertNotNull(f.registry.lastChain)[0].contentEquals(FakeParentAuthorizer.FAKE_LEAF_PREFIX + second))
+        assertEquals(1, f.registry.replacements)
+    }
+
+    @Test
     fun `renewal without a registered key is refused`() = test {
         val f = unlocked()
 

@@ -19,12 +19,16 @@ fun interface HouseholdStatusSource {
  * @property sync the sync line; null for the trial.
  * @property rejected events this device refused (quarantined), newest first.
  * @property pendingDevices parent phones waiting for this phone's approval.
+ * @property signingKeyNotRegistered this phone's parent signing key works here but the household's server never
+ *   recorded it (D-M3-39), so the other devices refuse its signatures; the card's "Retry" opens Settings → Security,
+ *   which renews and registers the key. Sync cannot retry it: the server needs a fresh attestation challenge.
  */
 data class HouseholdStatus(
     val trial: Boolean = false,
     val sync: SyncLine? = null,
     val rejected: List<RejectedEvent> = emptyList(),
     val pendingDevices: List<PendingDevice> = emptyList(),
+    val signingKeyNotRegistered: Boolean = false,
 )
 
 /**
@@ -53,10 +57,12 @@ enum class RejectionReason {
     DEVICE_NOT_ACTIVE,
     WRONG_ACCOUNT,
     ROLE_NOT_ALLOWED,
+    WRONG_KID,
     BAD_SIGNATURE,
     PARENT_SIGNATURE_MISSING,
     PARENT_SIGNATURE_INVALID,
     OUT_OF_ORDER,
+    CONFLICTING_HISTORY,
     OTHER,
     ;
 
@@ -68,10 +74,12 @@ enum class RejectionReason {
             "DEVICE_NOT_ACTIVE" -> DEVICE_NOT_ACTIVE
             "UID_MISMATCH" -> WRONG_ACCOUNT
             "ROLE_NOT_ALLOWED" -> ROLE_NOT_ALLOWED
+            "KID_MISMATCH" -> WRONG_KID
             "BAD_DEVICE_SIGNATURE" -> BAD_SIGNATURE
             "PARENT_SIGNATURE_MISSING" -> PARENT_SIGNATURE_MISSING
             "PARENT_SIGNATURE_INVALID" -> PARENT_SIGNATURE_INVALID
             "LAMPORT_TOO_FAR_AHEAD" -> OUT_OF_ORDER
+            "FORKED_CHAIN" -> CONFLICTING_HISTORY
             else -> OTHER
         }
     }

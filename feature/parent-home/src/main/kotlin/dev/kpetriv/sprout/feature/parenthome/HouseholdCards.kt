@@ -28,13 +28,25 @@ import java.time.format.FormatStyle
 import kotlin.time.Instant
 import kotlin.time.toJavaInstant
 
-/** The household cards at the top of the dashboard (M3 §6): trial banner, sync line, new devices, refused events. */
+/**
+ * The household cards at the top of the dashboard (M3 §6): trial banner, sync line, the unregistered signing key
+ * (D-M3-39), new devices, refused events.
+ */
 @Composable
-internal fun HouseholdCards(status: HouseholdStatus, onSetUpSync: () -> Unit, onReviewDevice: (DeviceId) -> Unit) {
-    if (status.trial) TrialBanner(onSetUpSync)
+internal fun HouseholdCards(status: HouseholdStatus, links: ParentHomeLinks) {
+    if (status.trial) TrialBanner(links.onSetUpSync)
     status.sync?.let { SyncStatusLine(it) }
-    if (status.pendingDevices.isNotEmpty()) NewDevicesCard(status.pendingDevices, onReviewDevice)
+    if (status.signingKeyNotRegistered) SigningKeyNotRegisteredCard(links.onRegisterSigningKey)
+    if (status.pendingDevices.isNotEmpty()) NewDevicesCard(status.pendingDevices, links.onReviewDevice)
     if (status.rejected.isNotEmpty()) RejectedEventsCard(status.rejected)
+}
+
+@Composable
+private fun SigningKeyNotRegisteredCard(onRetry: () -> Unit) {
+    HouseholdCard(stringResource(R.string.feature_parent_home_signing_key_title), highlighted = true) {
+        Text(stringResource(R.string.feature_parent_home_signing_key_text), style = MaterialTheme.typography.bodyMedium)
+        Button(onClick = onRetry) { Text(stringResource(R.string.feature_parent_home_signing_key_retry)) }
+    }
 }
 
 @Composable
@@ -148,10 +160,12 @@ private fun reasonText(reason: RejectionReason): String = stringResource(
         RejectionReason.DEVICE_NOT_ACTIVE -> R.string.feature_parent_home_reason_device_not_active
         RejectionReason.WRONG_ACCOUNT -> R.string.feature_parent_home_reason_wrong_account
         RejectionReason.ROLE_NOT_ALLOWED -> R.string.feature_parent_home_reason_role
+        RejectionReason.WRONG_KID -> R.string.feature_parent_home_reason_wrong_kid
         RejectionReason.BAD_SIGNATURE -> R.string.feature_parent_home_reason_bad_signature
         RejectionReason.PARENT_SIGNATURE_MISSING -> R.string.feature_parent_home_reason_parent_signature_missing
         RejectionReason.PARENT_SIGNATURE_INVALID -> R.string.feature_parent_home_reason_parent_signature_invalid
         RejectionReason.OUT_OF_ORDER -> R.string.feature_parent_home_reason_out_of_order
+        RejectionReason.CONFLICTING_HISTORY -> R.string.feature_parent_home_reason_conflicting_history
         RejectionReason.OTHER -> R.string.feature_parent_home_reason_other
     },
 )

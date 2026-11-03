@@ -102,14 +102,44 @@ class HouseholdAdminFunctionsTest {
     }
 
     @Test
-    fun `registerParentKey signs the key and records the server's registration`() = runTest {
-        val key = byteArrayOf(1, 2, 3, 4)
-        val invoker = RecordingInvoker(mapOf("fingerprint" to "f".repeat(64), "validFromLamport" to 42L))
-        admin(invoker).registerParentKey(key).getOrThrow()
+    fun `registerParentKey signs the key, sends its attestation chain and records the server's registration`() =
+        runTest {
+            val key = byteArrayOf(1, 2, 3, 4)
+            val chain = listOf(byteArrayOf(9, 8), byteArrayOf(7))
+            val invoker = RecordingInvoker(mapOf("fingerprint" to "f".repeat(64), "validFromLamport" to 42L))
+            admin(invoker).registerParentKey(key, chain).getOrThrow()
+            val (name, data) = invoker.calls.single()
+            assertEquals(HouseholdFunctions.REGISTER_PARENT_KEY, name)
+            assertEquals(THIS_DEVICE.value, data["deviceId"])
+            assertEquals(Base64.Default.encode(key), data["publicKey"])
+            assertEquals(chain.map { Base64.Default.encode(it) }, data["attestationChain"], "leaf first, as given")
+            assertTrue(verifies(DeviceProof.registerParentKeyPayload(REAL_HOUSEHOLD, key), data["signature"]))
+            assertEquals(listOf("f".repeat(64) to 42L), policies.recorded)
+        }
+
+    @Test
+    fun `an unattested parent key is sent without an attestationChain field`() = runTest {
+        val invoker = RecordingInvoker(mapOf("fingerprint" to "f".repeat(64), "validFromLamport" to 1L))
+        admin(invoker).registerParentKey(byteArrayOf(1, 2), emptyList()).getOrThrow()
         val data = invoker.calls.single().second
-        assertEquals(THIS_DEVICE.value, data["deviceId"])
-        assertTrue(verifies(DeviceProof.registerParentKeyPayload(REAL_HOUSEHOLD, key), data["signature"]))
-        assertEquals(listOf("f".repeat(64) to 42L), policies.recorded)
+        assertFalse("attestationChain" in data, "the server then applies its unattested rule")
+    }
+
+    @Test
+    fun `the registration challenge comes from beginDeviceRegistration, and the trial household has none`() = runTest {
+        val challenge = ByteArray(32) { 5 }
+        val invoker = RecordingInvoker(mapOf("challenge" to Base64.Default.encode(challenge)))
+        val source = ServerParentKeyChallengeSource(admin(invoker))
+        assertTrue(challenge.contentEquals(source.registrationChallenge()))
+        assertEquals(HouseholdFunctions.BEGIN_DEVICE_REGISTRATION, invoker.calls.single().first)
+
+        val trial = ServerParentKeyChallengeSource(admin(invoker, FakeSessionStore(trialSession())))
+        assertEquals(null, trial.registrationChallenge())
+        assertEquals(1, invoker.calls.size, "the trial household never reaches the backend")
+
+        invoker.failure = FunctionsException(FunctionsError.Unavailable)
+        val failure = runCatching { source.registrationChallenge() }.exceptionOrNull() as FunctionsException
+        assertEquals(FunctionsError.Unavailable, failure.error)
     }
 
     @Test

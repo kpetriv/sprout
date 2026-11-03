@@ -5,6 +5,7 @@ import dev.kpetriv.sprout.core.domainhousehold.AllowanceSchedule
 import dev.kpetriv.sprout.core.domainledger.Currency
 import dev.kpetriv.sprout.core.domainledger.Money
 import dev.kpetriv.sprout.core.domainledger.ParentAuthorization
+import dev.kpetriv.sprout.core.domainledger.QuarantineReason
 import dev.kpetriv.sprout.core.model.AccountId
 import dev.kpetriv.sprout.core.model.AllowanceCadence
 import dev.kpetriv.sprout.core.model.CalendarDate
@@ -352,5 +353,13 @@ class ParentHomeViewModelTest {
         assertEquals(RejectionReason.UNREADABLE, RejectionReason.of("SCHEMA_UNSUPPORTED"))
         assertEquals(RejectionReason.OTHER, RejectionReason.of("INSUFFICIENT_FUNDS"))
         assertEquals(RejectionReason.OTHER, RejectionReason.of("unknown"))
+        assertEquals(RejectionReason.WRONG_KID, RejectionReason.of("KID_MISMATCH"))
+        assertEquals(RejectionReason.CONFLICTING_HISTORY, RejectionReason.of("FORKED_CHAIN"))
+    }
+
+    @Test
+    fun `every verifier quarantine code has its own reason`() {
+        val unmapped = QuarantineReason.entries.filter { RejectionReason.of(it.name) == RejectionReason.OTHER }
+        assertEquals(emptyList(), unmapped)
     }
 }

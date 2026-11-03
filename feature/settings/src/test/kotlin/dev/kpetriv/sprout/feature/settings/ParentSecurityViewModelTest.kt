@@ -106,6 +106,52 @@ class ParentSecurityViewModelTest {
     }
 
     @Test
+    fun `a key the household never received offers a retry that renews it (D-M3-39)`() = test {
+        policies.policy.value = FakeHouseholdPolicyRepository.policy(hasKey = true)
+        policies.serverPending.value = true
+        val retry = FakeRegistrar { purpose ->
+            if (purpose == "renew") policies.serverPending.value = false
+            SigningKeyOutcome.Registered
+        }
+        val vm = ParentSecurityViewModel(pinChanger, retry, lockPreferences, authorizer, policies)
+        backgroundScope.launch(main.dispatcher) { vm.state.collect {} }
+        assertEquals(SigningStatus.NOT_REGISTERED_WITH_HOUSEHOLD, vm.state.value.signing)
+        assertTrue(vm.state.value.keyNotRegisteredWithHousehold)
+
+        vm.onEvent(ParentSecurityEvent.StartSigningKeyChange)
+        assertEquals(SigningPinPurpose.RENEW, vm.state.value.signingPin?.purpose)
+        vm.typeSigning("482913")
+
+        assertEquals(listOf("renew" to "482913"), retry.calls)
+        assertEquals(SigningStatus.ON, vm.state.value.signing)
+        assertEquals(SettingsMessage.KEY_REGISTERED, vm.state.value.message)
+    }
+
+    @Test
+    fun `a retry the household still did not receive says so and keeps the row`() = test {
+        policies.policy.value = FakeHouseholdPolicyRepository.policy(hasKey = true)
+        policies.serverPending.value = true
+        val vm = ParentSecurityViewModel(pinChanger, registrar, lockPreferences, authorizer, policies)
+        backgroundScope.launch(main.dispatcher) { vm.state.collect {} }
+
+        vm.onEvent(ParentSecurityEvent.StartSigningKeyChange)
+        vm.typeSigning("482913")
+
+        assertEquals(SettingsMessage.KEY_NOT_SHARED, vm.state.value.message)
+        assertEquals(SigningStatus.NOT_REGISTERED_WITH_HOUSEHOLD, vm.state.value.signing)
+    }
+
+    @Test
+    fun `a fingerprint change wins over a missing server registration`() = test {
+        policies.policy.value = FakeHouseholdPolicyRepository.policy(hasKey = true)
+        policies.serverPending.value = true
+        registrar.needsRenewal = true
+        val vm = viewModel()
+
+        assertEquals(SigningStatus.KEY_INVALIDATED, vm.state.value.signing)
+    }
+
+    @Test
     fun `nothing to start while signing is on or unavailable`() = test {
         policies.policy.value = FakeHouseholdPolicyRepository.policy(hasKey = true)
         val vm = viewModel()

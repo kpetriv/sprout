@@ -126,11 +126,19 @@ describe('registerParentKey', () => {
   });
 
   describe('with attestation', () => {
-    async function attestedKey(h: Household, options: Omit<FakeChainOptions, 'challenge' | 'leafKeys'>) {
+    /** `untrustedRoot`: the chain does not end in a trust anchor, like the Android emulator's software Keystore. */
+    async function attestedKey(
+      h: Household,
+      options: Omit<FakeChainOptions, 'challenge' | 'leafKeys'>,
+      untrustedRoot = false,
+    ) {
       const { challenge } = await call(fns.beginDeviceRegistration, req(h.parent));
       const keys = await newKeyPair();
       const fake = await fakeChain({ challenge: Buffer.from(challenge, 'base64'), leafKeys: keys, ...options });
-      setAttestationOptionsForTest({ roots: [fake.root], statusList: () => Promise.resolve(null) });
+      setAttestationOptionsForTest({
+        ...(untrustedRoot ? {} : { roots: [fake.root] }),
+        statusList: () => Promise.resolve(null),
+      });
       const spki = await spkiOf(keys);
       const key = { publicKey: spki.toString('base64'), spki } as TestDevice;
       return keyArgs(h, key, h.device, { attestationChain: fake.chain });
@@ -150,7 +158,31 @@ describe('registerParentKey', () => {
       );
     });
 
+    it('records an emulator chain (untrusted root) as NONE in emulator mode, whatever the key properties', async () => {
+      const h = await newHousehold();
+      // The emulator's software Keystore: SOFTWARE level, so a verified chain like it would break the hardware rule.
+      const args = await attestedKey(
+        h,
+        { userAuthType: 2, securityLevel: SecurityLevel.software, propertiesInSoftwareList: true },
+        true,
+      );
+      const result = await register(h.parent, args);
+      const stored = await db.doc(`households/${h.hid}/parentKeys/${result.fingerprint}`).get();
+      expect(stored.get('attestation')).toBe('NONE');
+      expect(stored.get('validFromLamport')).toBe(1);
+      expect((await db.doc(`challenges/${h.parent.uid}`).get()).exists).toBe(false);
+    });
+
+    it('refuses an emulator chain outside the emulator', async () => {
+      const h = await newHousehold();
+      const args = await attestedKey(h, { userAuthType: 2 }, true);
+      delete process.env.SPROUT_EMULATOR;
+      await expectCode(register(h.parent, args), 'permission-denied');
+      expect((await db.collection(`households/${h.hid}/parentKeys`).get()).size).toBe(0);
+    });
+
     it('refuses a software key, a key without biometric per-use authentication, or a wrong challenge', async () => {
+      // SPROUT_EMULATOR is set (test/setup.ts): policy violations on a verified chain are refused in emulator mode too.
       const h = await newHousehold();
       const refused = async (options: Omit<FakeChainOptions, 'challenge' | 'leafKeys'>) =>
         expectCode(register(h.parent, await attestedKey(h, options)), 'permission-denied');

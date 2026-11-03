@@ -64,10 +64,12 @@ object SettingsPreviewData {
         keyNeedsRenewal: Boolean = false,
         signingPin: SigningPinUi? = null,
         changePin: ChangePinUi = ChangePinUi(),
+        keyNotRegisteredWithHousehold: Boolean = false,
     ): ParentSecurityUiState = ParentSecurityUiState(
         availability = availability,
         policy = SignaturePolicyUi(hasParentKey = hasParentKey, requireParentSignature = hasParentKey),
         keyNeedsRenewal = keyNeedsRenewal,
+        keyNotRegisteredWithHousehold = keyNotRegisteredWithHousehold,
         lockWhenLeaving = true,
         changePin = changePin,
         pinError = pinError,

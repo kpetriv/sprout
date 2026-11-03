@@ -170,6 +170,11 @@ class FakeInterestPolicyRepository(initial: InterestPolicy = InterestPolicy(HOUS
 class FakeHouseholdPolicyRepository(initial: HouseholdPolicy? = policy(hasKey = false)) : HouseholdPolicyRepository {
     val policy = MutableStateFlow(initial)
 
+    /** The server never recorded this device's key (D-M3-39). */
+    val serverPending = MutableStateFlow(false)
+
+    override fun observeServerRegistrationPending(): Flow<Boolean> = serverPending
+
     override fun observe(): Flow<HouseholdPolicy?> = policy
 
     override suspend fun get(): HouseholdPolicy? = policy.value

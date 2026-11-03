@@ -1,5 +1,6 @@
 package dev.kpetriv.sprout.home
 
+import dev.kpetriv.sprout.core.database.HouseholdPolicyRepository
 import dev.kpetriv.sprout.core.database.KidRepository
 import dev.kpetriv.sprout.core.database.RoomLedgerRepository
 import dev.kpetriv.sprout.core.database.RoomOutboxSource
@@ -22,7 +23,10 @@ import javax.inject.Inject
 /**
  * The dashboard's household cards (M3 §6) over the session (trial or not), [SyncController.status], the event that
  * blocks the outbox ([RoomOutboxSource.observeBlocked]), the quarantined
- * events (`observeQuarantined`, ids and reasons only) and the registry mirror (labels and PENDING parent phones).
+ * events (`observeQuarantined`, ids and reasons only), the registry mirror (labels and PENDING parent phones) and
+ * whether this phone's parent key still lacks its server registration
+ * ([HouseholdPolicyRepository.observeServerRegistrationPending], D-M3-39). Sync never retries that registration (the
+ * server needs a fresh attestation challenge and the parent's fingerprint); the card stays until the parent retries.
  */
 @Suppress("LongParameterList") // One source per card.
 class SyncHouseholdStatusSource @Inject constructor(
@@ -32,13 +36,15 @@ class SyncHouseholdStatusSource @Inject constructor(
     private val outbox: RoomOutboxSource,
     private val database: SproutDatabase,
     private val kids: KidRepository,
+    private val policies: HouseholdPolicyRepository,
 ) : HouseholdStatusSource {
     override fun observe(): Flow<HouseholdStatus> = combine(
         combine(sessions.observe(), sync.status, outbox.observeBlocked(), ::Triple),
         ledger.observeQuarantined(),
         database.deviceDao().observeAll(),
         kids.observeKids(),
-    ) { (session, status, blocked), quarantined, devices, kidList ->
+        policies.observeServerRegistrationPending(),
+    ) { (session, status, blocked), quarantined, devices, kidList, keyPending ->
         val trial = session?.isLocalTrial ?: false
         val byId = devices.associateBy { it.deviceId }
         val names = kidList.associate { it.id to it.firstName }
@@ -67,6 +73,7 @@ class SyncHouseholdStatusSource @Inject constructor(
                         it.deviceId != session?.deviceId
                 }
                 .map { PendingDevice(it.deviceId, label(it.deviceId).fingerprint) },
+            signingKeyNotRegistered = keyPending && session?.role == Role.PARENT,
         )
     }
 
