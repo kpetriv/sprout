@@ -7,7 +7,9 @@ import dev.kpetriv.sprout.core.domainledger.AccountKind
 import dev.kpetriv.sprout.core.domainledger.Currency
 import dev.kpetriv.sprout.core.model.KidId
 import dev.kpetriv.sprout.core.model.KidUiTier
+import dev.kpetriv.sprout.core.model.RewardKind
 import dev.kpetriv.sprout.core.model.YearMonth
+import dev.kpetriv.sprout.core.time.HouseholdCalendar
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.runTest
@@ -28,11 +30,21 @@ class KidAndAccountRepositoryTest {
     private val clock = testClock()
     private val database = inMemoryDatabase()
     private val authors = LocalOnlyAuthorProvider(DeviceSigner(InMemoryDeviceKeyStore(clock), Dispatchers.Unconfined))
-    private val kids = RoomKidRepository(database, authors, clock)
+    private val photos = testPhotoStore(database, authors, clock)
+    private val kids = RoomKidRepository(database, authors, clock, photos)
     private val accounts = RoomAccountRepository(database, authors, clock)
     private val gbp = Currency.Fiat("GBP")
+    private val targets = HouseholdSeedTargets(
+        kids = kids,
+        accounts = accounts,
+        chores = RoomChoreRepository(database, authors, clock, NothingPaid, photos),
+        rewards = RoomRewardRepository(database, authors, clock),
+        allowances = RoomAllowanceRepository(database, authors, clock),
+        goals = RoomSavingsGoalRepository(database, authors, clock),
+        policies = RoomHouseholdPolicyRepository(database, authors, { gbp }, clock),
+    )
     private val bootstrap =
-        HouseholdBootstrap(database, kids, accounts, authors, { gbp }, clock) { ZoneOffset.UTC }
+        HouseholdBootstrap(database, targets, authors, { gbp }, clock, HouseholdCalendar(clock) { ZoneOffset.UTC })
 
     @After
     fun close() = database.close()
@@ -55,6 +67,39 @@ class KidAndAccountRepositoryTest {
                 owned,
             )
         }
+    }
+
+    @Test
+    fun bootstrapSeedsChoresRewardsAnAllowanceForLeoAndAGoalForZoe() = runTest {
+        assertTrue(bootstrap.ensureLocalHousehold())
+        val (mia, leo, zoe) = kids.observeKids().first().sortedBy { it.birthYearMonth }.asReversed()
+
+        listOf(mia, leo, zoe).forEach { kid -> assertEquals(2, targets.chores.observeChores(kid.id).first().size) }
+        val rewards = targets.rewards.observeRewards().first()
+        assertEquals(
+            setOf(RewardKind.SCREEN_TIME, RewardKind.TREAT, RewardKind.OUTING),
+            rewards.map {
+                it.kind
+            }.toSet(),
+        )
+        assertEquals(30, rewards.single { it.kind == RewardKind.SCREEN_TIME }.minutesGranted)
+        assertTrue(rewards.all { it.currency == gbp })
+        assertEquals(listOf(leo.id), targets.allowances.observeSchedules().first().map { it.kidId })
+        assertEquals(1, targets.goals.observeGoals(zoe.id).first().size)
+        assertEquals(gbp, targets.policies.get()?.fiatCurrency)
+        // Chores, rewards, the allowance and the goal are synced documents.
+        assertEquals(
+            mapOf(
+                DocTypes.CHORE to 6,
+                DocTypes.REWARD to 3,
+                DocTypes.ALLOWANCE_SCHEDULE to 1,
+                DocTypes.SAVINGS_GOAL to 1,
+            ),
+            database.outboxDao().all().mapNotNull { it.docType }.groupingBy { it }.eachCount(),
+        )
+        // Seeding twice does nothing.
+        assertFalse(bootstrap.ensureLocalHousehold())
+        assertEquals(3, targets.rewards.observeRewards().first().size)
     }
 
     @Test
@@ -92,6 +137,9 @@ class KidAndAccountRepositoryTest {
         audit.forEach { row ->
             listOf("Mia", "Leo", "Zoe").forEach { name ->
                 assertFalse(name in row.detailsJson || name in row.target, "audit row must not contain a name")
+            }
+            listOf("Make your bed", "Ice cream", "New bike").forEach { title ->
+                assertFalse(title in row.detailsJson, "audit row must not contain a title")
             }
         }
     }

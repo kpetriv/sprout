@@ -25,6 +25,7 @@ dependencies {
     compileOnly(libs.detekt.gradlePlugin)
     compileOnly(libs.ktlint.gradlePlugin)
     compileOnly(libs.dependencyCheck.gradlePlugin)
+    compileOnly(libs.roborazzi.gradlePlugin)
 }
 
 tasks {
@@ -59,6 +60,10 @@ gradlePlugin {
         register("jvmLibrary") {
             id = libs.plugins.sprout.jvm.library.get().pluginId
             implementationClass = "JvmLibraryConventionPlugin"
+        }
+        register("androidScreenshot") {
+            id = libs.plugins.sprout.android.screenshot.get().pluginId
+            implementationClass = "AndroidScreenshotConventionPlugin"
         }
         register("hilt") {
             id = libs.plugins.sprout.hilt.get().pluginId

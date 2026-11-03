@@ -6,6 +6,9 @@ import dev.kpetriv.sprout.BuildConfig
 import dev.kpetriv.sprout.core.database.HouseholdBootstrap
 import dev.kpetriv.sprout.core.database.RoomLedgerRepository
 import dev.kpetriv.sprout.di.ApplicationScope
+import dev.kpetriv.sprout.feature.chores.ChorePhotoCache
+import dev.kpetriv.sprout.work.PlanScheduler
+import dev.kpetriv.sprout.work.ScheduledActionsPlanner
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -19,31 +22,49 @@ import javax.inject.Singleton
 
 /**
  * One-time, process-start work, run off the main thread on the [ApplicationScope] (IO):
+ * 0. clear the plaintext chore-photo capture cache ([ChorePhotoCache], ADR-0005), best effort: a capture a crash or a
+ *    process death left behind never outlives the next start;
  * 1. debug builds only: seed the demo household ([HouseholdBootstrap], TEMPORARY until onboarding in M3; release
  *    builds never create demo kids);
  * 2. ledger maintenance: quarantine stored events whose hash or signature no longer verifies
- *    ([RoomLedgerRepository.quarantineUnverifiable]).
+ *    ([RoomLedgerRepository.quarantineUnverifiable]);
+ * 3. plan allowance and interest up to today ([ScheduledActionsPlanner]), best effort: a failure here does not fail
+ *    startup, the daily run tries again;
+ * 4. schedule the daily planner ([PlanScheduler], kept if already scheduled).
  *
  * Dependencies are injected lazily so even building their graph (database, Keystore-backed signer) happens on the IO
  * thread, never in `Application.onCreate`. Failures other than cancellation are caught and published as
- * [StartupState.Failed] (never logged: nothing here may carry personal data); the home screen shows them with a
+ * [StartupState.Failed] (never logged: nothing here may carry personal data); the app shell shows them with a
  * retry button that calls [retry].
  *
- * @param seedDemoHousehold whether to run the demo seeding; `BuildConfig.DEBUG` in the app.
+ * @param seedDemoHousehold the demo seeding, or null to skip it; set only when `BuildConfig.DEBUG`.
  */
 @Singleton
 class AppInitializer internal constructor(
     private val scope: CoroutineScope,
-    private val householdBootstrap: Lazy<HouseholdBootstrap>,
-    private val ledger: Lazy<RoomLedgerRepository>,
-    private val seedDemoHousehold: Boolean,
+    private val seedDemoHousehold: (suspend () -> Unit)?,
+    private val quarantineLedger: suspend () -> Unit,
+    private val planner: Lazy<ScheduledActionsPlanner>,
+    private val scheduler: Lazy<PlanScheduler>,
+    private val clearPhotoCache: () -> Unit = {},
 ) : StartupStatus {
     @Inject
+    @Suppress("LongParameterList") // One lazily built dependency per startup step.
     constructor(
         @ApplicationScope scope: CoroutineScope,
         householdBootstrap: Lazy<HouseholdBootstrap>,
         ledger: Lazy<RoomLedgerRepository>,
-    ) : this(scope, householdBootstrap, ledger, BuildConfig.DEBUG)
+        planner: Lazy<ScheduledActionsPlanner>,
+        scheduler: Lazy<PlanScheduler>,
+        photoCache: Lazy<ChorePhotoCache>,
+    ) : this(
+        scope = scope,
+        seedDemoHousehold = demoSeeding(householdBootstrap, BuildConfig.DEBUG),
+        quarantineLedger = { ledger.get().quarantineUnverifiable() },
+        planner = planner,
+        scheduler = scheduler,
+        clearPhotoCache = { photoCache.get().clear() },
+    )
 
     private val started = AtomicBoolean(false)
     private val running = AtomicBoolean(false)
@@ -75,13 +96,38 @@ class AppInitializer internal constructor(
 
     @Suppress("TooGenericExceptionCaught") // Any failure must reach the UI as a state instead of crashing the process.
     private suspend fun runWork(): StartupState = try {
-        if (seedDemoHousehold) householdBootstrap.get().ensureLocalHousehold()
-        ledger.get().quarantineUnverifiable()
+        clearPhotoCacheBestEffort()
+        seedDemoHousehold?.invoke()
+        quarantineLedger()
+        planBestEffort()
+        scheduler.get().scheduleDaily()
         StartupState.Ready
     } catch (e: CancellationException) {
         throw e
     } catch (e: Exception) {
         StartupState.Failed(failureKind(e))
+    }
+
+    /** Runs on the IO scope. A file system failure never fails startup; the next capture clears the cache too. */
+    @Suppress("TooGenericExceptionCaught", "SwallowedException")
+    private fun clearPhotoCacheBestEffort() {
+        try {
+            clearPhotoCache()
+        } catch (expected: Exception) {
+            // Nothing to show: the capture flow clears the directory again before every capture.
+        }
+    }
+
+    /** The first plan of the day. Never fails startup: the scheduled run retries, and nothing is logged. */
+    @Suppress("TooGenericExceptionCaught", "SwallowedException")
+    private suspend fun planBestEffort() {
+        try {
+            planner.get().planUpToToday()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (expected: Exception) {
+            // Left to PlanScheduledActionsWorker.
+        }
     }
 
     private fun failureKind(error: Throwable): StartupFailure {
@@ -98,5 +144,12 @@ class AppInitializer internal constructor(
 
     private companion object {
         const val MAX_CAUSE_DEPTH = 8
+
+        /** The TEMPORARY demo seeding, debug builds only: release builds never create demo kids. */
+        fun demoSeeding(bootstrap: Lazy<HouseholdBootstrap>, debug: Boolean): (suspend () -> Unit)? = if (debug) {
+            { bootstrap.get().ensureLocalHousehold() }
+        } else {
+            null
+        }
     }
 }

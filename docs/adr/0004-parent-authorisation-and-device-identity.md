@@ -98,3 +98,56 @@ Applying "the first one seen" would let whichever copy arrives first win, which 
 - The M3 migration is destructive for local-household data. It must be explicit in the UI and tested.
 - A parent-key registry, a revocation path, and key rotation on biometric re-enrolment (which invalidates the key) are needed in M3.
 - Until M2/M3 land, T1 and T16 are only partially mitigated; the threat model records that.
+
+## Amendments (M2 review, 2026-11-03)
+
+The M2 review and security audit refined how the parent key comes into existence, how it is renewed, and what the lockout does when no usable biometric exists. None of this reverses the decision above; it tightens it. Money-flow atomicity and scheduling are recorded separately in [ADR-0005](0005-scheduled-payments-and-money-flow-atomicity.md).
+
+### Parent key enrolment is PIN-gated; no lazy creation
+
+The parent authentication key is **never created lazily** (for example, the first time a money action needs a signature). It is created and registered only in a PIN-gated enrolment flow:
+
+- **at PIN setup**, when a strong biometric is available (the default; D-M2-8), or
+- **later from Settings**, after the parent enters a fresh PIN.
+
+Lazy creation let anyone who could pass a strong-biometric prompt mint the household's parent key: a kid with their own fingerprint enrolled on the parent's phone (which needs only the screen lock) could create the key and then sign parent-only events without ever knowing the parent PIN.
+
+Biometric unlock of the parent session and per-event parent authorisation are offered **only when** a parent key is registered in the household policy **and** the local Keystore key byte-equals the registered public key. The biometric unlock challenge is signed with that key and verified against the registered key, not against whatever key happens to sit under the alias.
+
+### Key renewal after a biometric enrolment change is PIN-gated
+
+`setInvalidatedByBiometricEnrollment(true)` makes the key permanently unusable when the set of enrolled biometrics changes. Renewal is a PIN-gated flow:
+
+1. fresh PIN entry, under the normal lockout policy;
+2. delete the invalidated Keystore key;
+3. create a new key under the same policy;
+4. a proof prompt: one `BiometricPrompt` signature with the new key, verified locally;
+5. replace the registered key in the household policy, **keeping the original from-lamport** (the lamport from which events must be parent-signed), so renewal never opens a window of unsigned events.
+
+### Lockout cap without a usable biometric
+
+Section 3 closes the PIN path after the lockout cap and requires a strong biometric instead. That leaves a parent with no way in when the parent key is invalidated or the device has no strong biometric. **While the parent key is invalidated or no strong biometric exists, the capped state allows one PIN attempt per hour** instead of requiring a biometric, so the PIN path never closes permanently (D-M2-7).
+
+Accepted deviation: an attacker with the device gets about 24 guesses a day against a 10^6 PIN space (6 digits), so an expected search takes decades. The pepper (section 3) keeps the search on this device.
+
+### Unregistered signatures count as unsigned
+
+An event whose `parentSignature` was made by a key that is not the registered parent key counts as **unsigned**: it fails `ParentSignatureMissing` locally and, in M3, is quarantined on receipt. A valid ECDSA signature by some other key proves nothing about the parent.
+
+### No unpeppered PIN hashes
+
+Unpeppered v1 PIN hashes are **not accepted**. No M1 build shipped, so there are no v1 hashes to migrate; accepting them would only leave a downgrade path.
+
+### Scheduled payments are signed on demand
+
+Scheduled parent-only events (allowance, interest) are signed from a **manual "Sign now"** action on the parent dashboard, not automatically at the next parent unlock (D-M2-6). This replaces section 1's "signed on the next parent unlock". Every prompt names the kid, the amount, and the period it pays for, so the parent sees what each per-use signature covers. Validation and queue handling are in ADR-0005.
+
+### M3 requirements recorded at the M2 review
+
+These are requirements for M3, not M2 work:
+
+- **Drop the from-lamport exemption for pulled events.** Local-household events are purged at linking (section 2), so a pulled parent-only event without a valid registered parent signature is quarantined regardless of its lamport.
+- **Parent-wins conflict resolution needs proof.** Resolving a conflicting duplicate in the parent's favour (D-M1-1) must use the role from the device registry and a verified parent signature. Without both, neither copy is applied (section 6's default).
+- **Reward catalogue definitions become parent-signed documents**, so a receiver can verify the cost and minutes a `RewardPurchased` and its `TimeBankCredited` claim against what the parent defined.
+- **Parent key generated with a server challenge**, and the attestation checked at registration: hardware-backed, `AUTH_BIOMETRIC_STRONG` only, per-use (timeout 0), invalidated on biometric enrolment.
+- **Instrumented runs on API 28 and 29** for the per-use key policy, where `setUserAuthenticationParameters` is unavailable and the deprecated validity-duration API is used instead.

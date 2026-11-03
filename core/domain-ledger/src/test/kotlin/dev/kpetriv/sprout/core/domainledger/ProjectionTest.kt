@@ -173,7 +173,7 @@ class ProjectionTest {
     fun currencyIsCheckedAgainstPriorBalancesForUnregisteredAccounts() {
         val unregistered = Fixtures.main.copy(id = dev.kpetriv.sprout.core.model.AccountId("loose"))
         val gbp = parent.chore(10, unregistered)
-        val minutes = parent.write(unregistered) { ChoreRewarded(it, Currency.Minutes, Money(5), "c") }
+        val minutes = parent.write(unregistered) { ChoreRewarded(it, Currency.Minutes, Money(5), "c", Fixtures.today) }
         val projection = Ledger.project(listOf(gbp, minutes))
         assertEquals(Money(10), projection.balanceOf(unregistered.id))
         assertIs<Violation.CurrencyMismatch>(
@@ -272,7 +272,7 @@ class ProjectionTest {
         val tablet = DeviceWriter(Fixtures.parentTablet)
         val chore = parent.chore(100)
         val parentReuse = tablet.writeWithId(chore.eventId, Fixtures.main) {
-            ChoreRewarded(it, Fixtures.gbp, Money(900), "other")
+            ChoreRewarded(it, Fixtures.gbp, Money(900), "other", Fixtures.today)
         }
         val parents = project(listOf(chore, parentReuse))
         assertEquals(Money.ZERO, parents.balanceOf(Fixtures.main.id))
@@ -413,7 +413,15 @@ class ProjectionTest {
             6 -> p.compensate(pick(), listOf(p.written.lastOrNull()?.eventId ?: k.timeStart("s").eventId))
 
             7 -> p.write(Fixtures.savings) {
-                InterestAccrued(it, Fixtures.gbp, Money(pick()), Money(pick()), random.nextInt(), random.nextInt())
+                InterestAccrued(
+                    it,
+                    Fixtures.gbp,
+                    Money(pick()),
+                    Money(pick()),
+                    random.nextInt(),
+                    random.nextInt(),
+                    p.nextMonth(),
+                )
             }
 
             8 -> p.chore(pick(), Fixtures.minutes)
@@ -424,6 +432,54 @@ class ProjectionTest {
 
             else -> p.allowance(pick())
         }
+    }
+
+    @Test
+    fun mergedScreenTimeCreditsRedeemEachPurchaseOnce() {
+        val purchase = kid.screenTime(cost = 50, minutes = 20)
+        val credit = kid.timeCredit(20, grantedBy = purchase)
+        // A second kid device that synced the purchase redeems it again while offline.
+        val twin = DeviceWriter(Fixtures.kidTablet.copy(deviceId = DeviceId("kid-phone")))
+        twin.observe(credit.lamport)
+        val again = twin.timeCredit(20, grantedBy = purchase)
+        // A credit that sorts before its purchase cannot redeem it.
+        val early = DeviceWriter(Fixtures.kidTablet.copy(deviceId = DeviceId("a-kid-device")))
+            .timeCredit(20, grantedBy = purchase)
+        val events = listOf(parent.allowance(100), purchase, credit, again, early)
+
+        val projection = project(events)
+        assertEquals(Money(20), projection.balanceOf(Fixtures.minutes.id))
+        val invalid = projection.anomalies.filterIsInstance<LedgerAnomaly.InvalidEvent>().associateBy { it.eventId }
+        assertEquals(setOf(again.eventId, early.eventId), invalid.keys)
+        assertEquals(
+            listOf(Violation.GrantAlreadyCredited(purchase.eventId, creditedBy = credit.eventId)),
+            invalid.getValue(again.eventId).violations,
+        )
+        assertEquals(listOf(Violation.GrantNotFound(purchase.eventId)), invalid.getValue(early.eventId).violations)
+        assertEquals(credit.eventId, projection.rewardGrants.getValue(purchase.eventId).creditedBy)
+        assertEquals(projection, project(events.shuffled(kotlin.random.Random(1))))
+        assertEquals(projection, project(events.reversed()).apply(events))
+    }
+
+    @Test
+    fun aPeriodPaidOnTwoOfflineDevicesCountsOnce() {
+        val tablet = DeviceWriter(Fixtures.parentTablet)
+        val week = parent.allowance(500, periodKey = "2026-W45")
+        val sameWeek = tablet.allowance(500, periodKey = "2026-W45")
+        val chore = parent.chore(100, choreId = "dishes")
+        val sameChore = tablet.chore(100, choreId = "dishes")
+        val interest = parent.interest(3, periodKey = "2026-11")
+        val sameInterest = tablet.interest(3, periodKey = "2026-11")
+        val events = listOf(week, sameWeek, chore, sameChore, interest, sameInterest)
+
+        val projection = project(events)
+        assertEquals(Money(600), projection.balanceOf(Fixtures.main.id))
+        assertEquals(Money(3), projection.balanceOf(Fixtures.savings.id))
+        val invalid = projection.anomalies.map { assertIs<LedgerAnomaly.InvalidEvent>(it) }
+        // "parent-phone" sorts before "parent-tablet" at equal lamports, so the tablet's copies lose.
+        assertEquals(listOf(sameWeek, sameChore, sameInterest).map { it.eventId }, invalid.map { it.eventId })
+        assertTrue(invalid.all { it.violations.single() is Violation.DuplicatePeriod })
+        assertEquals(projection, project(events.reversed()))
     }
 
     @Test
@@ -443,7 +499,7 @@ class ProjectionTest {
             Account(dev.kpetriv.sprout.core.model.AccountId("main-2"), otherKid, Fixtures.gbp, AccountKind.MAIN)
         val accounts = Fixtures.accounts + otherMain
         val overdraft = kid.purchase(5)
-        val forgedForOther = kid.write(otherMain) { ChoreRewarded(it, Fixtures.gbp, Money(5), "c") }
+        val forgedForOther = kid.write(otherMain) { ChoreRewarded(it, Fixtures.gbp, Money(5), "c", Fixtures.today) }
         val projection = Ledger.project(listOf(overdraft, forgedForOther), accounts)
         assertIs<LedgerAnomaly.OverdraftDetected>(projection.anomaliesFor(Fixtures.kid).single())
         assertIs<LedgerAnomaly.InvalidEvent>(projection.anomaliesFor(otherKid).single())

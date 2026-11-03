@@ -45,6 +45,20 @@ class MoneyFormatter(
             KidUiTier.SPROUT, KidUiTier.SAPLING -> format(money, currency, signed)
         }
 
+    /**
+     * Formats a price (or an amount still needed) the way a kid on [tier] reads it. Like [formatForTier], except that
+     * Seedling coins round **up** ([priceCoins]): balances round down, so a price shown as "2 coins" is affordable
+     * exactly when the jar shows at least 2 coins, and a kid never sees "1 coin" for something their "1 coin" cannot
+     * buy.
+     */
+    fun formatPriceForTier(money: Money, currency: Currency, tier: KidUiTier): String =
+        if (tier == KidUiTier.SEEDLING && currency is Currency.Fiat) {
+            val coins = priceCoins(money, currency)
+            labels.coins(coins, integerFormat().format(coins))
+        } else {
+            formatForTier(money, currency, tier)
+        }
+
     /** "7 coins": the whole major units of [money], never negative. */
     fun formatCoins(money: Money, currency: Currency.Fiat): String {
         val coins = wholeCoins(money, currency)
@@ -99,6 +113,13 @@ class MoneyFormatter(
         /** Whole major units of [money] (minor units dropped), clamped at zero. Seedling's "coins". */
         fun wholeCoins(money: Money, currency: Currency.Fiat): Long =
             (money.minorUnits / pow10(currency.fractionDigits)).coerceAtLeast(0)
+
+        /** Whole major units of [money] rounded up (a part coin counts as a coin), clamped at zero. Seedling prices. */
+        fun priceCoins(money: Money, currency: Currency.Fiat): Long {
+            val unit = pow10(currency.fractionDigits)
+            val minor = money.minorUnits.coerceAtLeast(0)
+            return minor / unit + if (minor % unit == 0L) 0 else 1
+        }
 
         private fun pow10(exponent: Int): Long = (1..exponent).fold(1L) { acc, _ ->
             Math.multiplyExact(acc, DECIMAL_RADIX)

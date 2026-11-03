@@ -1,6 +1,5 @@
 package dev.kpetriv.sprout.core.crypto
 
-import java.security.Signature
 import kotlin.time.Instant
 
 /**
@@ -43,40 +42,4 @@ interface DeviceKeyStore {
      * attestation; see [DeviceKeyProperties]. Creates the key if needed, so it may block briefly.
      */
     fun keyProperties(): DeviceKeyProperties
-}
-
-/**
- * The parent's user-authentication-bound EC P-256 key (alias [KeyAliases.PARENT_AUTH]). Every use needs a
- * strong biometric or the device credential within the last 30 seconds (threats T7, T16). Used by the lock
- * feature (M2); background work never touches it.
- */
-interface ParentAuthKeyStore {
-    /** True when the device has a secure lock screen, which Keystore needs before it creates this key. */
-    fun isAvailable(): Boolean
-
-    /** Creates the key if missing and returns its public key. Throws [IllegalStateException] if unavailable. */
-    suspend fun ensureKey(): PublicKeyBytes
-
-    /** The public key, or null before [ensureKey]. */
-    fun publicKey(): PublicKeyBytes?
-
-    /**
-     * The key's [DeviceKeyProperties] from Keystore `KeyInfo`, or null before [ensureKey]. Self-reported, **not**
-     * attestation; see [DeviceKeyProperties].
-     */
-    fun keyProperties(): DeviceKeyProperties?
-
-    /**
-     * A [Signature] initialised for signing with the parent key, ready to wrap in a `BiometricPrompt.CryptoObject`
-     * or to use directly within the authentication window.
-     *
-     * Throws `android.security.keystore.UserNotAuthenticatedException` when the user has not authenticated in the
-     * last 30 seconds, and `KeyPermanentlyInvalidatedException` after biometric enrolment changes (call [deleteKey]
-     * and re-enrol). Both are [java.security.InvalidKeyException]s. Throws [IllegalStateException] before
-     * [ensureKey].
-     */
-    fun initSignature(): Signature
-
-    /** Deletes the key, for example after it was permanently invalidated. */
-    suspend fun deleteKey()
 }

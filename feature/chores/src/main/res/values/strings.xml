@@ -1,4 +1,157 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
   <string name="feature_chores_title">Chores</string>
+  <string name="feature_chores_back">Back</string>
+  <string name="feature_chores_loading">Loading chores</string>
+  <string name="feature_chores_error_load_failed">Something went wrong while loading chores.</string>
+  <string name="feature_chores_retry">Try again</string>
+  <string name="feature_chores_something_failed">That didn\'t work. Please try again.</string>
+  <!-- Subtitle of the parent authorisation prompt for one reward event. %1$s kid, %2$s amount, %3$s chore title. -->
+  <string name="feature_chores_authorize_reason">Pay %1$s %2$s for %3$s</string>
+
+  <!-- Schedules -->
+  <string name="feature_chores_schedule_once_on">Once, on %1$s</string>
+  <string name="feature_chores_schedule_once_any_time">Once, any time</string>
+  <string name="feature_chores_schedule_every_day">Every day</string>
+  <string name="feature_chores_schedule_weekly">Every %1$s</string>
+  <string name="feature_chores_schedule_monthly">Monthly on day %1$d</string>
+  <string name="feature_chores_due_today">Today</string>
+  <string name="feature_chores_due_tomorrow">Tomorrow</string>
+  <plurals name="feature_chores_due_in_days">
+    <item quantity="one">In %1$d day</item>
+    <item quantity="other">In %1$d days</item>
+  </plurals>
+  <string name="feature_chores_due_on">Due %1$s</string>
+
+  <!-- Parent: chore list -->
+  <string name="feature_chores_new_chore">New chore</string>
+  <string name="feature_chores_approvals_count">Approvals (%1$d)</string>
+  <string name="feature_chores_show_archived">Show archived</string>
+  <string name="feature_chores_hide_archived">Hide archived</string>
+  <string name="feature_chores_state_active">Active</string>
+  <string name="feature_chores_state_proposed">Proposed</string>
+  <string name="feature_chores_state_archived">Archived</string>
+  <string name="feature_chores_archive">Archive</string>
+  <string name="feature_chores_restore">Restore</string>
+  <string name="feature_chores_archive_described">Archive %1$s</string>
+  <string name="feature_chores_restore_described">Restore %1$s</string>
+  <string name="feature_chores_archived_message">Chore archived</string>
+  <string name="feature_chores_restored_message">Chore restored</string>
+  <string name="feature_chores_kid_no_chores">No chores for %1$s yet.</string>
+  <string name="feature_chores_no_kids">Add a kid first, then give them chores.</string>
+  <string name="feature_chores_row_description">%1$s, %2$s, %3$s, %4$s</string>
+
+  <!-- Parent: editor -->
+  <string name="feature_chores_editor_new">New chore</string>
+  <string name="feature_chores_editor_edit">Edit chore</string>
+  <string name="feature_chores_save">Save</string>
+  <string name="feature_chores_editor_not_found">This chore no longer exists.</string>
+  <string name="feature_chores_editor_save_failed">The chore could not be saved.</string>
+  <string name="feature_chores_field_kid">For</string>
+  <string name="feature_chores_field_title">Title</string>
+  <string name="feature_chores_field_description">Description (optional)</string>
+  <string name="feature_chores_field_reward">Reward</string>
+  <string name="feature_chores_field_money">Money (%1$s)</string>
+  <string name="feature_chores_field_minutes">Screen time (minutes)</string>
+  <string name="feature_chores_field_schedule">How often</string>
+  <string name="feature_chores_kind_once">Once</string>
+  <string name="feature_chores_kind_daily">Daily</string>
+  <string name="feature_chores_kind_weekly">Weekly</string>
+  <string name="feature_chores_kind_monthly">Monthly</string>
+  <string name="feature_chores_once_any_time">Any time, no due date</string>
+  <string name="feature_chores_once_due">Due on %1$s</string>
+  <string name="feature_chores_pick_date">Pick a date</string>
+  <string name="feature_chores_clear_date">No due date</string>
+  <string name="feature_chores_ok">OK</string>
+  <string name="feature_chores_cancel">Cancel</string>
+  <string name="feature_chores_monthly_day">Day %1$d of each month</string>
+  <string name="feature_chores_monthly_earlier">Earlier day</string>
+  <string name="feature_chores_monthly_later">Later day</string>
+  <string name="feature_chores_error_no_kid">Choose who this chore is for.</string>
+  <string name="feature_chores_error_title_blank">Give the chore a title.</string>
+  <string name="feature_chores_error_title_too_long">Keep the title to 80 characters.</string>
+  <string name="feature_chores_error_description_too_long">Keep the description to 500 characters.</string>
+  <string name="feature_chores_error_money_invalid">Enter an amount like 2.50.</string>
+  <string name="feature_chores_error_minutes_invalid">Enter whole minutes, like 15.</string>
+  <string name="feature_chores_error_no_reward">Add money, screen time or both.</string>
+  <string name="feature_chores_error_reward_not_positive">A reward must be more than zero.</string>
+  <string name="feature_chores_error_no_days">Pick at least one day.</string>
+  <string name="feature_chores_error_due_in_past">The due date has already passed.</string>
+
+  <!-- Parent: approvals inbox -->
+  <string name="feature_chores_approvals_title">Approvals</string>
+  <string name="feature_chores_approvals_empty">Nothing to approve right now.</string>
+  <string name="feature_chores_approvals_submissions">Waiting for you</string>
+  <string name="feature_chores_approvals_proposals">Chore ideas from kids</string>
+  <string name="feature_chores_submission_heading">%1$s: %2$s</string>
+  <string name="feature_chores_submission_note">“%1$s”</string>
+  <string name="feature_chores_photo_from">Photo from %1$s for %2$s</string>
+  <string name="feature_chores_photo_loading">Loading photo</string>
+  <string name="feature_chores_photo_unavailable">The photo can\'t be shown.</string>
+  <string name="feature_chores_approve">Approve</string>
+  <string name="feature_chores_reject">Reject</string>
+  <string name="feature_chores_approve_described">Approve %1$s for %2$s</string>
+  <string name="feature_chores_finish_approval">Finish approval</string>
+  <string name="feature_chores_finish_approval_described">Finish approving %1$s for %2$s</string>
+  <string name="feature_chores_reject_described">Reject %1$s for %2$s</string>
+  <string name="feature_chores_reject_title">Reject %1$s?</string>
+  <string name="feature_chores_reject_reason">Reason (optional)</string>
+  <string name="feature_chores_proposal_heading">%1$s suggests: %2$s</string>
+  <string name="feature_chores_accept">Accept</string>
+  <string name="feature_chores_decline">Decline</string>
+  <string name="feature_chores_approved_message">Approved %2$s for %1$s.</string>
+  <plurals name="feature_chores_approved_already_paid">
+    <item quantity="one">Approved %2$s for %1$s. %3$d reward was already paid, so it was not paid again.</item>
+    <item quantity="other">Approved %2$s for %1$s. %3$d rewards were already paid, so they were not paid again.</item>
+  </plurals>
+  <string name="feature_chores_all_already_paid">%2$s for %1$s was already paid; it is now marked approved.</string>
+  <string name="feature_chores_approved_unsigned_suffix">Paid without a fingerprint signature on this device.</string>
+  <string name="feature_chores_signature_required_message">%1$s was not approved: this device has no fingerprint, and your household requires fingerprint-signed payments.</string>
+  <string name="feature_chores_rejected_message">Rejected %1$s.</string>
+  <string name="feature_chores_partly_paid_message">%1$s is only partly paid (%2$d of %3$d rewards). Tap Finish approval to pay the rest.</string>
+  <string name="feature_chores_key_invalidated_message">%1$s was not fully paid: fingerprints on this device changed, so the parent key must be renewed in Settings first.</string>
+  <string name="feature_chores_already_paid_message">%1$s already has a reward paid, so it cannot be rejected. Finish the approval instead.</string>
+  <string name="feature_chores_refused_message">The ledger refused the reward for %1$s. It is still waiting for you.</string>
+  <string name="feature_chores_cancelled_message">Approval of %1$s was not completed. Nothing more was paid.</string>
+  <string name="feature_chores_no_account_message">%1$s has no account for this reward yet.</string>
+  <string name="feature_chores_not_found_message">This submission is no longer waiting.</string>
+  <string name="feature_chores_proposal_accepted">%1$s is now a chore.</string>
+  <string name="feature_chores_proposal_declined">Declined %1$s.</string>
+
+  <!-- Kid: today -->
+  <string name="feature_chores_today_title">%1$s\'s chores</string>
+  <string name="feature_chores_seedling_greeting">Hi %1$s!</string>
+  <string name="feature_chores_today">Today</string>
+  <string name="feature_chores_upcoming">Next 7 days</string>
+  <string name="feature_chores_no_chores_today">No chores today!</string>
+  <string name="feature_chores_nothing_upcoming">Nothing coming up this week.</string>
+  <string name="feature_chores_done_button">Done!</string>
+  <string name="feature_chores_did_it">I did it</string>
+  <string name="feature_chores_did_it_described">I did %1$s</string>
+  <string name="feature_chores_waiting">Waiting for a parent</string>
+  <string name="feature_chores_done_reward">Done, +%1$s</string>
+  <string name="feature_chores_not_accepted">Not accepted this time</string>
+  <string name="feature_chores_not_accepted_reason">Not accepted: %1$s</string>
+  <string name="feature_chores_read_aloud">Read to me</string>
+  <string name="feature_chores_read_aloud_described">Read %1$s to me</string>
+  <string name="feature_chores_read_aloud_chore">%1$s. You get %2$s.</string>
+  <string name="feature_chores_well_done">Well done! You finished %1$s.</string>
+  <string name="feature_chores_celebration">Well done!</string>
+  <string name="feature_chores_submitted_message">Sent! Waiting for a parent.</string>
+  <string name="feature_chores_submit_failed">That didn\'t send. Please try again.</string>
+  <string name="feature_chores_photo_failed">The photo didn\'t work. You can still send without one.</string>
+  <string name="feature_chores_submit_note">Note for your parent (optional)</string>
+  <string name="feature_chores_add_photo">Add photo</string>
+  <string name="feature_chores_photo_added">Photo added</string>
+  <string name="feature_chores_remove_photo">Remove photo</string>
+  <string name="feature_chores_send">Send</string>
+  <string name="feature_chores_my_ideas">My chore ideas</string>
+  <string name="feature_chores_idea_waiting">Waiting for a parent to accept</string>
+  <string name="feature_chores_propose">Propose a chore</string>
+  <string name="feature_chores_propose_title">Propose a chore</string>
+  <string name="feature_chores_propose_hint">Suggest a chore and a reward. A parent will accept it or not.</string>
+  <string name="feature_chores_propose_send">Send to a parent</string>
+  <string name="feature_chores_proposed_message">Sent! A parent will look at your idea.</string>
+  <string name="feature_chores_propose_failed">Your idea didn\'t send. Please try again.</string>
+  <string name="feature_chores_counter">%1$d/%2$d</string>
 </resources>

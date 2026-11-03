@@ -20,7 +20,9 @@ object Ledger {
      * [appliedCopyOf] is folded (at its own place in the order): the single parent copy when every other copy is a
      * kid's, otherwise none.
      *
-     * Events must already have passed chain and signature verification; this function does not check hashes.
+     * Events must already have passed chain and signature verification; this function does not check hashes or
+     * verify parent signatures (with [LedgerPolicy.requireParentSignature] it only checks that parent-only events
+     * carry one).
      *
      * @param accounts registered accounts, used for currency, ownership and kind checks.
      */
@@ -139,6 +141,12 @@ class Projection internal constructor(internal val state: ProjectionState) {
     val dailyGameCredits: Map<DailyGameKey, Money> get() = state.dailyGameCredits
     val anomalies: List<LedgerAnomaly> get() = state.anomalies
 
+    /** Every applied screen-time purchase by purchase eventId, and which credit (if any) redeemed it. */
+    val rewardGrants: Map<EventId, RewardGrant> get() = state.rewardGrants
+
+    /** Every [PeriodClaim] held by an applied event, and that event's id. */
+    val claimedPeriods: Map<PeriodClaim, EventId> get() = state.claimedPeriods
+
     /** The highest lamport of any event folded in (valid, invalid or conflicting); 0 when empty. */
     val maxLamport: Long get() = state.maxLamport
 
@@ -194,6 +202,8 @@ class Projection internal constructor(internal val state: ProjectionState) {
         state.timeBanks,
         state.dailyGameCredits,
         state.anomalies,
+        state.rewardGrants,
+        state.claimedPeriods,
         state.openOverdrafts,
         state.maxLamport,
         state.events.mapValues { (_, copies) -> copies.map { it.envelope.hash }.toSet() },
@@ -212,6 +222,8 @@ class Projection internal constructor(internal val state: ProjectionState) {
                     timeBanks = emptyMap(),
                     dailyGameCredits = emptyMap(),
                     anomalies = emptyList(),
+                    rewardGrants = emptyMap(),
+                    claimedPeriods = emptyMap(),
                     events = emptyMap(),
                     openOverdrafts = emptySet(),
                     lastApplied = null,
@@ -252,6 +264,8 @@ internal data class ProjectionState(
     val timeBanks: Map<KidId, TimeBankState>,
     val dailyGameCredits: Map<DailyGameKey, Money>,
     val anomalies: List<LedgerAnomaly>,
+    val rewardGrants: Map<EventId, RewardGrant>,
+    val claimedPeriods: Map<PeriodClaim, EventId>,
     val events: Map<EventId, List<LedgerEvent>>,
     val openOverdrafts: Set<AccountId>,
     val lastApplied: LedgerEvent?,
@@ -277,6 +291,8 @@ private class ProjectionBuilder(private val base: ProjectionState, copies: Map<E
     private val timeBanks = LinkedHashMap(base.timeBanks)
     private val dailyGame = LinkedHashMap(base.dailyGameCredits)
     private val anomalies = ArrayList(base.anomalies)
+    private val grants = LinkedHashMap(base.rewardGrants)
+    private val claims = LinkedHashMap(base.claimedPeriods)
     private val events = LinkedHashMap(copies)
     private val openOverdrafts = LinkedHashSet(base.openOverdrafts)
     private val reportedConflicts = HashSet<EventId>()
@@ -314,6 +330,7 @@ private class ProjectionBuilder(private val base: ProjectionState, copies: Map<E
         }
         val violations =
             LedgerRules.staticViolations(event, base.accounts, balances, requireKnownAccounts = false, base.policy)
+                .ifEmpty { LedgerRules.historyViolations(event, grants, claims) }
         if (violations.isNotEmpty()) {
             anomalies += LedgerAnomaly.InvalidEvent(event.eventId, violations)
         } else {
@@ -331,6 +348,8 @@ private class ProjectionBuilder(private val base: ProjectionState, copies: Map<E
             timeBanks = timeBanks,
             dailyGameCredits = dailyGame,
             anomalies = anomalies,
+            rewardGrants = grants,
+            claimedPeriods = claims,
             events = events,
             openOverdrafts = openOverdrafts,
             lastApplied = lastApplied,
@@ -384,8 +403,22 @@ private class ProjectionBuilder(private val base: ProjectionState, copies: Map<E
             is TimeBankStarted -> startTimeBank(event)
             is TimeBankStopped -> stopTimeBank(event, stoppedMinutes ?: event.minutesUsed)
             is OverdraftCompensated -> resolveOverdraft(event, openBefore, updates.single())
+            is RewardPurchased -> recordGrant(event)
+            is TimeBankCredited -> redeemGrant(event)
             else -> Unit
         }
+        event.periodClaim()?.let { claims[it] = event.eventId }
+    }
+
+    private fun recordGrant(event: RewardPurchased) {
+        val minutes = event.minutesGranted ?: return
+        grants[event.eventId] = RewardGrant(event.eventId, event.envelope.kidId, event.rewardId, minutes, null)
+    }
+
+    /** Only reached for a valid credit, so a referenced grant exists and is still open. */
+    private fun redeemGrant(event: TimeBankCredited) {
+        val purchaseId = event.grantedBy ?: return
+        grants[purchaseId] = grants.getValue(purchaseId).copy(creditedBy = event.eventId)
     }
 
     private fun commit(event: LedgerEvent, update: BalanceUpdate) {

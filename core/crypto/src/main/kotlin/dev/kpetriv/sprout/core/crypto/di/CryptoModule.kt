@@ -13,13 +13,15 @@ import dev.kpetriv.sprout.core.crypto.AesGcmAead
 import dev.kpetriv.sprout.core.crypto.AndroidKeystoreDeviceKeyStore
 import dev.kpetriv.sprout.core.crypto.AndroidKeystoreKeyWrapper
 import dev.kpetriv.sprout.core.crypto.AndroidKeystoreParentAuthKeyStore
-import dev.kpetriv.sprout.core.crypto.Argon2idPinHasher
+import dev.kpetriv.sprout.core.crypto.BiometricParentAuthAvailabilityChecker
 import dev.kpetriv.sprout.core.crypto.DeviceKeyStore
 import dev.kpetriv.sprout.core.crypto.FilesDirBlobStorage
 import dev.kpetriv.sprout.core.crypto.JceEcdsaVerifier
 import dev.kpetriv.sprout.core.crypto.JceX25519KeyAgreement
+import dev.kpetriv.sprout.core.crypto.KeystoreParentAuthorizer
+import dev.kpetriv.sprout.core.crypto.ParentAuthAvailabilityChecker
 import dev.kpetriv.sprout.core.crypto.ParentAuthKeyStore
-import dev.kpetriv.sprout.core.crypto.PinHasher
+import dev.kpetriv.sprout.core.crypto.ParentAuthorizer
 import dev.kpetriv.sprout.core.crypto.SecretStore
 import dev.kpetriv.sprout.core.crypto.Verifier
 import dev.kpetriv.sprout.core.crypto.WrappedSecretStore
@@ -64,10 +66,15 @@ internal object CryptoModule {
 
     @Provides
     @Singleton
-    fun pinHasher(
-        random: SecureRandom,
-        @Dispatcher(SproutDispatchers.Default) dispatcher: CoroutineDispatcher,
-    ): PinHasher = Argon2idPinHasher(random, dispatcher)
+    fun parentAuthAvailabilityChecker(@ApplicationContext context: Context): ParentAuthAvailabilityChecker =
+        BiometricParentAuthAvailabilityChecker(context)
+
+    @Provides
+    @Singleton
+    fun parentAuthorizer(
+        keyStore: ParentAuthKeyStore,
+        availabilityChecker: ParentAuthAvailabilityChecker,
+    ): ParentAuthorizer = KeystoreParentAuthorizer(keyStore, availabilityChecker)
 
     @Provides
     @Singleton

@@ -7,6 +7,7 @@ import kotlin.random.Random
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
+import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.seconds
 
@@ -22,6 +23,38 @@ class LedgerPropertyTest {
     @Test
     fun projectionMatchesTheReferenceLedger() = forAllHistories { seed, history, _ ->
         assertMatchesReference(seed, history, Ledger.project(history.events, Fixtures.accounts))
+    }
+
+    @Test
+    fun requiredParentSignaturesMatchTheReference() {
+        val required = LedgerPolicy(requireParentSignature = true)
+        for (seed in seeds) {
+            // Unsigned parent devices: every parent-only event is excluded.
+            val unsigned = StreamGenerator(seed).generate(Random(seed).nextInt(1, 40))
+            assertMatchesReference(
+                seed,
+                unsigned,
+                Ledger.project(unsigned.events, Fixtures.accounts, required),
+                required,
+            )
+            // A cut-off lamport: only unsigned parent-only events at or above it are excluded.
+            val cutOff = required.copy(parentSignatureRequiredFromLamport = Random(seed).nextLong(0, 40))
+            assertMatchesReference(
+                seed,
+                unsigned,
+                Ledger.project(unsigned.events, Fixtures.accounts, cutOff),
+                cutOff,
+            )
+            // Signing parent devices: the policy changes nothing.
+            val signed = StreamGenerator(seed, FakeParentAuthorization()).generate(Random(seed).nextInt(1, 40))
+            val projection = Ledger.project(signed.events, Fixtures.accounts, required)
+            assertMatchesReference(seed, signed, projection, required)
+            assertEquals(
+                Ledger.project(signed.events, Fixtures.accounts).balances,
+                projection.balances,
+                "seed $seed",
+            )
+        }
     }
 
     @Test
@@ -100,10 +133,34 @@ class LedgerPropertyTest {
         // Both outcomes occur: a parent copy applied over kid copies, and nothing applied.
         assertTrue(conflicts.any { it.applied != null })
         assertTrue(conflicts.any { it.applied == null })
+        // Every history rule fires somewhere.
+        val violations = histories.flatMap { history ->
+            Ledger.project(history.events, Fixtures.accounts).anomalies
+                .filterIsInstance<LedgerAnomaly.InvalidEvent>().flatMap { it.violations }
+        }.map { it::class }.toSet()
+        for (kind in listOf(
+            Violation.DuplicatePeriod::class,
+            Violation.GrantNotFound::class,
+            Violation.GrantMinutesMismatch::class,
+            Violation.GrantAlreadyCredited::class,
+        )) {
+            assertTrue(kind in violations, kind.toString())
+        }
+        // And screen-time credits are applied too.
+        assertTrue(
+            histories.any { history ->
+                Ledger.project(history.events, Fixtures.accounts).rewardGrants.values.any { it.creditedBy != null }
+            },
+        )
     }
 
-    private fun assertMatchesReference(seed: Int, history: GeneratedHistory, projection: Projection) {
-        val expected = ReferenceLedger.fold(history, Fixtures.accounts.map { it.id }, LedgerPolicy())
+    private fun assertMatchesReference(
+        seed: Int,
+        history: GeneratedHistory,
+        projection: Projection,
+        policy: LedgerPolicy = LedgerPolicy(),
+    ) {
+        val expected = ReferenceLedger.fold(history, Fixtures.accounts.map { it.id }, policy)
         for (account in Fixtures.accounts) {
             assertEquals(
                 Money(expected.balances.getValue(account.id)),
@@ -120,6 +177,12 @@ class LedgerPropertyTest {
             Money(expected.minutesUsed[Fixtures.kid] ?: 0),
             projection.timeBank(Fixtures.kid)?.accumulatedMinutes ?: Money.ZERO,
             "seed $seed minutes",
+        )
+        assertEquals(expected.history.claims, projection.claimedPeriods, "seed $seed claims")
+        assertEquals(
+            expected.history.grants,
+            projection.rewardGrants.mapValues { (_, grant) -> grant.minutes.minorUnits to grant.creditedBy },
+            "seed $seed grants",
         )
 
         val anomalies = projection.anomalies
@@ -168,7 +231,10 @@ class LedgerPropertyTest {
  * generator produces.
  *
  * Conflicting ids: of the distinct copies of one id, the single parent copy is applied when every other copy is a
- * kid's; otherwise no copy is.
+ * kid's; otherwise no copy is. Periods: the first applied event per claim wins, later ones are invalid. Time
+ * credits: one that names a purchase is valid only if that purchase was applied earlier for the same kid and reward,
+ * granted exactly its minutes, and was not redeemed yet. With a policy that requires parent signatures, parent-only
+ * events without one are invalid as well.
  */
 internal object ReferenceLedger {
     class Expected(
@@ -177,33 +243,99 @@ internal object ReferenceLedger {
         val minutesUsed: Map<KidId, Long>,
         val overCap: Set<EventId>,
         val invalid: Set<EventId>,
+        val history: ExpectedHistory,
     )
+
+    /**
+     * @property claims which applied event holds each period claim.
+     * @property grants purchase id to (minutes granted, the credit that redeemed it).
+     */
+    class ExpectedHistory(val claims: Map<PeriodClaim, EventId>, val grants: Map<EventId, Pair<Long, EventId?>>)
 
     fun fold(history: GeneratedHistory, accounts: List<AccountId>, policy: LedgerPolicy): Expected {
         val chosen = history.events.groupBy { it.eventId }.values.mapNotNull { winner(it.distinct()) }
-        val (invalid, valid) = chosen.partition { it.envelope.hash in history.invalidHashes }
-        val applied = valid
+        val (invalid, valid) = chosen.partition {
+            val from = policy.parentSignatureRequiredFromLamport
+            val signatureRequired =
+                policy.requireParentSignature && it.isParentOnly() && (from == null || it.lamport >= from)
+            it.envelope.hash in history.invalidHashes || (signatureRequired && it.envelope.parentSignature == null)
+        }
+        val folder = Folder(accounts, policy)
+        valid
             .sortedWith(compareBy({ it.envelope.lamport }, { it.envelope.authorDeviceId.value }, { it.eventId.value }))
+            .forEach(folder::apply)
+        return Expected(
+            folder.balances,
+            folder.games,
+            folder.minutes,
+            folder.overCap,
+            invalid.map { it.eventId }.toSet() + folder.rejected,
+            ExpectedHistory(folder.claims, folder.grants),
+        )
+    }
+
+    private class Folder(accounts: List<AccountId>, private val policy: LedgerPolicy) {
         val balances = accounts.associateWith { 0L }.toMutableMap()
         val games = mutableMapOf<DailyGameKey, Long>()
         val minutes = mutableMapOf<KidId, Long>()
         val overCap = mutableSetOf<EventId>()
-        for (event in applied) {
-            if (event is GamePlayed) {
-                val key = DailyGameKey(event.envelope.kidId, event.playedOn, event.currency)
-                val sum = games[key] ?: 0L
-                if (sum + event.amount.minorUnits > policy.dailyGameCapFor(event.currency).minorUnits) {
-                    overCap += event.eventId
-                    continue
-                }
-                games[key] = sum + event.amount.minorUnits
+        val rejected = mutableSetOf<EventId>()
+        val claims = mutableMapOf<PeriodClaim, EventId>()
+        val grants = mutableMapOf<EventId, Pair<Long, EventId?>>()
+        private val purchases = mutableMapOf<EventId, RewardPurchased>()
+
+        fun apply(event: LedgerEvent) {
+            if (!historyAllows(event)) {
+                rejected += event.eventId
+                return
+            }
+            if (event is GamePlayed && !creditGame(event)) {
+                overCap += event.eventId
+                return
             }
             if (event is TimeBankStopped) {
                 minutes[event.envelope.kidId] = (minutes[event.envelope.kidId] ?: 0L) + event.minutesUsed.minorUnits
             }
             for ((account, delta) in deltas(event)) balances[account] = (balances[account] ?: 0L) + delta
+            record(event)
         }
-        return Expected(balances, games, minutes, overCap, invalid.map { it.eventId }.toSet())
+
+        private fun historyAllows(event: LedgerEvent): Boolean {
+            val claimFree = claimOf(event)?.let { it !in claims } ?: true
+            val purchaseId = (event as? TimeBankCredited)?.grantedBy ?: return claimFree
+            val purchase = purchases[purchaseId]
+            val grant = grants[purchaseId]
+            return purchase != null && grant != null && grant.second == null &&
+                purchase.envelope.kidId == event.envelope.kidId && purchase.rewardId == event.rewardId &&
+                grant.first == event.minutes.minorUnits
+        }
+
+        private fun creditGame(event: GamePlayed): Boolean {
+            val key = DailyGameKey(event.envelope.kidId, event.playedOn, event.currency)
+            val sum = (games[key] ?: 0L) + event.amount.minorUnits
+            if (sum > policy.dailyGameCapFor(event.currency).minorUnits) return false
+            games[key] = sum
+            return true
+        }
+
+        private fun record(event: LedgerEvent) {
+            claimOf(event)?.let { claims[it] = event.eventId }
+            if (event is TimeBankCredited && event.grantedBy != null) {
+                grants[event.grantedBy] = grants.getValue(event.grantedBy).first to event.eventId
+            }
+            if (event is RewardPurchased && event.minutesGranted != null) {
+                purchases[event.eventId] = event
+                grants[event.eventId] = event.minutesGranted.minorUnits to null
+            }
+        }
+    }
+
+    /** Written out independently of [periodClaim]. */
+    fun claimOf(event: LedgerEvent): PeriodClaim? = when (event) {
+        is AllowancePaid -> PeriodClaim.Allowance(event.envelope.kidId, event.periodKey, event.currency)
+        is ChoreRewarded -> PeriodClaim.Chore(event.envelope.kidId, event.choreId, event.dueOn, event.currency)
+        is InterestAccrued -> PeriodClaim.Interest(event.envelope.accountId, event.periodKey)
+        else -> null
     }
 
     private fun winner(copies: List<LedgerEvent>): LedgerEvent? {
@@ -216,7 +348,7 @@ internal object ReferenceLedger {
         }
     }
 
-    private fun deltas(event: LedgerEvent): List<Pair<AccountId, Long>> {
+    fun deltas(event: LedgerEvent): List<Pair<AccountId, Long>> {
         val account = event.envelope.accountId
         return when (event) {
             is ChoreRewarded -> listOf(account to event.amount.minorUnits)
@@ -230,6 +362,8 @@ internal object ReferenceLedger {
             is InterestAccrued -> listOf(account to event.amount.minorUnits)
 
             is OverdraftCompensated -> listOf(account to event.amount.minorUnits)
+
+            is TimeBankCredited -> listOf(account to event.minutes.minorUnits)
 
             is RewardPurchased -> listOf(account to -event.amount.minorUnits)
 
@@ -264,15 +398,23 @@ internal class GeneratedHistory(
 /**
  * Generates a household history: two parent devices and a kid device writing while mostly offline, with
  * occasional syncs that merge lamport clocks. Includes events that later trip every anomaly: overdrafts, games over
- * the cap, forged parent-only events, ids reused across authors, and forged copies of existing events.
+ * the cap, forged parent-only events, ids reused across authors, forged copies of existing events, periods paid
+ * twice (chores, allowance and interest drawn from small pools, so offline devices collide), and screen-time credits
+ * that are right, wrong, repeated or unreferenced.
+ *
+ * @param parentKey when set, the parent devices parent-sign their parent-only events.
  */
-internal class StreamGenerator(seed: Int) {
+internal class StreamGenerator(seed: Int, parentKey: ParentAuthorization? = null) {
     private val random = Random(seed)
     private val devices = listOf(
-        DeviceWriter(Fixtures.parentPhone, seed = seed * 3),
-        DeviceWriter(Fixtures.parentTablet, seed = seed * 3 + 1),
+        DeviceWriter(Fixtures.parentPhone, seed = seed * 3, parentKey = parentKey),
+        DeviceWriter(Fixtures.parentTablet, seed = seed * 3 + 1, parentKey = parentKey),
         DeviceWriter(Fixtures.kidTablet, seed = seed * 3 + 2),
     )
+    private val weeks = listOf("2026-W45", "2026-W46", "2026-W47")
+    private val months = listOf("2026-11", "2026-12")
+    private val chores = listOf("dishes", "bins")
+    private var lastScreenTime: RewardPurchased? = null
     private var session: String? = null
     private val dates = listOf(Fixtures.today, Fixtures.today.copy(day = 3))
     private val invalid = mutableSetOf<String>()
@@ -312,16 +454,20 @@ internal class StreamGenerator(seed: Int) {
     private fun amount(max: Int = 300) = random.nextLong(1, max.toLong())
 
     private fun parentWrites(device: DeviceWriter) {
-        when (random.nextInt(9)) {
-            0 -> device.chore(amount())
+        when (random.nextInt(10)) {
+            0 -> device.chore(amount(), choreId = chores.random(random), dueOn = dates.random(random))
 
-            1 -> device.allowance(amount(600))
+            1 -> device.allowance(amount(600), periodKey = weeks.random(random))
 
             2 -> device.adjust(if (random.nextBoolean()) amount() else -amount())
 
-            3 -> device.interest(amount(20))
+            3 -> device.interest(amount(20), periodKey = months.random(random))
 
-            4 -> device.chore(amount(60), Fixtures.minutes)
+            4 -> device.chore(amount(60), Fixtures.minutes, chores.random(random), dates.random(random))
+
+            9 -> device.timeCredit(amount(60))
+
+            // a manual grant
 
             5 -> device.purchase(amount())
 
@@ -337,7 +483,11 @@ internal class StreamGenerator(seed: Int) {
     }
 
     private fun kidWrites(device: DeviceWriter) {
-        when (random.nextInt(8)) {
+        when (random.nextInt(10)) {
+            8 -> buyScreenTime(device)
+
+            9 -> creditMinutes(device)
+
             0, 1 -> device.game(amount(40), dates.random(random))
 
             2 -> device.purchase(amount())
@@ -352,6 +502,27 @@ internal class StreamGenerator(seed: Int) {
             6 -> reuseId(device, Role.PARENT) { device.purchase(amount()) }
 
             else -> invalid += device.chore(amount()).envelope.hash // forged parent-only event
+        }
+    }
+
+    /** A screen-time purchase, usually redeemed straight away (sometimes left for [creditMinutes]). */
+    private fun buyScreenTime(device: DeviceWriter) {
+        val minutes = amount(60)
+        val purchase = device.screenTime(amount(), minutes)
+        lastScreenTime = purchase
+        if (random.nextInt(4) != 0) device.timeCredit(minutes, grantedBy = purchase)
+    }
+
+    /** A credit for the last screen-time purchase: right (maybe a repeat), wrong minutes, or with no reference. */
+    private fun creditMinutes(device: DeviceWriter) {
+        val purchase = lastScreenTime
+        when {
+            // A kid cannot grant minutes manually.
+            purchase == null || random.nextInt(4) == 0 -> invalid += device.timeCredit(amount(60)).envelope.hash
+
+            random.nextBoolean() -> device.timeCredit(assertNotNull(purchase.minutesGranted).minorUnits, purchase)
+
+            else -> device.timeCredit(assertNotNull(purchase.minutesGranted).minorUnits + 1, purchase)
         }
     }
 
@@ -371,7 +542,7 @@ internal class StreamGenerator(seed: Int) {
         }
         device.writeWithId(victim.eventId, Fixtures.main) {
             if (device.author.role == Role.PARENT) {
-                ChoreRewarded(it, Fixtures.gbp, Money(amount()), "reused")
+                ChoreRewarded(it, Fixtures.gbp, Money(amount()), "reused", dates.random(random))
             } else {
                 GamePlayed(it, Fixtures.gbp, Money(amount(40)), "reused", 1, Fixtures.today)
             }

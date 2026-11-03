@@ -16,7 +16,11 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTextInput
 import dev.kpetriv.sprout.core.designsystem.theme.SproutTheme
+import dev.kpetriv.sprout.core.domainledger.Currency
+import dev.kpetriv.sprout.core.domainledger.Money
 import dev.kpetriv.sprout.core.model.KidUiTier
+import dev.kpetriv.sprout.core.ui.AmountDirection
+import dev.kpetriv.sprout.core.ui.ReadAloud
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -24,6 +28,7 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
+import kotlin.time.Instant
 
 /** Renders [WalletScreen] per tier under Robolectric. A tall screen keeps every section composed. */
 @RunWith(RobolectricTestRunner::class)
@@ -35,6 +40,7 @@ class WalletScreenTest {
     private val events = mutableListOf<WalletEvent>()
     private val spoken = mutableListOf<String>()
     private var exports = 0
+    private val opened = mutableListOf<String>()
 
     private fun show(state: WalletUiState, readAloud: ReadAloud = ReadAloud { spoken += it }) {
         compose.setContent {
@@ -44,6 +50,8 @@ class WalletScreenTest {
                     onEvent = { events += it },
                     readAloud = readAloud,
                     onExport = { exports++ },
+                    onOpenShop = { opened += "shop" },
+                    onOpenChores = { opened += "chores" },
                 )
             }
         }
@@ -72,6 +80,77 @@ class WalletScreenTest {
         compose.onNodeWithText("History").assertDoesNotExist()
         compose.onNodeWithText("£7.45").assertDoesNotExist()
         compose.onNodeWithText("Recent activity").assertDoesNotExist()
+    }
+
+    @Test
+    fun `seedling shows the savings goal as stars and opens chores and shop`() {
+        show(WalletPreviewData.ready(KidUiTier.SEEDLING, canAdjust = false))
+
+        compose.onNodeWithContentDescription("Saving for a new bike")
+            .assertIsDisplayed()
+            .assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "1 of 5 stars"))
+        compose.onNodeWithText("Chores").performClick()
+        compose.onNodeWithText("Shop").performClick()
+        assertEquals(listOf("chores", "shop"), opened)
+    }
+
+    @Test
+    fun `seedling without a goal shows no stars`() {
+        show(
+            WalletPreviewData.ready(KidUiTier.SEEDLING, canAdjust = false).let {
+                it.copy(savingsGoal = it.savingsGoal?.copy(title = null, targetText = null, stars = 0))
+            },
+        )
+        compose.onNodeWithContentDescription("Saving for a new bike").assertDoesNotExist()
+    }
+
+    @Test
+    fun `sprout and sapling show the goal and open chores and shop`() {
+        show(WalletPreviewData.ready(KidUiTier.SAPLING))
+
+        compose.onNodeWithText("Saving for a new bike").assertIsDisplayed()
+        compose.onNodeWithText("£40.00").assertIsDisplayed()
+        compose.onNodeWithText("🛍️  Shop").performClick()
+        compose.onNodeWithText("🧹  Chores").performClick()
+        assertEquals(listOf("shop", "chores"), opened)
+    }
+
+    @Test
+    fun `screen time from a reward reads as screen time added`() {
+        val credited = EventUi(
+            eventId = "00000000-0000-4000-8000-000000000099",
+            category = EventCategory.SCREEN_TIME,
+            direction = AmountDirection.IN,
+            amount = Money(30),
+            currency = Currency.Minutes,
+            note = null,
+            createdAt = Instant.fromEpochMilliseconds(1_793_000_000_000L),
+        )
+        show(WalletPreviewData.ready(KidUiTier.SPROUT).copy(events = listOf(credited)))
+
+        compose.onNodeWithContentDescription("Screen time, +30 min").assertIsDisplayed()
+    }
+
+    @Test
+    fun `adjustment sheet warns when parent signatures are off`() {
+        show(
+            WalletPreviewData.ready(
+                KidUiTier.SPROUT,
+                adjustment = WalletPreviewData.adjustment.copy(unsignedWarning = true),
+            ),
+        )
+        compose.onNodeWithText("Parent signatures are off: this change is saved unsigned.").assertIsDisplayed()
+    }
+
+    @Test
+    fun `adjustment sheet explains an unavailable or dismissed parent check`() {
+        show(
+            WalletPreviewData.ready(
+                KidUiTier.SPROUT,
+                adjustment = WalletPreviewData.adjustment.copy(error = AdjustmentError.AuthorizationFailed),
+            ),
+        )
+        compose.onNodeWithText("Parent check didn't finish. Nothing was saved.").assertIsDisplayed()
     }
 
     @Test
@@ -114,7 +193,7 @@ class WalletScreenTest {
         show(WalletPreviewData.ready(KidUiTier.SPROUT))
 
         compose.onNodeWithText("£7.45").assertIsDisplayed()
-        compose.onNodeWithText("Savings").assertIsDisplayed()
+        compose.onNodeWithText("Saving for a new bike").assertIsDisplayed()
         compose.onNodeWithText("£12.50").assertIsDisplayed()
         compose.onNodeWithText("Recent").assertIsDisplayed()
         compose.onNodeWithContentDescription("Chore reward, +£1.50").assertIsDisplayed()

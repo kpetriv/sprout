@@ -35,17 +35,11 @@ import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
-import androidx.hilt.lifecycle.viewmodel.compose.rememberHiltViewModelFactory
-import androidx.lifecycle.DEFAULT_ARGS_KEY
-import androidx.lifecycle.HasDefaultViewModelProviderFactory
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import androidx.lifecycle.viewmodel.CreationExtras
-import androidx.lifecycle.viewmodel.MutableCreationExtras
-import androidx.lifecycle.viewmodel.compose.LocalViewModelStoreOwner
-import androidx.lifecycle.viewmodel.compose.viewModel
 import dev.kpetriv.sprout.core.designsystem.theme.ProvideKidTier
 import dev.kpetriv.sprout.core.model.KidId
 import dev.kpetriv.sprout.core.model.KidUiTier
+import dev.kpetriv.sprout.core.ui.ReadAloud
 
 /**
  * Navigation entry for the wallet of [kidId]. Creates a [WalletViewModel] scoped to the current
@@ -55,6 +49,8 @@ import dev.kpetriv.sprout.core.model.KidUiTier
  * @param readAloud speaks Seedling text aloud; no text-to-speech implementation exists yet, and with
  *   [ReadAloud.None] the Seedling "Read to me" button is hidden.
  * @param onExport Sapling "Export CSV"; not wired to an exporter yet.
+ * @param onOpenShop the Shop button (every tier); the app navigates to [ShopRoute] for the same kid and mode.
+ * @param onOpenChores the Chores button (every tier); the app navigates to the kid's chores ("Today").
  */
 @Composable
 fun WalletRoute(
@@ -64,8 +60,16 @@ fun WalletRoute(
     modifier: Modifier = Modifier,
     readAloud: ReadAloud = ReadAloud.None,
     onExport: () -> Unit = {},
+    onOpenShop: () -> Unit = {},
+    onOpenChores: () -> Unit = {},
 ) {
-    val viewModel = walletViewModel(kidId, mode)
+    val viewModel = featureViewModel<WalletViewModel>(
+        key = "wallet:${kidId.value}:${mode.name}",
+        args = Bundle().apply {
+            putString(WalletViewModel.KID_ID_KEY, kidId.value)
+            putString(WalletViewModel.MODE_KEY, mode.name)
+        },
+    )
     val state by viewModel.state.collectAsStateWithLifecycle()
     WalletScreen(
         state = state,
@@ -74,29 +78,8 @@ fun WalletRoute(
         onBack = onBack,
         readAloud = readAloud,
         onExport = onExport,
-    )
-}
-
-@Composable
-private fun walletViewModel(kidId: KidId, mode: WalletMode): WalletViewModel {
-    val owner = checkNotNull(LocalViewModelStoreOwner.current) { "WalletRoute needs a ViewModelStoreOwner" }
-    val defaults = (owner as? HasDefaultViewModelProviderFactory)?.defaultViewModelCreationExtras
-        ?: CreationExtras.Empty
-    val extras = MutableCreationExtras(defaults).apply {
-        set(
-            DEFAULT_ARGS_KEY,
-            Bundle().apply {
-                putString(WalletViewModel.KID_ID_KEY, kidId.value)
-                putString(WalletViewModel.MODE_KEY, mode.name)
-            },
-        )
-    }
-    return viewModel(
-        viewModelStoreOwner = owner,
-        key = "wallet:${kidId.value}:${mode.name}",
-        // Hilt factory over the owner's default factory, as hiltViewModel() does; extras carry the arguments.
-        factory = rememberHiltViewModelFactory(),
-        extras = extras,
+        onOpenShop = onOpenShop,
+        onOpenChores = onOpenChores,
     )
 }
 
@@ -114,6 +97,8 @@ fun WalletScreen(
     onBack: () -> Unit = {},
     readAloud: ReadAloud = ReadAloud.None,
     onExport: () -> Unit = {},
+    onOpenShop: () -> Unit = {},
+    onOpenChores: () -> Unit = {},
 ) {
     val snackbarHostState = remember { SnackbarHostState() }
     val ready = state as? WalletUiState.Ready
@@ -149,8 +134,15 @@ fun WalletScreen(
         Box(modifier = Modifier.padding(padding).fillMaxSize()) {
             when (state) {
                 WalletUiState.Loading -> LoadingContent()
+
                 is WalletUiState.Error -> ErrorContent(state.reason, onRetry = { onEvent(WalletEvent.Refresh) })
-                is WalletUiState.Ready -> ReadyContent(state, onEvent, readAloud, onExport)
+
+                is WalletUiState.Ready -> ReadyContent(
+                    state = state,
+                    onEvent = onEvent,
+                    readAloud = readAloud,
+                    actions = WalletActions(onExport = onExport, onOpenShop = onOpenShop, onOpenChores = onOpenChores),
+                )
             }
         }
     }
@@ -181,25 +173,39 @@ fun WalletScreen(
     }
 }
 
+/** Navigation-style callbacks of the ready wallet. */
+private class WalletActions(val onExport: () -> Unit, val onOpenShop: () -> Unit, val onOpenChores: () -> Unit)
+
 @Composable
 private fun ReadyContent(
     state: WalletUiState.Ready,
     onEvent: (WalletEvent) -> Unit,
     readAloud: ReadAloud,
-    onExport: () -> Unit,
+    actions: WalletActions,
 ) {
     ProvideKidTier(state.tier) {
         Column(modifier = Modifier.fillMaxSize()) {
             if (state.canAdjust && state.anomaliesCount > 0) AnomaliesBanner(state.anomaliesCount)
             when (state.tier) {
-                KidUiTier.SEEDLING -> SeedlingWalletContent(state, readAloud)
+                KidUiTier.SEEDLING -> SeedlingWalletContent(
+                    state = state,
+                    readAloud = readAloud,
+                    onOpenChores = actions.onOpenChores,
+                    onOpenShop = actions.onOpenShop,
+                )
 
-                KidUiTier.SPROUT -> SproutWalletContent(state)
+                KidUiTier.SPROUT -> SproutWalletContent(
+                    state = state,
+                    onOpenChores = actions.onOpenChores,
+                    onOpenShop = actions.onOpenShop,
+                )
 
                 KidUiTier.SAPLING -> SaplingWalletContent(
                     state = state,
                     onFilterChange = { onEvent(WalletEvent.FilterChanged(it)) },
-                    onExport = onExport,
+                    onExport = actions.onExport,
+                    onOpenChores = actions.onOpenChores,
+                    onOpenShop = actions.onOpenShop,
                 )
             }
         }

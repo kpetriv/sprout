@@ -5,7 +5,7 @@ plugins {
 
 android {
     namespace = "dev.kpetriv.sprout.core.crypto"
-    // In-memory fakes (InMemoryDeviceKeyStore, InMemoryKeyWrapper, InMemoryBlobStorage) live in src/testFixtures,
+    // In-memory fakes (InMemoryDeviceKeyStore, FakeParentAuthorizer, InMemoryHmacPepper, ...) live in src/testFixtures,
     // so they never ship in the app. Consumers: testImplementation(testFixtures(projects.core.crypto)).
     testFixtures {
         enable = true
@@ -22,6 +22,9 @@ dependencies {
     implementation(libs.argon2kt) {
         exclude(group = "androidx.appcompat")
     }
+    // BiometricManager.canAuthenticate(BIOMETRIC_STRONG) for ParentAuthAvailability. Its appcompat dependency stays:
+    // BiometricPrompt's fingerprint dialog (API 28) uses it, and feature/lock needs BiometricPrompt anyway.
+    implementation(libs.androidx.biometric)
 
     testImplementation(libs.kotlinx.coroutines.test)
     testImplementation(testFixtures(projects.core.time))

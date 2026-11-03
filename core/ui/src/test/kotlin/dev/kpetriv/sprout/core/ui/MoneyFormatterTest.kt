@@ -121,4 +121,17 @@ class MoneyFormatterTest {
         assertEquals(3, kwd.displayFractionDigits)
         assertEquals(0, Currency.Minutes.displayFractionDigits)
     }
+
+    @Test
+    fun `seedling prices round part coins up, other tiers show the real price`() {
+        val formatter = MoneyFormatter(Locale.UK)
+        val gbp = Currency.Fiat("GBP")
+        assertEquals("2 coins", formatter.formatPriceForTier(Money(150), gbp, KidUiTier.SEEDLING))
+        assertEquals("3 coins", formatter.formatPriceForTier(Money(300), gbp, KidUiTier.SEEDLING))
+        assertEquals("1 coin", formatter.formatPriceForTier(Money(1), gbp, KidUiTier.SEEDLING))
+        assertEquals("0 coins", formatter.formatPriceForTier(Money(-50), gbp, KidUiTier.SEEDLING))
+        assertEquals("£1.50", formatter.formatPriceForTier(Money(150), gbp, KidUiTier.SPROUT))
+        assertEquals("30 min", formatter.formatPriceForTier(Money(30), Currency.Minutes, KidUiTier.SEEDLING))
+        assertEquals(1_200L, MoneyFormatter.priceCoins(Money(1_200), Currency.Fiat("JPY")), "no minor units in yen")
+    }
 }

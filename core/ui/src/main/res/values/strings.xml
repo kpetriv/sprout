@@ -23,6 +23,18 @@
     <item quantity="one">%1$d percent of your goal</item>
     <item quantity="other">%1$d percent of your goal</item>
   </plurals>
+  <!-- %1$d stars lit out of %2$d. -->
+  <plurals name="core_ui_savings_stars">
+    <item quantity="one">%1$d of %2$d stars</item>
+    <item quantity="other">%1$d of %2$d stars</item>
+  </plurals>
   <string name="core_ui_savings_no_target">No goal amount set yet</string>
   <string name="core_ui_event_row_description">%1$s, %2$s</string>
+
+  <!-- PIN pad (PinDots, PinPad). -->
+  <plurals name="core_ui_pin_dots_description">
+    <item quantity="one">%1$d of %2$d digit entered</item>
+    <item quantity="other">%1$d of %2$d digits entered</item>
+  </plurals>
+  <string name="core_ui_pin_backspace">Delete digit</string>
 </resources>

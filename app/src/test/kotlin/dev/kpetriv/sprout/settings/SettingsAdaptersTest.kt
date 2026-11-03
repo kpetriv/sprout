@@ -1,0 +1,124 @@
+package dev.kpetriv.sprout.settings
+
+import dev.kpetriv.sprout.core.crypto.FakeParentAuthorizer
+import dev.kpetriv.sprout.core.crypto.LockoutDecision
+import dev.kpetriv.sprout.core.crypto.ParentAuthAvailability
+import dev.kpetriv.sprout.core.crypto.PublicKeyBytes
+import dev.kpetriv.sprout.core.database.HouseholdPolicy
+import dev.kpetriv.sprout.core.database.HouseholdPolicyRepository
+import dev.kpetriv.sprout.core.database.usecase.RegisterParentKeyUseCase
+import dev.kpetriv.sprout.core.domainledger.Currency
+import dev.kpetriv.sprout.feature.lock.ChangePinResult
+import dev.kpetriv.sprout.feature.lock.ParentKeyChangeResult
+import dev.kpetriv.sprout.feature.lock.PinRuleViolation
+import dev.kpetriv.sprout.feature.settings.NewPinProblem
+import dev.kpetriv.sprout.feature.settings.PinChangeOutcome
+import dev.kpetriv.sprout.feature.settings.SigningKeyOutcome
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.test.runTest
+import org.junit.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
+import kotlin.test.assertNull
+import kotlin.test.assertTrue
+import kotlin.time.Duration.Companion.seconds
+import kotlin.time.Instant
+
+class SettingsAdaptersTest {
+    private val gbp = Currency.Fiat("GBP")
+    private val authorizer = FakeParentAuthorizer()
+    private val policies = InMemoryPolicies(gbp)
+    private val registry = HouseholdParentKeyRegistry(
+        policies = policies,
+        useCase = RegisterParentKeyUseCase(policies),
+        currency = { gbp },
+    )
+
+    @Test
+    fun `the registry reads, registers and replaces the household's parent key`() = runTest {
+        assertNull(registry.registeredParentKey())
+
+        val first = authorizer.createParentKey()
+        registry.registerParentKey(first)
+        assertEquals(first, registry.registeredParentKey())
+        assertTrue(policies.policy.value!!.requireParentSignature)
+        // Registering over an existing key is refused: only renewal replaces it.
+        assertFailsWith<IllegalStateException> { registry.registerParentKey(first) }
+
+        authorizer.resetParentKey()
+        val second = authorizer.createParentKey()
+        registry.replaceParentKey(second)
+        assertEquals(second, registry.registeredParentKey())
+    }
+
+    @Test
+    fun `replacing without a registered key is refused`() = runTest {
+        assertFailsWith<IllegalStateException> { registry.replaceParentKey(authorizer.createParentKey()) }
+        assertNull(policies.policy.value)
+    }
+
+    @Test
+    fun `a key that is not EC P-256 is never registered`() = runTest {
+        assertFailsWith<IllegalArgumentException> { registry.registerParentKey(PublicKeyBytes(byteArrayOf(1, 2, 3))) }
+        assertNull(policies.policy.value)
+    }
+
+    @Test
+    fun `recording the unsigned state creates the policy with signatures off`() = runTest {
+        registry.recordSigningUnavailable()
+        assertFalse(policies.policy.value!!.requireParentSignature)
+        assertNull(registry.registeredParentKey())
+    }
+
+    @Test
+    fun `key change results map onto the settings outcomes`() {
+        val wait = LockoutDecision.Wait(30.seconds)
+        assertEquals(SigningKeyOutcome.Registered, ParentKeyChangeResult.Registered.toOutcome())
+        assertEquals(
+            SigningKeyOutcome.Unavailable(ParentAuthAvailability.NO_HARDWARE),
+            ParentKeyChangeResult.Unavailable(ParentAuthAvailability.NO_HARDWARE).toOutcome(),
+        )
+        assertEquals(SigningKeyOutcome.AlreadyOn, ParentKeyChangeResult.AlreadyRegistered.toOutcome())
+        assertEquals(SigningKeyOutcome.NotRegistered, ParentKeyChangeResult.NotRegistered.toOutcome())
+        assertEquals(SigningKeyOutcome.WrongPin(wait), ParentKeyChangeResult.WrongPin(wait).toOutcome())
+        assertEquals(SigningKeyOutcome.LockedOut(wait), ParentKeyChangeResult.LockedOut(wait).toOutcome())
+        assertEquals(SigningKeyOutcome.Cancelled, ParentKeyChangeResult.Cancelled.toOutcome())
+        assertEquals(SigningKeyOutcome.Failed, ParentKeyChangeResult.NotAllowed.toOutcome())
+        assertEquals(SigningKeyOutcome.Failed, ParentKeyChangeResult.Failed.toOutcome())
+    }
+
+    @Test
+    fun `pin change results map onto the settings outcomes`() {
+        val wait = LockoutDecision.Wait(30.seconds)
+        assertEquals(PinChangeOutcome.Changed, ChangePinResult.Changed.toOutcome())
+        assertEquals(PinChangeOutcome.WrongCurrentPin(wait), ChangePinResult.WrongCurrentPin(wait).toOutcome())
+        assertEquals(PinChangeOutcome.LockedOut(wait), ChangePinResult.LockedOut(wait).toOutcome())
+        assertEquals(
+            PinChangeOutcome.Invalid(NewPinProblem.SEQUENCE),
+            ChangePinResult.Invalid(PinRuleViolation.SEQUENCE).toOutcome(),
+        )
+        assertEquals(PinChangeOutcome.Mismatch, ChangePinResult.Mismatch.toOutcome())
+        assertEquals(PinChangeOutcome.NotAllowed, ChangePinResult.NotAllowed.toOutcome())
+        assertEquals(PinChangeOutcome.Failed, ChangePinResult.Failed.toOutcome())
+        assertEquals(PinRuleViolation.entries.map { it.name }, NewPinProblem.entries.map { it.name })
+    }
+}
+
+/** The household policy in memory; no policy until [ensure] or [registerParentKey]. */
+private class InMemoryPolicies(private val currency: Currency.Fiat) : HouseholdPolicyRepository {
+    val policy = MutableStateFlow<HouseholdPolicy?>(null)
+
+    override fun observe(): Flow<HouseholdPolicy?> = policy
+
+    override suspend fun get(): HouseholdPolicy? = policy.value
+
+    override suspend fun ensure(fiatCurrency: Currency.Fiat): HouseholdPolicy =
+        policy.value ?: HouseholdPolicy(false, null, null, fiatCurrency, Instant.fromEpochMilliseconds(0)).also {
+            policy.value = it
+        }
+
+    override suspend fun registerParentKey(publicKeyDer: ByteArray): HouseholdPolicy =
+        HouseholdPolicy(true, 1, publicKeyDer, currency, Instant.fromEpochMilliseconds(0)).also { policy.value = it }
+}

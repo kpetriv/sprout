@@ -29,8 +29,8 @@ import java.text.DateFormat
 import java.util.Date
 
 /**
- * Sapling (about 12 and up): every account, interest with an explanation, a budget placeholder, CSV export and the
- * full history with category filter chips.
+ * Sapling (about 12 and up): every account, chores and shop buttons, the savings goal (when the kid has one), interest
+ * with an explanation, a budget placeholder, CSV export and the full history with category filter chips.
  */
 @Composable
 internal fun SaplingWalletContent(
@@ -38,6 +38,8 @@ internal fun SaplingWalletContent(
     onFilterChange: (EventCategory?) -> Unit,
     onExport: () -> Unit,
     modifier: Modifier = Modifier,
+    onOpenChores: () -> Unit = {},
+    onOpenShop: () -> Unit = {},
 ) {
     val tier = KidUiTier.SAPLING
     val locale = LocalConfiguration.current.locales[0]
@@ -51,6 +53,8 @@ internal fun SaplingWalletContent(
         items(state.balances, key = { "balance-${it.accountId.value}" }) { balance ->
             BalanceCard(title = balance.label(), value = balance.kidFormatted, tier = tier)
         }
+        item { ChoresAndShopButtons(onOpenChores = onOpenChores, onOpenShop = onOpenShop) }
+        state.savingsGoal?.takeIf { it.title != null }?.let { goal -> item { SavingsGoalCard(goal, tier) } }
         item { InterestCard(state.interestEarned) }
         item { BudgetPlaceholderCard() }
         item {

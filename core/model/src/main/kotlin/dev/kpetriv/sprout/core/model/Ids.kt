@@ -71,3 +71,61 @@ value class UserId(val value: String) {
 
     override fun toString(): String = value
 }
+
+/** A chore definition (recurring or one-off) assigned to one kid. */
+@Serializable
+@JvmInline
+value class ChoreId(val value: String) {
+    init {
+        requireValidId("ChoreId", value)
+    }
+
+    override fun toString(): String = value
+}
+
+/** An item in the household's rewards catalogue. */
+@Serializable
+@JvmInline
+value class RewardId(val value: String) {
+    init {
+        requireValidId("RewardId", value)
+    }
+
+    override fun toString(): String = value
+}
+
+/**
+ * A kid's submission of one chore occurrence. Derived deterministically from the chore id and due date (see
+ * `SubmissionIds` in core/domain-household), so submitting the same occurrence twice is idempotent.
+ */
+@Serializable
+@JvmInline
+value class SubmissionId(val value: String) {
+    init {
+        requireValidId("SubmissionId", value)
+    }
+
+    override fun toString(): String = value
+}
+
+/** A kid's savings goal. */
+@Serializable
+@JvmInline
+value class GoalId(val value: String) {
+    init {
+        requireValidId("GoalId", value)
+    }
+
+    override fun toString(): String = value
+}
+
+/** An allowance schedule. */
+@Serializable
+@JvmInline
+value class ScheduleId(val value: String) {
+    init {
+        requireValidId("ScheduleId", value)
+    }
+
+    override fun toString(): String = value
+}

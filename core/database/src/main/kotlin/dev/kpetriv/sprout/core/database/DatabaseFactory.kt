@@ -50,9 +50,11 @@ object DatabaseFactory {
      * The production, SQLCipher-encrypted database in the app's database directory. Returns immediately: the key
      * is fetched from [secretStore] and the file opened on first use, which Room always does off the main thread.
      */
+    @Suppress("SpreadOperator") // Room takes migrations as varargs; the array is tiny and copied once at startup.
     fun encrypted(context: Context, secretStore: SecretStore): SproutDatabase =
         Room.databaseBuilder(context.applicationContext, SproutDatabase::class.java, DATABASE_NAME)
             .openHelperFactory(KeyedOnOpenFactory(context.applicationContext, secretStore))
+            .addMigrations(*Migrations.ALL)
             .setJournalMode(RoomDatabase.JournalMode.WRITE_AHEAD_LOGGING)
             .build()
 

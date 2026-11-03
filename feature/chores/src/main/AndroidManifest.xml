@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+  <application>
+    <!-- The camera app (ActivityResultContracts.TakePicture) writes chore photos into cacheDir/chore_photos/ through
+         this provider. Not exported; access is granted per capture URI only. -->
+    <provider
+      android:name="dev.kpetriv.sprout.feature.chores.ChorePhotoFileProvider"
+      android:authorities="${applicationId}.feature.chores.photos"
+      android:exported="false"
+      android:grantUriPermissions="true">
+      <meta-data
+        android:name="android.support.FILE_PROVIDER_PATHS"
+        android:resource="@xml/feature_chores_photo_paths" />
+    </provider>
+  </application>
+
+</manifest>

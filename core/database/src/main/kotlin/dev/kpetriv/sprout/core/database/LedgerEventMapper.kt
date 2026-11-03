@@ -11,7 +11,9 @@ import kotlinx.serialization.json.jsonPrimitive
 
 /**
  * Converts between [LedgerEvent] and its row. The row's `payloadJson` is the event in [LedgerJson] form and the
- * source of truth.
+ * source of truth. Every event type maps the same way, schema version 2 types ([dev.kpetriv.sprout.core.domainledger
+ * .TimeBankCredited]) included; the row's `currency` is the event's (minutes for time bank events) and its
+ * `parentSignature` copies the envelope's.
  *
  * Reading never throws: [verify] parses the stored document, decodes it with [LedgerJson.decodeOrNull], and checks
  * the stored hash against [HashChain.hashOf] of the stored JSON **tree** (ADR-0002 amendments: fields this client
@@ -55,6 +57,7 @@ internal object LedgerEventMapper {
             prevHash = envelope.prevHash,
             hash = envelope.hash,
             signature = envelope.signature,
+            parentSignature = envelope.parentSignature,
             payloadJson = LedgerJson.json.encodeToString(JsonElement.serializer(), tree),
             receivedAtEpochMs = receivedAtEpochMs,
             origin = origin,
@@ -97,7 +100,8 @@ internal object LedgerEventMapper {
     /** The indexed columns agree with the payload, so queries on them see the same event the payload holds. */
     private fun LedgerEventEntity.matches(event: LedgerEvent): Boolean = with(event.envelope) {
         this@matches.eventId == eventId && this@matches.hash == hash && this@matches.authorDeviceId == authorDeviceId &&
-            this@matches.kidId == kidId && this@matches.lamport == lamport
+            this@matches.kidId == kidId && this@matches.lamport == lamport &&
+            this@matches.parentSignature == parentSignature
     }
 
     /** Quarantine reasons. Stored on the row; never include event content. */

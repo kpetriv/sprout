@@ -12,6 +12,15 @@ enum class OutboxKind {
      * stored eventId gets its own row) and the payload its `LedgerJson` form.
      */
     LEDGER_EVENT,
+
+    /**
+     * A synced document (chore, submission, reward, allowance schedule, savings goal, interest policy):
+     * [OutboxEntity.refId] is `<docType>/<docId>`, [OutboxEntity.docType], [OutboxEntity.docId] and
+     * [OutboxEntity.lamport] are set, and the payload is the document's latest JSON. One row per document: a later
+     * write of the same document replaces a row that has not been sent yet (last writer wins by
+     * [OutboxEntity.lamport]).
+     */
+    DOCUMENT,
 }
 
 /**
@@ -19,6 +28,9 @@ enum class OutboxKind {
  * order; a row is deleted once the transport has acknowledged it.
  *
  * @property nextAttemptAtEpochMs earliest time to retry (backoff); 0 means immediately.
+ * @property docType for [OutboxKind.DOCUMENT]: the document collection, see `DocTypes`.
+ * @property docId for [OutboxKind.DOCUMENT]: the document's id.
+ * @property lamport for [OutboxKind.DOCUMENT]: the device Lamport value of the write (last-writer-wins key).
  */
 @Entity(
     tableName = "outbox",
@@ -36,4 +48,7 @@ data class OutboxEntity(
     @ColumnInfo(defaultValue = "0") val attempts: Int = 0,
     val lastError: String? = null,
     @ColumnInfo(defaultValue = "0") val nextAttemptAtEpochMs: Long = 0,
+    val docType: String? = null,
+    val docId: String? = null,
+    val lamport: Long? = null,
 )

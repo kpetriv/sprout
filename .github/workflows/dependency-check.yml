@@ -21,7 +21,8 @@ jobs:
   analyze:
     name: OWASP Dependency-Check
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    # The first NVD mirror download can exceed an hour; later runs restore the cache and fetch the delta.
+    timeout-minutes: 180
     permissions:
       contents: read
       security-events: write # upload SARIF to code scanning
@@ -61,10 +62,10 @@ jobs:
           cache-read-only: ${{ github.ref != 'refs/heads/main' }}
 
       # The vulnerability database lives outside Gradle's caches; restore the newest copy and save a
-      # fresh one after every run so each scan only downloads the delta.
-      - name: Cache vulnerability database
+      # fresh one after every run (even a failed or timed-out one) so each scan only downloads the delta.
+      - name: Restore vulnerability database
         if: steps.nvd.outputs.available == 'true'
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.gradle/dependency-check-data
           key: dependency-check-data-${{ github.run_id }}
@@ -78,6 +79,13 @@ jobs:
 
       # One analysis per module (build-logic applies the plugin everywhere). --continue scans every module
       # before failing; --no-parallel keeps the analyses from contending for the shared database.
+      - name: Save vulnerability database
+        if: always() && steps.nvd.outputs.available == 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.gradle/dependency-check-data
+          key: dependency-check-data-${{ github.run_id }}
+
       - name: Dependency-Check (fails on CVSS >= 7)
         if: steps.nvd.outputs.available == 'true'
         env:

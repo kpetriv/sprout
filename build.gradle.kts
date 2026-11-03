@@ -12,6 +12,8 @@ plugins {
     alias(libs.plugins.baselineprofile) apply false
     alias(libs.plugins.detekt) apply false
     alias(libs.plugins.ktlint) apply false
+    // Applied by the sprout.android.screenshot convention plugin to modules with screenshot tests.
+    alias(libs.plugins.roborazzi) apply false
     // Applied to every module by build-logic (DependencyCheck.kt), not part of `build`.
     alias(libs.plugins.dependency.check) apply false
 }

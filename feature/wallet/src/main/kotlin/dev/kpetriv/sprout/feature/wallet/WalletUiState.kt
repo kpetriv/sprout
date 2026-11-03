@@ -80,10 +80,22 @@ data class BalanceUi(
 )
 
 /**
- * The savings goal card. Goals with a name and target amount land with the savings-goal feature; until then
- * this shows the savings account balance with no target.
+ * The savings card: the kid's first goal that is not yet achieved, over the SAVINGS balance
+ * ([dev.kpetriv.sprout.core.domainhousehold.SavingsProgress]). Without a goal, [title] and [targetText] are null and
+ * the card shows the savings balance alone.
+ *
+ * @property progress the goal's exact progress fraction converted for drawing (0..1); 0 without a goal.
+ * @property stars filled stars out of [dev.kpetriv.sprout.core.ui.SavingsStarsDefaults.STAR_COUNT] on the Seedling
+ *   star row; 0 without a goal.
  */
-data class SavingsGoalUi(val savedText: String, val targetText: String?, val progress: Float)
+data class SavingsGoalUi(
+    val savedText: String,
+    val targetText: String?,
+    val progress: Float,
+    val title: String? = null,
+    val stars: Int = 0,
+    val isComplete: Boolean = false,
+)
 
 /**
  * One history row.
@@ -113,11 +125,17 @@ enum class EventCategory {
     ADJUSTMENT,
 }
 
-/** The open manual adjustment sheet. Adjustments post to the kid's main money account in [currency]. */
+/**
+ * The open manual adjustment sheet. Adjustments post to the kid's main money account in [currency].
+ *
+ * @property unsignedWarning the household policy has parent signatures off (D-M2-1: no parent key, typically a device
+ *   without a strong biometric), so the adjustment may be stored without a parent signature; the sheet says so.
+ */
 data class AdjustmentUi(
     val currency: Currency.Fiat,
     val isSubmitting: Boolean = false,
     val error: AdjustmentError? = null,
+    val unsignedWarning: Boolean = false,
 )
 
 /** Why an adjustment was not saved; shown in the sheet. */
@@ -141,6 +159,21 @@ sealed interface AdjustmentError {
      * ledger may not apply it until a parent checks the history.
      */
     data object Conflict : AdjustmentError
+
+    /**
+     * This device cannot confirm a parent (no strong biometric) and the household requires parent signatures, so
+     * the adjustment cannot be saved here.
+     */
+    data object ParentAuthUnavailable : AdjustmentError
+
+    /** The parent prompt was dismissed or failed; nothing was saved. */
+    data object AuthorizationFailed : AdjustmentError
+
+    /**
+     * The fingerprints on this device changed, which invalidated the parent key; nothing was saved. Parent security
+     * must be renewed in Settings (with the PIN) first.
+     */
+    data object KeyInvalidated : AdjustmentError
 
     /** The ledger refused or failed to store the event for another reason. */
     data object Failed : AdjustmentError

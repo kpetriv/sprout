@@ -1,5 +1,7 @@
 package dev.kpetriv.sprout.feature.wallet
 
+import dev.kpetriv.sprout.core.domainhousehold.SavingsGoal
+import dev.kpetriv.sprout.core.domainhousehold.SavingsProgress
 import dev.kpetriv.sprout.core.domainledger.Account
 import dev.kpetriv.sprout.core.domainledger.AccountKind
 import dev.kpetriv.sprout.core.domainledger.AllowancePaid
@@ -14,6 +16,7 @@ import dev.kpetriv.sprout.core.domainledger.Money
 import dev.kpetriv.sprout.core.domainledger.MovesValue
 import dev.kpetriv.sprout.core.domainledger.OverdraftCompensated
 import dev.kpetriv.sprout.core.domainledger.RewardPurchased
+import dev.kpetriv.sprout.core.domainledger.TimeBankCredited
 import dev.kpetriv.sprout.core.domainledger.TimeBankStopped
 import dev.kpetriv.sprout.core.domainledger.TransferToSavings
 import dev.kpetriv.sprout.core.model.Kid
@@ -21,6 +24,7 @@ import dev.kpetriv.sprout.core.model.KidUiTier
 import dev.kpetriv.sprout.core.ui.AmountDirection
 import dev.kpetriv.sprout.core.ui.BalanceJarDefaults
 import dev.kpetriv.sprout.core.ui.MoneyFormatter
+import dev.kpetriv.sprout.core.ui.SavingsStarsDefaults
 
 /** What the data sources currently say about one kid. */
 internal data class WalletSnapshot(
@@ -29,6 +33,7 @@ internal data class WalletSnapshot(
     val balances: List<Balance>,
     val events: List<LedgerEvent>,
     val anomaliesCount: Int,
+    val goals: List<SavingsGoal> = emptyList(),
 )
 
 /** Screen-local state the data sources do not own. */
@@ -38,9 +43,17 @@ internal data class WalletLocalState(
     val message: WalletMessage? = null,
 )
 
+/** What the household policy means for this wallet; see [AdjustmentUi.unsignedWarning]. */
+internal data class WalletPolicyState(val parentSignaturesOff: Boolean = false)
+
 /** Pure mapping from ledger data to [WalletUiState]; no Android, no coroutines. */
 internal class WalletStateMapper(private val formatter: MoneyFormatter) {
-    fun ready(snapshot: WalletSnapshot, local: WalletLocalState, mode: WalletMode): WalletUiState.Ready {
+    fun ready(
+        snapshot: WalletSnapshot,
+        local: WalletLocalState,
+        mode: WalletMode,
+        policy: WalletPolicyState = WalletPolicyState(),
+    ): WalletUiState.Ready {
         val tier = snapshot.kid.uiTier
         val balances = balances(snapshot.accounts, snapshot.balances, tier)
         val main = balances.firstOrNull { it.kind == AccountKind.MAIN && it.currency is Currency.Fiat }
@@ -53,7 +66,7 @@ internal class WalletStateMapper(private val formatter: MoneyFormatter) {
             balances = balances,
             coins = coins,
             jarLevel = BalanceJarDefaults.levelFor(coins),
-            savingsGoal = savingsGoal(balances, tier),
+            savingsGoal = savingsGoal(balances, activeGoal(snapshot.goals), tier),
             events = if (filter == null) events else events.filter { it.category == filter },
             filter = filter,
             availableFilters = EventCategory.entries.filter { category -> events.any { it.category == category } },
@@ -61,7 +74,7 @@ internal class WalletStateMapper(private val formatter: MoneyFormatter) {
             anomaliesCount = snapshot.anomaliesCount,
             isParentView = mode == WalletMode.PARENT,
             canAdjust = mode == WalletMode.PARENT && main != null,
-            adjustment = local.adjustment,
+            adjustment = local.adjustment?.copy(unsignedWarning = policy.parentSignaturesOff),
             message = local.message,
         )
     }
@@ -87,13 +100,27 @@ internal class WalletStateMapper(private val formatter: MoneyFormatter) {
         else -> 2
     }
 
-    private fun savingsGoal(balances: List<BalanceUi>, tier: KidUiTier): SavingsGoalUi? =
+    /**
+     * The savings card over the SAVINGS balance: against [goal] ([SavingsProgress]) when there is one, otherwise the
+     * balance alone. Null when the kid has no savings account.
+     */
+    private fun savingsGoal(balances: List<BalanceUi>, goal: SavingsGoal?, tier: KidUiTier): SavingsGoalUi? =
         balances.firstOrNull { it.kind == AccountKind.SAVINGS }?.let { savings ->
-            SavingsGoalUi(
-                savedText = formatter.formatForTier(savings.amount, savings.currency, tier),
-                targetText = null,
-                progress = 0f,
-            )
+            val savedText = formatter.formatForTier(savings.amount, savings.currency, tier)
+            if (goal == null) {
+                SavingsGoalUi(savedText = savedText, targetText = null, progress = 0f)
+            } else {
+                val progress = SavingsProgress.of(goal, savings.amount)
+                SavingsGoalUi(
+                    savedText = savedText,
+                    targetText = formatter.formatForTier(goal.target, savings.currency, tier),
+                    // Drawing only: the exact fraction stays in SavingsProgress.
+                    progress = progress.numerator.toFloat() / progress.denominator,
+                    title = goal.title,
+                    stars = SavingsStarsDefaults.filledStars(progress.numerator, progress.denominator),
+                    isComplete = progress.isComplete,
+                )
+            }
         }
 
     /** Sum of [InterestAccrued] in the loaded events, per currency; null when there is none. */
@@ -107,6 +134,9 @@ internal class WalletStateMapper(private val formatter: MoneyFormatter) {
         ?.joinToString(" + ")
 
     companion object {
+        /** The goal the wallet shows: the oldest one not yet achieved. */
+        fun activeGoal(goals: List<SavingsGoal>): SavingsGoal? = goals.firstOrNull { it.achievedOn == null }
+
         private const val SPROUT_HISTORY = 10
         private const val SAPLING_HISTORY = 100
         private const val PARENT_SEEDLING_HISTORY = 10
@@ -151,7 +181,7 @@ internal class WalletStateMapper(private val formatter: MoneyFormatter) {
             is RewardPurchased -> EventCategory.SHOP
             is TransferToSavings -> EventCategory.SAVINGS
             is InterestAccrued -> EventCategory.INTEREST
-            is TimeBankStopped -> EventCategory.SCREEN_TIME
+            is TimeBankStopped, is TimeBankCredited -> EventCategory.SCREEN_TIME
             is ManualAdjustment, is OverdraftCompensated -> EventCategory.ADJUSTMENT
         }
     }

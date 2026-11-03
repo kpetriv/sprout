@@ -6,6 +6,7 @@ import dev.kpetriv.sprout.core.domainledger.GamePlayed
 import dev.kpetriv.sprout.core.domainledger.ManualAdjustment
 import dev.kpetriv.sprout.core.domainledger.Money
 import dev.kpetriv.sprout.core.domainledger.OverdraftCompensated
+import dev.kpetriv.sprout.core.domainledger.TimeBankCredited
 import dev.kpetriv.sprout.core.domainledger.TimeBankStarted
 import dev.kpetriv.sprout.core.domainledger.TimeBankStopped
 import dev.kpetriv.sprout.core.domainledger.TransferToSavings
@@ -60,5 +61,20 @@ class WalletStateMapperTest {
         assertEquals(EventCategory.GAMES, WalletStateMapper.eventUi(game)?.category)
         assertEquals(AmountDirection.IN, WalletStateMapper.eventUi(compensated)?.direction)
         assertNull(WalletStateMapper.eventUi(TimeBankStarted(envelope(5, accountId = TestData.minutesId), "s1")))
+    }
+
+    @Test
+    fun `screen time credited by a reward is incoming minutes`() {
+        val credited = TimeBankCredited(
+            envelope(6, accountId = TestData.minutesId),
+            Money(30),
+            grantedBy = envelope(5).eventId,
+            rewardId = "reward-tablet",
+        )
+        val row = assertNotNull(WalletStateMapper.eventUi(credited))
+        assertEquals(EventCategory.SCREEN_TIME, row.category)
+        assertEquals(AmountDirection.IN, row.direction)
+        assertEquals(Money(30), row.amount)
+        assertEquals(Currency.Minutes, row.currency)
     }
 }

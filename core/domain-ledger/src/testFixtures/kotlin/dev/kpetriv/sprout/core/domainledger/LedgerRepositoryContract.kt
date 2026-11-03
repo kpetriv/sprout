@@ -6,14 +6,18 @@ import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
+import kotlin.test.assertNotNull
 
 /**
  * Behaviour every [LedgerRepository] must show. Subclass it in an implementation's test source set and return a
- * fresh, empty repository with [accounts] registered from [createRepository].
+ * fresh, empty repository with [accounts] registered and [policy] in force from [createRepository].
  */
 abstract class LedgerRepositoryContract {
-    /** A new, empty repository that knows [accounts]. Called once per test. */
-    protected abstract suspend fun createRepository(accounts: List<Account>): LedgerRepository
+    /** A new, empty repository that knows [accounts] and validates and projects with [policy]. Once per test. */
+    protected abstract suspend fun createRepository(
+        accounts: List<Account>,
+        policy: LedgerPolicy = LedgerPolicy(),
+    ): LedgerRepository
 
     @Test
     fun appendValidatesChainsAndIsIdempotent() = runTest {
@@ -148,7 +152,7 @@ abstract class LedgerRepositoryContract {
 
         // A second parent device reuses the id: two parent copies, so neither applies.
         val reused = tablet.writeWithId(chore.eventId, Fixtures.main) {
-            ChoreRewarded(it, Fixtures.gbp, Money(900), "other")
+            ChoreRewarded(it, Fixtures.gbp, Money(900), "other", Fixtures.today)
         }
         assertIs<AppendResult.Conflict>(repository.append(reused))
 
@@ -195,6 +199,94 @@ abstract class LedgerRepositoryContract {
             rejected.violations,
         )
         assertEquals(0, repository.latestLamport())
+    }
+
+    @Test
+    fun parentOnlyEventsNeedAParentSignatureWhenThePolicyRequiresIt() = runTest {
+        val repository = createRepository(Fixtures.accounts, LedgerPolicy(requireParentSignature = true))
+        val key = FakeParentAuthorization()
+        val unsignedParent = DeviceWriter(Fixtures.parentPhone)
+        val signedParent = DeviceWriter(Fixtures.parentTablet, parentKey = key)
+        val kid = DeviceWriter(Fixtures.kidTablet)
+
+        val unsigned = assertIs<AppendResult.Rejected>(repository.append(unsignedParent.allowance(100)))
+        assertEquals(INVARIANT_REJECTION, unsigned.reason)
+        assertEquals(listOf(Violation.ParentSignatureMissing("AllowancePaid")), unsigned.violations)
+
+        val signed = signedParent.allowance(100)
+        assertEquals(AppendResult.Accepted, repository.append(signed))
+        assertEquals(true, key.verify(signed.parentSignedPayload(), assertNotNull(signed.parentSignatureBytes())))
+        // Kid events never need one.
+        kid.observe(repository.latestLamport())
+        assertEquals(AppendResult.Accepted, repository.append(kid.purchase(40)))
+        assertEquals(listOf(Money(60)), repository.observeBalances(Fixtures.kid).first().map { it.amount })
+        assertEquals(emptyList(), repository.observeAnomalies(Fixtures.kid).first())
+    }
+
+    @Test
+    fun parentSignaturesAreOnlyRequiredFromThePolicysLamport() = runTest {
+        val parent = DeviceWriter(Fixtures.parentPhone)
+        val early = parent.allowance(100)
+        val late = parent.allowance(50)
+        val policy = LedgerPolicy(requireParentSignature = true, parentSignatureRequiredFromLamport = late.lamport)
+        val repository = createRepository(Fixtures.accounts, policy)
+
+        assertEquals(AppendResult.Accepted, repository.append(early))
+        val rejected = assertIs<AppendResult.Rejected>(repository.append(late))
+        assertEquals(listOf(Violation.ParentSignatureMissing("AllowancePaid")), rejected.violations)
+        assertEquals(listOf(Money(100)), repository.observeBalances(Fixtures.kid).first().map { it.amount })
+    }
+
+    @Test
+    fun aPeriodIsPaidOnlyOnce() = runTest {
+        val repository = createRepository(Fixtures.accounts)
+        val phone = DeviceWriter(Fixtures.parentPhone)
+        val tablet = DeviceWriter(Fixtures.parentTablet)
+        val first = phone.allowance(500, periodKey = "2026-W45")
+        assertEquals(AppendResult.Accepted, repository.append(first))
+
+        // A second device planned the same week.
+        val again = assertIs<AppendResult.Rejected>(repository.append(tablet.allowance(500, periodKey = "2026-W45")))
+        assertEquals(INVARIANT_REJECTION, again.reason)
+        assertEquals(
+            listOf(
+                Violation.DuplicatePeriod(
+                    PeriodClaim.Allowance(Fixtures.kid, "2026-W45", Fixtures.gbp),
+                    claimedBy = first.eventId,
+                ),
+            ),
+            again.violations,
+        )
+        val chore = phone.chore(100, choreId = "dishes")
+        assertEquals(AppendResult.Accepted, repository.append(chore))
+        assertIs<Violation.DuplicatePeriod>(
+            assertIs<AppendResult.Rejected>(
+                repository.append(phone.chore(100, choreId = "dishes")),
+            ).violations.single(),
+        )
+        assertEquals(listOf(Money(600)), repository.observeBalances(Fixtures.kid).first().map { it.amount })
+    }
+
+    @Test
+    fun aScreenTimePurchaseCreditsTheTimeBankExactlyOnce() = runTest {
+        val repository = createRepository(Fixtures.accounts)
+        val parent = DeviceWriter(Fixtures.parentPhone)
+        val kid = DeviceWriter(Fixtures.kidTablet)
+        assertEquals(AppendResult.Accepted, repository.append(parent.allowance(500)))
+        kid.observe(repository.latestLamport())
+
+        val purchase = kid.screenTime(cost = 200, minutes = 30)
+        assertEquals(AppendResult.Accepted, repository.append(purchase))
+        val credit = kid.timeCredit(30, grantedBy = purchase)
+        assertEquals(AppendResult.Accepted, repository.append(credit))
+        val twice = assertIs<AppendResult.Rejected>(repository.append(kid.timeCredit(30, grantedBy = purchase)))
+        assertEquals(
+            listOf(Violation.GrantAlreadyCredited(purchase.eventId, creditedBy = credit.eventId)),
+            twice.violations,
+        )
+
+        val balances = repository.observeBalances(Fixtures.kid).first().associate { it.accountId to it.amount }
+        assertEquals(mapOf(Fixtures.main.id to Money(300), Fixtures.minutes.id to Money(30)), balances)
     }
 
     companion object {

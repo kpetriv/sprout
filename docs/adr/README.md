@@ -7,6 +7,7 @@ Each ADR records one significant decision in the short format described by Micha
 | [0001](0001-architecture.md) | Multi-module, offline-first architecture | Accepted |
 | [0002](0002-ledger-as-events.md) | Ledger as a signed, append-only event stream | Accepted; amended 2026-11-02 (M1 review) and by ADR-0004 |
 | [0003](0003-security-model.md) | Security model: identity, signing, and scoped E2EE | Accepted; parent key policy, PIN hashing, and device key provenance amended by ADR-0004 |
-| [0004](0004-parent-authorisation-and-device-identity.md) | Parent authorisation of ledger events and device identity | Accepted (implemented in M2/M3) |
+| [0004](0004-parent-authorisation-and-device-identity.md) | Parent authorisation of ledger events and device identity | Accepted (implemented in M2/M3); amended 2026-11-03 (M2 review: PIN-gated key enrolment and renewal, lockout cap, "Sign now") |
+| [0005](0005-scheduled-payments-and-money-flow-atomicity.md) | Scheduled payments and money-flow atomicity | Accepted (implemented in M2) |
 
 Related: [threat model](../THREAT_MODEL.md), [privacy policy draft](../PRIVACY.md).

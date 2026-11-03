@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Only the temporary capture directory is shareable; encrypted photos live in noBackupFilesDir and are never exposed. -->
+<paths>
+  <cache-path name="chore_photos" path="chore_photos/" />
+</paths>

@@ -15,13 +15,33 @@ enum class AuditAction {
     KID_UPSERTED,
     KID_ARCHIVED,
     ACCOUNT_CREATED,
+    CHORE_UPSERTED,
+    CHORE_STATE_CHANGED,
+    SUBMISSION_SUBMITTED,
+    SUBMISSION_DECIDED,
+    REWARD_UPSERTED,
+    ALLOWANCE_UPSERTED,
+    SAVINGS_GOAL_UPSERTED,
+    SAVINGS_GOAL_DELETED,
+    INTEREST_POLICY_UPDATED,
+    HOUSEHOLD_POLICY_UPDATED,
+    PARENT_KEY_REGISTERED,
+    PARENT_ACTION_QUEUED,
+    PARENT_ACTION_DONE,
+    PARENT_ACTION_REFUSED,
+    PARENT_ACTION_FAILED,
+    PARENT_ACTION_CANCELLED,
+    PARENT_ACTION_SKIPPED,
+    PHOTO_SAVED,
+    PHOTO_DELETED,
 }
 
 /**
  * The append-only, parent-visible audit trail: who did what, when, from which device (PLAN "Availability and
  * operations"). The DAO has no update or delete.
  *
- * @property target the id acted on (an eventId, kidId or accountId); never a name.
+ * @property target the id acted on (an eventId, kidId, accountId, document id, action key or photo file name);
+ *   never a name.
  * @property detailsJson ids, types and amounts only. Never personal data or free text (no kid names, no
  *   adjustment reasons).
  */

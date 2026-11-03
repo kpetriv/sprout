@@ -4,6 +4,8 @@ import dev.kpetriv.sprout.core.domainledger.Account
 import dev.kpetriv.sprout.core.domainledger.AccountKind
 import dev.kpetriv.sprout.core.domainledger.AppendResult
 import dev.kpetriv.sprout.core.domainledger.Balance
+import dev.kpetriv.sprout.core.domainledger.BatchAppendResult
+import dev.kpetriv.sprout.core.domainledger.BatchEntry
 import dev.kpetriv.sprout.core.domainledger.Currency
 import dev.kpetriv.sprout.core.domainledger.Envelope
 import dev.kpetriv.sprout.core.domainledger.EventId
@@ -12,6 +14,9 @@ import dev.kpetriv.sprout.core.domainledger.LedgerEvent
 import dev.kpetriv.sprout.core.domainledger.LedgerRepository
 import dev.kpetriv.sprout.core.domainledger.LedgerWriter
 import dev.kpetriv.sprout.core.domainledger.Money
+import dev.kpetriv.sprout.core.domainledger.ParentAuthorization
+import dev.kpetriv.sprout.core.domainledger.ValidationResult
+import dev.kpetriv.sprout.core.domainledger.parentSignedPayload
 import dev.kpetriv.sprout.core.model.AccountId
 import dev.kpetriv.sprout.core.model.DeviceId
 import dev.kpetriv.sprout.core.model.HouseholdId
@@ -78,12 +83,61 @@ class FakeLedgerWriter : LedgerWriter {
     var failure: Exception? = null
     var gate: CompletableDeferred<Unit>? = null
 
+    /** Events appended through [appendAsParent], with the authorization each one was signed with. */
+    val parentSigned = mutableListOf<Pair<LedgerEvent, ParentAuthorization>>()
+
     override suspend fun append(kidId: KidId, accountId: AccountId, body: (Envelope) -> LedgerEvent): AppendResult {
         gate?.await()
         failure?.let { throw it }
         val event = body(TestData.envelope(appended.size + 100, kidId, accountId))
         appended += event
         return nextResult
+    }
+
+    /** Like [append], and calls [ParentAuthorization.sign] once, as the real writer does. */
+    override suspend fun appendAsParent(
+        kidId: KidId,
+        accountId: AccountId,
+        authorization: ParentAuthorization,
+        body: (Envelope) -> LedgerEvent,
+    ): AppendResult {
+        gate?.await()
+        failure?.let { throw it }
+        val event = body(TestData.envelope(appended.size + 100, kidId, accountId))
+        authorization.sign(event.parentSignedPayload())
+        appended += event
+        parentSigned += event to authorization
+        return nextResult
+    }
+
+    /** What [validateAsParent] answers; checked before any prompt by the use cases. */
+    var nextValidation: ValidationResult = ValidationResult.Valid
+
+    override suspend fun appendAsKid(
+        kidId: KidId,
+        accountId: AccountId,
+        body: (Envelope) -> LedgerEvent,
+    ): AppendResult = append(kidId, accountId, body)
+
+    override suspend fun appendAllAsKid(kidId: KidId, entries: List<BatchEntry>): BatchAppendResult {
+        gate?.await()
+        failure?.let { throw it }
+        val built = mutableListOf<LedgerEvent>()
+        entries.forEach { entry ->
+            built += entry.body(TestData.envelope(appended.size + built.size + 100, kidId, entry.accountId), built)
+        }
+        if (nextResult != AppendResult.Accepted) return BatchAppendResult.Rejected(0, nextResult)
+        appended += built
+        return BatchAppendResult.Accepted(built)
+    }
+
+    override suspend fun validateAsParent(
+        kidId: KidId,
+        accountId: AccountId,
+        body: (Envelope) -> LedgerEvent,
+    ): ValidationResult {
+        body(TestData.envelope(appended.size + 100, kidId, accountId))
+        return nextValidation
     }
 }
 

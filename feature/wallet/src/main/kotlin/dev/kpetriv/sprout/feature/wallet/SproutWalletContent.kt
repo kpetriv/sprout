@@ -2,28 +2,41 @@ package dev.kpetriv.sprout.feature.wallet
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Card
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
+import dev.kpetriv.sprout.core.designsystem.theme.SproutTheme
 import dev.kpetriv.sprout.core.model.KidUiTier
 import dev.kpetriv.sprout.core.ui.LedgerEventRow
 import dev.kpetriv.sprout.core.ui.SavingsGoalBar
 import dev.kpetriv.sprout.core.ui.TierScaledText
 import dev.kpetriv.sprout.core.ui.TierTextRole
 
-/** Sprout (about 8 to 11): real currency with decimals, a savings goal bar and the last 10 events. */
+/**
+ * Sprout (about 8 to 11): real currency with decimals, chores and shop buttons, the savings goal bar and the last 10
+ * events.
+ */
 @Composable
-internal fun SproutWalletContent(state: WalletUiState.Ready, modifier: Modifier = Modifier) {
+internal fun SproutWalletContent(
+    state: WalletUiState.Ready,
+    modifier: Modifier = Modifier,
+    onOpenChores: () -> Unit = {},
+    onOpenShop: () -> Unit = {},
+) {
     val tier = KidUiTier.SPROUT
     Column(
         modifier = modifier
@@ -42,23 +55,55 @@ internal fun SproutWalletContent(state: WalletUiState.Ready, modifier: Modifier 
                 tier = tier,
             )
         }
-        state.savingsGoal?.let { goal ->
-            Card(modifier = Modifier.fillMaxWidth()) {
-                SavingsGoalBar(
-                    title = stringResource(R.string.feature_wallet_savings),
-                    savedText = goal.savedText,
-                    targetText = goal.targetText,
-                    progress = goal.progress,
-                    tier = tier,
-                    modifier = Modifier.padding(16.dp),
-                )
-            }
-        }
+        ChoresAndShopButtons(onOpenChores = onOpenChores, onOpenShop = onOpenShop)
+        state.savingsGoal?.let { SavingsGoalCard(it, tier) }
         SectionHeading(stringResource(R.string.feature_wallet_recent), tier)
         if (state.events.isEmpty()) {
             EmptyHistory(tier)
         } else {
             state.events.forEach { EventRow(it, tier) }
+        }
+    }
+}
+
+/**
+ * The savings card: progress towards the kid's goal ("Saving for New bike", £12.50 of £40.00), or the savings
+ * balance alone when there is no goal.
+ */
+@Composable
+internal fun SavingsGoalCard(goal: SavingsGoalUi, tier: KidUiTier, modifier: Modifier = Modifier) {
+    Card(modifier = modifier.fillMaxWidth()) {
+        SavingsGoalBar(
+            title = goal.title?.let { stringResource(R.string.feature_wallet_saving_for, it) }
+                ?: stringResource(R.string.feature_wallet_savings),
+            savedText = goal.savedText,
+            targetText = goal.targetText,
+            progress = goal.progress,
+            tier = tier,
+            modifier = Modifier.padding(16.dp),
+        )
+    }
+}
+
+/** Two equal tonal buttons to the kid's chores and the rewards shop (Sprout and Sapling). */
+@Composable
+internal fun ChoresAndShopButtons(onOpenChores: () -> Unit, onOpenShop: () -> Unit, modifier: Modifier = Modifier) {
+    Row(modifier = modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+        FilledTonalButton(
+            onClick = onOpenChores,
+            modifier = Modifier
+                .weight(1f)
+                .heightIn(min = SproutTheme.tierTokens.minTouchTarget),
+        ) {
+            Text("${EventCategory.CHORES.icon}  ${stringResource(R.string.feature_wallet_chores)}")
+        }
+        FilledTonalButton(
+            onClick = onOpenShop,
+            modifier = Modifier
+                .weight(1f)
+                .heightIn(min = SproutTheme.tierTokens.minTouchTarget),
+        ) {
+            Text("${EventCategory.SHOP.icon}  ${stringResource(R.string.feature_wallet_shop)}")
         }
     }
 }
@@ -104,7 +149,7 @@ internal fun EmptyHistory(tier: KidUiTier, modifier: Modifier = Modifier) {
 internal fun EventRow(event: EventUi, tier: KidUiTier, modifier: Modifier = Modifier, subtitle: String? = event.note) {
     LedgerEventRow(
         icon = event.category.icon,
-        title = stringResource(event.category.titleRes),
+        title = stringResource(event.titleRes),
         amount = event.amount,
         currency = event.currency,
         direction = event.direction,

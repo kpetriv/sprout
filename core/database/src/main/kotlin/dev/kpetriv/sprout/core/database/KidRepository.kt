@@ -5,6 +5,7 @@ import dev.kpetriv.sprout.core.database.entity.AuditAction
 import dev.kpetriv.sprout.core.database.entity.KidEntity
 import dev.kpetriv.sprout.core.model.Kid
 import dev.kpetriv.sprout.core.model.KidId
+import dev.kpetriv.sprout.core.model.PhotoRef
 import dev.kpetriv.sprout.core.time.Clock
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
@@ -21,7 +22,10 @@ interface KidRepository {
     /** Inserts or replaces [kid]. */
     suspend fun upsert(kid: Kid)
 
-    /** Hides [id] from day-to-day screens; its ledger history stays. Returns false if there is no such kid. */
+    /**
+     * Hides [id] from day-to-day screens; its ledger history stays, its chore photos are deleted (audit L2). Returns
+     * false if there is no such kid.
+     */
     suspend fun archive(id: KidId): Boolean
 }
 
@@ -33,6 +37,7 @@ class RoomKidRepository @Inject constructor(
     private val database: SproutDatabase,
     private val authors: SessionAuthorProvider,
     private val clock: Clock,
+    private val photoStore: PhotoStore,
 ) : KidRepository {
     private val kids = database.kidDao()
     private val audit = database.auditLogDao()
@@ -56,12 +61,16 @@ class RoomKidRepository @Inject constructor(
 
     override suspend fun archive(id: KidId): Boolean {
         val author = authors.currentAuthor()
-        return database.withTransaction {
+        val changed = database.withTransaction {
             val changed = kids.archive(id) > 0
             if (changed) {
                 audit.insert(auditEntry(author, clock.now().toEpochMilliseconds(), AuditAction.KID_ARCHIVED, id.value))
             }
             changed
         }
+        if (changed) {
+            database.photoDao().forKid(id).forEach { photoStore.delete(PhotoRef(it.fileName, it.sha256)) }
+        }
+        return changed
     }
 }

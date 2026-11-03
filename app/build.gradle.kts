@@ -19,6 +19,9 @@ android {
         buildConfig = true
     }
 
+    // Robolectric (PlanScheduledActionsWorkerTest) reads the merged resources.
+    testOptions.unitTests.isIncludeAndroidResources = true
+
     buildTypes {
         release {
             isMinifyEnabled = true
@@ -38,9 +41,14 @@ baselineProfile {
 
 dependencies {
     implementation(projects.core.common)
+    // ParentAuthorizer, ParentAuthUnavailableException and verifyParentSignature for the settings adapters.
+    implementation(projects.core.crypto)
     implementation(projects.core.database)
     implementation(projects.core.designsystem)
+    // ParentAuthorizationRequester (bound by feature/lock) for the parent dashboard's "Sign now".
+    implementation(projects.core.domainLedger)
     implementation(projects.core.model)
+    implementation(projects.core.time)
     implementation(projects.core.ui)
 
     implementation(projects.feature.chat)
@@ -55,6 +63,8 @@ dependencies {
     implementation(projects.widget)
 
     implementation(libs.androidx.activity.compose)
+    // Window theme parent (Theme.AppCompat.DayNight): BiometricPrompt's fingerprint dialog fallback needs it.
+    implementation(libs.androidx.appcompat)
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.compose.material3)
     implementation(libs.androidx.hilt.lifecycle.viewmodel.compose)
@@ -63,10 +73,16 @@ dependencies {
     implementation(libs.androidx.navigation3.runtime)
     implementation(libs.androidx.navigation3.ui)
     implementation(libs.androidx.profileinstaller)
+    implementation(libs.androidx.work.runtime.ktx)
+    implementation(libs.androidx.hilt.work)
+    ksp(libs.androidx.hilt.compiler)
     implementation(libs.kotlinx.serialization.core)
 
+    testImplementation(testFixtures(projects.core.crypto))
     testImplementation(testFixtures(projects.core.time))
+    testImplementation(libs.androidx.work.testing)
     testImplementation(libs.kotlinx.coroutines.test)
+    testImplementation(libs.robolectric)
     testImplementation(libs.turbine)
 
     baselineProfile(projects.benchmark)

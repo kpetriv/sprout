@@ -115,13 +115,13 @@ class RoomLedgerRepositoryTest {
         database.register(Fixtures.accounts)
         val first = LedgerEventFactory(testClock(), LamportClock(start = 4), Fixtures.seededIds(1))
             .create(Fixtures.parentPhone, Fixtures.kid, Fixtures.main.id, headHash = null) {
-                ChoreRewarded(it, Fixtures.gbp, Money(100), "c1")
+                ChoreRewarded(it, Fixtures.gbp, Money(100), "c1", Fixtures.today)
             }
         assertEquals(AppendResult.Accepted, repository.append(first))
 
         val stale = LedgerEventFactory(testClock(), LamportClock(start = 2), Fixtures.seededIds(2))
             .create(Fixtures.parentPhone, Fixtures.kid, Fixtures.main.id, headHash = first.envelope.hash) {
-                ChoreRewarded(it, Fixtures.gbp, Money(100), "c2")
+                ChoreRewarded(it, Fixtures.gbp, Money(100), "c2", Fixtures.today)
             }
 
         val rejected = assertIs<AppendResult.Rejected>(repository.append(stale))
@@ -210,7 +210,7 @@ class RoomLedgerRepositoryTest {
         listOf(kid.timeStart("s"), kid.timeStop("s", minutes = 30)).forEach {
             assertEquals(AppendResult.Accepted, repository.append(it))
         }
-        val projected = repository.project().anomaliesFor(Fixtures.kid)
+        val projected = repository.projection().anomaliesFor(Fixtures.kid)
         assertTrue(projected.isNotEmpty())
         assertEquals(projected, repository.observeAnomalies(Fixtures.kid).first())
     }

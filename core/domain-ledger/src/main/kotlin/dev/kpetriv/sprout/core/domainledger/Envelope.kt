@@ -29,7 +29,14 @@ import kotlin.time.Instant
  *   canonical encoding itself.
  * @property signature base64 ECDSA signature over [LedgerEvent.signedPayload] by the device key; null until
  *   signed. Excluded from the canonical encoding.
- * @property schemaVersion version of the event schema and canonical encoding; part of the hashed form.
+ * @property parentSignature (schema version 2) base64 ECDSA P-256 signature over [LedgerEvent.parentSignedPayload]
+ *   by the parent authentication key (ADR-0004). Carried by parent-only events ([LedgerEvent.isParentOnly]) and
+ *   required on them when [LedgerPolicy.requireParentSignature] is set. Excluded from the canonical encoding
+ *   exactly like [signature], so a v1 document (which has no such key), an explicit `null` and any value all hash
+ *   and verify the same; the hash and the device signature never depend on it. It is still part of the event's
+ *   identity: two copies that differ only here are different events ([isSameEventAs]).
+ * @property schemaVersion version of the event schema and canonical encoding; part of the hashed form. New events
+ *   are written with [CURRENT_SCHEMA_VERSION]; version 1 documents (M1) decode with [parentSignature] null.
  */
 @Serializable
 data class Envelope(
@@ -46,6 +53,7 @@ data class Envelope(
     val prevHash: String?,
     val hash: String,
     val signature: String? = null,
+    val parentSignature: String? = null,
     val schemaVersion: Int = CURRENT_SCHEMA_VERSION,
 ) {
     init {
@@ -56,8 +64,12 @@ data class Envelope(
     }
 
     companion object {
-        /** The schema version new events are written with. */
-        const val CURRENT_SCHEMA_VERSION: Int = 1
+        /**
+         * The schema version new events are written with. Version 2 (M2) added [parentSignature],
+         * [TimeBankCredited], [RewardPurchased.minutesGranted] and the period keys of [ChoreRewarded],
+         * [AllowancePaid] and [InterestAccrued]. The canonical encoding rules did not change.
+         */
+        const val CURRENT_SCHEMA_VERSION: Int = 2
 
         /** Placeholder [hash] before [LedgerEventFactory] computes the real one. */
         const val UNHASHED: String = ""

@@ -1,5 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-  <!-- Window theme only; all UI is Compose and styled by SproutTheme. -->
-  <style name="Theme.Sprout" parent="android:Theme.Material.Light.NoActionBar" />
+  <!--
+    Window theme only; all UI is Compose and styled by SproutTheme. AppCompat-based because androidx.biometric shows
+    its fingerprint dialog fallback (some API 28 devices) as an AppCompat AlertDialog. DayNight follows the system
+    setting, so no values-night override is needed.
+  -->
+  <style name="Theme.Sprout" parent="Theme.AppCompat.DayNight.NoActionBar" />
 </resources>

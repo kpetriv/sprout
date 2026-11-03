@@ -71,6 +71,7 @@ The reasoning behind this layout is in [ADR-0001](docs/adr/0001-architecture.md)
 ## Security and privacy
 
 - **Tamper-evident ledger.** Every ledger event is signed by the authoring device and chained to that author's previous event by hash. Receivers verify signature and chain before applying; failures are quarantined and shown in the parent audit view. See [ADR-0002](docs/adr/0002-ledger-as-events.md).
+- **Parent authorisation.** The parent area sits behind a PIN, and every money event a parent authors (chore rewards, allowance, interest, adjustments) is also signed with a parent key that only a strong biometric can use (on devices that have one), one fingerprint prompt per event, each naming the kid, the amount and what it pays for. The key is created only after the parent enters the PIN, so knowing the phone's screen lock is not enough to award credits. Scheduled allowance and interest wait for the parent to tap "Sign now". See [ADR-0004](docs/adr/0004-parent-authorisation-and-device-identity.md) and [ADR-0005](docs/adr/0005-scheduled-payments-and-money-flow-atomicity.md).
 - **End-to-end encrypted chat and photos.** Per-thread AES-256-GCM keys derived from X25519 agreement between parent and kid devices. Firestore and Storage hold ciphertext and routing metadata only. Keys rotate when a device is removed.
 - **Keystore-backed keys.** Each device holds a P-256 key pair in Android Keystore (StrongBox where available). Kid devices get their own Firebase identity; they never see parent credentials.
 - **Server-side enforcement.** Firestore rules check household membership, author identity, role, registered device, and ledger immutability. App Check with Play Integrity rejects repackaged or scripted clients.
@@ -111,7 +112,7 @@ Each milestone ends with green CI and a tagged build.
 |---|---|---|
 | M0 Scaffold | Build logic, version catalog, module skeleton, Hilt, theme and tier tokens, CI, Renovate, ADRs, threat model | In progress |
 | M1 Ledger core and crypto | Event-sourced ledger with hash chain, Keystore keys and signing, SQLCipher Room, outbox, audit log, wallet (3 tiers) | Done |
-| M2 Chores, rewards, tiers | Parent CRUD, kid today and shop (3 tiers), submit/approve, allowance, savings and interest, PIN/biometric lock | Planned |
+| M2 Chores, rewards, tiers | Parent CRUD, kid today and shop (3 tiers), submit/approve, allowance, savings and interest, PIN/biometric lock with fingerprint-signed money events | Done |
 | M3 Sync and identity | Sync engine, Firebase transport, App Check, Credential Manager, Cloud Functions, Firestore rules and emulator tests, device registry, controls matrix | Planned |
 | M4 Chat and time bank | E2EE threads, key rotation, Seedling presets and voice notes, time bank with foreground notification | Planned |
 | M5 Games | Three games, tier difficulty, daily cap, signed scoring events | Planned |
@@ -125,6 +126,8 @@ Each milestone ends with green CI and a tagged build.
   - [ADR-0001 Architecture](docs/adr/0001-architecture.md)
   - [ADR-0002 Ledger as events](docs/adr/0002-ledger-as-events.md)
   - [ADR-0003 Security model](docs/adr/0003-security-model.md)
+  - [ADR-0004 Parent authorisation and device identity](docs/adr/0004-parent-authorisation-and-device-identity.md)
+  - [ADR-0005 Scheduled payments and money-flow atomicity](docs/adr/0005-scheduled-payments-and-money-flow-atomicity.md)
 - [Threat model](docs/THREAT_MODEL.md)
 
 ## Engineering practices

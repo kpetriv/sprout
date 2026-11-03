@@ -28,6 +28,9 @@
   <string name="feature_wallet_balance">Your money</string>
   <string name="feature_wallet_screen_time">Screen time</string>
   <string name="feature_wallet_savings">Savings</string>
+  <!-- %1$s is the savings goal's title. -->
+  <string name="feature_wallet_saving_for">Saving for %1$s</string>
+  <string name="feature_wallet_goal_reached">Goal reached!</string>
   <string name="feature_wallet_recent">Recent</string>
   <string name="feature_wallet_history">History</string>
   <string name="feature_wallet_history_empty">Nothing here yet.</string>
@@ -54,6 +57,7 @@
   <string name="feature_wallet_event_savings">Moved to savings</string>
   <string name="feature_wallet_event_interest">Interest</string>
   <string name="feature_wallet_event_screen_time">Screen time used</string>
+  <string name="feature_wallet_event_screen_time_added">Screen time</string>
   <string name="feature_wallet_event_adjustment">Adjustment</string>
 
   <!-- Sapling filter chips -->
@@ -89,5 +93,65 @@
   <string name="feature_wallet_not_allowed">Only a parent can adjust balances</string>
   <string name="feature_wallet_no_account">This kid has no money account yet</string>
   <string name="feature_wallet_adjust_failed">Couldn\'t save the adjustment. Try again.</string>
+  <!-- Parent prompt subtitle. %1$s is the kid's first name, %2$s the signed amount ("+£2.50"). -->
+  <string name="feature_wallet_adjust_prompt">Adjust %1$s\'s balance by %2$s</string>
+  <string name="feature_wallet_adjust_unsigned_warning">Parent signatures are off: this change is saved unsigned.</string>
+  <string name="feature_wallet_adjust_auth_unavailable">This device can\'t confirm a parent, and this household needs one for changes</string>
+  <string name="feature_wallet_adjust_auth_failed">Parent check didn\'t finish. Nothing was saved.</string>
+  <string name="feature_wallet_adjust_key_invalidated">Fingerprints on this phone changed. Renew parent security in Settings, then try again. Nothing was saved.</string>
   <string name="feature_wallet_adjust_conflict">This change clashed with another device; ask a parent to check the history</string>
+
+  <!-- Shop -->
+  <string name="feature_wallet_shop_title">Shop</string>
+  <string name="feature_wallet_shop_title_named">%1$s\'s shop</string>
+  <string name="feature_wallet_shop_loading">Loading shop</string>
+  <string name="feature_wallet_shop_error_kid_not_found">We couldn\'t find this shop.</string>
+  <string name="feature_wallet_shop_error_load_failed">Something went wrong while loading the shop.</string>
+  <string name="feature_wallet_shop_empty">No rewards in the shop yet. Ask a parent to add some!</string>
+  <!-- %1$s is the kid's balance as their tier reads it ("7 coins", "£7.45"). -->
+  <string name="feature_wallet_shop_balance">You have %1$s</string>
+  <string name="feature_wallet_shop_parent_preview">You\'re looking at the shop. Kids buy rewards in kid mode.</string>
+  <string name="feature_wallet_shop_can_afford">You can buy this now</string>
+  <string name="feature_wallet_shop_cannot_afford">Keep saving</string>
+  <!-- %1$s is the amount still needed. -->
+  <string name="feature_wallet_shop_need_more">You need %1$s more</string>
+  <plurals name="feature_wallet_shop_days_until">
+    <item quantity="one">%1$s more, about %2$d day of pocket money</item>
+    <item quantity="other">%1$s more, about %2$d days of pocket money</item>
+  </plurals>
+  <plurals name="feature_wallet_shop_savings_plan">
+    <item quantity="one">Savings plan: about %1$d week of pocket money</item>
+    <item quantity="other">Savings plan: about %1$d weeks of pocket money</item>
+  </plurals>
+  <string name="feature_wallet_shop_savings_plan_none">Savings plan: no pocket money set up to plan with</string>
+  <!-- %1$s is the minutes a screen-time reward grants ("30 min"). -->
+  <string name="feature_wallet_shop_grants_minutes">Gives %1$s of screen time</string>
+  <string name="feature_wallet_shop_buy">Buy</string>
+  <string name="feature_wallet_shop_wishlist">Wishlist</string>
+  <string name="feature_wallet_shop_wishlist_empty">Tap the heart on a reward to save it here.</string>
+  <string name="feature_wallet_shop_all_rewards">All rewards</string>
+  <!-- %1$s is the reward title. -->
+  <string name="feature_wallet_shop_wishlist_add">Add %1$s to wishlist</string>
+  <string name="feature_wallet_shop_wishlist_remove">Remove %1$s from wishlist</string>
+  <!-- Confirm dialog. %1$s is the reward title, %2$s its price. -->
+  <string name="feature_wallet_shop_confirm_title">Buy %1$s?</string>
+  <string name="feature_wallet_shop_confirm_body">It costs %1$s.</string>
+  <string name="feature_wallet_shop_confirm_yes">Yes, buy it!</string>
+  <string name="feature_wallet_shop_confirm_no">Not now</string>
+  <string name="feature_wallet_shop_not_yet_title">Not yet!</string>
+  <string name="feature_wallet_shop_ok">OK</string>
+  <string name="feature_wallet_shop_buying">Buying</string>
+  <!-- Purchase outcome -->
+  <string name="feature_wallet_shop_enjoy">Enjoy!</string>
+  <!-- %1$s is the reward title. -->
+  <string name="feature_wallet_shop_bought">You bought %1$s.</string>
+  <!-- %1$s is the minutes credited ("30 min"). -->
+  <string name="feature_wallet_shop_minutes_added">%1$s of screen time added.</string>
+  <string name="feature_wallet_shop_minutes_pending">Your screen time isn\'t added yet. Ask a parent to check.</string>
+  <string name="feature_wallet_shop_oops">Oops!</string>
+  <string name="feature_wallet_shop_failed_catalogue">This reward just changed. Have another look.</string>
+  <string name="feature_wallet_shop_failed_funds">Not enough money yet. Keep saving!</string>
+  <string name="feature_wallet_shop_failed_no_account">Your wallet isn\'t ready for this yet. Ask a parent.</string>
+  <string name="feature_wallet_shop_failed_not_allowed">Purchases happen in kid mode.</string>
+  <string name="feature_wallet_shop_failed">Couldn\'t buy that right now. Try again.</string>
 </resources>

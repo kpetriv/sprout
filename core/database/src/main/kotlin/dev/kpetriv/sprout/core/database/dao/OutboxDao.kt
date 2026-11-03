@@ -12,6 +12,13 @@ interface OutboxDao {
     @Insert(onConflict = OnConflictStrategy.ABORT)
     suspend fun insert(entry: OutboxEntity): Long
 
+    /**
+     * Queues a document write. A row for the same document (same `kind` and `refId`) that has not been sent yet is
+     * replaced, so the outbox holds only the document's latest state.
+     */
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertDocument(entry: OutboxEntity): Long
+
     /** Rows due at [nowEpochMs], oldest first. */
     @Query("SELECT * FROM outbox WHERE nextAttemptAtEpochMs <= :nowEpochMs ORDER BY seq LIMIT :limit")
     suspend fun due(nowEpochMs: Long, limit: Int): List<OutboxEntity>
