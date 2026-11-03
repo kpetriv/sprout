@@ -118,7 +118,7 @@ hilt-android = { module = "com.google.dagger:hilt-android", version.ref = "hilt"
 hilt-compiler = { module = "com.google.dagger:hilt-android-compiler", version.ref = "hilt" }
 hilt-android-testing = { module = "com.google.dagger:hilt-android-testing", version.ref = "hilt" }
 
-# Firebase: declared for core/sync-firebase (M3). The google-services plugin is not applied yet.
+# Firebase: core/sync-firebase (M3). The google-services plugin is applied by app only with google-services.json.
 firebase-bom = { module = "com.google.firebase:firebase-bom", version.ref = "firebaseBom" }
 firebase-auth = { module = "com.google.firebase:firebase-auth" }
 firebase-firestore = { module = "com.google.firebase:firebase-firestore" }
@@ -172,7 +172,7 @@ detekt = { id = "io.gitlab.arturbosch.detekt", version.ref = "detekt" }
 ktlint = { id = "org.jlleitschuh.gradle.ktlint", version.ref = "ktlintGradle" }
 dependency-check = { id = "org.owasp.dependencycheck", version.ref = "dependencyCheck" }
 roborazzi = { id = "io.github.takahirom.roborazzi", version.ref = "roborazzi" }
-# Declared only; applied in M3 once google-services.json is injected from CI secrets.
+# Applied by app only when app/google-services.json exists (D-M3-1); never in CI.
 google-services = { id = "com.google.gms.google-services", version.ref = "googleServices" }
 
 # Convention plugins (build-logic)

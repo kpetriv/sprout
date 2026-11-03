@@ -5,6 +5,36 @@ plugins {
     alias(libs.plugins.baselineprofile)
 }
 
+// A real Firebase project's config (never committed, D-M3-1). Without it, debug builds initialise Firebase
+// programmatically for the `demo-sprout` emulator project (core/sync-firebase FirebaseBootstrap).
+if (file("google-services.json").exists()) {
+    apply(plugin = "com.google.gms.google-services")
+    // Debug builds always run against the Emulator Suite's `demo-sprout` project, never the real one: without the
+    // generated values FirebaseBootstrap initialises the demo project programmatically.
+    // A disabled task leaves an earlier output behind, so that is deleted before debug resources are merged.
+    val dropDebugGoogleServices = tasks.register<Delete>("dropDebugGoogleServices") {
+        delete(layout.buildDirectory.dir("generated/res/processDebugGoogleServices"))
+    }
+    tasks.configureEach {
+        if (name == "processDebugGoogleServices") enabled = false
+        if (name.endsWith("DebugResources") && name != "dropDebugGoogleServices") dependsOn(dropDebugGoogleServices)
+    }
+}
+
+/** Host of the Firebase Emulator Suite as seen from the device: `10.0.2.2` is the Android emulator's host loopback. */
+val firebaseEmulatorHost: String = providers.gradleProperty("sprout.firebaseEmulatorHost").orElse("10.0.2.2").get()
+
+/**
+ * Base URL of the household callables (`server/`, D-M3-29) as seen from the device. Debug default: the host's
+ * port 8787 through the Android emulator's loopback alias; release: only when the property is set.
+ */
+val functionsBaseUrl: String? = providers.gradleProperty("sprout.functionsBaseUrl").orNull
+
+/** OAuth web client id Google ID tokens are issued for; only exists with a real Firebase project (D-M3-2). */
+val googleServerClientId: String? = providers.gradleProperty("sprout.googleServerClientId").orNull
+
+fun String?.asBuildConfigString(): String = this?.let { "\"" + it.replace("\"", "") + "\"" } ?: "null"
+
 android {
     namespace = "dev.kpetriv.sprout"
 
@@ -12,9 +42,11 @@ android {
         applicationId = "dev.kpetriv.sprout"
         versionCode = 1
         versionName = "0.1.0"
+        buildConfigField("String", "GOOGLE_SERVER_CLIENT_ID", googleServerClientId.asBuildConfigString())
     }
 
-    // BuildConfig.DEBUG gates the TEMPORARY demo-household seeding (HouseholdBootstrap) to debug builds.
+    // BuildConfig.DEBUG gates the TEMPORARY demo-household seeding (HouseholdBootstrap) to debug builds; the Firebase
+    // fields below configure core/sync-firebase (FirebaseModule).
     buildFeatures {
         buildConfig = true
     }
@@ -23,7 +55,18 @@ android {
     testOptions.unitTests.isIncludeAndroidResources = true
 
     buildTypes {
+        debug {
+            // Debug builds talk to the local Firebase Emulator Suite only (cleartext allowed to it, src/debug).
+            buildConfigField("String", "FIREBASE_EMULATOR_HOST", firebaseEmulatorHost.asBuildConfigString())
+            buildConfigField(
+                "String",
+                "FUNCTIONS_BASE_URL",
+                (functionsBaseUrl ?: "http://$firebaseEmulatorHost:8787").asBuildConfigString(),
+            )
+        }
         release {
+            buildConfigField("String", "FIREBASE_EMULATOR_HOST", "null")
+            buildConfigField("String", "FUNCTIONS_BASE_URL", functionsBaseUrl.asBuildConfigString())
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(
@@ -48,6 +91,10 @@ dependencies {
     // ParentAuthorizationRequester (bound by feature/lock) for the parent dashboard's "Sign now".
     implementation(projects.core.domainLedger)
     implementation(projects.core.model)
+    // SyncEngine and its ports, run by SyncController and SyncWorker.
+    implementation(projects.core.sync)
+    // FirebaseBootstrap, auth session, household callables and the Firestore transport (the only Firebase importer).
+    implementation(projects.core.syncFirebase)
     implementation(projects.core.time)
     implementation(projects.core.ui)
 
@@ -69,16 +116,23 @@ dependencies {
     implementation(libs.androidx.compose.material3)
     implementation(libs.androidx.hilt.lifecycle.viewmodel.compose)
     implementation(libs.androidx.lifecycle.runtime.compose)
+    // ProcessLifecycleOwner: the @AppForeground signal for the Firestore listeners and the sync trigger.
+    implementation(libs.androidx.lifecycle.process)
     implementation(libs.androidx.lifecycle.viewmodel.navigation3)
     implementation(libs.androidx.navigation3.runtime)
     implementation(libs.androidx.navigation3.ui)
     implementation(libs.androidx.profileinstaller)
+    // Room's invalidation tracker on the outbox table is the sync trigger (OutboxSyncTrigger).
+    implementation(libs.androidx.room.runtime)
     implementation(libs.androidx.work.runtime.ktx)
     implementation(libs.androidx.hilt.work)
     ksp(libs.androidx.hilt.compiler)
     implementation(libs.kotlinx.serialization.core)
+    // Callable payloads (device proofs, the export bundle).
+    implementation(libs.kotlinx.serialization.json)
 
     testImplementation(testFixtures(projects.core.crypto))
+    testImplementation(testFixtures(projects.core.sync))
     testImplementation(testFixtures(projects.core.time))
     testImplementation(libs.androidx.work.testing)
     testImplementation(libs.kotlinx.coroutines.test)

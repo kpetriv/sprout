@@ -88,6 +88,7 @@
   <string name="feature_chores_photo_from">Photo from %1$s for %2$s</string>
   <string name="feature_chores_photo_loading">Loading photo</string>
   <string name="feature_chores_photo_unavailable">The photo can\'t be shown.</string>
+  <string name="feature_chores_photo_on_kid_device">Photo on the kid\'s device</string>
   <string name="feature_chores_approve">Approve</string>
   <string name="feature_chores_reject">Reject</string>
   <string name="feature_chores_approve_described">Approve %1$s for %2$s</string>

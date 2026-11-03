@@ -9,14 +9,18 @@ import dev.kpetriv.sprout.core.model.AccountId
 import dev.kpetriv.sprout.core.model.AllowanceCadence
 import dev.kpetriv.sprout.core.model.CalendarDate
 import dev.kpetriv.sprout.core.model.DayOfWeek
+import dev.kpetriv.sprout.core.model.DeviceId
 import dev.kpetriv.sprout.core.model.HouseholdId
 import dev.kpetriv.sprout.core.model.Kid
 import dev.kpetriv.sprout.core.model.KidId
 import dev.kpetriv.sprout.core.model.KidUiTier
+import dev.kpetriv.sprout.core.model.Role
 import dev.kpetriv.sprout.core.model.ScheduleId
 import dev.kpetriv.sprout.core.model.YearMonth
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runTest
@@ -25,6 +29,7 @@ import org.junit.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
 import kotlin.test.assertNull
+import kotlin.time.Instant
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class ParentHomeViewModelTest {
@@ -42,11 +47,16 @@ class ParentHomeViewModelTest {
     private val allowances = FakeAllowanceRepository()
     private val queue = FakePendingParentActionRepository()
     private val signer = FakeSigner(queue)
+    private val householdStatus = MutableStateFlow(HouseholdStatus())
+    private var statusFails = false
 
     private val authorization = ParentAuthorization { payload -> payload }
 
     private fun TestScope.viewModel(): ParentHomeViewModel {
-        val vm = ParentHomeViewModel(kids, accounts, ledger, chores, allowances, queue, signer, fixedToday())
+        val status = HouseholdStatusSource {
+            if (statusFails) flow { error("registry unreadable") } else householdStatus
+        }
+        val vm = ParentHomeViewModel(kids, accounts, ledger, chores, allowances, queue, signer, fixedToday(), status)
         backgroundScope.launch(main.dispatcher) { vm.state.collect {} }
         return vm
     }
@@ -304,5 +314,43 @@ class ParentHomeViewModelTest {
 
         assertEquals(listOf(skipped.key), queue.dismissed)
         assertEquals(listOf(AttentionReason.FAILED), vm.ready().attention.map { it.reason })
+    }
+
+    @Test
+    fun `the trial banner, sync line, waiting phones and refused events come from the household status`() = test {
+        val vm = viewModel()
+        assertEquals(HouseholdStatus(), vm.ready().household)
+        val waiting = PendingDevice(DeviceId("ab".repeat(32)), "abab abab abab abab")
+        val rejected = RejectedEvent(
+            "PARENT_SIGNATURE_MISSING",
+            DeviceLabel(Role.KID, "Leo", "c0ff ee00 d00d feed"),
+            Instant.fromEpochSeconds(10),
+        )
+        householdStatus.value = HouseholdStatus(
+            sync = SyncLine(Instant.fromEpochSeconds(20), blockedCode = "permission-denied", failing = false),
+            rejected = listOf(rejected),
+            pendingDevices = listOf(waiting),
+        )
+        val ready = vm.ready()
+        assertEquals(listOf(waiting), ready.household.pendingDevices)
+        assertEquals(listOf(rejected), ready.household.rejected)
+        assertEquals("permission-denied", ready.household.sync?.blockedCode)
+        householdStatus.value = HouseholdStatus(trial = true)
+        assertEquals(true, vm.ready().household.trial)
+    }
+
+    @Test
+    fun `a failing household status hides the cards instead of failing the dashboard`() = test {
+        statusFails = true
+        assertEquals(HouseholdStatus(), viewModel().ready().household)
+    }
+
+    @Test
+    fun `quarantine codes map to short reasons, unknown ones to OTHER`() {
+        assertEquals(RejectionReason.PARENT_SIGNATURE_MISSING, RejectionReason.of("PARENT_SIGNATURE_MISSING"))
+        assertEquals(RejectionReason.DEVICE_NOT_ACTIVE, RejectionReason.of("DEVICE_NOT_ACTIVE"))
+        assertEquals(RejectionReason.UNREADABLE, RejectionReason.of("SCHEMA_UNSUPPORTED"))
+        assertEquals(RejectionReason.OTHER, RejectionReason.of("INSUFFICIENT_FUNDS"))
+        assertEquals(RejectionReason.OTHER, RejectionReason.of("unknown"))
     }
 }

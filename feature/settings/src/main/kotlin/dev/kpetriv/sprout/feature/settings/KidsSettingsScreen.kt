@@ -16,6 +16,7 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
@@ -35,24 +36,39 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import dev.kpetriv.sprout.core.model.KidId
 import dev.kpetriv.sprout.core.model.KidUiTier
 import dev.kpetriv.sprout.core.model.MAX_FIRST_NAME_LENGTH
 import java.text.DateFormatSymbols
 
 @Composable
-internal fun KidsSettingsRoute(onBack: () -> Unit, modifier: Modifier = Modifier) {
+internal fun KidsSettingsRoute(
+    onBack: () -> Unit,
+    modifier: Modifier = Modifier,
+    onLinkDevice: ((KidId, String) -> Unit)? = null,
+) {
     val viewModel: KidsSettingsViewModel = hiltViewModel()
     val state by viewModel.state.collectAsStateWithLifecycle()
-    KidsSettingsScreen(state = state, onEvent = viewModel::onEvent, onBack = onBack, modifier = modifier)
+    KidsSettingsScreen(
+        state = state,
+        onEvent = viewModel::onEvent,
+        onBack = onBack,
+        modifier = modifier,
+        onLinkDevice = onLinkDevice,
+    )
 }
 
-/** Kids & tiers: the list, "Add kid", and the edit sheet when [KidsSettingsUiState.editor] is set. */
+/**
+ * Kids & tiers: the list, "Add kid", and the edit sheet when [KidsSettingsUiState.editor] is set. With
+ * [onLinkDevice] (a synced household) the sheet of an existing kid offers "Link a device".
+ */
 @Composable
 fun KidsSettingsScreen(
     state: KidsSettingsUiState,
     onEvent: (KidsSettingsEvent) -> Unit,
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
+    onLinkDevice: ((KidId, String) -> Unit)? = null,
 ) {
     val snackbar = remember { SnackbarHostState() }
     SettingsScaffold(
@@ -86,7 +102,16 @@ fun KidsSettingsScreen(
     }
     MessageEffect(state.message, snackbar) { onEvent(KidsSettingsEvent.MessageShown) }
     state.editor?.let { editor ->
-        KidEditorSheet(editor, onEvent)
+        val kidId = editor.kidId
+        val link = if (onLinkDevice != null && kidId != null) {
+            {
+                onEvent(KidsSettingsEvent.DismissEditor)
+                onLinkDevice(kidId, editor.firstName)
+            }
+        } else {
+            null
+        }
+        KidEditorSheet(editor, onEvent, link)
     }
 }
 
@@ -107,17 +132,27 @@ private fun KidRow(row: KidRowUi, onClick: () -> Unit) {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun KidEditorSheet(editor: KidEditorUi, onEvent: (KidsSettingsEvent) -> Unit) {
+private fun KidEditorSheet(editor: KidEditorUi, onEvent: (KidsSettingsEvent) -> Unit, onLinkDevice: (() -> Unit)?) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     ModalBottomSheet(onDismissRequest = { onEvent(KidsSettingsEvent.DismissEditor) }, sheetState = sheetState) {
-        KidEditorForm(editor, onEvent, Modifier.padding(start = 24.dp, end = 24.dp, bottom = 24.dp))
+        KidEditorForm(
+            editor,
+            onEvent,
+            Modifier.padding(start = 24.dp, end = 24.dp, bottom = 24.dp),
+            onLinkDevice = onLinkDevice,
+        )
     }
 }
 
 /** The kid form: first name, birth month and year, screen style (tier) with the suggestion, archive. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-internal fun KidEditorForm(editor: KidEditorUi, onEvent: (KidsSettingsEvent) -> Unit, modifier: Modifier = Modifier) {
+internal fun KidEditorForm(
+    editor: KidEditorUi,
+    onEvent: (KidsSettingsEvent) -> Unit,
+    modifier: Modifier = Modifier,
+    onLinkDevice: (() -> Unit)? = null,
+) {
     var confirmArchive by remember { mutableStateOf(false) }
     Column(
         modifier = modifier.verticalScroll(rememberScrollState()),
@@ -203,6 +238,11 @@ internal fun KidEditorForm(editor: KidEditorUi, onEvent: (KidsSettingsEvent) -> 
             SaveButton(editor.isSaving, enabled = true, onClick = { onEvent(KidsSettingsEvent.Save) })
             TextButton(onClick = { onEvent(KidsSettingsEvent.DismissEditor) }) {
                 Text(stringResource(R.string.feature_settings_cancel))
+            }
+        }
+        if (!editor.isNew && onLinkDevice != null) {
+            OutlinedButton(onClick = onLinkDevice, enabled = !editor.isSaving) {
+                Text(stringResource(R.string.feature_settings_kids_link))
             }
         }
         if (!editor.isNew) {

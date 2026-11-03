@@ -43,6 +43,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.kpetriv.sprout.core.domainledger.Currency
 import dev.kpetriv.sprout.core.domainledger.ParentAuthorizationRequester
 import dev.kpetriv.sprout.core.model.CalendarDate
+import dev.kpetriv.sprout.core.model.DeviceId
 import dev.kpetriv.sprout.core.model.KidId
 import dev.kpetriv.sprout.core.model.KidUiTier
 import dev.kpetriv.sprout.core.ui.rememberMoneyFormatter
@@ -68,8 +69,19 @@ fun ParentHomeRoute(
     onSwitchToKidMode: () -> Unit,
     onOpenKid: (KidId) -> Unit,
     modifier: Modifier = Modifier,
+    onSetUpSync: () -> Unit = {},
+    onReviewDevice: (DeviceId) -> Unit = {},
 ) {
-    val links = ParentHomeLinks(onOpenChores, onOpenApprovals, onOpenShop, onOpenSettings, onSwitchToKidMode, onOpenKid)
+    val links = ParentHomeLinks(
+        onOpenChores,
+        onOpenApprovals,
+        onOpenShop,
+        onOpenSettings,
+        onSwitchToKidMode,
+        onOpenKid,
+        onSetUpSync,
+        onReviewDevice,
+    )
     val viewModel: ParentHomeViewModel = hiltViewModel()
     val state by viewModel.state.collectAsStateWithLifecycle()
     val current by rememberUpdatedState(requester)
@@ -137,6 +149,7 @@ private fun Dashboard(
         modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
+        HouseholdCards(state.household, links.onSetUpSync, links.onReviewDevice)
         ApprovalsCard(state.pendingApprovals, links.onOpenApprovals)
         PendingActionsCard(state.pendingActions, state.signing, onSignNow)
         if (state.attention.isNotEmpty()) AttentionCard(state.attention, onDismiss)

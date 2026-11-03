@@ -23,4 +23,16 @@
   <string name="startup_failed_keys">The secure key store on this device couldn’t be read.</string>
   <string name="startup_failed_database">The local data couldn’t be opened.</string>
   <string name="startup_failed_unknown">Something went wrong while starting up.</string>
+
+  <!-- Sync (M3) -->
+  <string name="sync_channel_name">Sync</string>
+  <string name="sync_notification_title">Syncing your household</string>
+
+  <!-- This phone was removed from the household (M3 §6) -->
+  <string name="removed_title">This phone was removed from the household</string>
+  <string name="removed_household_gone">The household was deleted, or this phone is no longer part of it.</string>
+  <string name="removed_device_revoked">A parent removed this phone from the household.</string>
+  <string name="removed_wiping">Erasing the household’s data from this phone…</string>
+  <string name="removed_wiped">The household’s data has been erased from this phone.</string>
+  <string name="removed_continue">Continue</string>
 </resources>

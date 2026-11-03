@@ -6,6 +6,8 @@ import dagger.Provides
 import dagger.hilt.InstallIn
 import dagger.hilt.android.components.ViewModelComponent
 import dev.kpetriv.sprout.feature.chores.ApprovalReasonText
+import dev.kpetriv.sprout.feature.chores.FileLocalPhotoCheck
+import dev.kpetriv.sprout.feature.chores.LocalPhotoCheck
 import dev.kpetriv.sprout.feature.chores.PhotoDecoder
 import dev.kpetriv.sprout.feature.chores.ResourceApprovalReasonText
 import dev.kpetriv.sprout.feature.chores.SubmissionApprover
@@ -24,6 +26,9 @@ abstract class ChoresModule {
 
     @Binds
     internal abstract fun approvalReasonText(impl: ResourceApprovalReasonText): ApprovalReasonText
+
+    @Binds
+    internal abstract fun localPhotoCheck(impl: FileLocalPhotoCheck): LocalPhotoCheck
 
     companion object {
         @Provides

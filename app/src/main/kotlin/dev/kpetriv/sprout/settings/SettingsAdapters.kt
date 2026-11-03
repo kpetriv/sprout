@@ -3,6 +3,7 @@ package dev.kpetriv.sprout.settings
 import dev.kpetriv.sprout.core.crypto.PublicKeyBytes
 import dev.kpetriv.sprout.core.database.FiatCurrencyProvider
 import dev.kpetriv.sprout.core.database.HouseholdPolicyRepository
+import dev.kpetriv.sprout.core.database.SessionStore
 import dev.kpetriv.sprout.core.database.usecase.RegisterParentKeyUseCase
 import dev.kpetriv.sprout.feature.lock.ChangePinResult
 import dev.kpetriv.sprout.feature.lock.LockSettings
@@ -21,6 +22,7 @@ import dev.kpetriv.sprout.feature.settings.PinChanger
 import dev.kpetriv.sprout.feature.settings.SigningKeyOutcome
 import kotlinx.coroutines.flow.StateFlow
 import javax.inject.Inject
+import dev.kpetriv.sprout.feature.onboarding.ParentKeyRegistrar as BackendParentKeyRegistrar
 
 /** Settings' [PinChanger] over `feature/lock`'s [ParentSession.changePin] (which zeroes the arrays). */
 class ParentSessionPinChanger @Inject constructor(private val session: ParentSession) : PinChanger {
@@ -88,22 +90,35 @@ internal fun ParentKeyChangeResult.toOutcome(): SigningKeyOutcome = when (this) 
  * [RegisterParentKeyUseCase.register], which accepts only EC P-256 keys and turns required parent signatures on;
  * a replacement keeps the original `parentSignatureFromLamport` (the repository does that on re-registration).
  * Only `feature/lock`'s PIN-gated enrolment and renewal call the writing methods.
+ *
+ * In a real household (not the trial) the key is then also registered with the backend's `parentKeys` registry
+ * ([BackendParentKeyRegistrar], M3 §1), best effort: the key reaches the other devices as a `parent_key` document
+ * anyway, and a failure (offline) must not undo the local registration the PIN and fingerprint just proved.
  */
 class HouseholdParentKeyRegistry @Inject constructor(
     private val policies: HouseholdPolicyRepository,
     private val useCase: RegisterParentKeyUseCase,
     private val currency: FiatCurrencyProvider,
+    private val sessions: SessionStore,
+    private val registrar: BackendParentKeyRegistrar,
 ) : ParentKeyRegistry {
     override suspend fun registeredParentKey(): PublicKeyBytes? = policies.get()?.parentPublicKey?.let(::PublicKeyBytes)
 
     override suspend fun registerParentKey(publicKey: PublicKeyBytes) {
         check(policies.get()?.hasParentKey != true) { "A parent key is already registered" }
         useCase.register(publicKey.encoded)
+        publish(publicKey)
     }
 
     override suspend fun replaceParentKey(publicKey: PublicKeyBytes) {
         check(policies.get()?.hasParentKey == true) { "No parent key is registered" }
         useCase.register(publicKey.encoded)
+        publish(publicKey)
+    }
+
+    private suspend fun publish(publicKey: PublicKeyBytes) {
+        val session = sessions.get() ?: return
+        if (!session.isLocalTrial) registrar.register(publicKey.encoded)
     }
 
     override suspend fun recordSigningUnavailable() {

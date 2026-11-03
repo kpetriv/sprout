@@ -2,7 +2,8 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
   xmlns:tools="http://schemas.android.com/tools">
 
-  <!-- No permissions of our own yet. Each one is added with the feature that needs it. -->
+  <!-- Sync with Firebase (M3). Each permission is added with the feature that needs it. -->
+  <uses-permission android:name="android.permission.INTERNET" />
 
   <application
     android:name=".SproutApplication"

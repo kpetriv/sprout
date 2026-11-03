@@ -40,6 +40,14 @@ class ChoresScreenshotTest : ScreenshotTest() {
     }
 
     @Test
+    fun `approvals inbox, photo on the kid's phone (D-M3-9)`() =
+        screenshot.captureLightDark("chores_approvals_photo_remote") {
+            val state = ChoresPreviewData.approvals()
+            val first = state.submissions.first().copy(photo = PhotoUi.OnKidDevice)
+            ApprovalsInboxScreen(state = state.copy(submissions = listOf(first), proposals = emptyList()), onEvent = {})
+        }
+
+    @Test
     @Config(qualifiers = TALL)
     fun `chore editor, valid`() = screenshot.captureLightDark("chores_editor") {
         ChoreEditorScreen(state = ChoresPreviewData.editor(), onEvent = {})

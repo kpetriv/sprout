@@ -59,14 +59,21 @@ class ParentHomeViewModel @Inject constructor(
     private val pendingActions: PendingParentActionRepository,
     private val signer: PendingActionSigner,
     private val calendar: HouseholdCalendar,
+    private val householdStatus: HouseholdStatusSource,
 ) : ViewModel() {
     private val local = MutableStateFlow(LocalState())
 
-    val state: StateFlow<ParentHomeUiState> = combine(dashboard(), local) { loaded, localState ->
+    val state: StateFlow<ParentHomeUiState> = combine(dashboard(), local, household()) { loaded, localState, status ->
         when (loaded) {
             Loaded.Loading -> ParentHomeUiState.Loading
+
             Loaded.Failed -> ParentHomeUiState.Error
-            is Loaded.Ready -> loaded.data.copy(signing = localState.signing, signResult = localState.signResult)
+
+            is Loaded.Ready -> loaded.data.copy(
+                signing = localState.signing,
+                signResult = localState.signResult,
+                household = status,
+            )
         }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MILLIS), ParentHomeUiState.Loading)
 
@@ -77,6 +84,10 @@ class ParentHomeViewModel @Inject constructor(
             is ParentHomeEvent.Dismiss -> dismiss(event.key)
         }
     }
+
+    /** The household cards are extras: a failing source hides them instead of failing the dashboard. */
+    private fun household(): Flow<HouseholdStatus> =
+        householdStatus.observe().onStart { emit(HouseholdStatus()) }.catch { emit(HouseholdStatus()) }
 
     private fun dashboard(): Flow<Loaded> = combine(
         kidSummaries(),

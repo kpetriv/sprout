@@ -1,5 +1,6 @@
 package dev.kpetriv.sprout.settings
 
+import dev.kpetriv.sprout.FakeSessionStore
 import dev.kpetriv.sprout.core.crypto.FakeParentAuthorizer
 import dev.kpetriv.sprout.core.crypto.LockoutDecision
 import dev.kpetriv.sprout.core.crypto.ParentAuthAvailability
@@ -14,6 +15,8 @@ import dev.kpetriv.sprout.feature.lock.PinRuleViolation
 import dev.kpetriv.sprout.feature.settings.NewPinProblem
 import dev.kpetriv.sprout.feature.settings.PinChangeOutcome
 import dev.kpetriv.sprout.feature.settings.SigningKeyOutcome
+import dev.kpetriv.sprout.parentSession
+import dev.kpetriv.sprout.trialSession
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.test.runTest
@@ -30,11 +33,31 @@ class SettingsAdaptersTest {
     private val gbp = Currency.Fiat("GBP")
     private val authorizer = FakeParentAuthorizer()
     private val policies = InMemoryPolicies(gbp)
+    private val sessions = FakeSessionStore(trialSession())
+    private val published = mutableListOf<ByteArray>()
     private val registry = HouseholdParentKeyRegistry(
         policies = policies,
         useCase = RegisterParentKeyUseCase(policies),
         currency = { gbp },
+        sessions = sessions,
+        registrar = { key ->
+            published += key
+            Result.success(Unit)
+        },
     )
+
+    @Test
+    fun `a real household's parent key is also registered with the backend, the trial's never`() = runTest {
+        registry.registerParentKey(authorizer.createParentKey())
+        assertEquals(emptyList(), published, "the trial household has no backend")
+
+        policies.policy.value = null
+        sessions.session.value = parentSession()
+        authorizer.resetParentKey()
+        val key = authorizer.createParentKey()
+        registry.registerParentKey(key)
+        assertEquals(listOf(key.encoded.toList()), published.map { it.toList() })
+    }
 
     @Test
     fun `the registry reads, registers and replaces the household's parent key`() = runTest {
