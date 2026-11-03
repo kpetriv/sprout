@@ -11,40 +11,59 @@ import java.security.SecureRandom
  * Argon2id PIN hasher for devices (argon2kt, JNI). Parameters follow RFC 9106's memory-constrained profile:
  * 64 MiB, 3 passes, 1 lane, 16-byte salt, 32-byte output.
  *
+ * The Argon2id password is the 32-byte [PinPepper] output, `HMAC(pepperKey, utf8(pin))`, computed inside
+ * Keystore (ADR-0004 section 3), so a dumped hash cannot be brute-forced off-device across the 10^4-10^6 PIN
+ * space. Writes `v2$argon2id-pepper$m=65536,t=3,p=1$<salt>$<hash>`.
+ *
+ * Also verifies peppered PBKDF2 hashes (through [pbkdf2]); every format other than current-parameter `v2` Argon2id
+ * is reported by [needsRehash] so it upgrades on the next unlock. The retired, unpeppered M1 formats
+ * (`v1$argon2id$...`, `v1$pbkdf2-sha256$...`) are refused with [UnsupportedPinHashException].
+ *
  * Android only: argon2kt ships native libraries for Android ABIs and has no JVM build, so JVM tests exercise
- * [Pbkdf2PinHasher] and this class is covered by instrumented tests. Hashes in the `pbkdf2-sha256` format are
- * still verified (through [pbkdf2]) and reported by [needsRehash] so they upgrade on the next unlock.
+ * [Pbkdf2PinHasher] and this class is covered by instrumented tests.
  */
 class Argon2idPinHasher(
     private val random: SecureRandom,
     private val dispatcher: CoroutineDispatcher,
-    private val pbkdf2: Pbkdf2PinHasher = Pbkdf2PinHasher(random, dispatcher),
+    private val pepper: PinPepper,
+    private val pbkdf2: Pbkdf2PinHasher = Pbkdf2PinHasher(random, dispatcher, pepper),
 ) : PinHasher {
-    // TODO(M2, ADR-0004): add a Keystore HMAC pepper (non-exportable key) over the Argon2 output, so a dumped
-    //  hash cannot be brute-forced off-device across the 10^4-10^6 PIN space (T7).
     private val argon2 by lazy { Argon2Kt() }
 
     override suspend fun hash(pin: CharArray): String {
         require(pin.isNotEmpty()) { "PIN must not be empty" }
         val salt = ByteArray(SALT_SIZE).also(random::nextBytes)
-        val derived = withContext(dispatcher) { derive(pin, salt, MEMORY_KIB, ITERATIONS, PARALLELISM, HASH_SIZE) }
+        val derived = withContext(dispatcher) {
+            val password = pepperedPin(pin, pepper, existingKeyOnly = false)
+            derive(password, salt, MEMORY_KIB, ITERATIONS, PARALLELISM, HASH_SIZE)
+        }
         return try {
-            PinHash(ALGORITHM, parametersOf(MEMORY_KIB, ITERATIONS, PARALLELISM), salt, derived).encode()
+            PinHash(PinHash.VERSION_2, ALGORITHM, parametersOf(MEMORY_KIB, ITERATIONS, PARALLELISM), salt, derived)
+                .encode()
         } finally {
             derived.fill(0)
         }
     }
 
     override suspend fun verify(pin: CharArray, encoded: String): Boolean {
-        val parsed = requireNotNull(PinHash.parse(encoded)) { "Malformed PIN hash" }
-        if (parsed.algorithm == Pbkdf2PinHasher.ALGORITHM) return pbkdf2.verify(pin, encoded)
-        require(parsed.algorithm == ALGORITHM) { "Unsupported PIN hash algorithm" }
+        val parsed = parseForVerify(encoded)
+        if (Pbkdf2PinHasher.handles(parsed)) return pbkdf2.verify(pin, encoded)
+        require(parsed.version == PinHash.VERSION_2 && parsed.algorithm == ALGORITHM) {
+            "Unsupported PIN hash algorithm"
+        }
         val memory = parameter(parsed, MEMORY_KEY, 1..MAX_MEMORY_KIB)
         val iterations = parameter(parsed, ITERATIONS_KEY, 1..MAX_ITERATIONS)
         val parallelism = parameter(parsed, PARALLELISM_KEY, 1..MAX_PARALLELISM)
         val expectedSize = parsed.hash.size
         val derived = withContext(dispatcher) {
-            derive(pin, parsed.salt, memory, iterations, parallelism, expectedSize)
+            derive(
+                pepperedPin(pin, pepper, existingKeyOnly = true),
+                parsed.salt,
+                memory,
+                iterations,
+                parallelism,
+                expectedSize,
+            )
         }
         return try {
             parsed.matches(derived)
@@ -54,16 +73,19 @@ class Argon2idPinHasher(
     }
 
     override fun needsRehash(encoded: String): Boolean {
-        val parsed = PinHash.parse(encoded)?.takeIf { it.algorithm == ALGORITHM } ?: return true
+        val parsed = PinHash.parse(encoded)
+            ?.takeIf { it.version == PinHash.VERSION_2 && it.algorithm == ALGORITHM }
+            ?: return true
         val params = parsed.parameters
         return (params[MEMORY_KEY] ?: 0) < MEMORY_KIB ||
             (params[ITERATIONS_KEY] ?: 0) < ITERATIONS ||
             (params[PARALLELISM_KEY] ?: 0) < PARALLELISM
     }
 
+    /** Argon2id over [passwordBytes], which this call zeroes. */
     @Suppress("LongParameterList")
     private fun derive(
-        pin: CharArray,
+        passwordBytes: ByteArray,
         salt: ByteArray,
         memoryKib: Int,
         iterations: Int,
@@ -71,7 +93,7 @@ class Argon2idPinHasher(
         size: Int,
     ): ByteArray {
         // Direct buffers we own, so every copy argon2kt sees can be wiped afterwards.
-        val password = directCopyOf(pin.toUtf8Bytes())
+        val password = directCopyOf(passwordBytes)
         val saltBuffer = directCopyOf(salt.copyOf())
         return try {
             val result = argon2.hash(
@@ -118,7 +140,9 @@ class Argon2idPinHasher(
         linkedMapOf(MEMORY_KEY to memory, ITERATIONS_KEY to iterations, PARALLELISM_KEY to parallelism)
 
     companion object {
-        const val ALGORITHM = "argon2id"
+        /** `v2` peppered Argon2id. */
+        const val ALGORITHM = "argon2id" + PinHash.PEPPER_SUFFIX
+
         const val MEMORY_KIB = 64 * 1024
         const val ITERATIONS = 3
         const val PARALLELISM = 1

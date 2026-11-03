@@ -2,6 +2,8 @@ package dev.kpetriv.sprout.core.domainledger
 
 import dev.kpetriv.sprout.core.model.AccountId
 import dev.kpetriv.sprout.core.model.CalendarDate
+import kotlinx.serialization.EncodeDefault
+import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
@@ -15,6 +17,12 @@ data class Posting(val accountId: AccountId, val delta: Money)
  *
  * The `@SerialName` of each type and every property name are part of the canonical encoding: renaming one
  * changes every hash, so they must only change together with [Envelope.schemaVersion].
+ *
+ * **Schema version 2** added [TimeBankCredited], the optional [RewardPurchased.minutesGranted] (omitted while null,
+ * so version 1 purchases keep their exact stored and canonical form) and the required period fields
+ * [ChoreRewarded.dueOn], [AllowancePaid.periodKey] and [InterestAccrued.periodKey]. No production data existed when
+ * those became required, so a version 1 document of those three types no longer decodes into a class
+ * ([LedgerJson.decodeOrNull] returns null); its stored tree still hashes and verifies unchanged.
  */
 @Serializable
 sealed interface LedgerEvent {
@@ -45,7 +53,12 @@ private fun LedgerEvent.credit(amount: Money) = listOf(Posting(envelope.accountI
 
 private fun LedgerEvent.debit(amount: Money) = listOf(Posting(envelope.accountId, -amount))
 
-/** A parent approved a chore; credits [amount]. Parent only. */
+/**
+ * A parent approved a chore; credits [amount]. Parent only. At most one is applied per
+ * [PeriodClaim.Chore] (kid, [choreId], [dueOn], currency), so re-approving the same occurrence is idempotent.
+ *
+ * @property dueOn the chore occurrence this rewards (schema version 2).
+ */
 @Serializable
 @SerialName("chore_rewarded")
 data class ChoreRewarded(
@@ -53,13 +66,19 @@ data class ChoreRewarded(
     override val currency: Currency,
     override val amount: Money,
     val choreId: String,
+    val dueOn: CalendarDate,
 ) : MovesValue {
     override val postings: List<Posting> get() = credit(amount)
 
     override fun withEnvelope(envelope: Envelope) = copy(envelope = envelope)
 }
 
-/** A scheduled allowance credit. Parent only. */
+/**
+ * A scheduled allowance credit. Parent only. At most one is applied per [PeriodClaim.Allowance] (kid,
+ * [periodKey], [currency]), so re-planning a period is idempotent.
+ *
+ * @property periodKey the period paid for, `YYYY-Www` (ISO week) or `YYYY-MM`; see [PeriodKeys] (schema version 2).
+ */
 @Serializable
 @SerialName("allowance_paid")
 data class AllowancePaid(
@@ -67,6 +86,7 @@ data class AllowancePaid(
     override val currency: Currency,
     override val amount: Money,
     val scheduleId: String,
+    val periodKey: String,
 ) : MovesValue {
     override val postings: List<Posting> get() = credit(amount)
 
@@ -92,7 +112,15 @@ data class GamePlayed(
     override fun withEnvelope(envelope: Envelope) = copy(envelope = envelope)
 }
 
-/** A purchase from the rewards catalogue; debits [amount]. */
+/**
+ * A purchase from the rewards catalogue; debits [amount].
+ *
+ * @property minutesGranted (schema version 2) for a screen-time reward, the minutes the purchase entitles the kid to;
+ *   a [TimeBankCredited] that names this purchase must credit exactly this many. The ledger does not know the
+ *   catalogue, so the writing app must take it from the reward definition. Null (and then omitted from the stored and
+ *   canonical form, exactly like a version 1 purchase) for every other reward.
+ */
+@OptIn(ExperimentalSerializationApi::class)
 @Serializable
 @SerialName("reward_purchased")
 data class RewardPurchased(
@@ -100,6 +128,7 @@ data class RewardPurchased(
     override val currency: Currency,
     override val amount: Money,
     val rewardId: String,
+    @EncodeDefault(EncodeDefault.Mode.NEVER) val minutesGranted: Money? = null,
 ) : MovesValue {
     override val postings: List<Posting> get() = debit(amount)
 
@@ -145,7 +174,10 @@ data class TransferToSavings(
 
 /**
  * Interest credited to a savings account. [principal], [annualRateBasisPoints] and [days] record how [amount] was
- * derived (see [InterestCalculator]) so the parent audit view can show the working. Parent only.
+ * derived (see [InterestCalculator]) so the parent audit view can show the working. Parent only. At most one is
+ * applied per [PeriodClaim.Interest] (account, [periodKey]).
+ *
+ * @property periodKey the accrual period, `YYYY-MM` (or `YYYY-Www`); see [PeriodKeys] (schema version 2).
  */
 @Serializable
 @SerialName("interest_accrued")
@@ -156,6 +188,7 @@ data class InterestAccrued(
     val principal: Money,
     val annualRateBasisPoints: Int,
     val days: Int,
+    val periodKey: String,
 ) : MovesValue {
     override val postings: List<Posting> get() = credit(amount)
 
@@ -184,6 +217,35 @@ data class TimeBankStopped(override val envelope: Envelope, val sessionId: Strin
     override val amount: Money get() = minutesUsed
     override val currency: Currency get() = Currency.Minutes
     override val postings: List<Posting> get() = debit(minutesUsed)
+
+    override fun withEnvelope(envelope: Envelope) = copy(envelope = envelope)
+}
+
+/**
+ * Screen-time minutes credited to the kid's minutes account (schema version 2); credits [minutes].
+ *
+ * Authorisation:
+ * - **Reward-referenced** ([grantedBy] set): any author may write it, because the purchase it names is the
+ *   authority. It is applied only if [grantedBy] is an applied [RewardPurchased] of the same kid with the same
+ *   [rewardId] whose [RewardPurchased.minutesGranted] equals [minutes], and no other credit has already named that
+ *   purchase (see [RewardGrant]).
+ * - **Manual** ([grantedBy] null): a parent grant outside the shop; parent only ([isParentOnly]) and subject to
+ *   [LedgerPolicy.requireParentSignature].
+ *
+ * @property grantedBy the eventId of the [RewardPurchased] this credit redeems, or null for a manual grant.
+ * @property rewardId the catalogue reward the minutes are for.
+ */
+@Serializable
+@SerialName("time_bank_credited")
+data class TimeBankCredited(
+    override val envelope: Envelope,
+    val minutes: Money,
+    val grantedBy: EventId?,
+    val rewardId: String,
+) : MovesValue {
+    override val amount: Money get() = minutes
+    override val currency: Currency get() = Currency.Minutes
+    override val postings: List<Posting> get() = credit(minutes)
 
     override fun withEnvelope(envelope: Envelope) = copy(envelope = envelope)
 }

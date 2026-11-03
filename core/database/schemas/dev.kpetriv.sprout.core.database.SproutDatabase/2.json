@@ -1,0 +1,1310 @@
+{
+  "formatVersion": 1,
+  "database": {
+    "version": 2,
+    "identityHash": "924457509956427dc53157c88e41c174",
+    "entities": [
+      {
+        "tableName": "ledger_events",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`eventId` TEXT NOT NULL, `householdId` TEXT NOT NULL, `kidId` TEXT NOT NULL, `accountId` TEXT NOT NULL, `authorUid` TEXT NOT NULL, `authorDeviceId` TEXT NOT NULL, `authorRole` TEXT NOT NULL, `lamport` INTEGER NOT NULL, `createdAtEpochMs` INTEGER NOT NULL, `type` TEXT NOT NULL, `currency` TEXT NOT NULL, `schemaVersion` INTEGER NOT NULL, `prevHash` TEXT, `hash` TEXT NOT NULL, `signature` TEXT, `payloadJson` TEXT NOT NULL, `receivedAtEpochMs` INTEGER NOT NULL, `origin` TEXT NOT NULL, `quarantined` INTEGER NOT NULL DEFAULT 0, `quarantineReason` TEXT, `parentSignature` TEXT, PRIMARY KEY(`eventId`, `hash`))",
+        "fields": [
+          {
+            "fieldPath": "eventId",
+            "columnName": "eventId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "householdId",
+            "columnName": "householdId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "kidId",
+            "columnName": "kidId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "accountId",
+            "columnName": "accountId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "authorUid",
+            "columnName": "authorUid",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "authorDeviceId",
+            "columnName": "authorDeviceId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "authorRole",
+            "columnName": "authorRole",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "lamport",
+            "columnName": "lamport",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "createdAtEpochMs",
+            "columnName": "createdAtEpochMs",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "type",
+            "columnName": "type",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "currency",
+            "columnName": "currency",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "schemaVersion",
+            "columnName": "schemaVersion",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "prevHash",
+            "columnName": "prevHash",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "hash",
+            "columnName": "hash",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "signature",
+            "columnName": "signature",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "payloadJson",
+            "columnName": "payloadJson",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "receivedAtEpochMs",
+            "columnName": "receivedAtEpochMs",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "origin",
+            "columnName": "origin",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "quarantined",
+            "columnName": "quarantined",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "0"
+          },
+          {
+            "fieldPath": "quarantineReason",
+            "columnName": "quarantineReason",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "parentSignature",
+            "columnName": "parentSignature",
+            "affinity": "TEXT"
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "eventId",
+            "hash"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_ledger_events_kidId_lamport",
+            "unique": false,
+            "columnNames": [
+              "kidId",
+              "lamport"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_ledger_events_kidId_lamport` ON `${TABLE_NAME}` (`kidId`, `lamport`)"
+          },
+          {
+            "name": "index_ledger_events_authorDeviceId_lamport",
+            "unique": false,
+            "columnNames": [
+              "authorDeviceId",
+              "lamport"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_ledger_events_authorDeviceId_lamport` ON `${TABLE_NAME}` (`authorDeviceId`, `lamport`)"
+          },
+          {
+            "name": "index_ledger_events_hash",
+            "unique": false,
+            "columnNames": [
+              "hash"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_ledger_events_hash` ON `${TABLE_NAME}` (`hash`)"
+          }
+        ]
+      },
+      {
+        "tableName": "accounts",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`accountId` TEXT NOT NULL, `kidId` TEXT NOT NULL, `currency` TEXT NOT NULL, `kind` TEXT NOT NULL, `createdAtEpochMs` INTEGER NOT NULL, `lastAccruedOn` TEXT, PRIMARY KEY(`accountId`))",
+        "fields": [
+          {
+            "fieldPath": "accountId",
+            "columnName": "accountId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "kidId",
+            "columnName": "kidId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "currency",
+            "columnName": "currency",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "kind",
+            "columnName": "kind",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "createdAtEpochMs",
+            "columnName": "createdAtEpochMs",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "lastAccruedOn",
+            "columnName": "lastAccruedOn",
+            "affinity": "TEXT"
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "accountId"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_accounts_kidId_currency_kind",
+            "unique": true,
+            "columnNames": [
+              "kidId",
+              "currency",
+              "kind"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_accounts_kidId_currency_kind` ON `${TABLE_NAME}` (`kidId`, `currency`, `kind`)"
+          }
+        ]
+      },
+      {
+        "tableName": "kids",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`kidId` TEXT NOT NULL, `householdId` TEXT NOT NULL, `firstName` TEXT NOT NULL, `avatarId` TEXT NOT NULL, `birthYearMonth` TEXT NOT NULL, `uiTier` TEXT NOT NULL, `archived` INTEGER NOT NULL, PRIMARY KEY(`kidId`))",
+        "fields": [
+          {
+            "fieldPath": "kidId",
+            "columnName": "kidId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "householdId",
+            "columnName": "householdId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "firstName",
+            "columnName": "firstName",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "avatarId",
+            "columnName": "avatarId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "birthYearMonth",
+            "columnName": "birthYearMonth",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "uiTier",
+            "columnName": "uiTier",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "archived",
+            "columnName": "archived",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "kidId"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_kids_householdId",
+            "unique": false,
+            "columnNames": [
+              "householdId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_kids_householdId` ON `${TABLE_NAME}` (`householdId`)"
+          }
+        ]
+      },
+      {
+        "tableName": "balances",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`accountId` TEXT NOT NULL, `kidId` TEXT NOT NULL, `currency` TEXT NOT NULL, `amountMinor` INTEGER NOT NULL, `asOfEpochMs` INTEGER NOT NULL, `lastLamport` INTEGER NOT NULL, PRIMARY KEY(`accountId`))",
+        "fields": [
+          {
+            "fieldPath": "accountId",
+            "columnName": "accountId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "kidId",
+            "columnName": "kidId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "currency",
+            "columnName": "currency",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "amountMinor",
+            "columnName": "amountMinor",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "asOfEpochMs",
+            "columnName": "asOfEpochMs",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "lastLamport",
+            "columnName": "lastLamport",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "accountId"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_balances_kidId",
+            "unique": false,
+            "columnNames": [
+              "kidId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_balances_kidId` ON `${TABLE_NAME}` (`kidId`)"
+          }
+        ]
+      },
+      {
+        "tableName": "anomalies",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`anomalyId` TEXT NOT NULL, `kidId` TEXT NOT NULL, `kind` TEXT NOT NULL, `accountId` TEXT, `eventId` TEXT NOT NULL, `amountMinor` INTEGER, `detailsJson` TEXT NOT NULL, `detectedAtEpochMs` INTEGER NOT NULL, PRIMARY KEY(`anomalyId`))",
+        "fields": [
+          {
+            "fieldPath": "anomalyId",
+            "columnName": "anomalyId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "kidId",
+            "columnName": "kidId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "kind",
+            "columnName": "kind",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "accountId",
+            "columnName": "accountId",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "eventId",
+            "columnName": "eventId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "amountMinor",
+            "columnName": "amountMinor",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "detailsJson",
+            "columnName": "detailsJson",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "detectedAtEpochMs",
+            "columnName": "detectedAtEpochMs",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "anomalyId"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_anomalies_kidId",
+            "unique": false,
+            "columnNames": [
+              "kidId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_anomalies_kidId` ON `${TABLE_NAME}` (`kidId`)"
+          }
+        ]
+      },
+      {
+        "tableName": "outbox",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`seq` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `kind` TEXT NOT NULL, `refId` TEXT NOT NULL, `payload` TEXT NOT NULL, `createdAtEpochMs` INTEGER NOT NULL, `attempts` INTEGER NOT NULL DEFAULT 0, `lastError` TEXT, `nextAttemptAtEpochMs` INTEGER NOT NULL DEFAULT 0, `docType` TEXT, `docId` TEXT, `lamport` INTEGER)",
+        "fields": [
+          {
+            "fieldPath": "seq",
+            "columnName": "seq",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "kind",
+            "columnName": "kind",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "refId",
+            "columnName": "refId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "payload",
+            "columnName": "payload",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "createdAtEpochMs",
+            "columnName": "createdAtEpochMs",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "attempts",
+            "columnName": "attempts",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "0"
+          },
+          {
+            "fieldPath": "lastError",
+            "columnName": "lastError",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "nextAttemptAtEpochMs",
+            "columnName": "nextAttemptAtEpochMs",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "0"
+          },
+          {
+            "fieldPath": "docType",
+            "columnName": "docType",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "docId",
+            "columnName": "docId",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "lamport",
+            "columnName": "lamport",
+            "affinity": "INTEGER"
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": true,
+          "columnNames": [
+            "seq"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_outbox_kind_refId",
+            "unique": true,
+            "columnNames": [
+              "kind",
+              "refId"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_outbox_kind_refId` ON `${TABLE_NAME}` (`kind`, `refId`)"
+          },
+          {
+            "name": "index_outbox_nextAttemptAtEpochMs",
+            "unique": false,
+            "columnNames": [
+              "nextAttemptAtEpochMs"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_outbox_nextAttemptAtEpochMs` ON `${TABLE_NAME}` (`nextAttemptAtEpochMs`)"
+          }
+        ]
+      },
+      {
+        "tableName": "audit_log",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `atEpochMs` INTEGER NOT NULL, `actorUid` TEXT NOT NULL, `deviceId` TEXT NOT NULL, `action` TEXT NOT NULL, `target` TEXT NOT NULL, `detailsJson` TEXT NOT NULL)",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "atEpochMs",
+            "columnName": "atEpochMs",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "actorUid",
+            "columnName": "actorUid",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "deviceId",
+            "columnName": "deviceId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "action",
+            "columnName": "action",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "target",
+            "columnName": "target",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "detailsJson",
+            "columnName": "detailsJson",
+            "affinity": "TEXT",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": true,
+          "columnNames": [
+            "id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_audit_log_atEpochMs",
+            "unique": false,
+            "columnNames": [
+              "atEpochMs"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_audit_log_atEpochMs` ON `${TABLE_NAME}` (`atEpochMs`)"
+          }
+        ]
+      },
+      {
+        "tableName": "device_state",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER NOT NULL, `deviceId` TEXT NOT NULL, `lamport` INTEGER NOT NULL, PRIMARY KEY(`id`))",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "deviceId",
+            "columnName": "deviceId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "lamport",
+            "columnName": "lamport",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "id"
+          ]
+        }
+      },
+      {
+        "tableName": "chores",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`choreId` TEXT NOT NULL, `householdId` TEXT NOT NULL, `kidId` TEXT NOT NULL, `title` TEXT NOT NULL, `description` TEXT, `rewardMoney` INTEGER, `rewardMinutes` INTEGER, `scheduleJson` TEXT NOT NULL, `state` TEXT NOT NULL, `createdAtEpochMs` INTEGER NOT NULL, `lamport` INTEGER NOT NULL, PRIMARY KEY(`choreId`))",
+        "fields": [
+          {
+            "fieldPath": "choreId",
+            "columnName": "choreId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "householdId",
+            "columnName": "householdId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "kidId",
+            "columnName": "kidId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "title",
+            "columnName": "title",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "description",
+            "columnName": "description",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "rewardMoney",
+            "columnName": "rewardMoney",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "rewardMinutes",
+            "columnName": "rewardMinutes",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "scheduleJson",
+            "columnName": "scheduleJson",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "state",
+            "columnName": "state",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "createdAtEpochMs",
+            "columnName": "createdAtEpochMs",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "lamport",
+            "columnName": "lamport",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "choreId"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_chores_kidId",
+            "unique": false,
+            "columnNames": [
+              "kidId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_chores_kidId` ON `${TABLE_NAME}` (`kidId`)"
+          }
+        ]
+      },
+      {
+        "tableName": "chore_submissions",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`submissionId` TEXT NOT NULL, `choreId` TEXT NOT NULL, `dueOn` TEXT NOT NULL, `kidId` TEXT NOT NULL, `submittedAtEpochMs` INTEGER NOT NULL, `note` TEXT, `photoFileName` TEXT, `photoSha256` TEXT, `status` TEXT NOT NULL, `decidedAtEpochMs` INTEGER, `decidedBy` TEXT, `rejectionReason` TEXT, `lamport` INTEGER NOT NULL, PRIMARY KEY(`submissionId`))",
+        "fields": [
+          {
+            "fieldPath": "submissionId",
+            "columnName": "submissionId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "choreId",
+            "columnName": "choreId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "dueOn",
+            "columnName": "dueOn",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "kidId",
+            "columnName": "kidId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "submittedAtEpochMs",
+            "columnName": "submittedAtEpochMs",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "note",
+            "columnName": "note",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "photoFileName",
+            "columnName": "photoFileName",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "photoSha256",
+            "columnName": "photoSha256",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "status",
+            "columnName": "status",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "decidedAtEpochMs",
+            "columnName": "decidedAtEpochMs",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "decidedBy",
+            "columnName": "decidedBy",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "rejectionReason",
+            "columnName": "rejectionReason",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "lamport",
+            "columnName": "lamport",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "submissionId"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_chore_submissions_choreId_dueOn",
+            "unique": true,
+            "columnNames": [
+              "choreId",
+              "dueOn"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_chore_submissions_choreId_dueOn` ON `${TABLE_NAME}` (`choreId`, `dueOn`)"
+          },
+          {
+            "name": "index_chore_submissions_kidId",
+            "unique": false,
+            "columnNames": [
+              "kidId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_chore_submissions_kidId` ON `${TABLE_NAME}` (`kidId`)"
+          },
+          {
+            "name": "index_chore_submissions_status",
+            "unique": false,
+            "columnNames": [
+              "status"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_chore_submissions_status` ON `${TABLE_NAME}` (`status`)"
+          }
+        ]
+      },
+      {
+        "tableName": "rewards",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`rewardId` TEXT NOT NULL, `householdId` TEXT NOT NULL, `title` TEXT NOT NULL, `kind` TEXT NOT NULL, `cost` INTEGER NOT NULL, `currency` TEXT NOT NULL, `minutesGranted` INTEGER, `active` INTEGER NOT NULL, `forKidsJson` TEXT NOT NULL, `lamport` INTEGER NOT NULL, PRIMARY KEY(`rewardId`))",
+        "fields": [
+          {
+            "fieldPath": "rewardId",
+            "columnName": "rewardId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "householdId",
+            "columnName": "householdId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "title",
+            "columnName": "title",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "kind",
+            "columnName": "kind",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "cost",
+            "columnName": "cost",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "currency",
+            "columnName": "currency",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "minutesGranted",
+            "columnName": "minutesGranted",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "active",
+            "columnName": "active",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "forKidsJson",
+            "columnName": "forKidsJson",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "lamport",
+            "columnName": "lamport",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "rewardId"
+          ]
+        }
+      },
+      {
+        "tableName": "allowance_schedules",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`scheduleId` TEXT NOT NULL, `kidId` TEXT NOT NULL, `accountId` TEXT NOT NULL, `amount` INTEGER NOT NULL, `currency` TEXT NOT NULL, `cadence` TEXT NOT NULL, `cadenceDay` INTEGER NOT NULL, `startsOn` TEXT NOT NULL, `active` INTEGER NOT NULL, `lastPaidOn` TEXT, `lamport` INTEGER NOT NULL, PRIMARY KEY(`scheduleId`))",
+        "fields": [
+          {
+            "fieldPath": "scheduleId",
+            "columnName": "scheduleId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "kidId",
+            "columnName": "kidId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "accountId",
+            "columnName": "accountId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "amount",
+            "columnName": "amount",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "currency",
+            "columnName": "currency",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "cadence",
+            "columnName": "cadence",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "cadenceDay",
+            "columnName": "cadenceDay",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "startsOn",
+            "columnName": "startsOn",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "active",
+            "columnName": "active",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "lastPaidOn",
+            "columnName": "lastPaidOn",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "lamport",
+            "columnName": "lamport",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "scheduleId"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_allowance_schedules_kidId",
+            "unique": false,
+            "columnNames": [
+              "kidId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_allowance_schedules_kidId` ON `${TABLE_NAME}` (`kidId`)"
+          }
+        ]
+      },
+      {
+        "tableName": "savings_goals",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`goalId` TEXT NOT NULL, `kidId` TEXT NOT NULL, `title` TEXT NOT NULL, `target` INTEGER NOT NULL, `createdOn` TEXT NOT NULL, `achievedOn` TEXT, `lamport` INTEGER NOT NULL, PRIMARY KEY(`goalId`))",
+        "fields": [
+          {
+            "fieldPath": "goalId",
+            "columnName": "goalId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "kidId",
+            "columnName": "kidId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "title",
+            "columnName": "title",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "target",
+            "columnName": "target",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "createdOn",
+            "columnName": "createdOn",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "achievedOn",
+            "columnName": "achievedOn",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "lamport",
+            "columnName": "lamport",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "goalId"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_savings_goals_kidId",
+            "unique": false,
+            "columnNames": [
+              "kidId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_savings_goals_kidId` ON `${TABLE_NAME}` (`kidId`)"
+          }
+        ]
+      },
+      {
+        "tableName": "interest_policy",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`householdId` TEXT NOT NULL, `annualRateBasisPoints` INTEGER NOT NULL, `accrualDay` INTEGER NOT NULL, `lamport` INTEGER NOT NULL, PRIMARY KEY(`householdId`))",
+        "fields": [
+          {
+            "fieldPath": "householdId",
+            "columnName": "householdId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "annualRateBasisPoints",
+            "columnName": "annualRateBasisPoints",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "accrualDay",
+            "columnName": "accrualDay",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "lamport",
+            "columnName": "lamport",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "householdId"
+          ]
+        }
+      },
+      {
+        "tableName": "pending_parent_actions",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `key` TEXT NOT NULL, `kind` TEXT NOT NULL, `kidId` TEXT NOT NULL, `accountId` TEXT NOT NULL, `amount` INTEGER NOT NULL, `currency` TEXT NOT NULL, `periodKey` TEXT NOT NULL, `actionJson` TEXT NOT NULL, `createdAtEpochMs` INTEGER NOT NULL, `doneAtEpochMs` INTEGER, `eventId` TEXT, `status` TEXT NOT NULL, `refusals` INTEGER NOT NULL, `failureReason` TEXT)",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "key",
+            "columnName": "key",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "kind",
+            "columnName": "kind",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "kidId",
+            "columnName": "kidId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "accountId",
+            "columnName": "accountId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "amount",
+            "columnName": "amount",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "currency",
+            "columnName": "currency",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "periodKey",
+            "columnName": "periodKey",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "actionJson",
+            "columnName": "actionJson",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "createdAtEpochMs",
+            "columnName": "createdAtEpochMs",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "doneAtEpochMs",
+            "columnName": "doneAtEpochMs",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "eventId",
+            "columnName": "eventId",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "status",
+            "columnName": "status",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "refusals",
+            "columnName": "refusals",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "failureReason",
+            "columnName": "failureReason",
+            "affinity": "TEXT"
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": true,
+          "columnNames": [
+            "id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_pending_parent_actions_key",
+            "unique": true,
+            "columnNames": [
+              "key"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_pending_parent_actions_key` ON `${TABLE_NAME}` (`key`)"
+          },
+          {
+            "name": "index_pending_parent_actions_status",
+            "unique": false,
+            "columnNames": [
+              "status"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_pending_parent_actions_status` ON `${TABLE_NAME}` (`status`)"
+          }
+        ]
+      },
+      {
+        "tableName": "photos",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`fileName` TEXT NOT NULL, `sha256` TEXT NOT NULL, `kidId` TEXT NOT NULL, `submissionId` TEXT, `createdAtEpochMs` INTEGER NOT NULL, PRIMARY KEY(`fileName`))",
+        "fields": [
+          {
+            "fieldPath": "fileName",
+            "columnName": "fileName",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "sha256",
+            "columnName": "sha256",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "kidId",
+            "columnName": "kidId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "submissionId",
+            "columnName": "submissionId",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "createdAtEpochMs",
+            "columnName": "createdAtEpochMs",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "fileName"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_photos_kidId",
+            "unique": false,
+            "columnNames": [
+              "kidId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_photos_kidId` ON `${TABLE_NAME}` (`kidId`)"
+          },
+          {
+            "name": "index_photos_submissionId",
+            "unique": false,
+            "columnNames": [
+              "submissionId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_photos_submissionId` ON `${TABLE_NAME}` (`submissionId`)"
+          }
+        ]
+      },
+      {
+        "tableName": "household_policy",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER NOT NULL, `requireParentSignature` INTEGER NOT NULL, `parentSignatureFromLamport` INTEGER, `parentPublicKey` BLOB, `fiatCurrency` TEXT NOT NULL, `createdAtEpochMs` INTEGER NOT NULL, PRIMARY KEY(`id`))",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "requireParentSignature",
+            "columnName": "requireParentSignature",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "parentSignatureFromLamport",
+            "columnName": "parentSignatureFromLamport",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "parentPublicKey",
+            "columnName": "parentPublicKey",
+            "affinity": "BLOB"
+          },
+          {
+            "fieldPath": "fiatCurrency",
+            "columnName": "fiatCurrency",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "createdAtEpochMs",
+            "columnName": "createdAtEpochMs",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "id"
+          ]
+        }
+      }
+    ],
+    "setupQueries": [
+      "CREATE TABLE IF NOT EXISTS room_master_table (id INTEGER PRIMARY KEY,identity_hash TEXT)",
+      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, '924457509956427dc53157c88e41c174')"
+    ]
+  }
+}

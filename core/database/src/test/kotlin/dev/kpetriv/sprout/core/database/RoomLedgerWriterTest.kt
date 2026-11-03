@@ -20,6 +20,7 @@ import dev.kpetriv.sprout.core.domainledger.signatureBytes
 import dev.kpetriv.sprout.core.domainledger.signedPayload
 import dev.kpetriv.sprout.core.domainledger.toHex
 import dev.kpetriv.sprout.core.model.AccountId
+import dev.kpetriv.sprout.core.model.CalendarDate
 import dev.kpetriv.sprout.core.model.KidId
 import dev.kpetriv.sprout.core.model.Role
 import kotlinx.coroutines.Dispatchers
@@ -46,6 +47,7 @@ class RoomLedgerWriterTest {
     private val kidId = KidId("kid-a")
     private val gbp = Currency.Fiat("GBP")
     private val main = Account(AccountId("kid-a-main"), kidId, gbp, AccountKind.MAIN)
+    private val today = CalendarDate(2026, 11, 2)
 
     private fun writer() = RoomLedgerWriter(database, repository, signer, authors, clock)
 
@@ -57,8 +59,18 @@ class RoomLedgerWriterTest {
         database.register(listOf(main))
         val writer = writer()
 
-        assertEquals(AppendResult.Accepted, writer.append(kidId, main.id) { ChoreRewarded(it, gbp, Money(300), "c1") })
-        assertEquals(AppendResult.Accepted, writer.append(kidId, main.id) { AllowancePaid(it, gbp, Money(200), "w") })
+        assertEquals(
+            AppendResult.Accepted,
+            writer.append(kidId, main.id) {
+                ChoreRewarded(it, gbp, Money(300), "c1", today)
+            },
+        )
+        assertEquals(
+            AppendResult.Accepted,
+            writer.append(kidId, main.id) {
+                AllowancePaid(it, gbp, Money(200), "w", "2026-W45")
+            },
+        )
         assertEquals(AppendResult.Accepted, writer.append(kidId, main.id) { RewardPurchased(it, gbp, Money(50), "r") })
 
         val events = repository.observeEvents(kidId, limit = 10).first().sortedWith(LedgerOrdering)
@@ -81,14 +93,24 @@ class RoomLedgerWriterTest {
     @Test
     fun lamportIsPersistedAndOnlyAdvancesForAcceptedEvents() = runTest {
         database.register(listOf(main))
-        assertEquals(AppendResult.Accepted, writer().append(kidId, main.id) { ChoreRewarded(it, gbp, Money(10), "c") })
+        assertEquals(
+            AppendResult.Accepted,
+            writer().append(kidId, main.id) {
+                ChoreRewarded(it, gbp, Money(10), "c", today)
+            },
+        )
 
         val rejected = writer().append(kidId, main.id) { RewardPurchased(it, gbp, Money(500), "too much") }
         assertIs<AppendResult.Rejected>(rejected)
         assertEquals(1, database.deviceStateDao().get()?.lamport)
 
         // A fresh writer (as after a restart) continues from the stored clock and links to the stored head.
-        assertEquals(AppendResult.Accepted, writer().append(kidId, main.id) { ChoreRewarded(it, gbp, Money(5), "c") })
+        assertEquals(
+            AppendResult.Accepted,
+            writer().append(kidId, main.id) {
+                ChoreRewarded(it, gbp, Money(5), "c2", today)
+            },
+        )
         assertEquals(2, database.deviceStateDao().get()?.lamport)
         val events = repository.observeEvents(kidId, limit = 10).first().sortedWith(LedgerOrdering)
         assertIs<ChainVerification.Valid>(HashChain().verifyChain(events))
@@ -100,8 +122,13 @@ class RoomLedgerWriterTest {
         val reusedId = EventId("00000000-0000-4000-8000-000000000001")
         val writer = RoomLedgerWriter(database, repository, signer, authors, clock) { reusedId }
 
-        assertEquals(AppendResult.Accepted, writer.append(kidId, main.id) { ChoreRewarded(it, gbp, Money(10), "c") })
-        val second = writer.append(kidId, main.id) { AllowancePaid(it, gbp, Money(20), "w") }
+        assertEquals(
+            AppendResult.Accepted,
+            writer.append(kidId, main.id) {
+                ChoreRewarded(it, gbp, Money(10), "c", today)
+            },
+        )
+        val second = writer.append(kidId, main.id) { AllowancePaid(it, gbp, Money(20), "w", "2026-W45") }
 
         assertIs<AppendResult.Conflict>(second)
         assertEquals(2, database.deviceStateDao().get()?.lamport)

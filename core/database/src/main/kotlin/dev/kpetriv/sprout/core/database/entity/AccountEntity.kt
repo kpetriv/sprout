@@ -7,9 +7,16 @@ import dev.kpetriv.sprout.core.domainledger.Account
 import dev.kpetriv.sprout.core.domainledger.AccountKind
 import dev.kpetriv.sprout.core.domainledger.Currency
 import dev.kpetriv.sprout.core.model.AccountId
+import dev.kpetriv.sprout.core.model.CalendarDate
 import dev.kpetriv.sprout.core.model.KidId
 
-/** A ledger account. One per (kid, currency, kind), enforced by a unique index. */
+/**
+ * A ledger account. One per (kid, currency, kind), enforced by a unique index.
+ *
+ * @property lastAccruedOn device-local interest bookkeeping for a SAVINGS account (schema version 2): the latest
+ *   accrual day already planned (`InterestPlanner`'s `lastAccruedOn`). Null until the first planning run, which
+ *   starts interest from that day.
+ */
 @Entity(
     tableName = "accounts",
     indices = [Index(value = ["kidId", "currency", "kind"], unique = true)],
@@ -20,6 +27,7 @@ data class AccountEntity(
     val currency: Currency,
     val kind: AccountKind,
     val createdAtEpochMs: Long,
+    val lastAccruedOn: CalendarDate? = null,
 ) {
     fun toDomain(): Account = Account(id = accountId, kidId = kidId, currency = currency, kind = kind)
 

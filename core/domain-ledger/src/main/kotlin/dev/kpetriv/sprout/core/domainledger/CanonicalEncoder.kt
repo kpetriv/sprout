@@ -16,11 +16,15 @@ import kotlinx.serialization.json.JsonPrimitive
  * fields added by a newer [Envelope.schemaVersion] that this client does not understand (and drops on decoding)
  * are still covered by the hash and the signature.
  *
- * Rules, frozen for [Envelope.CURRENT_SCHEMA_VERSION] 1:
+ * Rules, frozen since [Envelope.schemaVersion] 1 and unchanged in 2:
  * 1. Input is the event's JSON object as [LedgerJson] writes it (polymorphic `"type"` discriminator, defaults and
- *    nulls included), plus any fields a newer schema added.
- * 2. `envelope.hash` and `envelope.signature` are removed; everything else, including `schemaVersion` and a null
- *    `prevHash`, stays.
+ *    nulls included), plus any fields a newer schema added. The one exception to "defaults included": an optional
+ *    field that a later schema version added to an **existing** event type (so far only
+ *    [RewardPurchased.minutesGranted]) is omitted while it is null, so a decoded version 1 document re-encodes to
+ *    exactly its stored form and still verifies.
+ * 2. `envelope.hash`, `envelope.signature` and `envelope.parentSignature` are removed; everything else, including
+ *    `schemaVersion` and a null `prevHash`, stays. Removing `parentSignature` whether it is absent (version 1),
+ *    null or set is what makes a missing field and an explicit null canonicalise identically.
  * 3. Output is compact JSON (no whitespace) with object keys sorted explicitly by UTF-16 code unit at every
  *    depth, independent of declaration order. Arrays keep their order.
  * 4. Strings escape only `"`, `\` and control characters below U+0020 (as `\b \f \n \r \t` or `\u00XX`);
@@ -29,7 +33,7 @@ import kotlinx.serialization.json.JsonPrimitive
  *    [CharacterCodingException] rather than silently replaced (which would let two different events share a hash).
  */
 object CanonicalEncoder {
-    private val EXCLUDED_ENVELOPE_KEYS = setOf("hash", "signature")
+    private val EXCLUDED_ENVELOPE_KEYS = setOf("hash", "signature", "parentSignature")
     private val INTEGER = Regex("-?(0|[1-9][0-9]*)")
     private const val HEX_DIGITS = "0123456789abcdef"
     private const val NIBBLE_BITS = 4
@@ -137,8 +141,8 @@ object CanonicalEncoder {
 }
 
 /**
- * The full storage and wire form of [LedgerEvent]s, including `hash` and `signature`. Not canonical: use
- * [CanonicalEncoder] for anything hashed or signed.
+ * The full storage and wire form of [LedgerEvent]s, including `hash`, `signature` and `parentSignature`. Not
+ * canonical: use [CanonicalEncoder] for anything hashed or signed.
  *
  * **Forward compatibility.** Decoding ignores unknown keys, so a client can read events written by a newer
  * [Envelope.schemaVersion]; [Envelope.schemaVersion] says which fields the author's schema defines, and therefore

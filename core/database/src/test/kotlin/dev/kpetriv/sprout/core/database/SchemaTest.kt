@@ -12,12 +12,28 @@ import kotlin.test.assertTrue
 
 /** Checks the exported Room schema (`core/database/schemas`), which Gradle runs tests next to. */
 class SchemaTest {
-    private val schemaFile = File("schemas/${SproutDatabase::class.java.name}/${SproutDatabase.VERSION}.json")
+    private fun schemaFile(version: Int) = File("schemas/${SproutDatabase::class.java.name}/$version.json")
 
-    private fun schema(): JsonObject = Json.parseToJsonElement(schemaFile.readText()).jsonObject
+    private val schemaFile = schemaFile(SproutDatabase.VERSION)
 
-    private fun entities(): List<JsonObject> =
-        schema().getValue("database").jsonObject.getValue("entities").jsonArray.map { it.jsonObject }
+    private fun schema(file: File = schemaFile): JsonObject = Json.parseToJsonElement(file.readText()).jsonObject
+
+    private fun entities(file: File = schemaFile): List<JsonObject> =
+        schema(file).getValue("database").jsonObject.getValue("entities").jsonArray.map { it.jsonObject }
+
+    private fun table(name: String) = entities().single { it.getValue("tableName").jsonPrimitive.content == name }
+
+    /** Each index of [table] as (columns, unique). */
+    private fun indices(table: String): Set<Pair<List<String>, Boolean>> =
+        table(table).getValue("indices").jsonArray.map { index ->
+            val json = index.jsonObject
+            json.getValue("columnNames").jsonArray.map { it.jsonPrimitive.content } to
+                json.getValue("unique").jsonPrimitive.content.toBoolean()
+        }.toSet()
+
+    private fun columns(table: String): Set<String> =
+        table(table).getValue("fields").jsonArray.map { it.jsonObject.getValue("columnName").jsonPrimitive.content }
+            .toSet()
 
     @Test
     fun schemaForTheCurrentVersionIsExported() {
@@ -34,20 +50,56 @@ class SchemaTest {
                 "outbox",
                 "audit_log",
                 "device_state",
+                "chores",
+                "chore_submissions",
+                "rewards",
+                "allowance_schedules",
+                "savings_goals",
+                "interest_policy",
+                "pending_parent_actions",
+                "photos",
+                "household_policy",
             ),
             entities().map { it.getValue("tableName").jsonPrimitive.content }.toSet(),
         )
     }
 
     @Test
-    fun noColumnIsFloatingPoint() {
-        val floating = entities().flatMap { entity ->
-            val table = entity.getValue("tableName").jsonPrimitive.content
-            entity.getValue("fields").jsonArray.map { it.jsonObject }
-                .filter { it.getValue("affinity").jsonPrimitive.content.uppercase() in FLOATING_AFFINITIES }
-                .map { "$table.${it.getValue("columnName").jsonPrimitive.content}" }
+    fun noColumnOfAnyVersionIsFloatingPoint() {
+        for (version in 1..SproutDatabase.VERSION) {
+            val file = schemaFile(version)
+            assertTrue(file.isFile, "missing exported schema $file")
+            val floating = entities(file).flatMap { entity ->
+                val table = entity.getValue("tableName").jsonPrimitive.content
+                entity.getValue("fields").jsonArray.map { it.jsonObject }
+                    .filter { it.getValue("affinity").jsonPrimitive.content.uppercase() in FLOATING_AFFINITIES }
+                    .map { "$table.${it.getValue("columnName").jsonPrimitive.content}" }
+            }
+            assertEquals(emptyList(), floating, "schema version $version")
         }
-        assertEquals(emptyList(), floating)
+    }
+
+    @Test
+    fun householdTablesHaveTheirUniqueKeys() {
+        assertTrue(listOf("choreId", "dueOn") to true in indices("chore_submissions"))
+        assertTrue(listOf("key") to true in indices("pending_parent_actions"))
+        assertEquals(
+            setOf("fileName", "sha256", "kidId", "submissionId", "createdAtEpochMs"),
+            columns("photos"),
+        )
+        assertEquals(
+            setOf(
+                "id",
+                "requireParentSignature",
+                "parentSignatureFromLamport",
+                "parentPublicKey",
+                "fiatCurrency",
+                "createdAtEpochMs",
+            ),
+            columns("household_policy"),
+        )
+        assertTrue("parentSignature" in columns("ledger_events"))
+        assertTrue(setOf("docType", "docId", "lamport").all { it in columns("outbox") })
     }
 
     @Test

@@ -23,4 +23,8 @@ interface KidDao {
 
     @Query("SELECT COUNT(*) FROM kids")
     suspend fun count(): Int
+
+    /** Active (not archived) kids, for planners. */
+    @Query("SELECT * FROM kids WHERE archived = 0 ORDER BY birthYearMonth, kidId")
+    suspend fun active(): List<KidEntity>
 }

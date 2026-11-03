@@ -6,6 +6,7 @@ import dev.kpetriv.sprout.core.domainledger.CurrencySerializer
 import dev.kpetriv.sprout.core.domainledger.EventId
 import dev.kpetriv.sprout.core.domainledger.LedgerJson
 import dev.kpetriv.sprout.core.domainledger.Money
+import dev.kpetriv.sprout.core.domainledger.PeriodClaim
 import dev.kpetriv.sprout.core.domainledger.Violation
 import dev.kpetriv.sprout.core.model.AccountId
 import dev.kpetriv.sprout.core.model.KidId
@@ -102,6 +103,30 @@ internal object ViolationCodec {
                 money("alreadyCredited", violation.alreadyCredited)
                 money("requested", violation.requested)
             }
+
+            is Violation.ParentSignatureMissing -> put("eventType", violation.eventType)
+
+            Violation.InvalidPeriodKey -> Unit
+
+            is Violation.DuplicatePeriod -> {
+                put("claim", LedgerJson.json.encodeToJsonElement(PeriodClaim.serializer(), violation.claim))
+                put("claimedBy", violation.claimedBy.value)
+            }
+
+            is Violation.GrantNotFound -> put("grantedBy", violation.grantedBy.value)
+
+            is Violation.GrantRewardMismatch -> put("grantedBy", violation.grantedBy.value)
+
+            is Violation.GrantMinutesMismatch -> {
+                put("grantedBy", violation.grantedBy.value)
+                money("expected", violation.expected)
+                money("actual", violation.actual)
+            }
+
+            is Violation.GrantAlreadyCredited -> {
+                put("grantedBy", violation.grantedBy.value)
+                put("creditedBy", violation.creditedBy.value)
+            }
         }
     }
 
@@ -111,6 +136,7 @@ internal object ViolationCodec {
         fun money(key: String) = Money(json.getValue(key).jsonPrimitive.long)
         fun currency(key: String) = LedgerJson.json.decodeFromJsonElement(CurrencySerializer, json.getValue(key))
         fun account() = AccountId(text("accountId"))
+        fun event(key: String) = EventId(text(key))
         return when (val kind = text(KIND)) {
             "NonPositiveAmount" -> Violation.NonPositiveAmount(money("amount"))
 
@@ -164,6 +190,24 @@ internal object ViolationCodec {
             "TimeBankEmpty" -> Violation.TimeBankEmpty
 
             "TimeBankNotRunning" -> Violation.TimeBankNotRunning
+
+            "ParentSignatureMissing" -> Violation.ParentSignatureMissing(text("eventType"))
+
+            "InvalidPeriodKey" -> Violation.InvalidPeriodKey
+
+            "DuplicatePeriod" -> Violation.DuplicatePeriod(
+                claim = LedgerJson.json.decodeFromJsonElement(PeriodClaim.serializer(), json.getValue("claim")),
+                claimedBy = event("claimedBy"),
+            )
+
+            "GrantNotFound" -> Violation.GrantNotFound(event("grantedBy"))
+
+            "GrantRewardMismatch" -> Violation.GrantRewardMismatch(event("grantedBy"))
+
+            "GrantMinutesMismatch" ->
+                Violation.GrantMinutesMismatch(event("grantedBy"), money("expected"), money("actual"))
+
+            "GrantAlreadyCredited" -> Violation.GrantAlreadyCredited(event("grantedBy"), event("creditedBy"))
 
             else -> throw IllegalArgumentException("Unknown violation kind $kind")
         }

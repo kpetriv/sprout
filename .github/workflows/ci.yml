@@ -36,8 +36,19 @@ jobs:
         with:
           cache-read-only: ${{ github.ref != 'refs/heads/main' }}
 
-      - name: Build, Detekt, Lint, unit tests
-        run: ./gradlew build detekt lint test --no-daemon
+      # Everything but the unit tests (`-x test` drops every module's test tasks), so a lint or Detekt failure is told
+      # apart from a test or screenshot failure below.
+      - name: Build, Detekt, Lint
+        id: static
+        run: ./gradlew build detekt lint -x test --no-daemon
+
+      # verifyRoborazziDebug compares the screenshot tests against the goldens in src/test/screenshots with the small
+      # tolerance of D-M2-11 and fails on a real diff. It shares the invocation with `test`, so each module's
+      # testDebugUnitTest runs once, in verify mode. Runs even when the static checks failed, for complete feedback.
+      - name: Unit and screenshot tests
+        id: gate
+        if: ${{ !cancelled() && (steps.static.outcome == 'success' || steps.static.outcome == 'failure') }}
+        run: ./gradlew test verifyRoborazziDebug --no-daemon
 
       - name: Upload reports
         if: failure()
@@ -47,4 +58,32 @@ jobs:
           path: |
             **/build/reports/
             **/build/test-results/
+          retention-days: 7
+
+      # Expected, actual and side-by-side compare images for every screenshot that changed (docs/SCREENSHOT_TESTS.md).
+      - name: Upload screenshot diffs
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: screenshot-diffs
+          path: '**/build/outputs/roborazzi/**'
+          if-no-files-found: ignore
+          retention-days: 7
+
+      # A golden recorded on macOS can differ from a Linux render by more than the tolerance. When the test step failed
+      # (not lint or Detekt), record a full Linux set so it can be reviewed and committed. The `Record screenshots`
+      # workflow does the same on demand.
+      - name: Record screenshots on Linux
+        id: record-screenshots
+        if: failure() && steps.gate.outcome == 'failure'
+        continue-on-error: true
+        run: ./gradlew recordRoborazziDebug --no-daemon
+
+      - name: Upload Linux screenshots
+        if: failure() && steps.record-screenshots.outcome != 'skipped'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: screenshots-linux
+          path: '**/src/test/screenshots/**'
+          if-no-files-found: ignore
           retention-days: 7

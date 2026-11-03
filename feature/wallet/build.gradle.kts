@@ -1,19 +1,17 @@
 plugins {
     alias(libs.plugins.sprout.android.feature)
+    // Robolectric, Compose UI test and Roborazzi for the screen tests and screenshot goldens in src/test/screenshots.
+    alias(libs.plugins.sprout.android.screenshot)
 }
 
 android {
     namespace = "dev.kpetriv.sprout.feature.wallet"
-
-    // Robolectric Compose tests read this module's string resources.
-    testOptions.unitTests.isIncludeAndroidResources = true
 }
 
 dependencies {
     implementation(projects.core.domainLedger)
-
-    testImplementation(libs.robolectric)
-    testImplementation(libs.androidx.compose.ui.test.junit4)
-    // Registers the empty ComponentActivity that createComposeRule launches.
-    debugImplementation(libs.androidx.compose.ui.test.manifest)
+    // Rewards, allowance and savings goals (repositories and the purchase / manual adjustment use cases).
+    implementation(projects.core.database)
+    // ParentAuthUnavailableException: a device without a strong biometric (D-M2-1 fallback).
+    implementation(projects.core.crypto)
 }

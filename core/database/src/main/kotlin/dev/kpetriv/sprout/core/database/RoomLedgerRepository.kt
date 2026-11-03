@@ -10,6 +10,7 @@ import dev.kpetriv.sprout.core.database.entity.EventOrigin
 import dev.kpetriv.sprout.core.database.entity.LedgerEventEntity
 import dev.kpetriv.sprout.core.database.entity.OutboxEntity
 import dev.kpetriv.sprout.core.database.entity.OutboxKind
+import dev.kpetriv.sprout.core.domainledger.Account
 import dev.kpetriv.sprout.core.domainledger.AppendResult
 import dev.kpetriv.sprout.core.domainledger.Balance
 import dev.kpetriv.sprout.core.domainledger.ChainVerification
@@ -23,13 +24,18 @@ import dev.kpetriv.sprout.core.domainledger.LedgerRepository
 import dev.kpetriv.sprout.core.domainledger.LedgerRules
 import dev.kpetriv.sprout.core.domainledger.MovesValue
 import dev.kpetriv.sprout.core.domainledger.Projection
+import dev.kpetriv.sprout.core.domainledger.RewardPurchased
 import dev.kpetriv.sprout.core.domainledger.ValidationResult
 import dev.kpetriv.sprout.core.domainledger.Violation
 import dev.kpetriv.sprout.core.domainledger.anomaliesFor
+import dev.kpetriv.sprout.core.domainledger.parentSignatureBytes
+import dev.kpetriv.sprout.core.domainledger.parentSignedPayload
+import dev.kpetriv.sprout.core.domainledger.requiresParentSignature
 import dev.kpetriv.sprout.core.domainledger.signedPayload
 import dev.kpetriv.sprout.core.domainledger.signedPayloadOf
 import dev.kpetriv.sprout.core.model.DeviceId
 import dev.kpetriv.sprout.core.model.KidId
+import dev.kpetriv.sprout.core.model.Role
 import dev.kpetriv.sprout.core.time.Clock
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
@@ -59,18 +65,40 @@ import javax.inject.Inject
  * this device's valid signature. A row that fails is marked quarantined (a write, so never inside a read [Flow]) and
  * the caches are rebuilt without it. Read flows skip rows that fail the same checks and never throw.
  *
+ * **Policy and parent signatures (M2).** The [LedgerPolicy] comes from `household_policy` on every append
+ * ([HouseholdPolicySource]): once a parent key is registered, parent-only events from the registration lamport on
+ * must carry a parent signature. Whenever an event carries a parent signature and a parent key is registered, the
+ * signature must verify against that key over [parentSignedPayload] ([PARENT_SIGNATURE_REJECTION] otherwise); a
+ * required signature that is missing is [Violation.ParentSignatureMissing]. While **no** parent key is registered a
+ * parent signature cannot be verified, so it is dropped before storing and the event is stored (and reported by the
+ * use cases) as unsigned: a stored parent signature always verified against the registered key when it was stored.
+ * Stored rows are not re-verified against the key on read, because re-registering a new key (after a biometric
+ * enrolment change) must not quarantine history signed by the old one; M3's parent-key registry keeps every registered
+ * key for that.
+ *
+ * **Reward catalogue (M2).** A kid-authored [RewardPurchased] must match the catalogue row of its reward (active,
+ * available to the kid, same cost, currency and granted minutes), or it is [CATALOGUE_REJECTION].
+ *
  * @param localEvents decides what counts as this device's own, signed event.
- * @param policy household-tunable limits; the defaults until settings exist.
+ * @param policies the ledger policy and parent key in force, loaded inside each transaction.
+ * @param catalogue checks kid-authored purchases against the reward catalogue.
  */
+@Suppress("TooManyFunctions") // The LedgerRepository API plus the data layer's internal reads (projection, snapshot).
 class RoomLedgerRepository internal constructor(
     private val database: SproutDatabase,
     private val clock: Clock,
     private val localEvents: LocalEventCheck,
-    private val policy: LedgerPolicy,
+    private val policies: LedgerPolicySource,
+    private val catalogue: PurchaseCatalogue,
 ) : LedgerRepository {
     @Inject
-    constructor(database: SproutDatabase, clock: Clock, signer: DeviceSigner, verifier: Verifier) :
-        this(database, clock, DeviceKeyEventCheck(signer, verifier), LedgerPolicy())
+    constructor(database: SproutDatabase, clock: Clock, signer: DeviceSigner, verifier: Verifier) : this(
+        database,
+        clock,
+        DeviceKeyEventCheck(signer, verifier),
+        HouseholdPolicySource(database, verifier),
+        RewardTableCatalogue(database),
+    )
 
     private val events = database.ledgerEventDao()
     private val accounts = database.accountDao()
@@ -104,15 +132,28 @@ class RoomLedgerRepository internal constructor(
      */
     suspend fun quarantineUnverifiable(): Int {
         val check = bindLocalCheck()
-        return database.withTransaction { loadVerified(check).quarantined }
+        return database.withTransaction { loadVerified(check, policies.load().policy).quarantined }
     }
 
     /** Binds the local-event check to this device's key; a Keystore read, so done outside any transaction. */
     internal suspend fun bindLocalCheck(): LocalEventCheck.Bound = localEvents.bind()
 
-    /** The household projection from stored, verified events; for tests. */
-    internal suspend fun project(): Projection = database.withTransaction {
-        project(loadVerified(localEvents.bind()).events)
+    /**
+     * The household projection from stored, verified events under the current policy: balances, claimed periods
+     * and reward grants for the data layer's use cases. Binds the local check first, so call it outside a transaction.
+     */
+    internal suspend fun projection(): Projection = snapshot().projection
+
+    /**
+     * The stored, verified events with the registered accounts and the current policy, for projections of the past
+     * (the interest planner's balance on a given day). Binds the local check first, so call it outside a transaction.
+     */
+    internal suspend fun snapshot(): LedgerSnapshot {
+        val check = bindLocalCheck()
+        return database.withTransaction {
+            val policy = policies.load().policy
+            LedgerSnapshot(loadVerified(check, policy).events, accounts.all().map { it.toDomain() }, policy)
+        }
     }
 
     /** The body of [append]; must run inside a Room transaction. [check] comes from [bindLocalCheck]. */
@@ -122,17 +163,41 @@ class RoomLedgerRepository internal constructor(
         events.copiesOf(event.eventId).any { it.hash == event.envelope.hash } -> AppendResult.Duplicate
 
         // Verifying (and quarantining) first means the chain head below ignores rows that no longer verify.
-        else -> appendNew(event, loadVerified(check).events)
+        else -> policies.load().let { active ->
+            val stored = loadVerified(check, active.policy).events
+            appendNew(withoutUnverifiableParentSignature(event, active), stored, active)
+        }
     }
 
-    private suspend fun appendNew(event: LedgerEvent, stored: List<LedgerEvent>): AppendResult {
-        if (!linksToStoredHead(event)) return AppendResult.Rejected(CHAIN_REJECTION)
-        val before = project(stored)
-        val storedCopies = events.copiesOf(event.eventId).filterNot { it.quarantined }.map { it.hash }
-        return if (storedCopies.isEmpty()) {
-            validateAndStore(event, stored, before)
-        } else {
-            storeConflict(event, storedCopies.first(), stored, before)
+    private suspend fun appendNew(event: LedgerEvent, stored: List<LedgerEvent>, active: ActivePolicy): AppendResult =
+        when {
+            !linksToStoredHead(event) -> AppendResult.Rejected(CHAIN_REJECTION)
+
+            !parentSignatureVerifies(event, active) -> AppendResult.Rejected(PARENT_SIGNATURE_REJECTION)
+
+            else -> {
+                val before = project(stored, active.policy)
+                val storedCopies = events.copiesOf(event.eventId).filterNot { it.quarantined }.map { it.hash }
+                if (storedCopies.isEmpty()) {
+                    validateAndStore(event, stored, before)
+                } else {
+                    storeConflict(event, storedCopies.first(), stored, before)
+                }
+            }
+        }
+
+    /**
+     * False when [event] carries a parent signature that does not verify against the registered parent key, or when
+     * the policy requires one and there is no key to verify it with. An absent signature passes here; whether it was
+     * required is [LedgerRules]' [Violation.ParentSignatureMissing].
+     */
+    private fun parentSignatureVerifies(event: LedgerEvent, active: ActivePolicy): Boolean {
+        val signature = event.parentSignatureBytes()?.takeIf { it.isNotEmpty() }
+        val key = active.parentKey
+        return when {
+            signature == null -> true
+            key == null -> !event.requiresParentSignature(active.policy)
+            else -> payloadOrNull { event.parentSignedPayload() }?.let { key.verify(it, signature) } == true
         }
     }
 
@@ -154,7 +219,7 @@ class RoomLedgerRepository internal constructor(
      * Every non-quarantined row that still verifies. Rows that do not are quarantined here, and the caches are
      * rebuilt from what is left, so nothing derived from them survives.
      */
-    private suspend fun loadVerified(check: LocalEventCheck.Bound): Loaded {
+    private suspend fun loadVerified(check: LocalEventCheck.Bound, policy: LedgerPolicy): Loaded {
         val verified = ArrayList<LedgerEvent>()
         var quarantined = 0
         for (row in events.allVerified()) {
@@ -169,7 +234,7 @@ class RoomLedgerRepository internal constructor(
                 quarantined += 1
             }
         }
-        if (quarantined > 0) refreshCaches(project(verified), verified)
+        if (quarantined > 0) refreshCaches(project(verified, policy), verified)
         return Loaded(verified, quarantined)
     }
 
@@ -189,7 +254,7 @@ class RoomLedgerRepository internal constructor(
         }
     }
 
-    private suspend fun project(stored: List<LedgerEvent>): Projection =
+    private suspend fun project(stored: List<LedgerEvent>, policy: LedgerPolicy): Projection =
         Ledger.project(stored, accounts.all().map { it.toDomain() }, policy)
 
     /**
@@ -212,11 +277,18 @@ class RoomLedgerRepository internal constructor(
         before: Projection,
     ): AppendResult {
         val validation = LedgerRules.validate(event, before)
-        if (validation is ValidationResult.Invalid) {
-            return AppendResult.Rejected(INVARIANT_REJECTION, validation.violations)
+        return when {
+            validation is ValidationResult.Invalid ->
+                AppendResult.Rejected(INVARIANT_REJECTION, validation.violations)
+
+            event is RewardPurchased && event.envelope.authorRole == Role.KID && !catalogue.matches(event) ->
+                AppendResult.Rejected(CATALOGUE_REJECTION)
+
+            else -> {
+                store(event, stored, before, AuditAction.LEDGER_EVENT_APPENDED)
+                AppendResult.Accepted
+            }
         }
-        store(event, stored, before, AuditAction.LEDGER_EVENT_APPENDED)
-        return AppendResult.Accepted
     }
 
     /**
@@ -230,7 +302,7 @@ class RoomLedgerRepository internal constructor(
         stored: List<LedgerEvent>,
         before: Projection,
     ): AppendResult {
-        val maxJump = policy.maxLamportJump
+        val maxJump = before.policy.maxLamportJump
         // Both lamports are non-negative, so the subtraction cannot overflow.
         if (event.lamport - before.maxLamport > maxJump) {
             val violation = Violation.LamportTooFarAhead(before.maxLamport, event.lamport, maxJump)
@@ -300,6 +372,7 @@ class RoomLedgerRepository internal constructor(
             put("lamport", event.lamport)
             put("role", event.envelope.authorRole.name)
             if (event is MovesValue) put("amountMinor", event.amount.minorUnits)
+            put("parentSigned", event.envelope.parentSignature != null)
         }
         return LedgerJson.json.encodeToString(JsonObject.serializer(), details)
     }
@@ -313,5 +386,37 @@ class RoomLedgerRepository internal constructor(
 
         /** [AppendResult.Rejected.reason] when the event is not this device's own, validly signed event. */
         const val FOREIGN_REJECTION: String = "unsigned or foreign event"
+
+        /**
+         * [AppendResult.Rejected.reason] when the event's parent signature does not verify against the registered
+         * parent key (or one is required and no key is registered).
+         */
+        const val PARENT_SIGNATURE_REJECTION: String = "parent signature invalid"
+
+        /** [AppendResult.Rejected.reason] when a kid-authored purchase does not match the reward catalogue. */
+        const val CATALOGUE_REJECTION: String = "reward does not match the catalogue"
     }
+}
+
+/**
+ * [event] without its parent signature when no parent key is registered (audit M1): such a signature cannot be
+ * verified, so it is never stored and the event counts as unsigned. The hash and device signature do not cover
+ * the parent signature, so dropping it changes nothing else. With a key registered the signature is kept and must
+ * verify (see [RoomLedgerRepository]).
+ */
+private fun withoutUnverifiableParentSignature(event: LedgerEvent, active: ActivePolicy): LedgerEvent =
+    if (active.parentKey == null && event.envelope.parentSignature != null) {
+        event.withEnvelope(event.envelope.copy(parentSignature = null))
+    } else {
+        event
+    }
+
+/** What [RoomLedgerRepository.snapshot] read: verified events, registered accounts and the policy in force. */
+internal class LedgerSnapshot(val events: List<LedgerEvent>, val accounts: List<Account>, val policy: LedgerPolicy) {
+    /** The household projection of every event. */
+    val projection: Projection by lazy { Ledger.project(events, accounts, policy) }
+
+    /** The projection of only the events [include] keeps (for example those created up to some day). */
+    fun projectionOf(include: (LedgerEvent) -> Boolean): Projection =
+        Ledger.project(events.filter(include), accounts, policy)
 }

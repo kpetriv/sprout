@@ -2,21 +2,25 @@
 <resources>
   <string name="app_name">Sprout</string>
 
-  <!-- Home: the parent's kid list -->
-  <string name="home_title">Kids</string>
-  <string name="home_empty">No kids yet</string>
-  <string name="home_error">Couldn’t load your kids</string>
-  <string name="home_age_band_under_5">Under 5</string>
-  <string name="home_age_band_5_to_7">Ages 5–7</string>
-  <string name="home_age_band_8_to_11">Ages 8–11</string>
-  <string name="home_age_band_12_plus">Ages 12+</string>
-  <string name="home_age_band_unknown">Unknown</string>
-  <string name="home_retry">Try again</string>
-  <string name="home_startup_failed_title">Sprout couldn’t finish starting</string>
-  <string name="home_startup_failed_keys">The secure key store on this device couldn’t be read.</string>
-  <string name="home_startup_failed_database">The local data couldn’t be opened.</string>
-  <string name="home_startup_failed_unknown">Something went wrong while starting up.</string>
-  <string name="home_tier_seedling">Seedling</string>
-  <string name="home_tier_sprout">Sprout</string>
-  <string name="home_tier_sapling">Sapling</string>
+  <!-- Kid picker (switch to kid mode, open the shop) -->
+  <string name="kids_picker_kid_mode_title">Who is using Sprout?</string>
+  <string name="kids_picker_shop_title">Whose shop?</string>
+  <string name="kids_empty">No kids yet</string>
+  <string name="kids_error">Couldn’t load your kids</string>
+  <string name="kids_cancel">Cancel</string>
+  <string name="kids_age_band_under_5">Under 5</string>
+  <string name="kids_age_band_5_to_7">Ages 5–7</string>
+  <string name="kids_age_band_8_to_11">Ages 8–11</string>
+  <string name="kids_age_band_12_plus">Ages 12+</string>
+  <string name="kids_age_band_unknown">Unknown</string>
+  <string name="kids_tier_seedling">Seedling</string>
+  <string name="kids_tier_sprout">Sprout</string>
+  <string name="kids_tier_sapling">Sapling</string>
+
+  <!-- Startup failure -->
+  <string name="startup_retry">Try again</string>
+  <string name="startup_failed_title">Sprout couldn’t finish starting</string>
+  <string name="startup_failed_keys">The secure key store on this device couldn’t be read.</string>
+  <string name="startup_failed_database">The local data couldn’t be opened.</string>
+  <string name="startup_failed_unknown">Something went wrong while starting up.</string>
 </resources>

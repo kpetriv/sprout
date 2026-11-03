@@ -25,6 +25,8 @@ import dev.kpetriv.sprout.core.designsystem.theme.SproutTheme
 import dev.kpetriv.sprout.core.model.KidUiTier
 import dev.kpetriv.sprout.core.ui.BalanceJar
 import dev.kpetriv.sprout.core.ui.MinutesSun
+import dev.kpetriv.sprout.core.ui.ReadAloud
+import dev.kpetriv.sprout.core.ui.SavingsStars
 import dev.kpetriv.sprout.core.ui.TierScaledText
 import dev.kpetriv.sprout.core.ui.TierTextRole
 
@@ -36,8 +38,10 @@ import dev.kpetriv.sprout.core.ui.TierTextRole
  * taps a button that does nothing. When a parent is looking ([WalletUiState.Ready.isParentView]), a compact
  * "Recent activity" list in real currency follows, so a parent can see a Seedling kid's history.
  *
- * @param onOpenChores placeholder until chores land in kid mode.
- * @param onOpenShop placeholder until the shop lands.
+ * When the kid has a savings goal, a "Saving for ..." star row follows the sun.
+ *
+ * @param onOpenChores the big Chores button; the app navigates to the kid's chores.
+ * @param onOpenShop the big Shop button; the app navigates to [ShopRoute].
  */
 @Composable
 internal fun SeedlingWalletContent(
@@ -91,6 +95,15 @@ internal fun SeedlingWalletContent(
                 tier = tier,
                 contentDescription = stringResource(R.string.feature_wallet_sun_description, minutes.kidFormatted),
             )
+        }
+        state.savingsGoal?.let { goal ->
+            goal.title?.let { title ->
+                SavingsStars(
+                    title = stringResource(R.string.feature_wallet_saving_for, title),
+                    filled = goal.stars,
+                    tier = tier,
+                )
+            }
         }
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
             BigPictureButton(

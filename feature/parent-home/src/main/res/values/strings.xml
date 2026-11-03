@@ -1,4 +1,113 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
   <string name="feature_parent_home_title">Family dashboard</string>
+  <string name="feature_parent_home_load_failed">The dashboard couldn\'t be loaded.</string>
+
+  <!-- Approvals -->
+  <string name="feature_parent_home_approvals_title">Chores to approve</string>
+  <string name="feature_parent_home_approvals_none">Nothing waiting. Nice.</string>
+  <plurals name="feature_parent_home_approvals_count">
+    <item quantity="one">%1$d chore is waiting for you</item>
+    <item quantity="other">%1$d chores are waiting for you</item>
+  </plurals>
+  <string name="feature_parent_home_approvals_review">Review</string>
+
+  <!-- Pending parent actions -->
+  <string name="feature_parent_home_signing_title">Payments to sign</string>
+  <string name="feature_parent_home_signing_none">No payments waiting for your fingerprint.</string>
+  <plurals name="feature_parent_home_signing_allowances">
+    <item quantity="one">%1$d allowance</item>
+    <item quantity="other">%1$d allowances</item>
+  </plurals>
+  <plurals name="feature_parent_home_signing_interest">
+    <item quantity="one">%1$d interest payment</item>
+    <item quantity="other">%1$d interest payments</item>
+  </plurals>
+  <string name="feature_parent_home_signing_waiting">%1$s waiting for your fingerprint</string>
+  <string name="feature_parent_home_signing_and">%1$s and %2$s</string>
+  <string name="feature_parent_home_sign_now">Sign now</string>
+  <plurals name="feature_parent_home_signing_progress">
+    <item quantity="one">%1$d of %2$d signed</item>
+    <item quantity="other">%1$d of %2$d signed</item>
+  </plurals>
+  <plurals name="feature_parent_home_sign_finished">
+    <item quantity="one">%1$d of %2$d signed</item>
+    <item quantity="other">%1$d of %2$d signed</item>
+  </plurals>
+  <plurals name="feature_parent_home_sign_already_paid">
+    <item quantity="one">%1$d was already paid</item>
+    <item quantity="other">%1$d were already paid</item>
+  </plurals>
+  <plurals name="feature_parent_home_sign_failed">
+    <item quantity="one">%1$d couldn\'t be signed and will wait for next time</item>
+    <item quantity="other">%1$d couldn\'t be signed and will wait for next time</item>
+  </plurals>
+  <plurals name="feature_parent_home_sign_unsigned">
+    <item quantity="one">%1$d was paid without a fingerprint signature on this device</item>
+    <item quantity="other">%1$d were paid without a fingerprint signature on this device</item>
+  </plurals>
+  <string name="feature_parent_home_sign_signature_required">Nothing more was paid: this device has no fingerprint, and your household requires fingerprint-signed payments.</string>
+  <plurals name="feature_parent_home_sign_stopped">
+    <item quantity="one">Signing stopped: %1$d of %2$d signed. The rest wait until you tap Sign now again.</item>
+    <item quantity="other">Signing stopped: %1$d of %2$d signed. The rest wait until you tap Sign now again.</item>
+  </plurals>
+  <plurals name="feature_parent_home_sign_needs_attention">
+    <item quantity="one">%1$d can\'t be paid and is listed under payments that need attention</item>
+    <item quantity="other">%1$d can\'t be paid and are listed under payments that need attention</item>
+  </plurals>
+  <plurals name="feature_parent_home_sign_cancelled">
+    <item quantity="one">%1$d was withdrawn because its kid or schedule changed</item>
+    <item quantity="other">%1$d were withdrawn because their kid or schedule changed</item>
+  </plurals>
+  <plurals name="feature_parent_home_sign_replanned">
+    <item quantity="one">%1$d was planned again from the current schedule</item>
+    <item quantity="other">%1$d were planned again from the current schedule</item>
+  </plurals>
+  <string name="feature_parent_home_sign_key_invalidated">Nothing more was paid: the fingerprints on this phone changed. Renew parent security in Settings, then sign again.</string>
+  <string name="feature_parent_home_sign_already_running">Signing is already in progress.</string>
+
+  <!-- Payments that need attention -->
+  <string name="feature_parent_home_attention_title">Payments that need attention</string>
+  <string name="feature_parent_home_attention_explainer">These won\'t be paid automatically. Fix the schedule or pay by hand from the kid\'s wallet, then dismiss.</string>
+  <string name="feature_parent_home_attention_allowance">%1$s: %2$s allowance for %3$s</string>
+  <string name="feature_parent_home_attention_interest">%1$s: %2$s savings interest for %3$s</string>
+  <string name="feature_parent_home_attention_failed">Couldn\'t be paid: it breaks a ledger rule</string>
+  <string name="feature_parent_home_attention_skipped">Skipped: too far in the past to catch up</string>
+  <string name="feature_parent_home_attention_dismiss">Dismiss</string>
+
+  <!-- Kids -->
+  <string name="feature_parent_home_kids_title">Kids</string>
+  <string name="feature_parent_home_kids_none">No kids yet. Add one in Settings.</string>
+  <string name="feature_parent_home_kid_money">Money</string>
+  <string name="feature_parent_home_kid_minutes">Screen time</string>
+  <string name="feature_parent_home_kid_next_allowance">Next allowance: %1$s</string>
+  <string name="feature_parent_home_kid_no_allowance">No allowance set</string>
+  <plurals name="feature_parent_home_kid_anomalies">
+    <item quantity="one">%1$d issue to review</item>
+    <item quantity="other">%1$d issues to review</item>
+  </plurals>
+  <string name="feature_parent_home_tier_seedling">Seedling</string>
+  <string name="feature_parent_home_tier_sprout">Sprout</string>
+  <string name="feature_parent_home_tier_sapling">Sapling</string>
+
+  <!-- Anomalies -->
+  <string name="feature_parent_home_anomalies_title">Ledger check</string>
+  <string name="feature_parent_home_anomalies_none">Every balance adds up.</string>
+  <plurals name="feature_parent_home_anomalies_count">
+    <item quantity="one">%1$d entry needs a look (an overdraft, a conflict or a rejected event)</item>
+    <item quantity="other">%1$d entries need a look (overdrafts, conflicts or rejected events)</item>
+  </plurals>
+  <string name="feature_parent_home_anomalies_review">Review</string>
+
+  <!-- Weekly summary (M6) -->
+  <string name="feature_parent_home_summary_title">Weekly summary</string>
+  <string name="feature_parent_home_summary_placeholder">A short on-device summary of the family\'s week is coming in a later update.</string>
+
+  <!-- Quick links -->
+  <string name="feature_parent_home_links_title">Go to</string>
+  <string name="feature_parent_home_link_chores">Chores</string>
+  <string name="feature_parent_home_link_approvals">Approvals</string>
+  <string name="feature_parent_home_link_shop">Shop (parent view)</string>
+  <string name="feature_parent_home_link_settings">Settings</string>
+  <string name="feature_parent_home_link_kid_mode">Switch to kid mode</string>
 </resources>

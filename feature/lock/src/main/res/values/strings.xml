@@ -1,4 +1,45 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-  <string name="feature_lock_title">Parent lock</string>
+  <!-- PIN entry -->
+  <string name="feature_lock_entry_title">Enter your parent PIN</string>
+  <string name="feature_lock_entry_hint">Six digits</string>
+  <string name="feature_lock_use_fingerprint">Use fingerprint</string>
+  <string name="feature_lock_use_pin">Use PIN</string>
+  <string name="feature_lock_cancel">Cancel</string>
+  <string name="feature_lock_wait">Too many tries. Try again in %1$s</string>
+  <string name="feature_lock_require_biometric">PIN locked after too many tries. Unlock with your fingerprint.</string>
+  <string name="feature_lock_require_biometric_unavailable">PIN locked after too many tries. Unlock with your fingerprint once it is available again.</string>
+  <string name="feature_lock_error_wrong_pin">Wrong PIN</string>
+  <string name="feature_lock_error_unavailable">The PIN can\'t be checked on this device right now.</string>
+  <string name="feature_lock_error_biometric_failed">Fingerprint didn\'t work. Use your PIN.</string>
+  <string name="feature_lock_error_biometric_key_changed">Fingerprint changed. Renew the fingerprint key with your PIN.</string>
+  <string name="feature_lock_renew_key">Renew fingerprint key</string>
+  <string name="feature_lock_renew_hint">Enter your PIN to unlock and renew the fingerprint key</string>
+
+  <!-- Biometric prompts -->
+  <string name="feature_lock_unlock_prompt_title">Unlock parent mode</string>
+  <string name="feature_lock_authorize_title">Confirm as parent</string>
+  <string name="feature_lock_key_proof_title">Turn on fingerprint signing</string>
+  <string name="feature_lock_key_proof_subtitle">Confirm it\'s you. From now on every money change needs your fingerprint.</string>
+
+  <!-- PIN setup -->
+  <string name="feature_lock_setup_title">Choose a parent PIN</string>
+  <string name="feature_lock_setup_confirm_title">Enter the PIN again</string>
+  <string name="feature_lock_setup_start_over">Start over</string>
+  <string name="feature_lock_rule_length">6 digits</string>
+  <string name="feature_lock_rule_not_same">Not all the same digit, like 111111</string>
+  <string name="feature_lock_rule_not_sequence">Not a run like 123456 or 654321</string>
+  <string name="feature_lock_setup_error_all_same">Use different digits</string>
+  <string name="feature_lock_setup_error_sequence">Too easy to guess. Avoid runs like 123456.</string>
+  <string name="feature_lock_setup_error_mismatch">The PINs didn\'t match. Start again.</string>
+  <string name="feature_lock_setup_error_failed">Couldn\'t save the PIN. Try again.</string>
+
+  <!-- Kid mode exit -->
+  <string name="feature_lock_exit_kid_mode_title">Parent PIN to leave kid mode</string>
+
+  <!-- Parent signature policy (D-M2-1) -->
+  <string name="feature_lock_signature_banner_title">Money changes on this device can\'t be fingerprint-signed</string>
+  <string name="feature_lock_signature_banner_not_enrolled">Add a fingerprint in system settings so every money change carries your signature.</string>
+  <string name="feature_lock_signature_banner_no_hardware">This device has no strong fingerprint or face sensor, so money changes are saved without a parent signature.</string>
+  <string name="feature_lock_signature_banner_unavailable">The fingerprint sensor isn\'t available right now, so money changes are saved without a parent signature.</string>
 </resources>

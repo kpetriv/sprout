@@ -27,6 +27,20 @@ data class YearMonth(val year: Int, val month: Int) : Comparable<YearMonth> {
      */
     fun yearsUntil(other: YearMonth): Int = other.year - year - if (other.month < month) 1 else 0
 
+    /** Number of days in this month (28 to 31). */
+    val daysInMonth: Int get() = CalendarDate.daysInMonth(year, month)
+
+    /** The month [months] after this one (negative goes back). Throws outside [MIN_YEAR]..[MAX_YEAR]. */
+    fun plusMonths(months: Int): YearMonth {
+        val index = year.toLong() * MONTHS_PER_YEAR + (month - 1) + months
+        val newYear = index.floorDiv(MONTHS_PER_YEAR)
+        require(newYear in MIN_YEAR..MAX_YEAR) { "year must be in $MIN_YEAR..$MAX_YEAR" }
+        return YearMonth(newYear.toInt(), index.mod(MONTHS_PER_YEAR) + 1)
+    }
+
+    /** The date on [day] of this month. */
+    fun atDay(day: Int): CalendarDate = CalendarDate(year, month, day)
+
     override fun toString(): String =
         "${year.toString().padStart(YEAR_DIGITS, '0')}-${month.toString().padStart(2, '0')}"
 

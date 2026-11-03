@@ -1,4 +1,153 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
   <string name="feature_settings_title">Settings</string>
+  <string name="feature_settings_back">Back</string>
+  <string name="feature_settings_retry">Try again</string>
+  <string name="feature_settings_load_failed">Settings couldn\'t be loaded.</string>
+  <string name="feature_settings_save">Save</string>
+  <string name="feature_settings_cancel">Cancel</string>
+  <string name="feature_settings_saving">Saving…</string>
+  <string name="feature_settings_save_failed">Couldn\'t save. Please try again.</string>
+  <string name="feature_settings_no_kids">Add a kid first, in Kids.</string>
+
+  <!-- Hub -->
+  <string name="feature_settings_section_kids">Kids</string>
+  <string name="feature_settings_section_kids_summary">Names, birth months and screen styles</string>
+  <string name="feature_settings_section_allowance">Allowance</string>
+  <string name="feature_settings_section_allowance_summary">Pocket money per kid, weekly or monthly</string>
+  <string name="feature_settings_section_goals">Savings goals</string>
+  <string name="feature_settings_section_goals_summary">What each kid is saving towards</string>
+  <string name="feature_settings_section_interest">Interest</string>
+  <string name="feature_settings_section_interest_summary">Reward saving with a monthly bonus</string>
+  <string name="feature_settings_section_security">Parent security</string>
+  <string name="feature_settings_section_security_summary">PIN, fingerprint signing and auto-lock</string>
+  <string name="feature_settings_section_about">About</string>
+  <string name="feature_settings_section_about_summary">Version and privacy</string>
+
+  <!-- Messages -->
+  <string name="feature_settings_message_saved">Saved</string>
+  <string name="feature_settings_message_kid_added">Kid added</string>
+  <string name="feature_settings_message_kid_archived">Kid archived. Their history is kept.</string>
+  <string name="feature_settings_message_goal_deleted">Goal deleted. The savings stay in the account.</string>
+  <string name="feature_settings_message_pin_changed">PIN changed</string>
+  <string name="feature_settings_message_key_registered">Fingerprint signing is on</string>
+  <string name="feature_settings_message_save_failed">Couldn\'t save. Please try again.</string>
+
+  <!-- Field errors -->
+  <string name="feature_settings_error_required">Required</string>
+  <plurals name="feature_settings_error_name_too_long">
+    <item quantity="one">At most %1$d character</item>
+    <item quantity="other">At most %1$d characters</item>
+  </plurals>
+  <string name="feature_settings_error_not_a_number">Enter a number like 2.50</string>
+  <string name="feature_settings_error_too_many_decimals">Too many decimal places</string>
+  <string name="feature_settings_error_too_large">That amount is too large</string>
+  <string name="feature_settings_error_must_be_positive">Must be more than zero</string>
+
+  <!-- Kids -->
+  <string name="feature_settings_kids_add">Add kid</string>
+  <string name="feature_settings_kids_empty">No kids yet. Add one to get started.</string>
+  <string name="feature_settings_kids_row_detail">Age %1$d · %2$s</string>
+  <string name="feature_settings_kids_row_overridden">%1$s (suggested: %2$s)</string>
+  <string name="feature_settings_kids_edit_title">Edit %1$s</string>
+  <string name="feature_settings_kids_add_title">Add a kid</string>
+  <string name="feature_settings_kids_first_name">First name</string>
+  <string name="feature_settings_kids_birth_month">Birth month</string>
+  <string name="feature_settings_kids_birth_year">Birth year</string>
+  <string name="feature_settings_kids_birth_future">The birth month can\'t be in the future</string>
+  <string name="feature_settings_kids_birth_note">Sprout stores only the month and year, never a full birthday.</string>
+  <string name="feature_settings_kids_tier">Screen style</string>
+  <string name="feature_settings_kids_tier_suggested">Suggested: %1$s</string>
+  <string name="feature_settings_kids_archive">Archive kid</string>
+  <string name="feature_settings_kids_archive_confirm_title">Archive %1$s?</string>
+  <string name="feature_settings_kids_archive_confirm_text">They disappear from everyday screens. Their history stays in the ledger.</string>
+  <string name="feature_settings_kids_archive_confirm">Archive</string>
+  <string name="feature_settings_tier_seedling">Seedling</string>
+  <string name="feature_settings_tier_sprout">Sprout</string>
+  <string name="feature_settings_tier_sapling">Sapling</string>
+
+  <!-- Allowance -->
+  <string name="feature_settings_allowance_none">No allowance</string>
+  <string name="feature_settings_allowance_weekly">%1$s every %2$s</string>
+  <string name="feature_settings_allowance_monthly">%1$s on day %2$d of each month</string>
+  <string name="feature_settings_allowance_next">Next payment: %1$s</string>
+  <string name="feature_settings_allowance_paused">Paused</string>
+  <string name="feature_settings_allowance_edit_title">Allowance for %1$s</string>
+  <string name="feature_settings_allowance_amount">Amount (%1$s)</string>
+  <string name="feature_settings_allowance_cadence_weekly">Weekly</string>
+  <string name="feature_settings_allowance_cadence_monthly">Monthly</string>
+  <string name="feature_settings_allowance_day_of_week">Pay day</string>
+  <string name="feature_settings_allowance_day_of_month">Day of the month</string>
+  <string name="feature_settings_allowance_starts_on">Starts on %1$s</string>
+  <string name="feature_settings_allowance_change_date">Change</string>
+  <string name="feature_settings_allowance_active">Active</string>
+  <string name="feature_settings_allowance_signing_note">Each payment waits on the dashboard until you tap Sign now and confirm it with your fingerprint.</string>
+
+  <!-- Savings goals -->
+  <string name="feature_settings_goals_add">Add goal</string>
+  <string name="feature_settings_goals_empty">No savings goals yet.</string>
+  <string name="feature_settings_goals_target">Target %1$s</string>
+  <string name="feature_settings_goals_achieved">Reached on %1$s</string>
+  <string name="feature_settings_goals_add_title">New savings goal</string>
+  <string name="feature_settings_goals_edit_title">Edit goal</string>
+  <string name="feature_settings_goals_title_field">What are they saving for?</string>
+  <string name="feature_settings_goals_target_field">Target (%1$s)</string>
+  <string name="feature_settings_goals_delete">Delete goal</string>
+
+  <!-- Interest -->
+  <string name="feature_settings_interest_rate" formatted="false">Yearly rate (%)</string>
+  <string name="feature_settings_interest_rate_hint">0 to 20.00. 0 turns interest off.</string>
+  <string name="feature_settings_interest_too_high" formatted="false">At most 20.00%</string>
+  <string name="feature_settings_interest_accrual_day">Paid on day</string>
+  <string name="feature_settings_interest_explanation">Interest rewards saving. Once a month, on the day you pick, each kid\'s savings account earns simple interest for the days since the last payment. Each payment waits on the dashboard until you tap Sign now and confirm it with your fingerprint.</string>
+  <string name="feature_settings_interest_preview">On %1$s saved for a month you\'d earn about %2$s.</string>
+  <string name="feature_settings_interest_off">Interest is off.</string>
+
+  <!-- Parent security -->
+  <string name="feature_settings_security_pin_title">Change PIN</string>
+  <string name="feature_settings_security_pin_current">Enter your current PIN</string>
+  <string name="feature_settings_security_pin_new">Enter a new PIN (6 digits)</string>
+  <string name="feature_settings_security_pin_confirm">Enter the new PIN again</string>
+  <string name="feature_settings_security_pin_start_over">Start over</string>
+  <string name="feature_settings_security_cancel">Cancel</string>
+  <string name="feature_settings_security_pin_wrong">That isn\'t your current PIN</string>
+  <string name="feature_settings_security_pin_wrong_wait">That isn\'t your current PIN. Try again in %1$s.</string>
+  <string name="feature_settings_security_pin_locked_out">Too many wrong PINs. Try again in %1$s.</string>
+  <string name="feature_settings_security_pin_require_biometric">Too many wrong PINs. Lock the app and unlock with your fingerprint, then try again.</string>
+  <string name="feature_settings_security_pin_wrong_length">Use exactly 6 digits</string>
+  <string name="feature_settings_security_pin_not_digits">Use digits only</string>
+  <string name="feature_settings_security_pin_all_same">Too easy to guess: all digits are the same</string>
+  <string name="feature_settings_security_pin_sequence">Too easy to guess: avoid runs like 123456</string>
+  <string name="feature_settings_security_pin_mismatch">The new PINs don\'t match</string>
+  <string name="feature_settings_security_pin_not_allowed">Unlock the parent area first</string>
+  <string name="feature_settings_security_pin_failed">The PIN couldn\'t be changed. Your old PIN still works.</string>
+  <string name="feature_settings_security_signing_title">Fingerprint signing</string>
+  <string name="feature_settings_security_signing_on">On. Every money change you make is signed with your fingerprint, so nobody else can fake one.</string>
+  <string name="feature_settings_security_signing_not_set_up">Not set up yet. Turn it on so every money change you make carries your fingerprint signature.</string>
+  <string name="feature_settings_security_signing_register">Turn on fingerprint signing</string>
+  <string name="feature_settings_security_signing_registering">Setting up…</string>
+  <string name="feature_settings_security_signing_unavailable_title">Money changes on this device can\'t be fingerprint-signed</string>
+  <string name="feature_settings_security_signing_not_enrolled">Add a fingerprint in system settings so every money change carries your signature.</string>
+  <string name="feature_settings_security_signing_no_hardware">This device has no strong fingerprint or face sensor, so money changes are saved without a parent signature.</string>
+  <string name="feature_settings_security_signing_unavailable">The fingerprint sensor isn\'t available right now, so money changes are saved without a parent signature.</string>
+  <string name="feature_settings_security_policy_required">Household policy: parent signatures required</string>
+  <string name="feature_settings_security_policy_not_required">Household policy: unsigned parent changes accepted</string>
+  <string name="feature_settings_security_register_unavailable">This device couldn\'t create a fingerprint key. Check that a fingerprint is enrolled.</string>
+  <string name="feature_settings_security_register_failed">That didn\'t work, so nothing changed. Please try again.</string>
+  <string name="feature_settings_security_register_cancelled">Nothing changed: the fingerprint check was cancelled.</string>
+  <string name="feature_settings_security_register_wrong_pin">Wrong PIN. Nothing changed.</string>
+  <string name="feature_settings_security_register_wrong_pin_wait">Wrong PIN. Try again in %1$s.</string>
+  <string name="feature_settings_security_signing_invalidated_title">Fingerprint changed: renew signing key</string>
+  <string name="feature_settings_security_signing_invalidated">A fingerprint was added or removed on this device, so the old signing key stopped working. Renew it with your PIN to keep signing money changes.</string>
+  <string name="feature_settings_security_signing_renew">Renew signing key</string>
+  <string name="feature_settings_security_signing_pin_enrol">Enter your PIN to turn on fingerprint signing</string>
+  <string name="feature_settings_security_signing_pin_renew">Enter your PIN to renew the signing key</string>
+  <string name="feature_settings_security_lock_title">Lock when leaving the app</string>
+  <string name="feature_settings_security_lock_summary">Ask for the PIN or fingerprint again as soon as you switch away. When off, the parent area locks after 2 minutes away.</string>
+
+  <!-- About -->
+  <string name="feature_settings_about_app">Sprout</string>
+  <string name="feature_settings_about_tagline">A family economy: chores, pocket money, savings and screen time.</string>
+  <string name="feature_settings_about_version">Version %1$s</string>
+  <string name="feature_settings_about_privacy">Kid profiles hold only a first name, an avatar and a birth month. Money is kept in a tamper-evident ledger on this device.</string>
 </resources>

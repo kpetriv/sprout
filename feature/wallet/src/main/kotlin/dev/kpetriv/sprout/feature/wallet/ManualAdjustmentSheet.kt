@@ -130,6 +130,13 @@ internal fun ManualAdjustmentForm(
             ),
             modifier = Modifier.fillMaxWidth(),
         )
+        if (adjustment.unsignedWarning) {
+            Text(
+                text = stringResource(R.string.feature_wallet_adjust_unsigned_warning),
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                style = MaterialTheme.typography.bodySmall,
+            )
+        }
         adjustment.error?.let { error ->
             Text(
                 text = error.message(),

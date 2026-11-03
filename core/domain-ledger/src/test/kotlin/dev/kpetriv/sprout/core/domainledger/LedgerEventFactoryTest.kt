@@ -8,6 +8,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertIs
+import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.nanoseconds
@@ -19,7 +20,7 @@ class LedgerEventFactoryTest {
     private val factory = LedgerEventFactory(clock, lamport, Fixtures.seededIds(3))
 
     private fun chore(head: String?) = factory.create(Fixtures.parentPhone, Fixtures.kid, Fixtures.main.id, head) {
-        ChoreRewarded(it, Fixtures.gbp, Money(100), "dishes")
+        ChoreRewarded(it, Fixtures.gbp, Money(100), "dishes", Fixtures.today)
     }
 
     @Test
@@ -47,7 +48,7 @@ class LedgerEventFactoryTest {
     fun bodyMustUseTheEnvelopeItIsGiven() {
         assertFailsWith<IllegalArgumentException> {
             factory.create(Fixtures.parentPhone, Fixtures.kid, Fixtures.main.id, null) {
-                ChoreRewarded(it.copy(lamport = 99), Fixtures.gbp, Money(1), "x")
+                ChoreRewarded(it.copy(lamport = 99), Fixtures.gbp, Money(1), "x", Fixtures.today)
             }
         }
     }
@@ -85,6 +86,36 @@ class LedgerEventFactoryTest {
         assertContentEquals(payload, signedPayloadOf(stored))
         // The hash chain input stays unprefixed.
         assertEquals(HashChain().computeHash(null, CanonicalEncoder.encode(event)), event.envelope.hash)
+    }
+
+    @Test
+    fun parentSigningUsesItsOwnDomainAndChangesNothingElse() {
+        val event = chore(null)
+        val key = FakeParentAuthorization(singleUse = true)
+        val signed = event.signWith { byteArrayOf(1) }.parentSignWith(key)
+        // One sign call, over the parent payload, which differs from the device payload only in its prefix.
+        val payload = key.signed.single()
+        assertContentEquals(event.parentSignedPayload(), payload)
+        assertContentEquals(
+            LEDGER_PARENT_SIGNATURE_DOMAIN.encodeToByteArray() + byteArrayOf(0) + CanonicalEncoder.encode(event),
+            payload,
+        )
+        assertFalse(payload.contentEquals(event.signedPayload()))
+        assertTrue(key.verify(payload, assertNotNull(signed.parentSignatureBytes())))
+        // Hash, device signature and both payloads are unchanged by the parent signature.
+        assertEquals(event.envelope.hash, signed.envelope.hash)
+        assertContentEquals(byteArrayOf(1), signed.signatureBytes())
+        assertContentEquals(event.signedPayload(), signed.signedPayload())
+        assertContentEquals(event.parentSignedPayload(), signed.parentSignedPayload())
+        assertIs<ChoreRewarded>(signed)
+        // A per-use authorisation cannot sign a second event.
+        assertFailsWith<IllegalStateException> { chore(event.envelope.hash).parentSignWith(key) }
+        // Malformed parent signatures read as absent.
+        assertNull(event.parentSignatureBytes())
+        assertNull(event.mutateEnvelope { it.copy(parentSignature = "not base64!") }.parentSignatureBytes())
+        // Two copies that differ only in the parent signature are different events (a stripped copy conflicts).
+        assertFalse(signed.isSameEventAs(signed.mutateEnvelope { it.copy(parentSignature = null) }))
+        assertTrue(signed.isSameEventAs(signed.withSignature(byteArrayOf(2))))
     }
 
     @Test

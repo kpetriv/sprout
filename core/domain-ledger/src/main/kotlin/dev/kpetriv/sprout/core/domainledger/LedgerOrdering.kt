@@ -19,7 +19,10 @@ object LedgerOrdering : Comparator<LedgerEvent> {
 
 /**
  * True when [other] is the same event as this one: the same eventId, the same stored hash and the same content.
- * Only the signature may differ (ECDSA signatures are randomised, so a re-signed copy is still the same event).
+ * Only the device signature may differ (ECDSA signatures are randomised, so a re-signed copy is still the same event).
+ * The parent signature does count: it cannot be re-made without a new parent prompt, so a copy with a stripped or
+ * different [Envelope.parentSignature] is a conflict, which no device applies, rather than a duplicate whose fate
+ * would depend on which copy arrived first.
  * Two copies of one eventId that are not the same event are a conflict (see [LedgerAnomaly.ConflictingDuplicate]).
  */
 fun LedgerEvent.isSameEventAs(other: LedgerEvent): Boolean = eventId == other.eventId &&

@@ -39,12 +39,22 @@ object Fixtures {
     }
 }
 
-/** One author device writing a correctly chained stream, as a real device would. */
+/**
+ * One author device writing a correctly chained stream, as a real device would.
+ *
+ * Periodic events get a fresh claim on every call unless one is passed: chore ids are unique per device, and
+ * allowance (weekly) and interest (monthly) period keys count up from 2026 per writer. Two writers that both pay
+ * allowance or interest into one projection must pass their own keys, or the later one is a duplicate period.
+ *
+ * @param parentKey when set, every parent-only event written ([isParentOnly]) is parent-signed with it, as
+ *   [LedgerWriter.appendAsParent] would. Events are never device-signed.
+ */
 class DeviceWriter(
     val author: EventAuthor,
     seed: Int = author.deviceId.value.hashCode(),
     val lamport: LamportClock = LamportClock(),
     private val clock: FakeClock = FakeClock(Fixtures.start),
+    private val parentKey: ParentAuthorization? = null,
 ) {
     private val factory = LedgerEventFactory(clock, lamport, Fixtures.seededIds(seed))
     var head: String? = null
@@ -60,27 +70,65 @@ class DeviceWriter(
     fun <E : LedgerEvent> writeWithId(eventId: EventId, account: Account, body: (Envelope) -> E): E =
         write(LedgerEventFactory(clock, lamport, { eventId }), account, body)
 
+    private var choreCount = 0
+    private var weekCount = 0
+    private var monthCount = 0
+
     private fun <E : LedgerEvent> write(factory: LedgerEventFactory, account: Account, body: (Envelope) -> E): E {
         clock.advanceBy(1.minutes)
-        return factory.create(author, account.kidId, account.id, head, body).also {
+        val created = factory.create(author, account.kidId, account.id, head, body)
+        val key = parentKey
+
+        @Suppress("UNCHECKED_CAST") // withEnvelope is a data class copy, so the type is preserved.
+        val event = if (key != null && created.isParentOnly()) created.parentSignWith(key) as E else created
+        return event.also {
             head = it.envelope.hash
             written += it
         }
     }
 
+    /** A chore id no other call (on any device) returns. */
+    fun nextChoreId(): String = "${author.deviceId.value}-chore-${++choreCount}"
+
+    /** The next weekly period key of this writer: 2026-W01, 2026-W02, ... */
+    fun nextWeek(): String = weekCount++.let { PeriodKeys.weekly(FIRST_YEAR + it / WEEKS, it % WEEKS + 1) }
+
+    /** The next monthly period key of this writer: 2026-01, 2026-02, ... */
+    fun nextMonth(): String = monthCount++.let { PeriodKeys.monthly(FIRST_YEAR + it / MONTHS, it % MONTHS + 1) }
+
     /** Merge a pulled lamport, as a sync would. False if it was too far ahead and ignored. */
     fun observe(remote: Long) = lamport.observe(remote)
 
-    fun chore(amount: Long, account: Account = Fixtures.main) =
-        write(account) { ChoreRewarded(it, account.currency, Money(amount), "chore-1") }
+    fun chore(
+        amount: Long,
+        account: Account = Fixtures.main,
+        choreId: String = nextChoreId(),
+        dueOn: CalendarDate = Fixtures.today,
+    ) = write(account) { ChoreRewarded(it, account.currency, Money(amount), choreId, dueOn) }
 
-    fun allowance(amount: Long) = write(Fixtures.main) { AllowancePaid(it, Fixtures.gbp, Money(amount), "weekly") }
+    fun allowance(amount: Long, periodKey: String = nextWeek()) =
+        write(Fixtures.main) { AllowancePaid(it, Fixtures.gbp, Money(amount), "weekly", periodKey) }
 
     fun game(amount: Long, date: CalendarDate = Fixtures.today, account: Account = Fixtures.main) =
         write(account) { GamePlayed(it, account.currency, Money(amount), "memory", 10, date) }
 
-    fun purchase(amount: Long, account: Account = Fixtures.main) =
-        write(account) { RewardPurchased(it, account.currency, Money(amount), "sticker") }
+    fun purchase(
+        amount: Long,
+        account: Account = Fixtures.main,
+        rewardId: String = "sticker",
+        minutesGranted: Long? = null,
+    ) = write(account) { RewardPurchased(it, account.currency, Money(amount), rewardId, minutesGranted?.let(::Money)) }
+
+    /** A screen-time reward costing [cost] that grants [minutes]. */
+    fun screenTime(cost: Long, minutes: Long, rewardId: String = "screen-time") =
+        purchase(cost, rewardId = rewardId, minutesGranted = minutes)
+
+    /** Credits [minutes] to the minutes account, redeeming [grantedBy] (null: a manual parent grant). */
+    fun timeCredit(
+        minutes: Long,
+        grantedBy: RewardPurchased? = null,
+        rewardId: String = grantedBy?.rewardId ?: "screen-time",
+    ) = write(Fixtures.minutes) { TimeBankCredited(it, Money(minutes), grantedBy?.eventId, rewardId) }
 
     fun adjust(amount: Long, reason: String = "receipt") =
         write(Fixtures.main) { ManualAdjustment(it, Fixtures.gbp, Money(amount), reason) }
@@ -92,7 +140,7 @@ class DeviceWriter(
      * Interest of exactly [amount]: 5% for 365 days on a principal of 20 × [amount], so the recorded terms match
      * [InterestCalculator.accrue].
      */
-    fun interest(amount: Long) = write(Fixtures.savings) {
+    fun interest(amount: Long, periodKey: String = nextMonth()) = write(Fixtures.savings) {
         InterestAccrued(
             it,
             Fixtures.gbp,
@@ -100,6 +148,7 @@ class DeviceWriter(
             principal = Money(amount * INTEREST_PRINCIPAL_MULTIPLE),
             annualRateBasisPoints = 500,
             days = 365,
+            periodKey = periodKey,
         )
     }
 
@@ -114,6 +163,30 @@ class DeviceWriter(
 }
 
 private const val INTEREST_PRINCIPAL_MULTIPLE = 20
+private const val FIRST_YEAR = 2026
+private const val WEEKS = 52
+private const val MONTHS = 12
+
+/**
+ * A stand-in for the biometric-unlocked parent key: "signs" with SHA-256 over a key label and the payload, so a test
+ * can [verify] what it signed. Records every payload; with [singleUse] a second [sign] throws, like a per-use
+ * `CryptoObject`.
+ */
+class FakeParentAuthorization(private val label: String = "parent-key", private val singleUse: Boolean = false) :
+    ParentAuthorization {
+    val signed = mutableListOf<ByteArray>()
+
+    override fun sign(payload: ByteArray): ByteArray {
+        check(!singleUse || signed.isEmpty()) { "This authorisation was already used" }
+        signed += payload
+        return signatureOf(payload)
+    }
+
+    /** True if [signature] is this key's signature over [payload]. */
+    fun verify(payload: ByteArray, signature: ByteArray): Boolean = signatureOf(payload).contentEquals(signature)
+
+    private fun signatureOf(payload: ByteArray) = JvmSha256Hasher.sha256(label.encodeToByteArray() + payload)
+}
 
 /** Replaces the envelope of any event, keeping its stored hash (so the result fails verification). */
 fun LedgerEvent.mutateEnvelope(change: (Envelope) -> Envelope): LedgerEvent = withEnvelope(change(envelope))

@@ -70,6 +70,13 @@ class HashChainTest {
     }
 
     @Test
+    fun parentSignaturesDoNotAffectTheChain() {
+        val signed = stream().map { it.withParentSignature(byteArrayOf(7)).withSignature(byteArrayOf(9)) }
+        assertIs<ChainVerification.Valid>(chain.verifyChain(signed))
+        assertEquals(stream().map { it.envelope.hash }, signed.map { chain.hashOf(it) })
+    }
+
+    @Test
     fun aGapIsAMissingPrev() {
         val events = stream()
         val result = broken(events.filterIndexed { i, _ -> i != 2 })
@@ -196,13 +203,22 @@ class HashChainTest {
             event.copy(amount = event.amount + Money(1)),
             event.copy(choreId = "other"),
             event.copy(currency = Currency.Fiat("EUR")),
+            event.copy(dueOn = event.dueOn.plusDays(1)),
         )
 
-        is AllowancePaid -> listOf(event.copy(amount = Money(1)), event.copy(scheduleId = "x"))
+        is AllowancePaid -> listOf(
+            event.copy(amount = Money(1)),
+            event.copy(scheduleId = "x"),
+            event.copy(periodKey = "2099-W01"),
+        )
 
         is ManualAdjustment -> listOf(event.copy(amount = -event.amount), event.copy(reason = "edited"))
 
-        is InterestAccrued -> listOf(event.copy(days = event.days + 1), event.copy(principal = Money(1)))
+        is InterestAccrued -> listOf(
+            event.copy(days = event.days + 1),
+            event.copy(principal = Money(1)),
+            event.copy(periodKey = "2099-01"),
+        )
 
         else -> emptyList()
     }

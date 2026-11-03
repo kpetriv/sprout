@@ -1,0 +1,48 @@
+name: Record screenshots
+
+# Records the Roborazzi goldens on a Linux x86_64 runner and uploads them as an artifact (D-M2-11,
+# docs/SCREENSHOT_TESTS.md). Run it from the Actions tab or with
+# `gh workflow run "Record screenshots" --ref <branch>`, download the artifact, review the image diff and commit it.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: record-screenshots-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  record:
+    name: Record screenshots
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c # v6.4.1
+        with:
+          cache-read-only: true
+
+      - name: Record screenshots
+        run: ./gradlew recordRoborazziDebug --no-daemon
+
+      - name: Upload screenshots
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: screenshots-linux
+          path: '**/src/test/screenshots/**'
+          if-no-files-found: error
+          retention-days: 14

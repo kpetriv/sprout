@@ -1,0 +1,17 @@
+package dev.kpetriv.sprout.core.testing.screenshot
+
+/** The fixed Robolectric environment every screenshot test renders in. Changing any of these re-records all goldens. */
+object ScreenshotDevice {
+    /**
+     * Robolectric SDK. Pinned (not "latest") so a Robolectric upgrade cannot silently change the rendering.
+     * SDK 36 sandboxes need Java 21; the build runs on 17.
+     */
+    const val SDK = 35
+
+    /**
+     * A Pixel 7 (411 x 914 dp at 420 dpi, so 1080 x 2400 px) in British English, portrait, light mode.
+     * Same values as Roborazzi's `RobolectricDeviceQualifiers.Pixel7`, plus the locale.
+     * Tests whose content scrolls can make the window taller with `@Config(qualifiers = "+h1400dp")`.
+     */
+    const val PIXEL_7 = "en-rGB-w411dp-h914dp-normal-long-notround-any-420dpi-keyshidden-nonav"
+}

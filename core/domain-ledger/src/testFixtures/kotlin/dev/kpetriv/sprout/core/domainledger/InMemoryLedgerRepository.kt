@@ -12,12 +12,17 @@ import kotlinx.coroutines.flow.map
  *
  * Projections always fold every stored event (all kids), so an eventId reused across kids is still a conflict, and
  * reads filter the result per kid.
+ *
+ * @param policy used for validation and every projection (for example [LedgerPolicy.requireParentSignature]).
  */
-class InMemoryLedgerRepository(private val accounts: List<Account>) : LedgerRepository {
+class InMemoryLedgerRepository(
+    private val accounts: List<Account>,
+    private val policy: LedgerPolicy = LedgerPolicy(),
+) : LedgerRepository {
     private val events = MutableStateFlow(LedgerEventSet.EMPTY)
     private val chain = HashChain()
 
-    private fun projection(set: LedgerEventSet = events.value) = Ledger.project(set.sorted(), accounts)
+    private fun projection(set: LedgerEventSet = events.value) = Ledger.project(set.sorted(), accounts, policy)
 
     override fun observeBalances(kidId: KidId): Flow<List<Balance>> = events.map { set ->
         val ids = accounts.filter { it.kidId == kidId }.map { it.id }.toSet()

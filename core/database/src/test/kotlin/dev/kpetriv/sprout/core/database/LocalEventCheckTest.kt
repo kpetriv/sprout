@@ -49,7 +49,7 @@ class LocalEventCheckTest {
     private fun chore(author: EventAuthor = localAuthor, amount: Long = 100, lamport: Long = 0): LedgerEvent =
         LedgerEventFactory(clock, LamportClock(start = lamport), Fixtures.seededIds(lamport.toInt()))
             .create(author, Fixtures.kid, Fixtures.main.id, headHash = null) {
-                ChoreRewarded(it, Fixtures.gbp, Money(amount), "c")
+                ChoreRewarded(it, Fixtures.gbp, Money(amount), "c$lamport", Fixtures.today)
             }
 
     private suspend fun signedLocally(event: LedgerEvent) = event.withSignature(signer.sign(event.signedPayload()))

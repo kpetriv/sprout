@@ -22,8 +22,12 @@ room {
 
 dependencies {
     api(projects.core.domainLedger)
+    // Chores, rewards, allowance, savings and their planners (M2); repositories expose these models.
+    api(projects.core.domainHousehold)
     api(projects.core.model)
     implementation(projects.core.crypto)
+    // The IO dispatcher qualifier for the photo store's file work.
+    implementation(projects.core.common)
 
     implementation(libs.androidx.room.runtime)
     ksp(libs.androidx.room.compiler)

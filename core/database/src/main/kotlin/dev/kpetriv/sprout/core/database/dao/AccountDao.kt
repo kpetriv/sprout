@@ -5,6 +5,8 @@ import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.Query
 import dev.kpetriv.sprout.core.database.entity.AccountEntity
+import dev.kpetriv.sprout.core.model.AccountId
+import dev.kpetriv.sprout.core.model.CalendarDate
 import dev.kpetriv.sprout.core.model.KidId
 import kotlinx.coroutines.flow.Flow
 
@@ -23,4 +25,11 @@ interface AccountDao {
     /** Every account of every kid in the household. */
     @Query("SELECT * FROM accounts")
     suspend fun all(): List<AccountEntity>
+
+    @Query("SELECT * FROM accounts WHERE accountId = :accountId")
+    suspend fun get(accountId: AccountId): AccountEntity?
+
+    /** Interest bookkeeping of a SAVINGS account; see [AccountEntity.lastAccruedOn]. */
+    @Query("UPDATE accounts SET lastAccruedOn = :lastAccruedOn WHERE accountId = :accountId")
+    suspend fun setLastAccruedOn(accountId: AccountId, lastAccruedOn: CalendarDate): Int
 }

@@ -7,8 +7,10 @@ import dev.kpetriv.sprout.core.domainledger.EventId
 import dev.kpetriv.sprout.core.domainledger.Fixtures
 import dev.kpetriv.sprout.core.domainledger.LedgerAnomaly
 import dev.kpetriv.sprout.core.domainledger.Money
+import dev.kpetriv.sprout.core.domainledger.PeriodClaim
 import dev.kpetriv.sprout.core.domainledger.Violation
 import dev.kpetriv.sprout.core.model.AccountId
+import dev.kpetriv.sprout.core.model.CalendarDate
 import dev.kpetriv.sprout.core.model.KidId
 import dev.kpetriv.sprout.core.model.Role
 import kotlin.test.Test
@@ -44,6 +46,18 @@ class AnomalyMapperTest {
         Violation.TimeBankAlreadyRunning,
         Violation.TimeBankEmpty,
         Violation.TimeBankNotRunning,
+        Violation.ParentSignatureMissing("AllowancePaid"),
+        Violation.InvalidPeriodKey,
+        Violation.DuplicatePeriod(PeriodClaim.Allowance(KidId("a"), "2026-W45", Currency.Minutes), claimedBy = eventA),
+        Violation.DuplicatePeriod(
+            PeriodClaim.Chore(KidId("a"), "dishes", CalendarDate(2026, 11, 2), Currency.Fiat("GBP")),
+            claimedBy = eventA,
+        ),
+        Violation.DuplicatePeriod(PeriodClaim.Interest(account, "2026-11"), claimedBy = eventB),
+        Violation.GrantNotFound(eventA),
+        Violation.GrantRewardMismatch(eventA),
+        Violation.GrantMinutesMismatch(eventA, expected = Money(30), actual = Money(45)),
+        Violation.GrantAlreadyCredited(eventA, creditedBy = eventB),
     )
 
     @Test

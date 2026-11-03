@@ -6,6 +6,7 @@ import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import dev.kpetriv.sprout.core.domainledger.AccountKind
 import dev.kpetriv.sprout.core.domainledger.Currency
+import dev.kpetriv.sprout.core.ui.AmountDirection
 import dev.kpetriv.sprout.core.ui.AmountInputError
 
 /** Decorative glyph for a history row; the title carries the meaning for accessibility. */
@@ -32,6 +33,15 @@ internal val EventCategory.titleRes: Int
         EventCategory.INTEREST -> R.string.feature_wallet_event_interest
         EventCategory.SCREEN_TIME -> R.string.feature_wallet_event_screen_time
         EventCategory.ADJUSTMENT -> R.string.feature_wallet_event_adjustment
+    }
+
+/** Row title: [EventCategory.titleRes], except that screen time credited (a reward's minutes) reads "Screen time". */
+@get:StringRes
+internal val EventUi.titleRes: Int
+    get() = if (category == EventCategory.SCREEN_TIME && direction == AmountDirection.IN) {
+        R.string.feature_wallet_event_screen_time_added
+    } else {
+        category.titleRes
     }
 
 @get:StringRes
@@ -65,6 +75,9 @@ internal fun AdjustmentError.message(): String = when (this) {
     AdjustmentError.NotAllowed -> stringResource(R.string.feature_wallet_not_allowed)
     AdjustmentError.NoAccount -> stringResource(R.string.feature_wallet_no_account)
     AdjustmentError.Conflict -> stringResource(R.string.feature_wallet_adjust_conflict)
+    AdjustmentError.ParentAuthUnavailable -> stringResource(R.string.feature_wallet_adjust_auth_unavailable)
+    AdjustmentError.AuthorizationFailed -> stringResource(R.string.feature_wallet_adjust_auth_failed)
+    AdjustmentError.KeyInvalidated -> stringResource(R.string.feature_wallet_adjust_key_invalidated)
     AdjustmentError.Failed -> stringResource(R.string.feature_wallet_adjust_failed)
 }
 

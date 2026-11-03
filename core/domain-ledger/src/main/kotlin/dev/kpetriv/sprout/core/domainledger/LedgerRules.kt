@@ -14,18 +14,34 @@ import kotlin.reflect.KClass
  * - **Positive amounts.** Every amount is > 0, except [ManualAdjustment], whose signed amount must be non-zero.
  * - **Bounded amounts.** No amount (and no interest principal) exceeds [LedgerPolicy.maxAmount] in absolute value.
  * - **Parent-only authors** for [PARENT_ONLY] types: [ChoreRewarded], [AllowancePaid], [ManualAdjustment],
- *   [InterestAccrued] and [OverdraftCompensated] (THREAT_MODEL T1, T16).
+ *   [InterestAccrued] and [OverdraftCompensated], plus a manual [TimeBankCredited] (no [TimeBankCredited.grantedBy])
+ *   (THREAT_MODEL T1, T16); see [isParentOnly].
+ * - **Parent signature.** With [LedgerPolicy.requireParentSignature], every parent-only event (from
+ *   [LedgerPolicy.parentSignatureRequiredFromLamport] on, when set) carries a decodable, non-empty
+ *   [Envelope.parentSignature] ([Violation.ParentSignatureMissing]); see [requiresParentSignature]. Presence only:
+ *   the data layer verifies the signature against the parent key (ADR-0004).
  * - **Currency.** The event's [LedgerEvent.currency] equals the currency of every account it posts to; time bank
  *   events always target a [Currency.Minutes] account.
  * - **Ownership.** Every account posted to belongs to the envelope's kid.
  * - **Account kinds.** [ChoreRewarded], [AllowancePaid], [GamePlayed], [RewardPurchased] and the time bank events
- *   target a [AccountKind.MAIN] account; [TransferToSavings] goes from a MAIN account to a different
- *   [AccountKind.SAVINGS] account; [InterestAccrued] targets a SAVINGS account. [ManualAdjustment] and
- *   [OverdraftCompensated] may target either.
+ *   (including [TimeBankCredited]) target a [AccountKind.MAIN] account; [TransferToSavings] goes from a MAIN
+ *   account to a different [AccountKind.SAVINGS] account; [InterestAccrued] targets a SAVINGS account.
+ *   [ManualAdjustment] and [OverdraftCompensated] may target either.
  * - **Interest.** [InterestAccrued.amount] equals [InterestCalculator.accrue] of its recorded terms.
- * - **Text.** Adjustment reasons, time bank session ids and compensation causes are not blank/empty; reasons and
- *   notes are at most [MAX_TEXT_LENGTH] characters; no string holds an unpaired surrogate (it has no UTF-8 form, so
- *   the event could not be hashed or signed).
+ * - **Text.** Adjustment reasons, time bank session ids, chore ids, credited reward ids and compensation causes
+ *   are not blank/empty; reasons and notes are at most [MAX_TEXT_LENGTH] characters; no string holds an unpaired
+ *   surrogate (it has no UTF-8 form, so the event could not be hashed or signed).
+ * - **Period keys.** [AllowancePaid.periodKey] and [InterestAccrued.periodKey] are [PeriodKeys.isValid].
+ * - **Granted minutes.** A [RewardPurchased.minutesGranted], when present, is positive and within the amount bound.
+ *
+ * History rules (against what was applied before the event, in total order; checked at local validation **and**
+ * when projecting merged streams, where a violating event is excluded and reported as
+ * [LedgerAnomaly.InvalidEvent]):
+ * - **One payment per period.** At most one applied event per [PeriodClaim] ([Violation.DuplicatePeriod]).
+ * - **Reward-referenced time credits.** A [TimeBankCredited] with a [TimeBankCredited.grantedBy] needs an applied
+ *   [RewardPurchased] of the same kid with that id and a [RewardPurchased.minutesGranted]
+ *   ([Violation.GrantNotFound]), the same reward id ([Violation.GrantRewardMismatch]), exactly that many minutes
+ *   ([Violation.GrantMinutesMismatch]), and no earlier credit for that purchase ([Violation.GrantAlreadyCredited]).
  *
  * Stateful rules (against the [Projection] before the event; only at local validation time, and only once the
  * static rules pass):
@@ -47,7 +63,10 @@ object LedgerRules {
     /** Longest [ManualAdjustment.reason] or [OverdraftCompensated.note], in UTF-16 code units. */
     const val MAX_TEXT_LENGTH: Int = 200
 
-    /** Event types only a [Role.PARENT] may author. */
+    /**
+     * Event types only a [Role.PARENT] may author, whatever their content. A [TimeBankCredited] is parent-only only
+     * when it is a manual grant; use [isParentOnly] to decide for a given event.
+     */
     val PARENT_ONLY: Set<KClass<out LedgerEvent>> = setOf(
         ChoreRewarded::class,
         AllowancePaid::class,
@@ -69,7 +88,10 @@ object LedgerRules {
                 projectionBefore.balances,
                 requireKnownAccounts = true,
                 policy = projectionBefore.policy,
-            ).ifEmpty { statefulViolations(event, projectionBefore) }
+            ).ifEmpty {
+                historyViolations(event, projectionBefore.rewardGrants, projectionBefore.claimedPeriods) +
+                    statefulViolations(event, projectionBefore)
+            }
         } catch (expected: ArithmeticException) {
             listOf(Violation.Overflow)
         }
@@ -90,8 +112,11 @@ object LedgerRules {
         addAll(amountViolations(event, policy.maxAmount))
         addAll(contentViolations(event))
         addAll(textViolations(event))
-        if (event::class in PARENT_ONLY && event.envelope.authorRole != Role.PARENT) {
+        if (event.isParentOnly() && event.envelope.authorRole != Role.PARENT) {
             add(Violation.ParentOnly(event::class.simpleName.orEmpty(), event.envelope.authorRole))
+        }
+        if (event.requiresParentSignature(policy) && event.parentSignatureBytes()?.isNotEmpty() != true) {
+            add(Violation.ParentSignatureMissing(event::class.simpleName.orEmpty()))
         }
         for (accountId in event.touchedAccounts()) {
             val account = accounts[accountId]
@@ -114,6 +139,9 @@ object LedgerRules {
         // max is positive, so -max cannot overflow; comparing never does.
         if (amount > max || amount < -max) add(Violation.AmountTooLarge(amount, max))
         if (event is InterestAccrued && event.principal > max) add(Violation.AmountTooLarge(event.principal, max))
+        val granted = (event as? RewardPurchased)?.minutesGranted ?: return@buildList
+        if (!granted.isPositive) add(Violation.NonPositiveAmount(granted))
+        if (granted > max) add(Violation.AmountTooLarge(granted, max))
     }
 
     private fun contentViolations(event: LedgerEvent): List<Violation> = when (event) {
@@ -128,10 +156,19 @@ object LedgerRules {
         is TransferToSavings ->
             listOfNotNull(Violation.SameAccountTransfer.takeIf { event.toAccountId == event.envelope.accountId })
 
-        is InterestAccrued -> interestViolations(event)
+        is InterestAccrued -> periodKeyViolations(event.periodKey) + interestViolations(event)
+
+        is AllowancePaid -> periodKeyViolations(event.periodKey)
+
+        is ChoreRewarded -> listOfNotNull(Violation.BlankText("choreId").takeIf { event.choreId.isBlank() })
+
+        is TimeBankCredited -> listOfNotNull(Violation.BlankText("rewardId").takeIf { event.rewardId.isBlank() })
 
         else -> emptyList()
     }
+
+    private fun periodKeyViolations(periodKey: String): List<Violation> =
+        listOfNotNull(Violation.InvalidPeriodKey.takeUnless { PeriodKeys.isValid(periodKey) })
 
     private fun interestViolations(event: InterestAccrued): List<Violation> = when {
         event.annualRateBasisPoints < 0 || event.days <= 0 || event.principal.isNegative ->
@@ -173,9 +210,11 @@ object LedgerRules {
     /** Reference strings (catalogue, schedule, game and session ids), by field name. */
     private fun referencesOf(event: LedgerEvent): Map<String, String> = when (event) {
         is ChoreRewarded -> mapOf("choreId" to event.choreId)
-        is AllowancePaid -> mapOf("scheduleId" to event.scheduleId)
+        is AllowancePaid -> mapOf("scheduleId" to event.scheduleId, "periodKey" to event.periodKey)
+        is InterestAccrued -> mapOf("periodKey" to event.periodKey)
         is GamePlayed -> mapOf("gameId" to event.gameId)
         is RewardPurchased -> mapOf("rewardId" to event.rewardId)
+        is TimeBankCredited -> mapOf("rewardId" to event.rewardId)
         is TimeBankStarted -> mapOf("sessionId" to event.sessionId)
         is TimeBankStopped -> mapOf("sessionId" to event.sessionId)
         else -> emptyMap()
@@ -201,10 +240,37 @@ object LedgerRules {
         is InterestAccrued -> AccountKind.SAVINGS
 
         is ChoreRewarded, is AllowancePaid, is GamePlayed, is RewardPurchased, is TimeBankStarted,
-        is TimeBankStopped,
+        is TimeBankStopped, is TimeBankCredited,
         -> AccountKind.MAIN
 
         is ManualAdjustment, is OverdraftCompensated -> null
+    }
+
+    /**
+     * The history rules: period uniqueness and reward-referenced time credits, against the [grants] and [claims]
+     * applied before [event]. Shared by [validate] and projection, so both decide identically. Never throws.
+     */
+    internal fun historyViolations(
+        event: LedgerEvent,
+        grants: Map<EventId, RewardGrant>,
+        claims: Map<PeriodClaim, EventId>,
+    ): List<Violation> = buildList {
+        event.periodClaim()?.let { claim ->
+            claims[claim]?.let { add(Violation.DuplicatePeriod(claim, claimedBy = it)) }
+        }
+        val grantedBy = (event as? TimeBankCredited)?.grantedBy ?: return@buildList
+        val grant = grants[grantedBy]?.takeIf { it.kidId == event.envelope.kidId }
+        when {
+            grant == null -> add(Violation.GrantNotFound(grantedBy))
+
+            else -> {
+                if (grant.rewardId != event.rewardId) add(Violation.GrantRewardMismatch(grantedBy))
+                if (grant.minutes != event.minutes) {
+                    add(Violation.GrantMinutesMismatch(grantedBy, expected = grant.minutes, actual = event.minutes))
+                }
+                grant.creditedBy?.let { add(Violation.GrantAlreadyCredited(grantedBy, creditedBy = it)) }
+            }
+        }
     }
 
     private fun currencyMismatch(balance: Balance, event: LedgerEvent) =
@@ -311,6 +377,30 @@ sealed interface Violation {
     data class InterestMismatch(val expected: Money, val actual: Money) : Violation
 
     data class ParentOnly(val eventType: String, val authorRole: Role) : Violation
+
+    /**
+     * A parent-only [eventType] has no (decodable, non-empty) [Envelope.parentSignature] although
+     * [LedgerPolicy.requireParentSignature] is set.
+     */
+    data class ParentSignatureMissing(val eventType: String) : Violation
+
+    /** [AllowancePaid.periodKey] or [InterestAccrued.periodKey] is not [PeriodKeys.isValid]. */
+    data object InvalidPeriodKey : Violation
+
+    /** Another applied event, [claimedBy], already holds [claim]: this period was already paid. */
+    data class DuplicatePeriod(val claim: PeriodClaim, val claimedBy: EventId) : Violation
+
+    /** [grantedBy] is not an applied screen-time [RewardPurchased] of this kid. */
+    data class GrantNotFound(val grantedBy: EventId) : Violation
+
+    /** The credit names a different reward than the purchase [grantedBy]. */
+    data class GrantRewardMismatch(val grantedBy: EventId) : Violation
+
+    /** The credit's minutes ([actual]) differ from the purchase's [RewardPurchased.minutesGranted] ([expected]). */
+    data class GrantMinutesMismatch(val grantedBy: EventId, val expected: Money, val actual: Money) : Violation
+
+    /** The purchase [grantedBy] was already redeemed by the credit [creditedBy]. */
+    data class GrantAlreadyCredited(val grantedBy: EventId, val creditedBy: EventId) : Violation
 
     data class UnknownAccount(val accountId: AccountId) : Violation
 

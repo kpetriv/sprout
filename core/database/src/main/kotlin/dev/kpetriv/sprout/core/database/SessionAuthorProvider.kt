@@ -5,6 +5,7 @@ import dev.kpetriv.sprout.core.domainledger.EventAuthor
 import dev.kpetriv.sprout.core.domainledger.toHex
 import dev.kpetriv.sprout.core.model.DeviceId
 import dev.kpetriv.sprout.core.model.HouseholdId
+import dev.kpetriv.sprout.core.model.KidId
 import dev.kpetriv.sprout.core.model.Role
 import dev.kpetriv.sprout.core.model.UserId
 import kotlinx.coroutines.sync.Mutex
@@ -15,6 +16,12 @@ import javax.inject.Singleton
 /** Who is writing right now: household, user, role and this device. */
 interface SessionAuthorProvider {
     suspend fun currentAuthor(): EventAuthor
+
+    /**
+     * The author of what [kidId] does on this device in kid mode: [currentAuthor]'s household and device with role
+     * [Role.KID] and the kid's own user id. TEMPORARY until kid devices sign in (M3): the uid is the kid id.
+     */
+    suspend fun kidAuthor(kidId: KidId): EventAuthor = currentAuthor().copy(uid = UserId(kidId.value), role = Role.KID)
 }
 
 /**

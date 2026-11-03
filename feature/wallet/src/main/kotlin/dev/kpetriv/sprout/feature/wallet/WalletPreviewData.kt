@@ -12,6 +12,7 @@ import dev.kpetriv.sprout.core.model.YearMonth
 import dev.kpetriv.sprout.core.ui.AmountDirection
 import dev.kpetriv.sprout.core.ui.BalanceJarDefaults
 import dev.kpetriv.sprout.core.ui.MoneyFormatter
+import dev.kpetriv.sprout.core.ui.SavingsStarsDefaults
 import java.util.Locale
 import kotlin.time.Instant
 
@@ -26,6 +27,7 @@ internal object WalletPreviewData {
     private const val SAVINGS_MINOR = 1_250L
     private const val GOAL_MINOR = 4_000L
     private const val INTEREST_MINOR = 12L
+    private const val GOAL_TITLE = "a new bike"
     private val now = Instant.fromEpochMilliseconds(1_793_000_000_000L)
 
     private val names = mapOf(
@@ -113,6 +115,8 @@ internal object WalletPreviewData {
                 savedText = formatter.formatForTier(Money(SAVINGS_MINOR), gbp, tier),
                 targetText = formatter.formatForTier(Money(GOAL_MINOR), gbp, tier),
                 progress = SAVINGS_MINOR.toFloat() / GOAL_MINOR,
+                title = GOAL_TITLE,
+                stars = SavingsStarsDefaults.filledStars(SAVINGS_MINOR, GOAL_MINOR),
             ),
             events = if (filter == null) tierEvents else tierEvents.filter { it.category == filter },
             filter = filter,

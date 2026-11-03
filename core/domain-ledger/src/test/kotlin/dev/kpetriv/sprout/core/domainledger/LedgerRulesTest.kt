@@ -5,8 +5,10 @@ import dev.kpetriv.sprout.core.model.KidId
 import dev.kpetriv.sprout.core.model.Role
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertIs
+import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 
 class LedgerRulesTest {
@@ -65,13 +67,237 @@ class LedgerRulesTest {
             kid.adjust(10),
             kid.interest(10),
             kid.compensate(10, listOf(kid.game(1).eventId)),
+            kid.timeCredit(10), // a manual grant: no purchase to authorise it
         )
         for (event in kidAuthored) {
+            assertTrue(event.isParentOnly(), event.toString())
             val violation = violations(event).filterIsInstance<Violation.ParentOnly>().single()
             assertEquals(Role.KID, violation.authorRole)
             assertEquals(event::class.simpleName, violation.eventType)
         }
-        assertEquals(LedgerRules.PARENT_ONLY, kidAuthored.map { it::class }.toSet())
+        assertEquals(LedgerRules.PARENT_ONLY + TimeBankCredited::class, kidAuthored.map { it::class }.toSet())
+        assertFalse(kid.timeCredit(10, grantedBy = kid.screenTime(5, 10)).isParentOnly())
+    }
+
+    @Test
+    fun parentSignaturesAreRequiredOnlyWhenThePolicySaysSo() {
+        val signing = DeviceWriter(Fixtures.parentTablet, parentKey = FakeParentAuthorization())
+        val required = Projection.empty(Fixtures.accounts, LedgerPolicy(requireParentSignature = true))
+            .apply(signing.chore(500))
+        assertEquals(Money(500), required.balanceOf(Fixtures.main.id))
+        val unsigned = listOf(parent.allowance(10), parent.adjust(5), parent.interest(1), parent.timeCredit(5))
+        for (event in unsigned) {
+            assertTrue(event.requiresParentSignature(required.policy))
+            assertFalse(event.requiresParentSignature(LedgerPolicy()))
+            assertEquals(
+                listOf(Violation.ParentSignatureMissing(event::class.simpleName.orEmpty())),
+                violations(event, required),
+            )
+            // Without the policy the same event is fine.
+            assertEquals(emptyList(), violations(event))
+        }
+        for (event in listOf(signing.allowance(10), signing.adjust(5), signing.interest(1), signing.timeCredit(5))) {
+            assertEquals(emptyList(), violations(event, required), event.toString())
+        }
+        // Kid events, and reward-referenced credits, need none.
+        val purchase = kid.screenTime(100, 30)
+        assertEquals(emptyList(), violations(purchase, required))
+        assertEquals(emptyList(), violations(kid.timeCredit(30, purchase), required.apply(purchase)))
+        assertFalse(kid.purchase(1).requiresParentSignature(required.policy))
+        // A malformed or empty signature counts as missing.
+        val chore = signing.chore(5)
+        for (bad in listOf("not base64!", "")) {
+            assertEquals(
+                listOf(Violation.ParentSignatureMissing("ChoreRewarded")),
+                violations(chore.mutateEnvelope { it.copy(parentSignature = bad) }, required),
+                bad,
+            )
+        }
+        // Projection excludes unsigned parent-only events under the same policy.
+        val projected = Ledger.project(listOf(parent.chore(10), signing.chore(20)), Fixtures.accounts, required.policy)
+        assertEquals(Money(20), projected.balanceOf(Fixtures.main.id))
+        assertIs<Violation.ParentSignatureMissing>(
+            assertIs<LedgerAnomaly.InvalidEvent>(projected.anomalies.single()).violations.single(),
+        )
+    }
+
+    @Test
+    fun parentSignaturesAreRequiredOnlyFromTheConfiguredLamport() {
+        val early = parent.allowance(10)
+        val late = parent.allowance(20)
+        val policy = LedgerPolicy(requireParentSignature = true, parentSignatureRequiredFromLamport = late.lamport)
+        assertFalse(early.requiresParentSignature(policy))
+        assertTrue(late.requiresParentSignature(policy))
+        val before = Projection.empty(Fixtures.accounts, policy)
+        assertEquals(ValidationResult.Valid, LedgerRules.validate(early, before))
+        assertEquals(
+            listOf(Violation.ParentSignatureMissing("AllowancePaid")),
+            violations(late, before.apply(early)),
+        )
+        // A from-lamport without requireParentSignature requires nothing.
+        assertFalse(late.requiresParentSignature(LedgerPolicy(parentSignatureRequiredFromLamport = 0)))
+        // Projection applies the same cut-off: the early unsigned event counts, the late one is excluded.
+        val projected = Ledger.project(listOf(early, late), Fixtures.accounts, policy)
+        assertEquals(Money(10), projected.balanceOf(Fixtures.main.id))
+        assertEquals(late.eventId, assertIs<LedgerAnomaly.InvalidEvent>(projected.anomalies.single()).eventId)
+        assertFailsWith<IllegalArgumentException> { LedgerPolicy(parentSignatureRequiredFromLamport = -1) }
+    }
+
+    @Test
+    fun aKidMayCreditMinutesForItsOwnScreenTimePurchase() {
+        val before = funded(parent.chore(500))
+        val purchase = kid.screenTime(cost = 200, minutes = 30)
+        val bought = before.apply(purchase)
+        assertEquals(
+            RewardGrant(purchase.eventId, Fixtures.kid, "screen-time", Money(30), creditedBy = null),
+            bought.rewardGrants[purchase.eventId],
+        )
+        val credit = kid.timeCredit(30, grantedBy = purchase)
+        assertEquals(emptyList(), violations(credit, bought))
+        val credited = bought.apply(credit)
+        assertEquals(Money(30), credited.balanceOf(Fixtures.minutes.id))
+        assertEquals(credit.eventId, credited.rewardGrants.getValue(purchase.eventId).creditedBy)
+        // A second credit for the same purchase is refused.
+        assertEquals(
+            listOf(Violation.GrantAlreadyCredited(purchase.eventId, creditedBy = credit.eventId)),
+            violations(kid.timeCredit(30, grantedBy = purchase), credited),
+        )
+    }
+
+    @Test
+    fun aCreditWithTheWrongMinutesOrRewardIsRejected() {
+        val purchase = kid.screenTime(cost = 200, minutes = 30)
+        val bought = funded(parent.chore(500), purchase)
+        assertEquals(
+            listOf(Violation.GrantMinutesMismatch(purchase.eventId, expected = Money(30), actual = Money(300))),
+            violations(kid.timeCredit(300, grantedBy = purchase), bought),
+        )
+        assertEquals(
+            listOf(Violation.GrantRewardMismatch(purchase.eventId)),
+            violations(kid.timeCredit(30, grantedBy = purchase, rewardId = "movie-night"), bought),
+        )
+    }
+
+    @Test
+    fun aCreditWithoutAValidPurchaseIsRejected() {
+        val ordinary = kid.purchase(10)
+        val elsewhere = kid.screenTime(cost = 10, minutes = 30)
+        val before = funded(parent.chore(500), ordinary)
+        // Never applied here.
+        assertEquals(
+            listOf(Violation.GrantNotFound(elsewhere.eventId)),
+            violations(kid.timeCredit(30, grantedBy = elsewhere), before),
+        )
+        // Applied, but grants no minutes.
+        val noMinutes = kid.write(Fixtures.minutes) { TimeBankCredited(it, Money(30), ordinary.eventId, "sticker") }
+        assertEquals(listOf(Violation.GrantNotFound(ordinary.eventId)), violations(noMinutes, before))
+        // Another kid's purchase does not authorise this kid's credit.
+        val otherKid = KidId("kid-2")
+        val otherMain = Account(AccountId("main-2"), otherKid, Fixtures.gbp, AccountKind.MAIN)
+        val otherPurchase = kid.write(otherMain) {
+            RewardPurchased(it, Fixtures.gbp, Money(1), "screen-time", Money(30))
+        }
+        val withOther = Projection.empty(Fixtures.accounts + otherMain)
+            .apply(listOf(parent.chore(5, otherMain), otherPurchase))
+        assertEquals(
+            listOf(Violation.GrantNotFound(otherPurchase.eventId)),
+            violations(kid.timeCredit(30, grantedBy = otherPurchase), withOther),
+        )
+    }
+
+    @Test
+    fun aParentMayGrantMinutesManually() {
+        val manual = parent.timeCredit(45)
+        assertEquals(emptyList(), violations(manual))
+        assertEquals(Money(45), funded(manual).balanceOf(Fixtures.minutes.id))
+        assertEquals(
+            listOf(Violation.CurrencyMismatch(Fixtures.main.id, Fixtures.gbp, Currency.Minutes)),
+            violations(parent.write(Fixtures.main) { TimeBankCredited(it, Money(5), null, "screen-time") }),
+        )
+        assertEquals(listOf(Violation.NonPositiveAmount(Money(0))), violations(parent.timeCredit(0)))
+        assertEquals(listOf(Violation.BlankText("rewardId")), violations(parent.timeCredit(5, rewardId = " ")))
+    }
+
+    @Test
+    fun grantedMinutesArePositiveAndBounded() {
+        val before = funded(parent.chore(500))
+        assertEquals(listOf(Violation.NonPositiveAmount(Money(0))), violations(kid.screenTime(5, 0), before))
+        val max = LedgerPolicy.DEFAULT_MAX_AMOUNT
+        assertEquals(
+            listOf(Violation.AmountTooLarge(max + Money(1), max)),
+            violations(kid.screenTime(5, max.minorUnits + 1), before),
+        )
+    }
+
+    @Test
+    fun eachPeriodIsPaidOnce() {
+        val allowance = parent.allowance(100, periodKey = "2026-W45")
+        val chore = parent.chore(50, choreId = "dishes")
+        val minutesChore = parent.chore(10, Fixtures.minutes, choreId = "dishes")
+        val interest = parent.interest(2, periodKey = "2026-11")
+        val before = funded(allowance, chore, minutesChore, interest)
+        assertEquals(
+            mapOf(
+                PeriodClaim.Allowance(Fixtures.kid, "2026-W45", Fixtures.gbp) to allowance.eventId,
+                PeriodClaim.Chore(Fixtures.kid, "dishes", Fixtures.today, Fixtures.gbp) to chore.eventId,
+                PeriodClaim.Chore(Fixtures.kid, "dishes", Fixtures.today, Currency.Minutes) to minutesChore.eventId,
+                PeriodClaim.Interest(Fixtures.savings.id, "2026-11") to interest.eventId,
+            ),
+            before.claimedPeriods,
+        )
+        val tablet = DeviceWriter(Fixtures.parentTablet)
+        val repeats = listOf(
+            tablet.allowance(100, periodKey = "2026-W45") to allowance,
+            tablet.chore(50, choreId = "dishes") to chore,
+            tablet.chore(10, Fixtures.minutes, choreId = "dishes") to minutesChore,
+            tablet.interest(2, periodKey = "2026-11") to interest,
+        )
+        for ((repeat, original) in repeats) {
+            assertEquals(
+                listOf(Violation.DuplicatePeriod(assertNotNull(repeat.periodClaim()), claimedBy = original.eventId)),
+                violations(repeat, before),
+            )
+        }
+        // Another period, chore, date or account is a new claim.
+        assertEquals(emptyList(), violations(tablet.allowance(100, periodKey = "2026-W46"), before))
+        assertEquals(emptyList(), violations(tablet.allowance(100, periodKey = "2026-11"), before))
+        assertEquals(emptyList(), violations(tablet.chore(50, choreId = "bins"), before))
+        val tomorrow = Fixtures.today.plusDays(1)
+        assertEquals(emptyList(), violations(tablet.chore(50, choreId = "dishes", dueOn = tomorrow), before))
+        assertEquals(emptyList(), violations(tablet.interest(2, periodKey = "2026-12"), before))
+        // A minutes allowance for the same week is a different claim from the money one.
+        val minutesAllowance = tablet.write(Fixtures.minutes) {
+            AllowancePaid(it, Currency.Minutes, Money(30), "weekly-minutes", "2026-W45")
+        }
+        assertEquals(PeriodClaim.Allowance(Fixtures.kid, "2026-W45", Currency.Minutes), minutesAllowance.periodClaim())
+        assertEquals(emptyList(), violations(minutesAllowance, before))
+        // Merged offline: the later duplicate in total order is excluded and reported.
+        val merged = Ledger.project(listOf(repeats.first().first, allowance), Fixtures.accounts)
+        assertEquals(Money(100), merged.balanceOf(Fixtures.main.id))
+        val invalid = assertIs<LedgerAnomaly.InvalidEvent>(merged.anomalies.single())
+        assertEquals(repeats.first().first.eventId, invalid.eventId)
+        assertIs<Violation.DuplicatePeriod>(invalid.violations.single())
+    }
+
+    @Test
+    fun periodKeysAreWeeksOrMonths() {
+        for (good in listOf("2026-W01", "2026-W53", "2026-01", "2026-12", "0000-W10")) {
+            assertTrue(PeriodKeys.isValid(good), good)
+            assertEquals(emptyList(), violations(parent.allowance(5, periodKey = good)), good)
+        }
+        val malformed = listOf(
+            "", "2026", "2026-W00", "2026-W54", "2026-00", "2026-13", "26-11", "2026-w45", "2026-W5", "2026-11-02",
+        )
+        for (bad in malformed) {
+            assertFalse(PeriodKeys.isValid(bad), bad)
+            assertEquals(listOf(Violation.InvalidPeriodKey), violations(parent.allowance(5, periodKey = bad)), bad)
+            assertTrue(Violation.InvalidPeriodKey in violations(parent.interest(5, periodKey = bad)), bad)
+        }
+        assertEquals("2026-W05", PeriodKeys.weekly(2026, 5))
+        assertEquals("2026-11", PeriodKeys.monthly(2026, 11))
+        assertFailsWith<IllegalArgumentException> { PeriodKeys.weekly(2026, 54) }
+        assertFailsWith<IllegalArgumentException> { PeriodKeys.monthly(10_000, 1) }
+        assertEquals(listOf(Violation.BlankText("choreId")), violations(parent.chore(5, choreId = " ")))
     }
 
     @Test
@@ -120,7 +346,9 @@ class LedgerRulesTest {
 
     @Test
     fun currencyMustMatchTheAccount() {
-        val eurChore = parent.write(Fixtures.main) { ChoreRewarded(it, Currency.Fiat("EUR"), Money(5), "c") }
+        val eurChore = parent.write(Fixtures.main) {
+            ChoreRewarded(it, Currency.Fiat("EUR"), Money(5), "c", Fixtures.today)
+        }
         assertEquals(
             listOf(Violation.CurrencyMismatch(Fixtures.main.id, Fixtures.gbp, Currency.Fiat("EUR"))),
             violations(eurChore),
@@ -142,7 +370,7 @@ class LedgerRulesTest {
             violations(parent.chore(5, stranger).mutateEnvelope { it.copy(kidId = Fixtures.kid) }, withStranger),
         )
         val interestOnMain = parent.write(Fixtures.main) {
-            InterestAccrued(it, Fixtures.gbp, Money(1), Money(20), 500, 365)
+            InterestAccrued(it, Fixtures.gbp, Money(1), Money(20), 500, 365, "2026-11")
         }
         assertEquals(
             listOf(Violation.WrongAccountKind(Fixtures.main.id, AccountKind.SAVINGS, AccountKind.MAIN)),
@@ -174,7 +402,7 @@ class LedgerRulesTest {
         val before = Projection.empty(Fixtures.accounts + savingsMinutes)
         val onSavings = listOf(
             parent.chore(5, Fixtures.savings),
-            parent.write(Fixtures.savings) { AllowancePaid(it, Fixtures.gbp, Money(5), "weekly") },
+            parent.write(Fixtures.savings) { AllowancePaid(it, Fixtures.gbp, Money(5), "weekly", "2026-W45") },
             kid.game(5, account = Fixtures.savings),
             kid.purchase(5, Fixtures.savings),
         )
@@ -210,19 +438,28 @@ class LedgerRulesTest {
         val before = funded()
         assertEquals(emptyList(), violations(parent.interest(7), before))
         val wrong = parent.write(Fixtures.savings) {
-            InterestAccrued(it, Fixtures.gbp, Money(500), Money(1_000), 500, 30)
+            InterestAccrued(it, Fixtures.gbp, Money(500), Money(1_000), 500, 30, "2026-11")
         }
         assertEquals(listOf(Violation.InterestMismatch(Money(4), Money(500))), violations(wrong, before))
         val rounded = parent.write(Fixtures.savings) {
-            InterestAccrued(it, Fixtures.gbp, InterestCalculator.accrue(Money(1_000), 500, 30), Money(1_000), 500, 30)
+            val accrued = InterestCalculator.accrue(Money(1_000), 500, 30)
+            InterestAccrued(it, Fixtures.gbp, accrued, Money(1_000), 500, 30, "2026-12")
         }
         assertEquals(emptyList(), violations(rounded, before))
         val overflowing = parent.write(Fixtures.savings) {
-            InterestAccrued(it, Fixtures.gbp, Money(1), Money(1_000_000_000_000), Int.MAX_VALUE, Int.MAX_VALUE)
+            InterestAccrued(
+                it,
+                Fixtures.gbp,
+                Money(1),
+                Money(1_000_000_000_000),
+                Int.MAX_VALUE,
+                Int.MAX_VALUE,
+                "2027-01",
+            )
         }
         assertEquals(listOf(Violation.Overflow), violations(overflowing, before))
         val hugePrincipal = parent.write(Fixtures.savings) {
-            InterestAccrued(it, Fixtures.gbp, Money(1), Money(1_000_000_000_001), 1, 1)
+            InterestAccrued(it, Fixtures.gbp, Money(1), Money(1_000_000_000_001), 1, 1, "2027-02")
         }
         assertTrue(
             Violation.AmountTooLarge(Money(1_000_000_000_001), LedgerPolicy.DEFAULT_MAX_AMOUNT) in
@@ -298,7 +535,7 @@ class LedgerRulesTest {
         assertEquals(listOf(Violation.TextTooLong("note", LedgerRules.MAX_TEXT_LENGTH)), violations(longNote))
         assertEquals(emptyList(), violations(note.copy(note = null)))
         val refs = listOf(
-            ChoreRewarded(chore.envelope, Fixtures.gbp, Money(1), "x\uD800") to "choreId",
+            ChoreRewarded(chore.envelope, Fixtures.gbp, Money(1), "x\uD800", Fixtures.today) to "choreId",
             TimeBankStarted(chore.envelope.copy(accountId = Fixtures.minutes.id), "x\uD800") to "sessionId",
         )
         for ((event, field) in refs) assertTrue(Violation.InvalidText(field) in violations(event), field)
