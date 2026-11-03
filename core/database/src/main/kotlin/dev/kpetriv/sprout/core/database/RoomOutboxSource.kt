@@ -1,9 +1,9 @@
 package dev.kpetriv.sprout.core.database
 
 import androidx.room.withTransaction
+import dev.kpetriv.sprout.core.database.dao.OutboxHead
 import dev.kpetriv.sprout.core.database.entity.AuditAction
 import dev.kpetriv.sprout.core.database.entity.AuditLogEntity
-import dev.kpetriv.sprout.core.database.entity.OutboxEntity
 import dev.kpetriv.sprout.core.database.entity.OutboxKind
 import dev.kpetriv.sprout.core.domainledger.LedgerJson
 import dev.kpetriv.sprout.core.domainledger.chat.BlobJson
@@ -32,7 +32,10 @@ import kotlin.time.Instant
 /**
  * [OutboxSource] over the `outbox` table, **head of line** (D-M3-15): [due] reads rows in `seq` order and stops at the
  * first one whose `nextAttemptAtEpochMs` is after now, so an item waiting for its backoff holds back everything
- * queued after it and push order stays write order (a device's events form a hash chain).
+ * queued after it and push order stays write order (a device's events form a hash chain). Rows are read without their
+ * bytes; a blob chunk's bytes are loaded for that item only, and one call returns at most [MAX_CHUNKS_PER_BATCH]
+ * chunks (review M5: at most 1.4 MB of chunk data in memory per batch). The rest follow in the next sync, which the
+ * outbox trigger requests as soon as the acks leave a due head.
  *
  * A `LEDGER_EVENT` row becomes [OutboxItem.event] with its `LedgerJson` tree; a `DOCUMENT` row [OutboxItem.document]
  * with its signed envelope; a `MESSAGE` row [OutboxItem.message] with its signed `MessageJson` tree; a `BLOB_CHUNK` row
@@ -49,8 +52,11 @@ class RoomOutboxSource @Inject constructor(private val database: SproutDatabase,
     override suspend fun due(nowEpochMs: Long, limit: Int): List<OutboxItem> {
         require(limit > 0) { "limit must be positive" }
         val items = ArrayList<OutboxItem>(limit)
+        var chunks = 0
         for (row in outbox.head(limit)) {
-            if (row.nextAttemptAtEpochMs > nowEpochMs) break
+            val isChunk = row.kind == OutboxKind.BLOB_CHUNK
+            if (row.nextAttemptAtEpochMs > nowEpochMs || (isChunk && chunks == MAX_CHUNKS_PER_BATCH)) break
+            if (isChunk) chunks++
             val item = itemOf(row)
             if (item == null) drop(row) else items += item
         }
@@ -80,27 +86,15 @@ class RoomOutboxSource @Inject constructor(private val database: SproutDatabase,
     }
 
     /**
-     * The ledger event holding the outbox back (D-M3-33), for the dashboard's "sync blocked" state: the lowest queued
-     * `seq` with a blocking `SYNC_REJECTED` audit row ([auditRejections]), the latest code it was refused with, and
-     * when it was first refused. Null when nothing blocks; it clears as soon as the event is accepted (its row is
-     * acked) or removed.
+     * The item holding the outbox back (D-M3-33), for the dashboard's "sync blocked" state and the chat's "sending
+     * is blocked": the lowest queued `seq` of a kind that [blocks on refusal][OutboxItem.Kind.blocksOnRefusal] (a
+     * ledger event, a chat message or a blob chunk) with a blocking `SYNC_REJECTED` audit row ([auditRejections]), the
+     * latest code it was refused with, and when it was first refused. Null when nothing blocks; it clears as soon as
+     * the item is accepted (its row is acked) or removed (a discarded message, D-M4-19).
      */
-    fun observeBlocked(): Flow<BlockedPush?> = combine(
-        outbox.observeSeqs(OutboxKind.LEDGER_EVENT),
-        audit.observeAction(AuditAction.SYNC_REJECTED),
-    ) { seqs, rows ->
-        val queued = seqs.toHashSet()
-        val blocking = rows.mapNotNull { row -> blockingRejectionOf(row)?.takeIf { it.seq in queued } }
-        val seq = blocking.minOfOrNull { it.seq } ?: return@combine null
-        val forSeq = blocking.filter { it.seq == seq }
-        BlockedPush(
-            seq = seq,
-            code = forSeq.last().code,
-            since = Instant.fromEpochMilliseconds(forSeq.minOf { it.atEpochMs }),
-        )
-    }.distinctUntilChanged()
+    fun observeBlocked(): Flow<BlockedPush?> = observeBlockedPush(database)
 
-    private fun itemOf(row: OutboxEntity): OutboxItem? = when (row.kind) {
+    private suspend fun itemOf(row: OutboxHead): OutboxItem? = when (row.kind) {
         OutboxKind.LEDGER_EVENT -> parseObjectOrNull(row.payload)?.let { OutboxItem.event(row.seq, it, row.attempts) }
 
         OutboxKind.DOCUMENT -> DocumentJsonCodec.decodeOrNull(row.payload)
@@ -113,7 +107,7 @@ class RoomOutboxSource @Inject constructor(private val database: SproutDatabase,
 
         OutboxKind.BLOB_CHUNK -> {
             val header = parseObjectOrNull(row.payload)
-            val data = row.data
+            val data = outbox.dataOf(row.seq)
             if (header != null && data != null && BlobJson.decodeOrNull(header)?.signature != null) {
                 OutboxItem.blobChunk(row.seq, BlobChunkJson(header, data), row.attempts)
             } else {
@@ -122,7 +116,7 @@ class RoomOutboxSource @Inject constructor(private val database: SproutDatabase,
         }
     }
 
-    private suspend fun drop(row: OutboxEntity) {
+    private suspend fun drop(row: OutboxHead) {
         database.withTransaction {
             outbox.delete(row.seq)
             audit(row.refId, encode(buildJsonObject { put(CODE, UNDECODABLE) }))
@@ -143,17 +137,6 @@ class RoomOutboxSource @Inject constructor(private val database: SproutDatabase,
         )
     }
 
-    /** One blocking refusal read back from the audit log. */
-    private class BlockingRejection(val seq: Long, val code: String, val atEpochMs: Long)
-
-    private fun blockingRejectionOf(row: AuditLogEntity): BlockingRejection? {
-        val details = parseObjectOrNull(row.detailsJson) ?: return null
-        val blocking = (details[BLOCKING] as? JsonPrimitive)?.booleanOrNull == true
-        val seq = (details[SEQ] as? JsonPrimitive)?.takeUnless { it.isString }?.longOrNull
-        val code = (details[CODE] as? JsonPrimitive)?.takeIf { it.isString }?.content
-        return if (blocking && seq != null && code != null) BlockingRejection(seq, code, row.atEpochMs) else null
-    }
-
     private fun parseObjectOrNull(text: String): JsonObject? = try {
         LedgerJson.json.parseToJsonElement(text) as? JsonObject
     } catch (expected: IllegalArgumentException) {
@@ -163,6 +146,9 @@ class RoomOutboxSource @Inject constructor(private val database: SproutDatabase,
     companion object {
         /** `SYNC_REJECTED` code of an outbox row whose payload cannot be decoded (never sendable). */
         const val UNDECODABLE: String = "undecodable"
+
+        /** Most blob chunks one [due] call returns (review M5). */
+        const val MAX_CHUNKS_PER_BATCH: Int = 2
 
         private const val UNKNOWN_DEVICE = "unknown"
         private const val CODE = "code"
@@ -184,7 +170,63 @@ class RoomOutboxSource @Inject constructor(private val database: SproutDatabase,
 }
 
 /**
- * A ledger event the backend refused for good and that holds back the outbox (D-M3-33): its outbox [seq], the
- * server's latest [code] for it, and [since] when it was first refused. The dashboard shows "sync blocked".
+ * An item the backend refused for good and that holds back the outbox (D-M3-33): its outbox [seq], the server's
+ * latest [code] for it, [since] when it was first refused, and which row it is ([kind], [refId]: an event id, a
+ * message id, `"<blobId>.<chunk>"`). The dashboard shows "sync blocked"; a chat message (or the blob of one) shows
+ * "sending is blocked" with Discard.
  */
-data class BlockedPush(val seq: Long, val code: String, val since: Instant)
+data class BlockedPush(
+    val seq: Long,
+    val code: String,
+    val since: Instant,
+    val kind: OutboxKind = OutboxKind.LEDGER_EVENT,
+    val refId: String = "",
+)
+
+/** One blocking refusal read back from the audit log. */
+internal class BlockingRejection(val seq: Long, val code: String, val atEpochMs: Long)
+
+/** The blocking refusal recorded in [row] (`SYNC_REJECTED` details `{code, seq, blocking: true}`), or null. */
+internal fun blockingRejectionOf(row: AuditLogEntity): BlockingRejection? {
+    val details = try {
+        LedgerJson.json.parseToJsonElement(row.detailsJson) as? JsonObject
+    } catch (expected: IllegalArgumentException) {
+        null
+    } ?: return null
+    val blocking = (details["blocking"] as? JsonPrimitive)?.booleanOrNull == true
+    val seq = (details["seq"] as? JsonPrimitive)?.takeUnless { it.isString }?.longOrNull
+    val code = (details["code"] as? JsonPrimitive)?.takeIf { it.isString }?.content
+    return if (blocking && seq != null && code != null) BlockingRejection(seq, code, row.atEpochMs) else null
+}
+
+/** Kinds whose permanent refusal blocks the outbox (`OutboxItem.Kind.blocksOnRefusal`). */
+internal val BLOCKING_KINDS: List<OutboxKind> =
+    listOf(OutboxKind.LEDGER_EVENT, OutboxKind.MESSAGE, OutboxKind.BLOB_CHUNK)
+
+/** See [RoomOutboxSource.observeBlocked]. */
+internal fun observeBlockedPush(database: SproutDatabase): Flow<BlockedPush?> = combine(
+    database.outboxDao().observeHeads(BLOCKING_KINDS),
+    database.auditLogDao().observeAction(AuditAction.SYNC_REJECTED),
+    ::blockedPushOf,
+).distinctUntilChanged()
+
+/** [RoomOutboxSource.observeBlocked] now, as a one-off read (inside or outside a transaction). */
+internal suspend fun currentBlockedPush(database: SproutDatabase): BlockedPush? = blockedPushOf(
+    database.outboxDao().headsOf(BLOCKING_KINDS),
+    database.auditLogDao().withAction(AuditAction.SYNC_REJECTED),
+)
+
+private fun blockedPushOf(heads: List<OutboxHead>, rows: List<AuditLogEntity>): BlockedPush? {
+    val queued = heads.associateBy { it.seq }
+    val blocking = rows.mapNotNull { row -> blockingRejectionOf(row)?.takeIf { it.seq in queued } }
+    val seq = blocking.minOfOrNull { it.seq } ?: return null
+    val forSeq = blocking.filter { it.seq == seq }
+    val head = queued.getValue(seq)
+    return BlockedPush(
+        seq = seq,
+        code = forSeq.last().code,
+        since = Instant.fromEpochMilliseconds(forSeq.minOf { it.atEpochMs }),
+        kind = head.kind,
+        refId = head.refId,
+    )
+}

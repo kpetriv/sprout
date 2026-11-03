@@ -176,6 +176,14 @@ private fun MessageBubble(
         ) {
             Box(modifier = Modifier.padding(12.dp)) { BubbleContent(message, playing, onEvent) }
         }
+        if (message.fromParentPhone) {
+            Text(
+                text = stringResource(R.string.feature_chat_from_parent_phone),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(horizontal = 8.dp),
+            )
+        }
         BubbleFooter(message, onEvent)
     }
 }
@@ -330,6 +338,20 @@ private fun BubbleFooter(message: MessageUi, onEvent: (ChatEvent) -> Unit) {
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
         )
+
+        SendState.BLOCKED -> Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
+        ) {
+            Text(
+                text = "⛔ " + stringResource(R.string.feature_chat_blocked),
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.error,
+            )
+            TextButton(onClick = { onEvent(ChatEvent.Discard(message.id)) }) {
+                Text(stringResource(R.string.feature_chat_discard))
+            }
+        }
 
         SendState.FAILED -> Row(
             verticalAlignment = Alignment.CenterVertically,

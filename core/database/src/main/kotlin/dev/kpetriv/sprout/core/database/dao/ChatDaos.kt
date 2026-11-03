@@ -6,6 +6,7 @@ import androidx.room.OnConflictStrategy
 import androidx.room.Query
 import androidx.room.Upsert
 import dev.kpetriv.sprout.core.database.entity.BlobEntity
+import dev.kpetriv.sprout.core.database.entity.ChoreSubmissionEntity
 import dev.kpetriv.sprout.core.database.entity.KidEntity
 import dev.kpetriv.sprout.core.database.entity.MessageEntity
 import dev.kpetriv.sprout.core.database.entity.MessageSeqEntity
@@ -94,6 +95,15 @@ interface MessageDao {
     )
     suspend fun heldAt(author: DeviceId, threadId: String, seq: Long): Int
 
+    /** The stored (not held) message of [author] at [seq] in [threadId], quarantined ones included. */
+    @Query(
+        """
+        SELECT * FROM messages WHERE status != 'HELD' AND authorDeviceId = :author AND threadId = :threadId
+        AND seq = :seq LIMIT 1
+        """,
+    )
+    suspend fun storedAt(author: DeviceId, threadId: String, seq: Long): MessageEntity?
+
     @Query("SELECT * FROM message_seq WHERE threadId = :threadId AND authorDeviceId = :author")
     suspend fun seq(threadId: String, author: DeviceId): MessageSeqEntity?
 
@@ -142,6 +152,13 @@ interface ThreadKeyDao {
     @Query("SELECT * FROM thread_keys WHERE key IS NULL")
     suspend fun withoutKey(): List<ThreadKeyEntity>
 
+    /** This device's own documents the server has not confirmed yet ([ThreadKeyEntity.confirmed]). */
+    @Query("SELECT * FROM thread_keys WHERE createdByDeviceId = :self AND confirmed = 0")
+    suspend fun unconfirmed(self: DeviceId): List<ThreadKeyEntity>
+
+    @Query("DELETE FROM thread_keys WHERE threadId = :threadId AND epoch = :epoch AND createdByDeviceId = :creator")
+    suspend fun delete(threadId: String, epoch: Long, creator: DeviceId): Int
+
     @Query("SELECT * FROM thread_keys ORDER BY threadId, epoch")
     suspend fun all(): List<ThreadKeyEntity>
 
@@ -188,14 +205,22 @@ interface ChatHouseholdDao {
     @Query("SELECT * FROM kids WHERE archived = 0 AND deleted = 0 ORDER BY birthYearMonth, kidId")
     fun observeActiveKids(): Flow<List<KidEntity>>
 
+    /** Whether kid [kidId] is archived (false while it is unknown); re-emits when that changes. */
+    @Query("SELECT COUNT(*) > 0 FROM kids WHERE kidId = :kidId AND archived = 1")
+    fun observeArchived(kidId: String): Flow<Boolean>
+
+    /** The submission whose uploaded photo is blob [blobId] (D-M4-15), for the photo's expected binding. */
+    @Query("SELECT * FROM chore_submissions WHERE photoBlobId = :blobId LIMIT 1")
+    suspend fun submissionWithBlob(blobId: String): ChoreSubmissionEntity?
+
     /**
-     * Photos attached to a submission that is still waiting for a decision and not yet queued as a blob (M4 §2,
-     * D-M2-3): what the chore photo upload sends.
+     * Photos that are the current photo of a submission still waiting for a decision and not yet queued as a blob
+     * (M4 §2, D-M2-3): what the chore photo upload sends. A photo the kid replaced is never uploaded.
      */
     @Query(
         """
         SELECT p.* FROM photos p JOIN chore_submissions s ON s.submissionId = p.submissionId
-        WHERE p.blobId IS NULL AND s.status = 'SUBMITTED' AND s.deleted = 0
+        WHERE p.blobId IS NULL AND s.status = 'SUBMITTED' AND s.deleted = 0 AND s.photoFileName = p.fileName
         ORDER BY p.createdAtEpochMs, p.fileName
         """,
     )

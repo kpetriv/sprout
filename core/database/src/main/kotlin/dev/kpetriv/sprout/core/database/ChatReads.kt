@@ -1,16 +1,15 @@
 package dev.kpetriv.sprout.core.database
 
 import androidx.room.withTransaction
+import dev.kpetriv.sprout.core.database.dao.OutboxHead
 import dev.kpetriv.sprout.core.database.entity.MessageEntity
 import dev.kpetriv.sprout.core.database.entity.MessageStatus
-import dev.kpetriv.sprout.core.database.entity.OutboxEntity
 import dev.kpetriv.sprout.core.database.entity.OutboxKind
 import dev.kpetriv.sprout.core.database.entity.ReadMarkEntity
 import dev.kpetriv.sprout.core.domainledger.SignatureCheck
 import dev.kpetriv.sprout.core.domainledger.chat.MessageKind
 import dev.kpetriv.sprout.core.domainledger.chat.MessagePlaintext
 import dev.kpetriv.sprout.core.domainledger.chat.MessagePlaintextCodec
-import dev.kpetriv.sprout.core.domainledger.chat.ThreadKeyPolicy
 import dev.kpetriv.sprout.core.domainledger.chat.ThreadMembers
 import dev.kpetriv.sprout.core.model.BlobId
 import dev.kpetriv.sprout.core.model.DeviceId
@@ -36,6 +35,12 @@ enum class MessageSendState {
 
     /** Still queued after [MessageReader.FAILED_AFTER_ATTEMPTS] failed attempts; [MessageWrites.retry] retries. */
     FAILED,
+
+    /**
+     * The server refused it (or its blob) for good and it holds back the outbox ([RoomOutboxSource.observeBlocked]):
+     * "sending is blocked"; [MessageWrites.discard] removes it (D-M4-19).
+     */
+    BLOCKED,
 }
 
 /**
@@ -44,6 +49,11 @@ enum class MessageSendState {
  * @property content the decrypted content; null while [locked].
  * @property locked no key of its epoch on this device yet ("waiting for a parent device").
  * @property fromThisDevice written on this device ([MessageStatus.SENT_LOCAL]).
+ * @property createdAt the time to show: the signed `createdAt`, never earlier than the author's previous message
+ *   (audit M4).
+ * @property authorDeviceRole the role the registry gives the author device (a KID-role message from a PARENT device was
+ *   written in kid mode on a parent's phone, D-M3-12); null when the device is not in the registry mirror.
+ * @property late accepted after its `seq` gap had been skipped (audit L3).
  */
 @Suppress("LongParameterList") // One field per envelope fact the screens show.
 class StoredMessage(
@@ -60,6 +70,8 @@ class StoredMessage(
     val locked: Boolean,
     val fromThisDevice: Boolean,
     val sendState: MessageSendState,
+    val authorDeviceRole: Role? = null,
+    val late: Boolean = false,
 ) {
     override fun toString(): String =
         "StoredMessage(messageId=$messageId, threadId=$threadId, kind=$kind, locked=$locked, sendState=$sendState)"
@@ -93,15 +105,18 @@ class MessageReader @Inject constructor(private val database: SproutDatabase) {
      * The newest [limit] visible messages of [threadId] (RECEIVED, LOCKED and this device's own), oldest first,
      * ordered by lamport (then author device and seq); re-emits on every change, including send states.
      */
-    @OptIn(ExperimentalCoroutinesApi::class)
     fun observe(threadId: ThreadId, limit: Int = DEFAULT_LIMIT): Flow<MessagePage> {
         require(limit > 0) { "limit must be positive" }
         return combine(
             database.messageDao().observeNewest(threadId.value, limit + 1),
             database.outboxDao().observeKind(OutboxKind.MESSAGE),
-        ) { rows, queued ->
+            observeBlockedPush(database),
+            database.deviceDao().observeAll(),
+        ) { rows, queued, blocked, devices ->
             val pending = queued.associateBy { it.refId }
-            MessagePage(rows.take(limit).reversed().map { it.toStored(pending) }, rows.size > limit)
+            val roles = devices.associate { it.deviceId to it.role }
+            val page = rows.take(limit).reversed().map { it.toStored(pending, blocked, roles) }
+            MessagePage(page, rows.size > limit)
         }.distinctUntilChanged { old, new -> old.sameAs(new) }
     }
 
@@ -114,7 +129,8 @@ class MessageReader @Inject constructor(private val database: SproutDatabase) {
         private fun MessagePage.sameAs(other: MessagePage): Boolean = hasMore == other.hasMore &&
             messages.size == other.messages.size &&
             messages.zip(other.messages).all { (a, b) ->
-                a.messageId == b.messageId && a.locked == b.locked && a.sendState == b.sendState
+                a.messageId == b.messageId && a.locked == b.locked && a.sendState == b.sendState &&
+                    a.authorDeviceRole == b.authorDeviceRole && a.createdAt == b.createdAt
             }
     }
 }
@@ -141,7 +157,11 @@ class ChatThreads @Inject constructor(private val database: SproutDatabase) {
                     kidName = kid.firstName,
                     avatarId = kid.avatarId,
                     unreadCount = unreadByThread[kid.kidId.value] ?: 0,
-                    lastMessage = latestByThread[kid.kidId.value]?.toStored(pending),
+                    lastMessage = latestByThread[kid.kidId.value]?.toStored(
+                        pending,
+                        blocked = null,
+                        roles = emptyMap(),
+                    ),
                 )
             }
         }
@@ -157,8 +177,9 @@ class ChatThreads @Inject constructor(private val database: SproutDatabase) {
 }
 
 /**
- * Whether this device can send in a thread (M4 §1.2): the latest epoch's key is here and its wrap set holds no
- * device that must not have it. False means "waiting for a parent device".
+ * Whether this device can send in a thread (M4 §1.2, review H2): the latest epoch's key this device would send with
+ * is here (its own only once the server confirmed it) and no latest wrap set holds a device that must not have it,
+ * the kid's archiving included. False means "waiting for a parent device". The same rule as `MessageWrites`.
  */
 class ThreadKeyStatusReader @Inject constructor(
     private val database: SproutDatabase,
@@ -168,22 +189,29 @@ class ThreadKeyStatusReader @Inject constructor(
         database.threadKeyDao().observeThread(threadId.value),
         database.deviceDao().observeAll(),
         database.sessionDao().observe(),
-    ) { rows, devices, session ->
-        val latest = ThreadKeyStore.latestOf(rows)?.let(ThreadKeyStore::documentOf)
-        if (session == null || latest == null) {
+        database.chatHouseholdDao().observeArchived(threadId.value),
+    ) { rows, devices, session, archived ->
+        if (session == null) {
             false
         } else {
-            val archived = database.isArchivedKid(threadId)
             val membership = ThreadMembers.resolve(threadId, devices.map { it.toRegistered() }, check, archived)
-            val held = rows.filter { it.key != null }.mapTo(HashSet()) { it.epoch }
-            ThreadKeyPolicy.sendingEpoch(latest, held, membership.excluded) != null
+            ThreadKeyStore.sendable(rows, session.deviceId, membership.excluded) != null
         }
     }.distinctUntilChanged()
 }
 
-private fun MessageEntity.toStored(pending: Map<String, OutboxEntity>): StoredMessage {
+private fun MessageEntity.toStored(
+    pending: Map<String, OutboxHead>,
+    blocked: BlockedPush?,
+    roles: Map<DeviceId, Role>,
+): StoredMessage {
     val queued = pending[messageId]
+    val isBlocked = blocked != null && status == MessageStatus.SENT_LOCAL && (
+        (blocked.kind == OutboxKind.MESSAGE && blocked.refId == messageId) ||
+            (blocked.kind == OutboxKind.BLOB_CHUNK && blobId != null && blocked.refId.startsWith("$blobId."))
+        )
     val sendState = when {
+        isBlocked -> MessageSendState.BLOCKED
         status != MessageStatus.SENT_LOCAL || queued == null -> MessageSendState.SENT
         queued.attempts >= MessageReader.FAILED_AFTER_ATTEMPTS -> MessageSendState.FAILED
         else -> MessageSendState.SENDING
@@ -196,12 +224,14 @@ private fun MessageEntity.toStored(pending: Map<String, OutboxEntity>): StoredMe
         authorDeviceId = authorDeviceId,
         authorRole = authorRole,
         kind = kind,
-        createdAt = Instant.fromEpochMilliseconds(createdAtEpochMs),
+        createdAt = Instant.fromEpochMilliseconds(displayedAtEpochMs),
         lamport = lamport,
         blobId = blobId?.let(::BlobId),
         content = content,
         locked = content == null,
         fromThisDevice = status == MessageStatus.SENT_LOCAL,
         sendState = sendState,
+        authorDeviceRole = roles[authorDeviceId],
+        late = late,
     )
 }

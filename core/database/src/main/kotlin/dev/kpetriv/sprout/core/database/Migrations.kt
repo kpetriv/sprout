@@ -83,23 +83,26 @@ object Migrations {
         "ALTER TABLE `devices` ADD COLUMN `encryptionKey` BLOB",
         "ALTER TABLE `devices` ADD COLUMN `encryptionKeySignature` BLOB",
         "ALTER TABLE `devices` ADD COLUMN `encryptionKeyHouseholdId` TEXT",
+        "ALTER TABLE `devices` ADD COLUMN `encryptionKeyConflict` INTEGER NOT NULL DEFAULT 0",
         "CREATE TABLE IF NOT EXISTS `messages` (`messageId` TEXT NOT NULL, `householdId` TEXT NOT NULL, " +
             "`threadId` TEXT NOT NULL, `authorUid` TEXT NOT NULL, `authorDeviceId` TEXT NOT NULL, " +
             "`authorRole` TEXT NOT NULL, `seq` INTEGER NOT NULL, `lamport` INTEGER NOT NULL, " +
             "`createdAtEpochMs` INTEGER NOT NULL, `epoch` INTEGER NOT NULL, `kind` TEXT NOT NULL, " +
             "`ciphertext` TEXT NOT NULL, `blobId` TEXT, `signature` TEXT, `schemaVersion` INTEGER NOT NULL, " +
             "`plaintext` BLOB, `status` TEXT NOT NULL, `reason` TEXT, `receivedAtEpochMs` INTEGER NOT NULL, " +
-            "PRIMARY KEY(`messageId`))",
+            "`displayedAtEpochMs` INTEGER NOT NULL, `late` INTEGER NOT NULL, PRIMARY KEY(`messageId`))",
         "CREATE INDEX IF NOT EXISTS `index_messages_threadId_lamport` ON `messages` (`threadId`, `lamport`)",
         "CREATE INDEX IF NOT EXISTS `index_messages_authorDeviceId_threadId_seq` " +
             "ON `messages` (`authorDeviceId`, `threadId`, `seq`)",
         "CREATE INDEX IF NOT EXISTS `index_messages_status` ON `messages` (`status`)",
         "CREATE TABLE IF NOT EXISTS `message_seq` (`threadId` TEXT NOT NULL, `authorDeviceId` TEXT NOT NULL, " +
-            "`nextSeq` INTEGER NOT NULL, PRIMARY KEY(`threadId`, `authorDeviceId`))",
+            "`nextSeq` INTEGER NOT NULL, `lastLamport` INTEGER NOT NULL, `lastDisplayedAtEpochMs` INTEGER NOT NULL, " +
+            "`skippedRanges` TEXT NOT NULL, PRIMARY KEY(`threadId`, `authorDeviceId`))",
         "CREATE TABLE IF NOT EXISTS `thread_keys` (`threadId` TEXT NOT NULL, `epoch` INTEGER NOT NULL, " +
             "`createdByDeviceId` TEXT NOT NULL, `key` BLOB, `sourceDocId` TEXT NOT NULL, " +
             "`wrapSetJson` TEXT NOT NULL, `lamport` INTEGER NOT NULL, `authorUid` TEXT NOT NULL, `signature` TEXT, " +
-            "`receivedAtEpochMs` INTEGER NOT NULL, PRIMARY KEY(`threadId`, `epoch`, `createdByDeviceId`))",
+            "`receivedAtEpochMs` INTEGER NOT NULL, `confirmed` INTEGER NOT NULL, `olderKeys` BLOB, " +
+            "PRIMARY KEY(`threadId`, `epoch`, `createdByDeviceId`))",
         "CREATE TABLE IF NOT EXISTS `blobs` (`blobId` TEXT NOT NULL, `fileName` TEXT NOT NULL, " +
             "`sha256` TEXT NOT NULL, `size` INTEGER NOT NULL, `contextJson` TEXT NOT NULL, " +
             "`lastUsedEpochMs` INTEGER NOT NULL, PRIMARY KEY(`blobId`))",

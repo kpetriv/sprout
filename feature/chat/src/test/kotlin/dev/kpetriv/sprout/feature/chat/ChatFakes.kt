@@ -31,8 +31,16 @@ object ChatTestData {
     fun text(id: String, text: String, direction: MessageDirection = MessageDirection.THEIRS, minute: Int = 0) =
         ChatMessage(id, direction, MessageKind.TEXT, start + minute.minutes, text = text, authorName = "Leo")
 
-    fun photo(id: String, blobId: String) =
-        ChatMessage(id, MessageDirection.THEIRS, MessageKind.PHOTO, start, blobId = blobId)
+    fun photo(id: String, blobId: String, author: String = "kid-device", sha256: String = "ab".repeat(32)) =
+        ChatMessage(
+            id,
+            MessageDirection.THEIRS,
+            MessageKind.PHOTO,
+            start,
+            blobId = blobId,
+            authorDeviceId = author,
+            photoSha256 = sha256,
+        )
 
     fun voice(id: String, blobId: String) =
         ChatMessage(id, MessageDirection.THEIRS, MessageKind.VOICE, start, durationMs = 4_000, blobId = blobId)
@@ -70,6 +78,7 @@ class FakeMessageReader : MessageReader {
 class FakeMessageSender : MessageSender {
     val sent = mutableListOf<OutgoingMessage>()
     val retried = mutableListOf<String>()
+    val discarded = mutableListOf<String>()
     var result: Result<Unit> = Result.success(Unit)
     var gate: CompletableDeferred<Unit>? = null
 
@@ -83,6 +92,11 @@ class FakeMessageSender : MessageSender {
         retried += messageId
         return result
     }
+
+    override suspend fun discard(threadId: KidId, messageId: String): Result<Unit> {
+        discarded += messageId
+        return result
+    }
 }
 
 class FakeKeyStatus(initial: ThreadKeyState = ThreadKeyState.USABLE) : ThreadKeyStatus {
@@ -94,9 +108,11 @@ class FakeKeyStatus(initial: ThreadKeyState = ThreadKeyState.USABLE) : ThreadKey
 class FakeBlobLoader : BlobLoader {
     val blobs = mutableMapOf<String, ByteArray>()
     val loads = mutableListOf<String>()
+    val expectations = mutableListOf<BlobExpectation>()
 
-    override suspend fun load(blobId: String): Result<ByteArray> {
+    override suspend fun load(blobId: String, expected: BlobExpectation): Result<ByteArray> {
         loads += blobId
+        expectations += expected
         return blobs[blobId]?.let { Result.success(it) } ?: Result.failure(IllegalStateException("missing"))
     }
 }

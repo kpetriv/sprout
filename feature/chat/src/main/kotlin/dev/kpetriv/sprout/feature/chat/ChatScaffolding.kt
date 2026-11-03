@@ -111,5 +111,6 @@ internal fun noticeText(notice: ChatNotice): String = stringResource(
         ChatNotice.PLAYBACK_FAILED -> R.string.feature_chat_notice_playback_failed
         ChatNotice.PHOTO_FAILED -> R.string.feature_chat_notice_photo_failed
         ChatNotice.RETRY_FAILED -> R.string.feature_chat_notice_retry_failed
+        ChatNotice.DISCARD_FAILED -> R.string.feature_chat_notice_discard_failed
     },
 )

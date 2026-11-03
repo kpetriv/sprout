@@ -16,6 +16,7 @@ import dev.kpetriv.sprout.core.crypto.JceX25519KeyAgreement
 import dev.kpetriv.sprout.core.crypto.ParentSigner
 import dev.kpetriv.sprout.core.crypto.SecretStoreEncryptionKeyStore
 import dev.kpetriv.sprout.core.crypto.WrappedSecretStore
+import dev.kpetriv.sprout.core.crypto.X25519KeyAgreement
 import dev.kpetriv.sprout.core.crypto.chat.BlobCipher
 import dev.kpetriv.sprout.core.crypto.chat.MessageCipher
 import dev.kpetriv.sprout.core.crypto.chat.ThreadKeyring
@@ -75,6 +76,9 @@ import kotlin.time.Instant
  * [Session.localTrial]); pass `sessionFor` to sign the household in as a real PARENT or KID session. Two instances
  * with distinct key stores and sessions of one household, wired to `SyncEngine`s over one `FakeBackend`, are two
  * devices of that household.
+ *
+ * [agreement] is this device's X25519 implementation: JCE by default (API 33+), or Tink's pure-Java one (the API 28-32
+ * fallback, D-M4-1) to pair the two in one test.
  */
 @Suppress("LongParameterList", "TooManyFunctions") // One field per repository and use case of the data layer.
 class TestHousehold(
@@ -82,6 +86,7 @@ class TestHousehold(
     val clock: FakeClock = FakeClock(DEFAULT_START),
     val keyStore: DeviceKeyStore = InMemoryDeviceKeyStore(clock),
     sessionFor: (DeviceId) -> Session = { Session.localTrial(it, clock.now()) },
+    agreement: (SecureRandom) -> X25519KeyAgreement = ::JceX25519KeyAgreement,
 ) : AutoCloseable {
     val database: SproutDatabase = inMemoryDatabase(context)
     val gbp = Currency.Fiat("GBP")
@@ -103,9 +108,9 @@ class TestHousehold(
         WrappedSecretStore(InMemoryKeyWrapper(), InMemoryBlobStorage(), random, Dispatchers.Unconfined)
 
     /** This device's X25519 chat key (`chat.x25519.v1`), in memory. */
-    val encryptionKeys: EncryptionKeyStore = SecretStoreEncryptionKeyStore(secretStore, JceX25519KeyAgreement(random))
+    val encryptionKeys: EncryptionKeyStore = SecretStoreEncryptionKeyStore(secretStore, agreement(random))
     val chatCrypto = ChatCrypto(
-        ThreadKeyring(JceX25519KeyAgreement(random), HouseholdKeyDerivation(), aead, random),
+        ThreadKeyring(agreement(random), HouseholdKeyDerivation(), aead, random),
         MessageCipher(aead),
         BlobCipher(aead),
         encryptionKeys,
@@ -170,7 +175,7 @@ class TestHousehold(
     val reconcileTimeBank = ReconcileTimeBankUseCase(ledger, timeBankStatus, writer, sessions, clock)
 
     val photoUploads = PendingPhotoUploads(database)
-    val uploadChorePhotos = UploadChorePhotosUseCase(photoUploads, photos, blobWrites)
+    val uploadChorePhotos = UploadChorePhotosUseCase(photoUploads, photos, blobWrites, chores, authors)
     val sweepOrphanPhotos = SweepOrphanPhotosUseCase(database, photos, clock)
 
     init {
@@ -221,6 +226,17 @@ class TestHousehold(
         val publicKey = encryptionKeys.publicKey().bytes
         val signature = signer.sign(EncryptionKeyBindingPayload.of(session.householdId, deviceId, publicKey))
         return BoundEncryptionKey(session.householdId, publicKey, signature)
+    }
+
+    /**
+     * Stands in for the server accepting this device's thread key documents (review H2): marks every key it published
+     * confirmed, as its own copy coming back in a pull or [ThreadKeyWrites.settle] after the push would. Tests that do
+     * not run a sync engine call it after [threadKeyMaintenance] before sending.
+     */
+    suspend fun confirmThreadKeys() {
+        database.threadKeyDao().all().filterNot { it.confirmed }.forEach {
+            database.threadKeyDao().upsert(it.withConfirmed(true))
+        }
     }
 
     override fun close() {

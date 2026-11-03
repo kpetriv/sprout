@@ -41,13 +41,16 @@ class BoundEncryptionKey(val householdId: HouseholdId, publicKey: ByteArray, sig
     val signature: ByteArray get() = sig.copyOf()
 
     /**
-     * True only if the key is 32 bytes and [signature] verifies over [EncryptionKeyBindingPayload.of] for
+     * True only if the key is 32 bytes, is not a small-order point ([X25519SmallOrder], audit L1: every agreement
+     * with it would give a fixed shared secret), and [signature] verifies over [EncryptionKeyBindingPayload.of] for
      * ([householdId], [deviceId], [publicKey]) against [devicePublicKey] (the registered SPKI DER device key).
      * Never throws: a malformed key or a [SignatureCheck] that throws counts as "does not verify".
      */
     @Suppress("TooGenericExceptionCaught") // A third-party SignatureCheck must not crash registry reads.
     fun verify(check: SignatureCheck, deviceId: DeviceId, devicePublicKey: ByteArray): Boolean {
-        if (key.size != EncryptionKeyBindingPayload.KEY_SIZE || sig.isEmpty()) return false
+        val usable = key.size == EncryptionKeyBindingPayload.KEY_SIZE && sig.isNotEmpty() &&
+            !X25519SmallOrder.isSmallOrder(key)
+        if (!usable) return false
         return try {
             check.verify(devicePublicKey, EncryptionKeyBindingPayload.of(householdId, deviceId, key), sig)
         } catch (expected: Exception) {
@@ -71,4 +74,36 @@ class BoundEncryptionKey(val householdId: HouseholdId, publicKey: ByteArray, sig
             }
         }
     }
+}
+
+/**
+ * The X25519 public keys of small order (RFC 7748 §7, the blocklist libsodium uses), compared with the unused top bit
+ * cleared: an agreement with any of them yields a shared secret that does not depend on the private key (often all
+ * zero). A registered encryption key must never be one of them.
+ */
+object X25519SmallOrder {
+    private const val TOP_BIT_MASK = 0x7f
+    private const val LAST = EncryptionKeyBindingPayload.KEY_SIZE - 1
+
+    private val BLOCKLIST: List<ByteArray> = listOf(
+        "0000000000000000000000000000000000000000000000000000000000000000",
+        "0100000000000000000000000000000000000000000000000000000000000000",
+        "e0eb7a7c3b41b8ae1656e3faf19fc46ada098deb9c32b1fd866205165f49b800",
+        "5f9c95bca3508c24b1d0b1559c83ef5b04445cc4581c8e86d8224eddd09f1157",
+        "ecffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+        "edffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+        "eeffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f",
+    ).map(::hexToBytes)
+
+    /** Whether [key] (32 raw bytes) is a small-order point; false for any other length. */
+    fun isSmallOrder(key: ByteArray): Boolean {
+        if (key.size != EncryptionKeyBindingPayload.KEY_SIZE) return false
+        val masked = key.copyOf().also { it[LAST] = (it[LAST].toInt() and TOP_BIT_MASK).toByte() }
+        return BLOCKLIST.any { it.contentEquals(masked) }
+    }
+
+    private fun hexToBytes(hex: String): ByteArray =
+        ByteArray(hex.length / 2) { hex.substring(it * 2, it * 2 + 2).toInt(HEX_RADIX).toByte() }
+
+    private const val HEX_RADIX = 16
 }

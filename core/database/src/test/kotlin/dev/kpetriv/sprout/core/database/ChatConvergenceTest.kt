@@ -1,6 +1,8 @@
 package dev.kpetriv.sprout.core.database
 
+import dev.kpetriv.sprout.core.crypto.TinkX25519KeyAgreement
 import dev.kpetriv.sprout.core.database.entity.MessageStatus
+import dev.kpetriv.sprout.core.database.entity.ThreadKeyEntity
 import dev.kpetriv.sprout.core.domainledger.JvmSha256Hasher
 import dev.kpetriv.sprout.core.domainledger.LedgerJson
 import dev.kpetriv.sprout.core.domainledger.chat.ChatPhotoRef
@@ -36,7 +38,13 @@ import kotlin.test.assertTrue
 @RunWith(RobolectricTestRunner::class)
 class ChatConvergenceTest {
     private val parent = parentDevice()
-    private val kid = kidDevice()
+
+    /** The kid's phone runs Tink's X25519 (an API 28-32 device, D-M4-1); every parent runs JCE. */
+    private val kid = TestHousehold(
+        RuntimeEnvironment.getApplication(),
+        sessionFor = TestHousehold.kidSession(HOME, KID_UID, KID_X),
+        agreement = ::TinkX25519KeyAgreement,
+    )
     private val secondParent = TestHousehold(
         RuntimeEnvironment.getApplication(),
         sessionFor = TestHousehold.parentSession(HOME, "parent-2"),
@@ -67,6 +75,12 @@ class ChatConvergenceTest {
 
     private suspend fun SyncEngine.synced(): SyncReport = syncOnce().also { assertNull(it.error, it.toString()) }
 
+    /** A parent's sync as the app runs it: the sync, then the thread key upkeep (`ChatMaintenance.afterSync`). */
+    private suspend fun TestHousehold.syncWith(engine: SyncEngine): Int {
+        engine.synced()
+        return threadKeyMaintenance()
+    }
+
     /** Both devices registered with their encryption keys; the parent creates the kid and its thread's epoch 0. */
     private suspend fun household() {
         backend.registerDevice(parent.registeredWithKey())
@@ -74,7 +88,8 @@ class ChatConvergenceTest {
         parentEngine.synced()
         parent.addKid(KID_X.value)
         assertEquals(1, parent.threadKeyMaintenance())
-        parentEngine.synced()
+        // Pushed; the upkeep after that sync confirms the key (the push was accepted).
+        assertEquals(0, parent.syncWith(parentEngine))
         kidEngine.synced()
     }
 
@@ -106,7 +121,12 @@ class ChatConvergenceTest {
         assertEquals(MessagePlaintext.Preset("thank-you", "🌟"), parent.row(preset.value)?.content())
         assertEquals(MessageStatus.RECEIVED, parent.row(photoMessage.value)?.status)
         val fetched = parentTransport.fetchBlob(blobId).getOrThrow()
-        assertContentEquals(photo, parent.chatBlobs.ingest(blobId, fetched))
+        val expected = BlobExpectation(
+            BlobTarget.Thread(THREAD_X),
+            kid.deviceId,
+            JvmSha256Hasher.sha256(photo).toHex(),
+        )
+        assertContentEquals(photo, parent.chatBlobs.ingest(blobId, fetched, expected))
 
         val stored = backendText()
         for (secret in listOf("Dinner at six", "thank-you", "My drawing")) assertFalse(secret in stored, secret)
@@ -130,8 +150,8 @@ class ChatConvergenceTest {
         assertEquals(text("before"), kid.row(before.value)?.content())
 
         backend.revoke(kid.deviceId, atLamport = 10_000)
-        parentEngine.synced()
-        assertEquals(1, parent.threadKeyMaintenance())
+        assertEquals(1, parent.syncWith(parentEngine))
+        assertEquals(0, parent.syncWith(parentEngine))
         val after = parent.messageWrites.send(THREAD_X, text("after"))
         parentEngine.synced()
 
@@ -144,12 +164,77 @@ class ChatConvergenceTest {
 
         // A second parent device joins: the parent re-wraps the current epoch for it.
         backend.registerDevice(secondParent.registeredWithKey())
-        parentEngine.synced()
-        assertEquals(1, parent.threadKeyMaintenance())
+        assertEquals(1, parent.syncWith(parentEngine))
         parentEngine.synced()
         secondEngine.synced()
 
         assertEquals(text("after"), secondParent.row(after.value)?.content())
         assertEquals(MessageStatus.LOCKED, secondParent.row(before.value)?.status, "older epochs are not re-wrapped")
+    }
+
+    @Test
+    fun twoParentsRotatingAtOnceBothKeepWorkingAndNothingStaysLocked() = runTest {
+        // Two parent phones and the kid, all with keys; the first parent creates epoch 0.
+        backend.registerDevice(parent.registeredWithKey())
+        backend.registerDevice(secondParent.registeredWithKey())
+        backend.registerDevice(kid.registeredWithKey())
+        parentEngine.synced()
+        parent.addKid(KID_X.value)
+        assertEquals(1, parent.threadKeyMaintenance())
+        assertEquals(0, parent.syncWith(parentEngine))
+        secondEngine.synced()
+        kidEngine.synced()
+        assertEquals(0, secondParent.threadKeyMaintenance(), "the first key already wraps for everyone")
+
+        // A fourth device that both parents see revoked before either has seen the other's rotation.
+        val oldKid = kidDevice()
+        backend.registerDevice(oldKid.registeredWithKey())
+        assertEquals(1, parent.syncWith(parentEngine), "re-wrap of epoch 0 for the old kid phone")
+        secondEngine.synced()
+        backend.revoke(oldKid.deviceId, atLamport = 10_000)
+        parentEngine.synced()
+        secondEngine.synced()
+        assertEquals(1, parent.threadKeyMaintenance())
+        assertEquals(1, secondParent.threadKeyMaintenance())
+        val epochOne: suspend (TestHousehold) -> List<ThreadKeyEntity> =
+            { device -> device.database.threadKeyDao().all().filter { it.epoch == 1L } }
+        assertEquals(1, epochOne(parent).size)
+        assertEquals(1, epochOne(secondParent).size)
+
+        // Both push (each confirmed by its own upkeep) and each sends under its own key.
+        parent.syncWith(parentEngine)
+        secondParent.syncWith(secondEngine)
+        val fromFirst = parent.messageWrites.send(THREAD_X, text("from the first phone"))
+        val fromSecond = secondParent.messageWrites.send(THREAD_X, text("from the second phone"))
+        parent.syncWith(parentEngine)
+        secondParent.syncWith(secondEngine)
+        parent.syncWith(parentEngine)
+        kidEngine.synced()
+        val fromKid = kid.messageWrites.send(THREAD_X, text("from the kid"))
+        kidEngine.synced()
+        parent.syncWith(parentEngine)
+        secondParent.syncWith(secondEngine)
+
+        // Two documents for epoch 1, both kept everywhere; nothing stays locked and nobody rotates again.
+        assertEquals(
+            2,
+            backend.documents().count {
+                it.docType == DocTypes.THREAD_KEY &&
+                    it.docId.startsWith("${KID_X.value}.1.")
+            },
+        )
+        for (device in listOf(parent, secondParent, kid)) {
+            assertEquals(2, epochOne(device).count { it.key != null }, "both epoch 1 keys on every member")
+            assertTrue(device.database.messageDao().all().none { it.status == MessageStatus.LOCKED })
+        }
+        assertEquals(text("from the second phone"), parent.row(fromSecond.value)?.content())
+        assertEquals(text("from the first phone"), secondParent.row(fromFirst.value)?.content())
+        assertEquals(text("from the kid"), parent.row(fromKid.value)?.content())
+        assertEquals(text("from the kid"), secondParent.row(fromKid.value)?.content())
+        assertEquals(text("from the first phone"), kid.row(fromFirst.value)?.content())
+        assertEquals(text("from the second phone"), kid.row(fromSecond.value)?.content())
+        assertEquals(0, parent.threadKeyMaintenance())
+        assertEquals(0, secondParent.threadKeyMaintenance())
+        oldKid.close()
     }
 }

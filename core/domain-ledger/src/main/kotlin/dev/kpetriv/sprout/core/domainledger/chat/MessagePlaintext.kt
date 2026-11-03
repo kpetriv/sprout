@@ -125,11 +125,13 @@ object MessagePlaintextCodec {
 
     /**
      * Decodes [bytes] as the plaintext of a message of [kind]; null when they are not strict UTF-8 JSON, the key set
-     * is not exactly the kind's, or a value fails validation.
+     * is not exactly the kind's, a value fails validation, or the result has no canonical encoding (review H1: a JSON
+     * escape such as `"\ud800"` decodes to an unpaired surrogate, which [encode] cannot write). So every plaintext
+     * this returns can be encoded again: a stored message never fails to re-encode later.
      */
     fun decode(kind: MessageKind, bytes: ByteArray): MessagePlaintext? = try {
         val tree = Json.parseToJsonElement(bytes.decodeToString(throwOnInvalidSequence = true)) as? JsonObject
-        tree?.let { fromJson(kind, it) }
+        tree?.let { fromJson(kind, it) }?.also { encode(it).fill(0) }
     } catch (expected: IllegalArgumentException) {
         null
     } catch (expected: CharacterCodingException) {

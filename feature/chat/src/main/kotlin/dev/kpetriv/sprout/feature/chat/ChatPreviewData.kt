@@ -6,7 +6,7 @@ import kotlin.time.Duration.Companion.minutes
 import kotlin.time.Instant
 
 /** Fixed chat states for previews, screen tests and screenshot goldens. No real people or messages. */
-@Suppress("MagicNumber") // Fixed preview minutes.
+@Suppress("MagicNumber", "TooManyFunctions") // Fixed preview minutes; one function per previewed state.
 internal object ChatPreviewData {
     private val start = Instant.parse("2026-11-04T16:00:00Z")
     private const val VOICE_MS = 12_000L
@@ -115,4 +115,34 @@ internal object ChatPreviewData {
         draft = "You never let me do anything",
         nudge = NudgeUi("You never let me do anything", "Can we talk about it later?"),
     )
+
+    /** A parent's own messages in every send state, and a kid message written on a parent's phone. */
+    fun parentSendStates() = base(
+        ChatMode.PARENT,
+        null,
+        listOf(
+            theirs("m1", 0, "Leo", MessageKind.TEXT).copy(text = "Can I have a snack?", fromParentPhone = true),
+            mine("m2", 1, MessageKind.TEXT, SendState.SENDING).copy(text = "After homework"),
+            mine("m3", 2, MessageKind.TEXT, SendState.FAILED).copy(text = "Apple or banana?"),
+            mine("m4", 3, MessageKind.TEXT, SendState.BLOCKED).copy(text = "Bring your coat"),
+        ),
+    )
+
+    /** One photo still loading and one that could not be fetched. */
+    fun parentPhotos() = base(
+        ChatMode.PARENT,
+        null,
+        listOf(
+            theirs("m1", 0, "Leo", MessageKind.PHOTO).copy(photo = PhotoUi.Loading),
+            theirs("m2", 1, "Leo", MessageKind.PHOTO).copy(photo = PhotoUi.Unavailable, text = "My drawing"),
+        ),
+    )
+
+    /** A voice note playing: in Seedling, Dad's; in the other tiers, the last one. */
+    fun kidVoicePlaying(tier: KidUiTier) = kidMessages(tier).let { state ->
+        state.copy(playingId = state.messages.last { it.kind == MessageKind.VOICE }.id)
+    }
+
+    /** Sprout and Sapling: the kindness filter is looking at the draft. */
+    fun kidChecking(tier: KidUiTier) = kidMessages(tier).copy(draft = "See you at the park", checking = true)
 }

@@ -5,6 +5,8 @@ import dev.kpetriv.sprout.core.database.BlobTarget
 import dev.kpetriv.sprout.core.database.BlobWrites
 import dev.kpetriv.sprout.core.database.PhotoIntegrityException
 import dev.kpetriv.sprout.core.database.PhotoStore
+import dev.kpetriv.sprout.core.database.RoomChoreRepository
+import dev.kpetriv.sprout.core.database.SessionAuthorProvider
 import dev.kpetriv.sprout.core.database.SproutDatabase
 import dev.kpetriv.sprout.core.database.ThreadKeyUnavailableException
 import dev.kpetriv.sprout.core.model.BlobId
@@ -12,6 +14,8 @@ import dev.kpetriv.sprout.core.model.KidId
 import dev.kpetriv.sprout.core.model.PhotoRef
 import dev.kpetriv.sprout.core.model.SubmissionId
 import dev.kpetriv.sprout.core.time.Clock
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import javax.inject.Inject
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.hours
@@ -35,30 +39,62 @@ class PendingPhotoUploads @Inject constructor(private val database: SproutDataba
 }
 
 /**
- * Uploads every pending chore photo (M4 §2): loads it from the [PhotoStore], encrypts and queues it with the kid's
- * thread key ([BlobTarget.ChorePhoto]), and marks it uploaded. A photo whose thread has no usable key yet stays
- * pending (retried on the next run); one that no longer loads is skipped. Returns the photos queued now.
+ * Uploads every pending chore photo (M4 §2): loads it from the [PhotoStore], encrypts it with the kid's thread key
+ * ([BlobTarget.ChorePhoto]), then in **one** transaction under the device clock lock (review M4) queues its chunks,
+ * marks the photo uploaded and writes the submission again with `photoRef.blobId`
+ * ([RoomChoreRepository.attachPhotoBlobInTransaction]), chunks first so the push order sends the blob before the
+ * submission that names it. A crash leaves either all of it or none of it; runs are serialised by one process-wide
+ * lock, and a photo another run already marked, or whose submission was decided or re-photographed meanwhile, is
+ * left alone (the transaction is rolled back; its cached copy is evicted in time). A photo whose thread has no usable
+ * key yet stays pending (retried on the next run); one that no longer loads is skipped. Returns the photos attached
+ * now.
  */
 class UploadChorePhotosUseCase @Inject constructor(
     private val uploads: PendingPhotoUploads,
     private val photos: PhotoStore,
     private val blobs: BlobWrites,
+    private val chores: RoomChoreRepository,
+    private val authors: SessionAuthorProvider,
 ) {
-    suspend operator fun invoke(): List<Pair<PendingPhotoUpload, BlobId>> = uploads.pending().mapNotNull { pending ->
+    suspend operator fun invoke(): List<Pair<PendingPhotoUpload, BlobId>> = LOCK.withLock {
+        uploads.pending().mapNotNull { pending -> upload(pending)?.let { pending to it } }
+    }
+
+    @Suppress("ReturnCount") // Unreadable photo, no key yet, no longer pending.
+    private suspend fun upload(pending: PendingPhotoUpload): BlobId? {
         val bytes = try {
             photos.load(pending.ref)
         } catch (expected: PhotoIntegrityException) {
-            return@mapNotNull null
+            return null
         }
-        val blobId = try {
-            blobs.store(BlobTarget.ChorePhoto(pending.kidId, pending.submissionId), bytes)
+        val prepared = try {
+            blobs.prepare(BlobTarget.ChorePhoto(pending.kidId, pending.submissionId), bytes)
         } catch (expected: ThreadKeyUnavailableException) {
-            return@mapNotNull null
+            return null
         } finally {
             bytes.fill(0)
         }
-        uploads.markUploaded(pending.ref, blobId)
-        pending to blobId
+        val blobId = prepared.context.blobId
+        val author = authors.currentAuthor()
+        return try {
+            chores.transaction {
+                blobs.queue(prepared)
+                if (!uploads.markUploaded(pending.ref, blobId)) throw NotAttached()
+                chores.attachPhotoBlobInTransaction(author, pending.submissionId, pending.ref, blobId)
+                    ?: throw NotAttached()
+            }
+            blobId
+        } catch (expected: NotAttached) {
+            null
+        }
+    }
+
+    /** Rolls the upload's transaction back: the photo is no longer this run's to upload. */
+    private class NotAttached : IllegalStateException("photo no longer pending")
+
+    private companion object {
+        /** One upload run at a time, process-wide. */
+        val LOCK = Mutex()
     }
 }
 

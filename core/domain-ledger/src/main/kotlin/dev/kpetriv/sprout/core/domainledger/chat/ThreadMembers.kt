@@ -7,6 +7,7 @@ import dev.kpetriv.sprout.core.domainledger.toHex
 import dev.kpetriv.sprout.core.model.DeviceId
 import dev.kpetriv.sprout.core.model.Role
 import dev.kpetriv.sprout.core.model.ThreadId
+import java.util.WeakHashMap
 
 /**
  * A device that may hold a thread's key: its [role] and its verified raw X25519 [encryptionKey] (32 bytes), which
@@ -38,7 +39,9 @@ class ThreadMember(val deviceId: DeviceId, val role: Role, encryptionKey: ByteAr
  *
  * @property members the devices the thread key must be wrapped for, sorted by device id.
  * @property excluded known devices that must not hold the key: every REVOKED device, every KID device of another
- *   kid, and the thread's own KID devices when the kid is archived. A key whose wrap set contains one of them must be
+ *   kid, the thread's own KID devices when the kid is archived, and every device whose registry entry changed its
+ *   encryption key ([RegisteredDevice.encryptionKeyConflict], D-M4-16). A key whose wrap set contains one of them must
+ *   be
  *   rotated ([ThreadKeyPolicy]). Devices that are only missing a verified encryption key, or PENDING, are neither
  *   members nor excluded: a registry mirror that lags must not trigger a rotation.
  */
@@ -68,9 +71,9 @@ object ThreadMembers {
         kidArchived: Boolean = false,
     ): ThreadMembership {
         val members = devices
-            .filter { isEligible(it, threadId, kidArchived) }
+            .filter { isEligible(it, threadId, kidArchived) && !it.encryptionKeyConflict }
             .mapNotNull { device ->
-                device.verifiedEncryptionKey(check)?.let { ThreadMember(device.deviceId, device.role, it) }
+                BindingVerifications.verifiedKey(device, check)?.let { ThreadMember(device.deviceId, device.role, it) }
             }
             .sortedBy { it.deviceId.value }
         val excluded = devices.filter { isExcluded(it, threadId, kidArchived) }.mapTo(LinkedHashSet()) { it.deviceId }
@@ -85,6 +88,39 @@ object ThreadMembers {
         }
 
     private fun isExcluded(device: RegisteredDevice, threadId: ThreadId, kidArchived: Boolean): Boolean =
-        device.status is DeviceStatus.Revoked ||
+        device.status is DeviceStatus.Revoked || device.encryptionKeyConflict ||
             (device.role == Role.KID && (kidArchived || device.kidId?.value != threadId.value))
+}
+
+/**
+ * [RegisteredDevice.verifiedEncryptionKey] with its outcome remembered (review Low): [ThreadMembers.resolve] runs on
+ * every send, status emission and maintenance pass, and each binding check is an ECDSA verification. Outcomes are
+ * kept per [SignatureCheck] instance and per everything the check reads (device id, device key, household, encryption
+ * key, signature), so a changed registry row is checked afresh; at most [MAX_ENTRIES] per check, least recently used
+ * dropped first.
+ */
+internal object BindingVerifications {
+    private const val MAX_ENTRIES = 512
+    private const val SEPARATOR = '|'
+
+    /** Per check, outcomes in least recently used first order (re-inserted on every hit). */
+    private val caches = WeakHashMap<SignatureCheck, LinkedHashMap<String, Boolean>>()
+
+    fun verifiedKey(device: RegisteredDevice, check: SignatureCheck): ByteArray? {
+        val bound = device.encryptionKey ?: return null
+        val key = buildString {
+            append(device.deviceId.value).append(SEPARATOR).append(device.publicKey.toHex()).append(SEPARATOR)
+            append(bound.householdId.value).append(SEPARATOR).append(bound.publicKey.toHex()).append(SEPARATOR)
+            append(bound.signature.toHex())
+        }
+        val cached = synchronized(caches) { caches[check]?.remove(key)?.also { caches.getValue(check)[key] = it } }
+        val verified = cached ?: bound.verify(check, device.deviceId, device.publicKey).also { result ->
+            synchronized(caches) {
+                val cache = caches.getOrPut(check) { LinkedHashMap() }
+                cache[key] = result
+                if (cache.size > MAX_ENTRIES) cache.remove(cache.keys.first())
+            }
+        }
+        return if (verified) bound.publicKey else null
+    }
 }

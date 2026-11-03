@@ -48,6 +48,7 @@ class LocalHouseholdRowsTest {
         household.applier.applyRegistry(listOf(self), emptyList())
         household.addKid(kidId.value)
         household.threadKeyMaintenance()
+        household.confirmThreadKeys()
         val thread = ThreadId.of(kidId)
         household.messageWrites.send(thread, MessagePlaintext.Text("secret plans"))
         household.blobWrites.store(BlobTarget.Thread(thread), byteArrayOf(1, 2, 3))

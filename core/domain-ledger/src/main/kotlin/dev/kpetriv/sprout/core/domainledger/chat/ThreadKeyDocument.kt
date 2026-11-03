@@ -17,8 +17,10 @@ import kotlin.io.encoding.Base64
 /**
  * The payload of a `thread_key` document (M4 §1.2, D-M4-3): the thread key of ([threadId], [epoch]) wrapped once per
  * member device by [createdByDeviceId], a PARENT device, which also wraps for itself. Document id: [docId],
- * `"<kidId>.<epoch>"`. Every document for one epoch wraps the same key, so a re-wrap for a new member (a new document
- * under the same id, superset of recipients) is safe under last-writer-wins.
+ * `"<kidId>.<epoch>.<createdByDeviceId>"` (D-M4-3 as amended in M4 fix pass 1: one document per creator, so two
+ * parents rotating at once publish two documents, and two keys, for one epoch instead of a last-writer-wins loser).
+ * A creator re-wraps its own key for a new member under the same id (a superset of recipients); the rules let only
+ * the creator rewrite its document and never accept a tombstone.
  *
  * Payload JSON (closed key sets at both levels):
  * `{"threadId": "...", "epoch": n, "createdByDeviceId": "...", "wraps": {"<deviceId>": {"wrapped": "<base64>"}}}`.
@@ -42,11 +44,11 @@ data class ThreadKeyDocument(
         require(wraps.values.all(::isValidWrapped)) {
             "wrapped values are base64 of at most ${ChatLimits.MAX_WRAPPED_LENGTH} characters"
         }
-        require(ID_PATTERN.matches(docId)) { "threadId and epoch must form a valid document id" }
+        require(ID_PATTERN.matches(docId)) { "threadId, epoch and creator must form a valid document id" }
     }
 
-    /** The document id, `"<threadId>.<epoch>"` (the thread id is the kid id). */
-    val docId: String get() = docIdFor(threadId, epoch)
+    /** The document id, `"<threadId>.<epoch>.<createdByDeviceId>"` (the thread id is the kid id). */
+    val docId: String get() = docIdFor(threadId, epoch, createdByDeviceId)
 
     /** The devices this document wraps the key for. */
     val recipients: Set<DeviceId> get() = wraps.keys
@@ -87,8 +89,9 @@ data class ThreadKeyDocument(
         private const val WRAPPED = "wrapped"
         private val PAYLOAD_KEYS = setOf(THREAD_ID, EPOCH, CREATED_BY, WRAPS)
 
-        /** `"<threadId>.<epoch>"`. */
-        fun docIdFor(threadId: ThreadId, epoch: Long): String = "${threadId.value}.$epoch"
+        /** `"<threadId>.<epoch>.<createdByDeviceId>"`, as the rules and `FakeBackend` require. */
+        fun docIdFor(threadId: ThreadId, epoch: Long, createdByDeviceId: DeviceId): String =
+            "${threadId.value}.$epoch.${createdByDeviceId.value}"
 
         /**
          * Parses a document payload; null when the key sets are not exactly the documented ones, a type is wrong, or

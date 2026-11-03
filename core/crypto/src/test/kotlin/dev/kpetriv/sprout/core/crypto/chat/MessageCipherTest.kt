@@ -120,6 +120,49 @@ class MessageCipherTest {
     }
 
     @Test
+    fun ciphertextSizesRevealOnlyTheBucket() {
+        val short = seal(header("m-1"), MessagePlaintext.Text("hi")).ciphertextBytes().size
+        val longer = seal(header("m-2"), MessagePlaintext.Text("a".repeat(40))).ciphertextBytes().size
+        assertEquals(short, longer, "texts of 2 and 40 characters share the first 64-byte bucket")
+        assertEquals(64 + 29, short)
+        val fixed = listOf(
+            MessagePlaintext.Preset("hug"),
+            MessagePlaintext.Preset("love-you", "❤️"),
+            MessagePlaintext.Voice(1),
+            MessagePlaintext.Photo(ChatPhotoRef("cd".repeat(32), 1, 1), "c".repeat(200)),
+        ).mapIndexed { index, plaintext ->
+            seal(header("f-$index", plaintext.kind), plaintext).ciphertextBytes().size
+        }
+        assertEquals(setOf(1536 + 29), fixed.toSet())
+    }
+
+    @Test
+    fun anAuthenticatedCiphertextWithBadPaddingOrContentIsUndecodableNotLocked() {
+        val aead = AesGcmAead(random)
+        fun sealRaw(id: String, bytes: ByteArray): MessageEnvelope {
+            val h = header(id)
+            return MessageEnvelope.of(h, 1, 10, sentAt, aead.encrypt(key.key, bytes, h.associatedData()))
+        }
+        // Not padded at all: the length prefix points past the end.
+        assertFailsWith<MessagePlaintextException> {
+            cipher.decrypt(key, sealRaw("p-1", "{\"text\":\"x\"}".encodeToByteArray()))
+        }
+        // Padded, but a lone surrogate inside.
+        val surrogate = dev.kpetriv.sprout.core.domainledger.chat.MessagePadding.pad(
+            MessageKind.TEXT,
+            "{\"text\":\"\\ud800\"}".encodeToByteArray(),
+        )
+        assertFailsWith<MessagePlaintextException> { cipher.decrypt(key, sealRaw("p-2", surrogate)) }
+        // A wrong key is a plain decryption failure, not an undecodable plaintext.
+        ThreadKey.generate(thread, 1, random).use { other ->
+            val failure = assertFailsWith<MessageDecryptionException> {
+                cipher.decrypt(other, seal(header("p-3"), MessagePlaintext.Text("hi")))
+            }
+            assertFalse(failure is MessagePlaintextException)
+        }
+    }
+
+    @Test
     fun theSignerSignsTheEnvelopeForReceivers() = runTest {
         val signer = MessageSigner(DeviceSigner(parent.deviceKeys, Dispatchers.Unconfined))
         val signed = signer.sign(seal(header(), MessagePlaintext.Text("hi")))

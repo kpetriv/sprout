@@ -30,8 +30,9 @@ import javax.inject.Inject
 import kotlin.time.Instant
 
 /**
- * Sends chat messages (M4 §1.3): encrypts with the key of the epoch [ThreadKeyStore.sendingKey] allows (M4 §1.2),
- * then, in one transaction under the device clock lock, allocates the next `seq` of this device in the thread and the
+ * Sends chat messages (M4 §1.3). In one transaction under the device clock lock: picks the key this device may send
+ * with ([ThreadKeyStore.sendingKey], M4 §1.2, checked there so a rotation or a withdrawn key between the screen's
+ * check and the write cannot slip through), encrypts, allocates the next `seq` of this device in the thread and the
  * next device lamport, signs the envelope with the device key ([MessageSigner]), stores it as SENT_LOCAL (with its
  * plaintext, for this device's own view) and queues it in the outbox (`MESSAGE`), with a `MESSAGE_SENT` audit row (ids
  * only). A VOICE or PHOTO message names a blob that [BlobWrites.store] already queued, so the outbox sends the blob
@@ -76,10 +77,63 @@ class MessageWrites @Inject constructor(
         } else {
             authors.currentAuthor()
         }
-        val devices = RoomDeviceRegistry(database).devicesOf(session.householdId)
-        val key = ThreadKeyStore(database).sendingKey(threadId, devices, check, database.isArchivedKid(threadId))
-            ?: throw ThreadKeyUnavailableException(threadId)
-        val (header, ciphertext) = key.use {
+        return store(author, session, threadId, plaintext, blobId)
+    }
+
+    /** Makes a queued message due at once (the user's "retry" after a failure). False if it is not queued. */
+    suspend fun retry(messageId: MessageId): Boolean =
+        database.outboxDao().retryNow(OutboxKind.MESSAGE, messageId.value) > 0
+
+    /**
+     * Removes this device's message [messageId] whose push (or whose blob's) the server refused for good, the item
+     * that blocks the outbox ([RoomOutboxSource.observeBlocked], D-M4-19): the message row, its outbox row and its
+     * blob's chunks, audited `MESSAGE_DISCARDED`. Its `seq` stays used: receivers see a gap that they skip after the
+     * gap timeout (`ChatApplier.HELD_GAP_TIMEOUT_MS`). False when the message is not this device's or not blocked.
+     */
+    suspend fun discard(messageId: MessageId): Boolean = deviceClock.withLock {
+        database.withTransaction {
+            val row = messages.get(messageId.value)?.takeIf { it.status == MessageStatus.SENT_LOCAL }
+            val blocked = currentBlockedPush(database)
+            val blocks = row != null && blocked != null && (
+                (blocked.kind == OutboxKind.MESSAGE && blocked.refId == row.messageId) ||
+                    (
+                        blocked.kind == OutboxKind.BLOB_CHUNK && row.blobId != null &&
+                            blocked.refId.startsWith(row.blobId + ".")
+                        )
+                )
+            if (row != null && blocks) {
+                messages.delete(row.messageId)
+                database.outboxDao().deleteRef(OutboxKind.MESSAGE, row.messageId)
+                row.blobId?.let { database.outboxDao().deleteBlobChunks(it) }
+                database.auditLogDao().insert(
+                    auditEntry(
+                        authors.currentAuthor(),
+                        clock.now().toEpochMilliseconds(),
+                        AuditAction.MESSAGE_DISCARDED,
+                        row.messageId,
+                    ) {
+                        put("threadId", row.threadId)
+                        put("seq", row.seq)
+                    },
+                )
+            }
+            blocks
+        }
+    }
+
+    @Suppress("LongParameterList") // The message and who writes it.
+    private suspend fun store(
+        author: EventAuthor,
+        session: Session,
+        threadId: ThreadId,
+        plaintext: MessagePlaintext,
+        blobId: BlobId?,
+    ): MessageId = deviceClock.withLock {
+        database.withTransaction {
+            val devices = RoomDeviceRegistry(database).devicesOf(session.householdId)
+            val archived = database.isArchivedKid(threadId)
+            val key = ThreadKeyStore(database).sendingKey(threadId, session.deviceId, devices, check, archived)
+                ?: throw ThreadKeyUnavailableException(threadId)
             val header = MessageHeader(
                 householdId = author.householdId,
                 threadId = threadId,
@@ -87,50 +141,46 @@ class MessageWrites @Inject constructor(
                 authorUid = author.uid,
                 authorDeviceId = author.deviceId,
                 authorRole = author.role,
-                epoch = it.epoch,
+                epoch = key.epoch,
                 kind = plaintext.kind,
                 blobId = blobId,
             )
-            header to crypto.messages.encrypt(it, header, plaintext)
-        }
-        store(author, header, ciphertext, MessagePlaintextCodec.encode(plaintext))
-        return header.messageId
-    }
-
-    /** Makes a queued message due at once (the user's "retry" after a failure). False if it is not queued. */
-    suspend fun retry(messageId: MessageId): Boolean =
-        database.outboxDao().retryNow(OutboxKind.MESSAGE, messageId.value) > 0
-
-    private suspend fun store(author: EventAuthor, header: MessageHeader, ciphertext: ByteArray, plaintext: ByteArray) {
-        deviceClock.withLock {
-            database.withTransaction {
-                val threadId = header.threadId.value
-                val seq = messages.seq(threadId, author.deviceId)?.nextSeq ?: 1
-                val lamport = deviceClock.takeNext(author.deviceId)
-                val now = clock.now().toEpochMilliseconds()
-                val unsigned = MessageEnvelope.of(header, seq, lamport, Instant.fromEpochMilliseconds(now), ciphertext)
-                val envelope = messageSigner.sign(unsigned)
-                messages.upsert(MessageEntity.of(envelope, MessageStatus.SENT_LOCAL, plaintext, null, now))
-                messages.upsertSeq(MessageSeqEntity(threadId, author.deviceId, seq + 1))
-                database.outboxDao().insert(
-                    OutboxEntity(
-                        kind = OutboxKind.MESSAGE,
-                        refId = envelope.messageId.value,
-                        payload = MessageJson.encode(envelope),
-                        createdAtEpochMs = now,
-                        lamport = lamport,
-                    ),
-                )
-                database.auditLogDao().insert(
-                    auditEntry(author, now, AuditAction.MESSAGE_SENT, envelope.messageId.value) {
-                        put("threadId", threadId)
-                        put("seq", seq)
-                        put("lamport", lamport)
-                        put("kind", envelope.kind.name)
-                        put("epoch", envelope.epoch)
-                    },
-                )
-            }
+            val ciphertext = key.use { crypto.messages.encrypt(it, header, plaintext) }
+            val previous = messages.seq(threadId.value, author.deviceId)
+            val seq = previous?.nextSeq ?: 1
+            val lamport = deviceClock.takeNext(author.deviceId)
+            val now = clock.now().toEpochMilliseconds()
+            val displayed = maxOf(now, previous?.lastDisplayedAtEpochMs ?: 0)
+            val unsigned = MessageEnvelope.of(header, seq, lamport, Instant.fromEpochMilliseconds(now), ciphertext)
+            val envelope = messageSigner.sign(unsigned)
+            val bytes = MessagePlaintextCodec.encode(plaintext)
+            messages.upsert(MessageEntity.of(envelope, MessageStatus.SENT_LOCAL, bytes, null, now, displayed))
+            messages.upsertSeq(
+                (previous ?: MessageSeqEntity(threadId.value, author.deviceId, 1)).copy(
+                    nextSeq = seq + 1,
+                    lastLamport = lamport,
+                    lastDisplayedAtEpochMs = displayed,
+                ),
+            )
+            database.outboxDao().insert(
+                OutboxEntity(
+                    kind = OutboxKind.MESSAGE,
+                    refId = envelope.messageId.value,
+                    payload = MessageJson.encode(envelope),
+                    createdAtEpochMs = now,
+                    lamport = lamport,
+                ),
+            )
+            database.auditLogDao().insert(
+                auditEntry(author, now, AuditAction.MESSAGE_SENT, envelope.messageId.value) {
+                    put("threadId", threadId.value)
+                    put("seq", seq)
+                    put("lamport", lamport)
+                    put("kind", envelope.kind.name)
+                    put("epoch", envelope.epoch)
+                },
+            )
+            header.messageId
         }
     }
 }
@@ -140,6 +190,11 @@ class MessageWrites @Inject constructor(
  * and only documents this device created. The document must wrap the key for this device too: the wrap is opened
  * with this device's key pair before anything is written (so a document nobody could use is never published), and the
  * key is stored in `thread_keys` with the document in the same transaction.
+ *
+ * A **new** key stays unconfirmed ([ThreadKeyEntity.confirmed]) until the server has the document (review H2): its own
+ * copy came back in a pull (`ChatApplier`), or [settle] finds its outbox row gone without a refusal. Until then this
+ * device does not send under it; if the server refused it, [settle] withdraws the key (nothing was encrypted with it).
+ * A re-wrap of a confirmed key for new members keeps it confirmed: the server already has that key.
  */
 class ThreadKeyWrites @Inject constructor(
     private val database: SproutDatabase,
@@ -149,6 +204,7 @@ class ThreadKeyWrites @Inject constructor(
     private val crypto: ChatCrypto,
 ) {
     private val writes = DocumentWrites(database, clock, signer)
+    private val threadKeys = database.threadKeyDao()
 
     /**
      * Signs and queues [document] and stores its key.
@@ -168,6 +224,8 @@ class ThreadKeyWrites @Inject constructor(
         }
         try {
             writes.transaction {
+                val existing = threadKeys.get(document.threadId.value, document.epoch, document.createdByDeviceId)
+                val sameKey = existing?.key?.contentEquals(key) == true
                 val lamport = writes.nextLamport(author.deviceId)
                 val stamp = writes.record(
                     author,
@@ -181,7 +239,7 @@ class ThreadKeyWrites @Inject constructor(
                     put("epoch", document.epoch)
                     put("recipients", document.recipients.size)
                 }
-                database.threadKeyDao().upsert(
+                threadKeys.upsert(
                     ThreadKeyEntity(
                         threadId = document.threadId.value,
                         epoch = document.epoch,
@@ -193,11 +251,69 @@ class ThreadKeyWrites @Inject constructor(
                         authorUid = author.uid,
                         signature = stamp.signature,
                         receivedAtEpochMs = clock.now().toEpochMilliseconds(),
+                        confirmed = sameKey && existing.confirmed,
+                        olderKeys = if (sameKey) existing?.olderKeys else olderKeysWith(existing),
                     ),
                 )
             }
         } finally {
             key.fill(0)
+        }
+    }
+
+    /** Whether the server has confirmed this device's document [docId] (see the class documentation). */
+    suspend fun confirmed(docId: String): Boolean =
+        threadKeys.all().firstOrNull { it.sourceDocId == docId }?.confirmed == true
+
+    /**
+     * Settles this device's unconfirmed documents from the outbox state: still queued, they wait; refused for good
+     * (a `SYNC_REJECTED` row for the document since it was written), the new key is withdrawn (the previous key of
+     * that document, if any, is restored), audited `THREAD_KEY_WITHDRAWN`; otherwise the push was accepted and the
+     * row is confirmed. Call it after the sync's refusals were audited (the app runs it in `ThreadKeyMaintenance`,
+     * after each sync); a pulled copy of the document confirms it at any time. Returns how many were withdrawn.
+     */
+    suspend fun settle(): Int {
+        val self = database.sessionDao().get()?.deviceId ?: return 0
+        return database.withTransaction {
+            var withdrawn = 0
+            for (row in threadKeys.unconfirmed(self)) {
+                val queued = database.outboxDao().countRef(
+                    OutboxKind.DOCUMENT,
+                    "${DocTypes.THREAD_KEY}/${row.sourceDocId}",
+                )
+                if (queued > 0) continue
+                val target = "document/${DocTypes.THREAD_KEY}/${row.sourceDocId}"
+                val refused = database.auditLogDao().countSince(
+                    AuditAction.SYNC_REJECTED,
+                    target,
+                    row.receivedAtEpochMs,
+                )
+                if (refused == 0) {
+                    threadKeys.upsert(row.withConfirmed(true))
+                } else {
+                    withdraw(row)
+                    withdrawn++
+                }
+            }
+            withdrawn
+        }
+    }
+
+    private suspend fun withdraw(row: ThreadKeyEntity) {
+        val older = row.allKeys().drop(1)
+        if (older.isEmpty()) {
+            threadKeys.delete(row.threadId, row.epoch, row.createdByDeviceId)
+        } else {
+            val restored = ThreadKeyEntity(
+                row.threadId, row.epoch, row.createdByDeviceId, older.last(), row.sourceDocId, row.wrapSetJson,
+                row.lamport, row.authorUid, row.signature, row.receivedAtEpochMs, confirmed = true,
+                olderKeys = older.dropLast(1).takeIf { it.isNotEmpty() }?.reduce { a, b -> a + b },
+            )
+            threadKeys.upsert(restored)
+        }
+        writes.auditOnly(authors.currentAuthor(), AuditAction.THREAD_KEY_WITHDRAWN, row.sourceDocId) {
+            put("threadId", row.threadId)
+            put("epoch", row.epoch)
         }
     }
 }

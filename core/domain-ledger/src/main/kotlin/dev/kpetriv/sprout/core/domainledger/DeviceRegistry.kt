@@ -26,6 +26,11 @@ interface DeviceRegistry {
  * [encryptionKey] (M4 §1.1) is the device's X25519 chat key with its binding signature, exactly as the registry row
  * holds it; null until the device registered one. It is never trusted as stored: use [verifiedEncryptionKey], which
  * checks the binding against [publicKey] and returns null when it fails.
+ *
+ * [encryptionKeyConflict] (audit H1, D-M4-16) is set by the receiver's registry mirror when the registry later listed
+ * a **different** encryption key for this device than the one first seen: the first key stays pinned, and the device
+ * is treated as excluded from every thread (its thread keys rotate away from it) until it is removed and linked
+ * again.
  */
 class RegisteredDevice(
     val deviceId: DeviceId,
@@ -34,6 +39,7 @@ class RegisteredDevice(
     val status: DeviceStatus,
     val attestation: AttestationLevel,
     val encryptionKey: BoundEncryptionKey? = null,
+    val encryptionKeyConflict: Boolean = false,
 ) {
     val uid: UserId get() = owner.uid
     val role: Role get() = owner.role

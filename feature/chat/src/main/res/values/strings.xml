@@ -28,6 +28,8 @@
   <string name="feature_chat_failed">Not sent</string>
   <string name="feature_chat_retry_send">Try again</string>
   <string name="feature_chat_discard">Delete</string>
+  <string name="feature_chat_blocked">Sending is blocked</string>
+  <string name="feature_chat_from_parent_phone">From a parent\'s phone</string>
   <string name="feature_chat_load_older">Show older messages</string>
   <string name="feature_chat_preset_unknown">Message</string>
   <!-- A message bubble for accessibility: author, then content ("Mum: I love you"). -->
@@ -70,6 +72,7 @@
   <string name="feature_chat_notice_playback_failed">The voice note could not be played.</string>
   <string name="feature_chat_notice_photo_failed">That photo could not be added.</string>
   <string name="feature_chat_notice_retry_failed">The message could not be sent again.</string>
+  <string name="feature_chat_notice_discard_failed">The message could not be deleted.</string>
 
   <!-- The twelve presets (ids in ChatPresets; never change an id, only its text). -->
   <string name="feature_chat_preset_hello">Hello!</string>

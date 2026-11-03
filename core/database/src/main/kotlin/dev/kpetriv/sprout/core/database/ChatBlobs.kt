@@ -19,6 +19,7 @@ import dev.kpetriv.sprout.core.domainledger.chat.BlobContext
 import dev.kpetriv.sprout.core.domainledger.chat.BlobJson
 import dev.kpetriv.sprout.core.domainledger.toHex
 import dev.kpetriv.sprout.core.model.BlobId
+import dev.kpetriv.sprout.core.model.DeviceId
 import dev.kpetriv.sprout.core.model.HouseholdId
 import dev.kpetriv.sprout.core.model.KidId
 import dev.kpetriv.sprout.core.model.Role
@@ -33,6 +34,7 @@ import kotlinx.serialization.json.put
 import java.io.File
 import java.io.IOException
 import java.security.GeneralSecurityException
+import java.security.MessageDigest
 import java.util.UUID
 import javax.inject.Inject
 
@@ -46,6 +48,38 @@ sealed interface BlobTarget {
     }
 
     data class ChorePhoto(override val kidId: KidId, val submissionId: SubmissionId) : BlobTarget
+}
+
+/**
+ * What an opened blob must be (audit M5): the [target] its header names (a chat thread, or a chore submission of a
+ * kid), the [authorDeviceId] that wrote it (a chat message's author; null when any device of the target may have),
+ * and the lower-case hex SHA-256 of its **plaintext** when a signed reference names one ([ChatPhotoRef.sha256] of a
+ * photo message, a submission's `photoRef.sha256`). A blob that differs in any of them is
+ * [BlobUnavailableException.Reason.INVALID]: a member cannot swap another blob of the household into a message.
+ */
+class BlobExpectation(
+    val target: BlobTarget,
+    val authorDeviceId: DeviceId? = null,
+    val plaintextSha256: String? = null,
+) {
+    /** Whether [context] (a verified header's) is this target's, by this author. */
+    fun matches(context: BlobContext): Boolean {
+        val sameTarget = when (target) {
+            is BlobTarget.Thread -> context.threadId == target.threadId && context.submissionId == null
+            is BlobTarget.ChorePhoto -> context.submissionId == target.submissionId && context.threadId == null
+        }
+        return sameTarget && context.kidId == target.kidId &&
+            (authorDeviceId == null || context.authorDeviceId == authorDeviceId)
+    }
+
+    /** Whether [plaintext] has the expected hash (always, without one). */
+    fun matches(plaintext: ByteArray): Boolean = plaintextSha256 == null ||
+        MessageDigest.isEqual(
+            JvmSha256Hasher.sha256(plaintext).toHex().encodeToByteArray(),
+            plaintextSha256.encodeToByteArray(),
+        )
+
+    override fun toString(): String = "BlobExpectation(target=$target, authorDeviceId=$authorDeviceId)"
 }
 
 /** A blob in the local cache: its AEAD [context], the hex [sha256] of its E2EE [ciphertext], and the ciphertext. */
@@ -214,13 +248,27 @@ class BlobWrites @Inject constructor(
      *   or a KID session targets another kid.
      */
     suspend fun store(target: BlobTarget, bytes: ByteArray): BlobId {
+        val prepared = prepare(target, bytes)
+        deviceClock.withLock { database.withTransaction { queue(prepared) } }
+        return prepared.context.blobId
+    }
+
+    /** A blob encrypted and cached by [prepare], to be queued by [queue]. */
+    internal class Prepared(val author: EventAuthor, val context: BlobContext, val encrypted: EncryptedBlob)
+
+    /**
+     * The encryption half of [store] (no outbox row yet): checks, encrypts with the sending key and caches the
+     * ciphertext. Same exceptions as [store].
+     */
+    internal suspend fun prepare(target: BlobTarget, bytes: ByteArray): Prepared {
         require(bytes.isNotEmpty()) { "a blob must not be empty" }
         val session = database.sessionDao().get()?.toDomain() ?: throw NoSessionException()
         require(session.role != Role.KID || session.kidId == target.kidId) { "this device is linked to another kid" }
         val author = authors.currentAuthor()
         val threadId = ThreadId(target.kidId.value)
         val devices = RoomDeviceRegistry(database).devicesOf(session.householdId)
-        val key = ThreadKeyStore(database).sendingKey(threadId, devices, check, database.isArchivedKid(threadId))
+        val archived = database.isArchivedKid(threadId)
+        val key = ThreadKeyStore(database).sendingKey(threadId, session.deviceId, devices, check, archived)
             ?: throw ThreadKeyUnavailableException(threadId)
         val blobId = BlobId(UUID.randomUUID().toString())
         val context = BlobContext(
@@ -234,56 +282,57 @@ class BlobWrites @Inject constructor(
         )
         val encrypted = key.use { crypto.blobs.encrypt(it, context, bytes) }
         cache.put(context, encrypted.sha256, encrypted.chunks.reduce { joined, chunk -> joined + chunk })
-        queue(author, context, encrypted)
-        return blobId
+        return Prepared(author, context, encrypted)
     }
 
-    /** Signs every chunk's header and queues the chunks, in one transaction under the device clock lock. */
-    private suspend fun queue(author: EventAuthor, context: BlobContext, encrypted: EncryptedBlob) {
-        deviceClock.withLock {
-            database.withTransaction {
-                val lamport = deviceClock.takeNext(author.deviceId)
-                val now = clock.now().toEpochMilliseconds()
-                encrypted.chunks.forEachIndexed { index, chunk ->
-                    val unsigned = BlobChunkHeader(
-                        householdId = author.householdId,
-                        blobId = context.blobId,
-                        threadId = context.threadId,
-                        kidId = context.kidId,
-                        submissionId = context.submissionId,
-                        authorUid = author.uid,
-                        authorDeviceId = author.deviceId,
-                        lamport = lamport,
-                        chunk = index,
-                        chunks = encrypted.chunks.size,
-                        sha256 = encrypted.sha256,
-                        epoch = context.epoch,
-                    )
-                    val header = unsigned.withSignature(signer.sign(unsigned.signedPayload(chunk)))
-                    database.outboxDao().insert(
-                        OutboxEntity(
-                            kind = OutboxKind.BLOB_CHUNK,
-                            refId = header.docId,
-                            payload = LedgerJson.json.encodeToString(
-                                JsonObject.serializer(),
-                                BlobJson.toJsonObject(header),
-                            ),
-                            createdAtEpochMs = now,
-                            lamport = lamport,
-                            data = chunk,
-                        ),
-                    )
-                }
-                database.auditLogDao().insert(
-                    auditEntry(author, now, AuditAction.BLOB_QUEUED, context.blobId.value) {
-                        put("chunks", encrypted.chunks.size)
-                        put("epoch", context.epoch)
-                        context.threadId?.let { put("threadId", it.value) }
-                        context.submissionId?.let { put("submissionId", it.value) }
-                    },
-                )
-            }
+    /**
+     * Signs every chunk's header of [prepared] and queues the chunks. Must run inside a transaction under the device
+     * clock lock (the caller's: [store], or the chore photo upload, which attaches the blob in the same transaction).
+     */
+    internal suspend fun queue(prepared: Prepared) {
+        val author = prepared.author
+        val context = prepared.context
+        val encrypted = prepared.encrypted
+        val lamport = deviceClock.takeNext(author.deviceId)
+        val now = clock.now().toEpochMilliseconds()
+        encrypted.chunks.forEachIndexed { index, chunk ->
+            val unsigned = BlobChunkHeader(
+                householdId = author.householdId,
+                blobId = context.blobId,
+                threadId = context.threadId,
+                kidId = context.kidId,
+                submissionId = context.submissionId,
+                authorUid = author.uid,
+                authorDeviceId = author.deviceId,
+                lamport = lamport,
+                chunk = index,
+                chunks = encrypted.chunks.size,
+                sha256 = encrypted.sha256,
+                epoch = context.epoch,
+            )
+            val header = unsigned.withSignature(signer.sign(unsigned.signedPayload(chunk)))
+            database.outboxDao().insert(
+                OutboxEntity(
+                    kind = OutboxKind.BLOB_CHUNK,
+                    refId = header.docId,
+                    payload = LedgerJson.json.encodeToString(
+                        JsonObject.serializer(),
+                        BlobJson.toJsonObject(header),
+                    ),
+                    createdAtEpochMs = now,
+                    lamport = lamport,
+                    data = chunk,
+                ),
+            )
         }
+        database.auditLogDao().insert(
+            auditEntry(author, now, AuditAction.BLOB_QUEUED, context.blobId.value) {
+                put("chunks", encrypted.chunks.size)
+                put("epoch", context.epoch)
+                context.threadId?.let { put("threadId", it.value) }
+                context.submissionId?.let { put("submissionId", it.value) }
+            },
+        )
     }
 }
 
@@ -316,11 +365,24 @@ class ChatBlobs @Inject constructor(
     /**
      * The plaintext of cached blob [blobId], or null when it is not cached (fetch it and call [ingest]).
      *
-     * @throws BlobUnavailableException ([BlobUnavailableException.Reason.LOCKED]) when no held key opens it.
+     * @throws BlobUnavailableException LOCKED when no held key opens it, INVALID when it is not what [expected] says.
      */
-    suspend fun open(blobId: BlobId): ByteArray? {
+    suspend fun open(blobId: BlobId, expected: BlobExpectation): ByteArray? {
         val cached = cache.get(blobId) ?: return null
-        return decrypt(cached.context, listOf(cached.ciphertext), cached.sha256)
+        if (!expected.matches(cached.context)) throw BlobUnavailableException(BlobUnavailableException.Reason.INVALID)
+        return checked(decrypt(cached.context, listOf(cached.ciphertext), cached.sha256), expected)
+    }
+
+    /**
+     * What a chore photo blob must be (D-M4-15, audit M5): the submission that names [blobId] in its signed
+     * `photoRef`, of its kid, with the photo's SHA-256. Null when no submission names it.
+     */
+    suspend fun chorePhotoExpectation(blobId: BlobId): BlobExpectation? {
+        val submission = database.chatHouseholdDao().submissionWithBlob(blobId.value) ?: return null
+        return BlobExpectation(
+            target = BlobTarget.ChorePhoto(submission.kidId, submission.submissionId),
+            plaintextSha256 = submission.photoSha256,
+        )
     }
 
     /**
@@ -331,18 +393,28 @@ class ChatBlobs @Inject constructor(
      * own the header's uid, and (a KID device) belong to the blob's kid; and its device signature must verify over the
      * chunk bytes.
      *
+     * The header's context must also be what [expected] says (target and author), and the plaintext must have its
+     * hash, before anything is cached.
+     *
      * @throws BlobUnavailableException NOT_FOUND for no chunks, INVALID when a check fails, LOCKED when no held key
      *   opens it.
      */
-    suspend fun ingest(blobId: BlobId, chunks: List<BlobChunkJson>): ByteArray {
+    suspend fun ingest(blobId: BlobId, chunks: List<BlobChunkJson>, expected: BlobExpectation): ByteArray {
         if (chunks.isEmpty()) throw BlobUnavailableException(BlobUnavailableException.Reason.NOT_FOUND)
-        val headers = verifiedHeaders(blobId, chunks)
+        val headers = verifiedHeaders(blobId, chunks)?.takeIf { expected.matches(it.first().context) }
             ?: throw BlobUnavailableException(BlobUnavailableException.Reason.INVALID)
         val first = headers.first()
         val data = chunks.sortedBy { it.chunk }.map { it.data }
-        val plaintext = decrypt(first.context, data, first.sha256)
+        val plaintext = checked(decrypt(first.context, data, first.sha256), expected)
         cache.put(first.context, first.sha256, data.reduce { joined, chunk -> joined + chunk })
         return plaintext
+    }
+
+    /** [plaintext] when it has [expected]'s hash; otherwise it is wiped and INVALID is thrown. */
+    private fun checked(plaintext: ByteArray, expected: BlobExpectation): ByteArray {
+        if (expected.matches(plaintext)) return plaintext
+        plaintext.fill(0)
+        throw BlobUnavailableException(BlobUnavailableException.Reason.INVALID)
     }
 
     /** The decoded headers of [chunks] in chunk order, or null when any check of [ingest] fails. */

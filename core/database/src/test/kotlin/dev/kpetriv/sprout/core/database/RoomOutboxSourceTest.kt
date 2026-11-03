@@ -144,12 +144,18 @@ class RoomOutboxSourceTest {
         suspend fun rejections() =
             household.database.auditLogDao().all().filter { it.action == AuditAction.SYNC_REJECTED }
         assertEquals(1, rejections().size)
-        assertEquals(BlockedPush(first.seq, "permission-denied", firstRefusedAt), source.observeBlocked().first())
+        assertEquals(
+            BlockedPush(first.seq, "permission-denied", firstRefusedAt, OutboxKind.LEDGER_EVENT, first.refId),
+            source.observeBlocked().first(),
+        )
 
         // A new code for the same seq is audited, and becomes the code shown; "since" stays the first refusal.
         source.auditRejections(listOf(PushRejection(first.seq, id, "invalid-argument", blocking = true)))
         assertEquals(2, rejections().size)
-        assertEquals(BlockedPush(first.seq, "invalid-argument", firstRefusedAt), source.observeBlocked().first())
+        assertEquals(
+            BlockedPush(first.seq, "invalid-argument", firstRefusedAt, OutboxKind.LEDGER_EVENT, first.refId),
+            source.observeBlocked().first(),
+        )
 
         // A refused document never blocks; once the event is accepted (acked) nothing blocks any more.
         source.auditRejections(listOf(PushRejection(second.seq + 1, PushItemId("document/reward/a"), "x")))

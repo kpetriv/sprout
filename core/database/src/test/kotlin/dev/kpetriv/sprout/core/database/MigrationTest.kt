@@ -335,6 +335,7 @@ class MigrationTest {
                 it.moveToFirst()
                 assertEquals(listOf(true, true, true), (0..2).map(it::isNull), "the next registry pull fills them")
             }
+            assertFixPass2Columns(db)
             db.query("SELECT refId, data FROM outbox").use { cursor ->
                 cursor.moveToFirst()
                 assertEquals("kid/kid-1", cursor.getString(0))
@@ -347,6 +348,19 @@ class MigrationTest {
                 }
             }
         }
+    }
+
+    /** The M4 fix pass 2 columns: no device starts excluded; ordering, late messages, key confirmation exist. */
+    private fun assertFixPass2Columns(db: SupportSQLiteDatabase) {
+        db.query("SELECT encryptionKeyConflict FROM devices").use {
+            it.moveToFirst()
+            assertEquals(0, it.getInt(0), "no device starts excluded")
+        }
+        listOf(
+            "SELECT displayedAtEpochMs, late FROM messages",
+            "SELECT lastLamport, lastDisplayedAtEpochMs, skippedRanges FROM message_seq",
+            "SELECT confirmed, olderKeys FROM thread_keys",
+        ).forEach { query -> db.query(query).close() }
     }
 
     @Test

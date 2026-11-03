@@ -7,6 +7,7 @@ import dev.kpetriv.sprout.core.database.entity.AuditAction
 import dev.kpetriv.sprout.core.database.entity.AuditLogEntity
 import dev.kpetriv.sprout.core.database.entity.ChoreEntity
 import dev.kpetriv.sprout.core.database.entity.ChoreSubmissionEntity
+import dev.kpetriv.sprout.core.database.entity.DeviceEntity
 import dev.kpetriv.sprout.core.database.entity.DocumentInboxEntity
 import dev.kpetriv.sprout.core.database.entity.DocumentStamp
 import dev.kpetriv.sprout.core.database.entity.HouseholdPolicyEntity
@@ -126,9 +127,23 @@ class RoomRemoteApplier internal constructor(
         }
     }
 
+    /**
+     * Mirrors one registry row, **pinning** what was seen first (audit H1, D-M4-16): a row whose device id is not the
+     * SHA-256 of its public key is dropped (`DEVICE_REJECTED`); a known device's public key and verified encryption
+     * key are never replaced (a different encryption key is kept out, the device is marked
+     * [DeviceEntity.encryptionKeyConflict] and so excluded from every thread, audited `DEVICE_KEY_CHANGED` once); a
+     * REVOKED device never becomes ACTIVE or PENDING again here, and its revocation lamport never moves up
+     * (`DEVICE_REVOCATION_KEPT`).
+     */
+    @Suppress("ReturnCount") // A rejected row returns early.
     private suspend fun applyDevice(device: RegisteredDevice, session: SessionEntity?, now: Long) {
+        if (JvmSha256Hasher.sha256(device.publicKey).toHex() != device.deviceId.value) {
+            record(AuditAction.DEVICE_REJECTED, device.uid, device.deviceId, device.deviceId.value, now) {}
+            return
+        }
         val existing = database.deviceDao().get(device.deviceId)
-        val entity = device.toEntity(existing?.registeredAtEpochMs ?: now, session?.householdId)
+        val incoming = device.toEntity(existing?.registeredAtEpochMs ?: now, session?.householdId)
+        val entity = if (existing == null) incoming else pinned(existing, incoming, now)
         database.deviceDao().upsert(entity)
         val action = when {
             existing == null -> AuditAction.DEVICE_REGISTERED
@@ -148,6 +163,42 @@ class RoomRemoteApplier internal constructor(
         if (session != null && session.deviceId == device.deviceId && session.deviceStatus != entity.status) {
             database.sessionDao().upsert(session.copy(deviceStatus = entity.status))
         }
+    }
+
+    /** [incoming] with everything [existing] pins kept; see [applyDevice]. Audits what it refused. */
+    private suspend fun pinned(existing: DeviceEntity, incoming: DeviceEntity, now: Long): DeviceEntity {
+        val pinnedKey = existing.encryptionKey?.takeIf { existing.toRegistered().verifiedEncryptionKey(check) != null }
+        val keyChanged = pinnedKey != null && incoming.encryptionKey != null &&
+            !incoming.encryptionKey.contentEquals(pinnedKey)
+        val signingKeyChanged = !incoming.publicKey.contentEquals(existing.publicKey)
+        if ((keyChanged && !existing.encryptionKeyConflict) || signingKeyChanged) {
+            record(AuditAction.DEVICE_KEY_CHANGED, existing.uid, existing.deviceId, existing.deviceId.value, now) {
+                put("key", if (signingKeyChanged) "publicKey" else "encryptionKey")
+            }
+        }
+        val revoked = existing.status == RegistrationStatus.REVOKED
+        if (revoked && incoming.status != RegistrationStatus.REVOKED) {
+            record(AuditAction.DEVICE_REVOCATION_KEPT, existing.uid, existing.deviceId, existing.deviceId.value, now) {
+                put("status", incoming.status.name)
+            }
+        }
+        val keySource = if (pinnedKey != null) existing else incoming
+        return incoming.copy(
+            publicKey = existing.publicKey,
+            status = if (revoked) RegistrationStatus.REVOKED else incoming.status,
+            revokedAtLamport = if (revoked) keptRevocation(existing, incoming) else incoming.revokedAtLamport,
+            encryptionKey = keySource.encryptionKey,
+            encryptionKeySignature = keySource.encryptionKeySignature,
+            encryptionKeyHouseholdId = keySource.encryptionKeyHouseholdId,
+            encryptionKeyConflict = existing.encryptionKeyConflict || keyChanged || signingKeyChanged,
+        )
+    }
+
+    /** A revoked device's revocation lamport: never moved up (that would admit more of its writes). */
+    private fun keptRevocation(existing: DeviceEntity, incoming: DeviceEntity): Long? {
+        val stored = existing.revokedAtLamport
+        val claimed = incoming.revokedAtLamport.takeIf { incoming.status == RegistrationStatus.REVOKED }
+        return if (stored == null || claimed == null) stored ?: claimed else minOf(stored, claimed)
     }
 
     override suspend fun applyDocuments(documents: List<DocumentEnvelope>): DocumentApplyReport = deviceClock.withLock {

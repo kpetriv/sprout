@@ -131,7 +131,13 @@ class SchemaTest {
         assertTrue(listOf("threadId", "lamport") to false in indices("messages"))
         assertTrue(listOf("authorDeviceId", "threadId", "seq") to false in indices("messages"))
         assertTrue(setOf("plaintext", "status", "reason", "receivedAtEpochMs").all { it in columns("messages") })
-        assertEquals(setOf("threadId", "authorDeviceId", "nextSeq"), columns("message_seq"))
+        assertEquals(
+            setOf("threadId", "authorDeviceId", "nextSeq", "lastLamport", "lastDisplayedAtEpochMs", "skippedRanges"),
+            columns("message_seq"),
+        )
+        assertTrue(setOf("displayedAtEpochMs", "late").all { it in columns("messages") })
+        assertTrue(setOf("confirmed", "olderKeys").all { it in columns("thread_keys") })
+        assertTrue("encryptionKeyConflict" in columns("devices"))
         val threadKeyColumns = columns("thread_keys")
         val keyColumns = setOf("key", "wrapSetJson", "sourceDocId", "createdByDeviceId")
         assertTrue(keyColumns.all { it in threadKeyColumns })

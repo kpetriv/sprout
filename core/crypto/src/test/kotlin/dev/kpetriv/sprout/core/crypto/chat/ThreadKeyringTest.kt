@@ -6,6 +6,7 @@ import dev.kpetriv.sprout.core.crypto.JceX25519KeyAgreement
 import dev.kpetriv.sprout.core.crypto.TinkX25519KeyAgreement
 import dev.kpetriv.sprout.core.crypto.X25519KeyAgreement
 import dev.kpetriv.sprout.core.domainledger.chat.ThreadKeyDocument
+import dev.kpetriv.sprout.core.domainledger.chat.ThreadMember
 import dev.kpetriv.sprout.core.model.DeviceId
 import dev.kpetriv.sprout.core.model.HouseholdId
 import dev.kpetriv.sprout.core.model.KidId
@@ -121,6 +122,16 @@ class ThreadKeyringTest {
                 ring.wrapFor(household, key, parent.deviceId, tablet.keys.privateKey, members)
             }
         }
+    }
+
+    @Test
+    fun aMemberWithASmallOrderKeyIsSkippedAndTheOthersStillGetTheKey() {
+        val ring = keyring(jce)
+        val bad = ThreadMember(DeviceId("bad-kid"), Role.KID, ByteArray(32).also { it[0] = 1 })
+        val doc = ring.newKey(thread, 0).use {
+            ring.wrapFor(household, it, parent.deviceId, parent.keys.privateKey, members + bad)
+        }
+        assertEquals(setOf(parent.deviceId, tablet.deviceId, kid.deviceId), doc.recipients)
     }
 
     @Test

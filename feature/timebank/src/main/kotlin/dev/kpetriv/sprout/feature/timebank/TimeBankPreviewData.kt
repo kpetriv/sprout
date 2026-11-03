@@ -36,4 +36,11 @@ internal object TimeBankPreviewData {
     )
 
     fun empty(tier: KidUiTier) = idle(tier).copy(balanceMinutes = 0, remainingSeconds = 0)
+
+    /** The whole balance is used up while the session still runs (the auto-stop or the kid stops it). */
+    fun timeUp(tier: KidUiTier) = idle(tier).copy(
+        running = true,
+        elapsedSeconds = BALANCE * TimeBankUiState.Ready.SECONDS_PER_MINUTE,
+        remainingSeconds = 0,
+    )
 }

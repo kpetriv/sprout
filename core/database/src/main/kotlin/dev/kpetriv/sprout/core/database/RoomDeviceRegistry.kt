@@ -88,6 +88,7 @@ internal fun DeviceEntity.toRegistered(): RegisteredDevice = RegisteredDevice(
         val signature = encryptionKeySignature
         if (key != null && signature != null) BoundEncryptionKey(household, key, signature) else null
     },
+    encryptionKeyConflict = encryptionKeyConflict,
 )
 
 /**

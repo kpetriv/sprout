@@ -49,6 +49,29 @@ class ChatScreenshotTest : ScreenshotTest() {
     }
 
     @Test
+    fun `kid, voice note playing, every tier`() = screenshot.captureTiers("chat_kid_voice_playing") { tier ->
+        ChatScreen(state = ChatPreviewData.kidVoicePlaying(tier), onEvent = {}, readAloud = speech)
+    }
+
+    @Test
+    fun `kid, kindness check running, sprout and sapling`() = screenshot.captureTiers(
+        "chat_kid_checking",
+        tiers = listOf(KidUiTier.SPROUT, KidUiTier.SAPLING),
+    ) { tier ->
+        ChatScreen(state = ChatPreviewData.kidChecking(tier), onEvent = {})
+    }
+
+    @Test
+    fun `parent thread, sending, failed and blocked`() = screenshot.captureLightDark("chat_parent_send_states") {
+        ChatScreen(state = ChatPreviewData.parentSendStates(), onEvent = {})
+    }
+
+    @Test
+    fun `parent thread, photo loading and unavailable`() = screenshot.captureLightDark("chat_parent_photos") {
+        ChatScreen(state = ChatPreviewData.parentPhotos(), onEvent = {})
+    }
+
+    @Test
     fun `parent inbox`() = screenshot.captureLightDark("chat_threads") {
         ChatThreadListScreen(ChatPreviewData.threads(), onEvent = {}, onOpenThread = {}, onBack = {})
     }

@@ -453,6 +453,117 @@ class ChatViewModelTest {
     }
 
     @Test
+    fun `a draft cut at the limit never splits an emoji`() = runTest {
+        val vm = viewModel()
+        val state = ready(vm)
+        // The 1,000th UTF-16 unit is the first half of 🌱.
+        val text = "a".repeat(OutgoingMessage.MAX_TEXT_LENGTH - 1) + "🌱"
+        vm.onEvent(ChatEvent.DraftChanged(text))
+
+        assertEquals("a".repeat(OutgoingMessage.MAX_TEXT_LENGTH - 1), state().draft)
+        assertFalse(Character.isHighSurrogate(state().draft.last()))
+        assertEquals("ab", "ab🌱".truncatedTo(3))
+        assertEquals("ab🌱", "ab🌱".truncatedTo(4))
+    }
+
+    @Test
+    fun `a suggestion cut at the limit never splits an emoji`() = runTest {
+        filter.verdict = FilterVerdict.Nudge("b".repeat(OutgoingMessage.MAX_TEXT_LENGTH - 1) + "😀 more")
+        val vm = kid(KidUiTier.SAPLING)
+        val state = ready(vm)
+        vm.onEvent(ChatEvent.DraftChanged("mean"))
+        vm.onEvent(ChatEvent.SendText)
+        vm.onEvent(ChatEvent.NudgeUseSuggestion)
+
+        assertEquals("b".repeat(OutgoingMessage.MAX_TEXT_LENGTH - 1), state().draft)
+    }
+
+    @Test
+    fun `leaving the screen cancels a recording instead of sending it`() = runTest {
+        val vm = kid(KidUiTier.SEEDLING)
+        val state = ready(vm)
+        vm.onEvent(ChatEvent.StartRecording)
+        advanceTimeBy(3_000)
+        vm.onEvent(ChatEvent.ScreenStopped)
+        runCurrent()
+
+        assertEquals(listOf("start", "cancel"), recorder.calls)
+        assertTrue(sender.sent.isEmpty())
+        assertNull(state().recording)
+    }
+
+    @Test
+    fun `leaving the screen while the recorder is still starting cancels once it has started`() = runTest {
+        val gate = CompletableDeferred<Unit>()
+        recorder.startGate = gate
+        val vm = kid(KidUiTier.SEEDLING)
+        ready(vm)
+        vm.onEvent(ChatEvent.StartRecording)
+        vm.onEvent(ChatEvent.ScreenStopped)
+        gate.complete(Unit)
+        runCurrent()
+
+        assertEquals(listOf("start", "cancel"), recorder.calls)
+        assertTrue(sender.sent.isEmpty())
+    }
+
+    @Test
+    fun `a photo is loaded with the message's author and hash as its expectation`() = runTest {
+        blobs.blobs["blob-1"] = byteArrayOf(1)
+        reader.messages.value =
+            listOf(ChatTestData.photo("m1", "blob-1", author = "device-a", sha256 = "cd".repeat(32)))
+        ready(viewModel())()
+
+        assertEquals(listOf(BlobExpectation(ChatTestData.leo, "device-a", "cd".repeat(32))), blobs.expectations)
+    }
+
+    @Test
+    fun `reload asks again for photos that were unavailable`() = runTest {
+        reader.messages.value = listOf(ChatTestData.photo("m1", "blob-late"))
+        val vm = viewModel()
+        val state = ready(vm)
+        assertEquals(PhotoUi.Unavailable, state().messages.single().photo)
+
+        blobs.blobs["blob-late"] = byteArrayOf(4)
+        vm.onEvent(ChatEvent.Reload)
+        runCurrent()
+
+        assertEquals(PhotoUi.Loaded(byteArrayOf(4)), state().messages.single().photo)
+        assertEquals(listOf("blob-late", "blob-late"), blobs.loads)
+    }
+
+    @Test
+    fun `a blocked message can only be discarded, through the sender`() = runTest {
+        reader.messages.value = listOf(
+            ChatTestData.text("m1", "refused", MessageDirection.MINE).copy(sendState = SendState.BLOCKED),
+            ChatTestData.text("m2", "fine", MessageDirection.MINE),
+        )
+        val vm = viewModel()
+        val state = ready(vm)
+        assertEquals(SendState.BLOCKED, state().messages.first().sendState)
+
+        vm.onEvent(ChatEvent.Discard("m2"))
+        vm.onEvent(ChatEvent.Retry("m1"))
+        vm.onEvent(ChatEvent.Discard("m1"))
+        runCurrent()
+
+        assertEquals(listOf("m1"), sender.discarded)
+        assertTrue(sender.retried.isEmpty())
+        sender.result = Result.failure(IllegalStateException("not blocked"))
+        vm.onEvent(ChatEvent.Discard("m1"))
+        runCurrent()
+        assertEquals(ChatNotice.DISCARD_FAILED, state().notice)
+    }
+
+    @Test
+    fun `a kid's message from a parent's phone is labelled`() = runTest {
+        reader.messages.value = listOf(ChatTestData.text("m1", "hi").copy(fromParentPhone = true))
+        val state = ready(viewModel())
+
+        assertTrue(state().messages.single().fromParentPhone)
+    }
+
+    @Test
     fun `message text never shows up in toString`() = runTest {
         val secret = "my secret plan"
         reader.messages.value = listOf(ChatTestData.text("m1", secret))

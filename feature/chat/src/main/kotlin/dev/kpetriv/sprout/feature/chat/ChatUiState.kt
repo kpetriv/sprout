@@ -78,6 +78,7 @@ enum class ChatError {
  *
  * @property pending still being handed to [MessageSender] from this screen (not stored yet); a failed one can be
  *   retried or discarded.
+ * @property fromParentPhone a kid's message written in kid mode on a parent's phone: labelled so.
  */
 data class MessageUi(
     val id: String,
@@ -93,6 +94,7 @@ data class MessageUi(
     val photo: PhotoUi? = null,
     val authorName: String? = null,
     val pending: Boolean = false,
+    val fromParentPhone: Boolean = false,
 ) {
     val isVoice: Boolean get() = kind == MessageKind.VOICE && !locked
 
@@ -136,6 +138,7 @@ enum class ChatNotice {
     PLAYBACK_FAILED,
     PHOTO_FAILED,
     RETRY_FAILED,
+    DISCARD_FAILED,
 }
 
 /** Everything a chat screen can ask the [ChatViewModel] to do. */
@@ -179,7 +182,7 @@ sealed interface ChatEvent {
     /** Sends a failed message again. */
     data class Retry(val messageId: String) : ChatEvent
 
-    /** Drops a failed message that was never stored. */
+    /** Drops a failed message that was never stored, or removes a stored one whose sending is blocked. */
     data class Discard(val messageId: String) : ChatEvent
 
     data object NudgeSendAnyway : ChatEvent
@@ -192,5 +195,12 @@ sealed interface ChatEvent {
 
     data object NoticeShown : ChatEvent
 
+    /** Loads the thread again, and asks again for photos that were unavailable. */
     data object Reload : ChatEvent
+
+    /**
+     * The screen left the foreground (`ON_STOP`): a recording under way is cancelled, never sent (review M6), and
+     * playback stops.
+     */
+    data object ScreenStopped : ChatEvent
 }

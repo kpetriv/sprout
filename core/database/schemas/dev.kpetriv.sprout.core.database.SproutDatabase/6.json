@@ -2,7 +2,7 @@
   "formatVersion": 1,
   "database": {
     "version": 6,
-    "identityHash": "b012c5cec4880d91c6e9d6ac61ec2ed6",
+    "identityHash": "9b47945e5899c388f328c5ae321f1ff8",
     "entities": [
       {
         "tableName": "ledger_events",
@@ -1547,7 +1547,7 @@
       },
       {
         "tableName": "devices",
-        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`deviceId` TEXT NOT NULL, `uid` TEXT NOT NULL, `role` TEXT NOT NULL, `kidId` TEXT, `publicKey` BLOB NOT NULL, `status` TEXT NOT NULL, `revokedAtLamport` INTEGER, `attestation` TEXT NOT NULL, `registeredAtEpochMs` INTEGER NOT NULL, `lamport` INTEGER NOT NULL, `encryptionKey` BLOB, `encryptionKeySignature` BLOB, `encryptionKeyHouseholdId` TEXT, PRIMARY KEY(`deviceId`))",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`deviceId` TEXT NOT NULL, `uid` TEXT NOT NULL, `role` TEXT NOT NULL, `kidId` TEXT, `publicKey` BLOB NOT NULL, `status` TEXT NOT NULL, `revokedAtLamport` INTEGER, `attestation` TEXT NOT NULL, `registeredAtEpochMs` INTEGER NOT NULL, `lamport` INTEGER NOT NULL, `encryptionKey` BLOB, `encryptionKeySignature` BLOB, `encryptionKeyHouseholdId` TEXT, `encryptionKeyConflict` INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(`deviceId`))",
         "fields": [
           {
             "fieldPath": "deviceId",
@@ -1621,6 +1621,13 @@
             "fieldPath": "encryptionKeyHouseholdId",
             "columnName": "encryptionKeyHouseholdId",
             "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "encryptionKeyConflict",
+            "columnName": "encryptionKeyConflict",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "0"
           }
         ],
         "primaryKey": {
@@ -1900,7 +1907,7 @@
       },
       {
         "tableName": "messages",
-        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`messageId` TEXT NOT NULL, `householdId` TEXT NOT NULL, `threadId` TEXT NOT NULL, `authorUid` TEXT NOT NULL, `authorDeviceId` TEXT NOT NULL, `authorRole` TEXT NOT NULL, `seq` INTEGER NOT NULL, `lamport` INTEGER NOT NULL, `createdAtEpochMs` INTEGER NOT NULL, `epoch` INTEGER NOT NULL, `kind` TEXT NOT NULL, `ciphertext` TEXT NOT NULL, `blobId` TEXT, `signature` TEXT, `schemaVersion` INTEGER NOT NULL, `plaintext` BLOB, `status` TEXT NOT NULL, `reason` TEXT, `receivedAtEpochMs` INTEGER NOT NULL, PRIMARY KEY(`messageId`))",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`messageId` TEXT NOT NULL, `householdId` TEXT NOT NULL, `threadId` TEXT NOT NULL, `authorUid` TEXT NOT NULL, `authorDeviceId` TEXT NOT NULL, `authorRole` TEXT NOT NULL, `seq` INTEGER NOT NULL, `lamport` INTEGER NOT NULL, `createdAtEpochMs` INTEGER NOT NULL, `epoch` INTEGER NOT NULL, `kind` TEXT NOT NULL, `ciphertext` TEXT NOT NULL, `blobId` TEXT, `signature` TEXT, `schemaVersion` INTEGER NOT NULL, `plaintext` BLOB, `status` TEXT NOT NULL, `reason` TEXT, `receivedAtEpochMs` INTEGER NOT NULL, `displayedAtEpochMs` INTEGER NOT NULL, `late` INTEGER NOT NULL, PRIMARY KEY(`messageId`))",
         "fields": [
           {
             "fieldPath": "messageId",
@@ -2011,6 +2018,18 @@
             "columnName": "receivedAtEpochMs",
             "affinity": "INTEGER",
             "notNull": true
+          },
+          {
+            "fieldPath": "displayedAtEpochMs",
+            "columnName": "displayedAtEpochMs",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "late",
+            "columnName": "late",
+            "affinity": "INTEGER",
+            "notNull": true
           }
         ],
         "primaryKey": {
@@ -2054,7 +2073,7 @@
       },
       {
         "tableName": "message_seq",
-        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`threadId` TEXT NOT NULL, `authorDeviceId` TEXT NOT NULL, `nextSeq` INTEGER NOT NULL, PRIMARY KEY(`threadId`, `authorDeviceId`))",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`threadId` TEXT NOT NULL, `authorDeviceId` TEXT NOT NULL, `nextSeq` INTEGER NOT NULL, `lastLamport` INTEGER NOT NULL, `lastDisplayedAtEpochMs` INTEGER NOT NULL, `skippedRanges` TEXT NOT NULL, PRIMARY KEY(`threadId`, `authorDeviceId`))",
         "fields": [
           {
             "fieldPath": "threadId",
@@ -2073,6 +2092,24 @@
             "columnName": "nextSeq",
             "affinity": "INTEGER",
             "notNull": true
+          },
+          {
+            "fieldPath": "lastLamport",
+            "columnName": "lastLamport",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "lastDisplayedAtEpochMs",
+            "columnName": "lastDisplayedAtEpochMs",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "skippedRanges",
+            "columnName": "skippedRanges",
+            "affinity": "TEXT",
+            "notNull": true
           }
         ],
         "primaryKey": {
@@ -2085,7 +2122,7 @@
       },
       {
         "tableName": "thread_keys",
-        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`threadId` TEXT NOT NULL, `epoch` INTEGER NOT NULL, `createdByDeviceId` TEXT NOT NULL, `key` BLOB, `sourceDocId` TEXT NOT NULL, `wrapSetJson` TEXT NOT NULL, `lamport` INTEGER NOT NULL, `authorUid` TEXT NOT NULL, `signature` TEXT, `receivedAtEpochMs` INTEGER NOT NULL, PRIMARY KEY(`threadId`, `epoch`, `createdByDeviceId`))",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`threadId` TEXT NOT NULL, `epoch` INTEGER NOT NULL, `createdByDeviceId` TEXT NOT NULL, `key` BLOB, `sourceDocId` TEXT NOT NULL, `wrapSetJson` TEXT NOT NULL, `lamport` INTEGER NOT NULL, `authorUid` TEXT NOT NULL, `signature` TEXT, `receivedAtEpochMs` INTEGER NOT NULL, `confirmed` INTEGER NOT NULL, `olderKeys` BLOB, PRIMARY KEY(`threadId`, `epoch`, `createdByDeviceId`))",
         "fields": [
           {
             "fieldPath": "threadId",
@@ -2144,6 +2181,17 @@
             "columnName": "receivedAtEpochMs",
             "affinity": "INTEGER",
             "notNull": true
+          },
+          {
+            "fieldPath": "confirmed",
+            "columnName": "confirmed",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "olderKeys",
+            "columnName": "olderKeys",
+            "affinity": "BLOB"
           }
         ],
         "primaryKey": {
@@ -2241,7 +2289,7 @@
     ],
     "setupQueries": [
       "CREATE TABLE IF NOT EXISTS room_master_table (id INTEGER PRIMARY KEY,identity_hash TEXT)",
-      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, 'b012c5cec4880d91c6e9d6ac61ec2ed6')"
+      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, '9b47945e5899c388f328c5ae321f1ff8')"
     ]
   }
 }

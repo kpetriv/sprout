@@ -76,6 +76,12 @@ enum class SendState {
 
     /** The server refused it, or it could not be stored; it can be retried. */
     FAILED,
+
+    /**
+     * The server refused it for good and it holds back everything this device sends after it: "sending is blocked".
+     * It can only be discarded ([MessageSender.discard]).
+     */
+    BLOCKED,
 }
 
 /**
@@ -84,6 +90,10 @@ enum class SendState {
  *
  * @property locked the epoch key is not on this device yet ("waiting for a parent device"); no content is set.
  * @property authorName who wrote a [MessageDirection.THEIRS] message ("Mum", "Leo"), when known.
+ * @property authorDeviceId the device that wrote it: a VOICE or PHOTO blob must come from the same device.
+ * @property photoSha256 a PHOTO's lower-case hex SHA-256 from its signed content: the blob must decrypt to it.
+ * @property fromParentPhone a kid's message written in kid mode on a parent's phone (D-M3-12): anyone holding that
+ *   phone could have written it, so it is labelled.
  */
 data class ChatMessage(
     val id: String,
@@ -98,6 +108,9 @@ data class ChatMessage(
     val durationMs: Long? = null,
     val blobId: String? = null,
     val authorName: String? = null,
+    val authorDeviceId: String? = null,
+    val photoSha256: String? = null,
+    val fromParentPhone: Boolean = false,
 ) {
     override fun toString(): String =
         "ChatMessage(id=$id, direction=$direction, kind=$kind, sendState=$sendState, locked=$locked)"
@@ -137,14 +150,24 @@ sealed interface OutgoingMessage {
 }
 
 /**
- * Writes outgoing messages (`DocumentWrites.appendMessage` plus, for media, the blob first). A success means the
- * message is stored and queued; [MessageReader] then shows it with its [SendState].
+ * Writes outgoing messages (`MessageWrites` plus, for media, the blob first). A success means the message is stored
+ * and queued; [MessageReader] then shows it with its [SendState].
+ *
+ * Implementations run every write to the end in an application-scoped, non-cancellable writer (review M6): a screen
+ * that is closed while a send is under way does not leave a half-written blob or message behind. The caller may stop
+ * waiting; the write still completes.
  */
 interface MessageSender {
     suspend fun send(threadId: KidId, message: OutgoingMessage): Result<Unit>
 
     /** Queues a stored [SendState.FAILED] message again. */
     suspend fun retry(threadId: KidId, messageId: String): Result<Unit>
+
+    /**
+     * Removes a stored [SendState.BLOCKED] message of this device, with what it queued (D-M4-19). Its place in the
+     * thread's sequence stays used, so the other devices skip it after a day. Fails for any other message.
+     */
+    suspend fun discard(threadId: KidId, messageId: String): Result<Unit>
 }
 
 /** Whether this device can encrypt in a thread (M4 §1.2: latest epoch unwrappable, no revoked member in it). */
@@ -203,8 +226,15 @@ interface VoicePlayer {
 
 /** Fetches, verifies and decrypts a blob (`SyncTransport.fetchBlob` plus the local cache). */
 fun interface BlobLoader {
-    suspend fun load(blobId: String): Result<ByteArray>
+    /** The plaintext of [blobId]; a failure when it is missing, locked, or not what [expected] says (audit M5). */
+    suspend fun load(blobId: String, expected: BlobExpectation): Result<ByteArray>
 }
+
+/**
+ * What a message's blob must be (audit M5): a blob of [threadId]'s thread, written by [authorDeviceId] (the message's
+ * author device), whose plaintext has the SHA-256 [sha256] when the message names one (a photo). Never logged.
+ */
+data class BlobExpectation(val threadId: KidId, val authorDeviceId: String?, val sha256: String?)
 
 /**
  * The kindness hook (M6 fills it): looks at text a kid is about to send. It never blocks: a [FilterVerdict.Nudge] is

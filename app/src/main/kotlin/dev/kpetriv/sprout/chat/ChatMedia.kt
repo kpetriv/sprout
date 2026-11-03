@@ -9,10 +9,14 @@ import android.os.SystemClock
 import dagger.hilt.android.qualifiers.ApplicationContext
 import dev.kpetriv.sprout.core.common.Dispatcher
 import dev.kpetriv.sprout.core.common.SproutDispatchers
+import dev.kpetriv.sprout.core.database.BlobExpectation
+import dev.kpetriv.sprout.core.database.BlobTarget
 import dev.kpetriv.sprout.core.database.BlobUnavailableException
 import dev.kpetriv.sprout.core.database.ChatBlobs
 import dev.kpetriv.sprout.core.domainledger.chat.ChatLimits
 import dev.kpetriv.sprout.core.model.BlobId
+import dev.kpetriv.sprout.core.model.DeviceId
+import dev.kpetriv.sprout.core.model.ThreadId
 import dev.kpetriv.sprout.core.sync.SyncTransport
 import dev.kpetriv.sprout.feature.chat.BlobLoader
 import dev.kpetriv.sprout.feature.chat.VoiceClip
@@ -27,6 +31,7 @@ import java.io.File
 import java.io.IOException
 import javax.inject.Inject
 import kotlin.coroutines.resume
+import dev.kpetriv.sprout.feature.chat.BlobExpectation as ChatBlobExpectation
 
 /** The pixel size of a JPEG, read from its header only. */
 internal data class JpegSize(val width: Int, val height: Int) {
@@ -52,17 +57,33 @@ internal data class JpegSize(val width: Int, val height: Int) {
 /**
  * [BlobLoader] (chat media) and [RemotePhotoLoader] (chore photos in the approvals inbox), M4 §2: the local cache
  * first ([ChatBlobs.open]), otherwise the chunks from [SyncTransport.fetchBlob], verified, cached and decrypted by
- * [ChatBlobs.ingest]. A failure is a failed [Result] ([BlobUnavailableException] or the transport's `SyncException`);
- * nothing is logged.
+ * [ChatBlobs.ingest]. Every blob is checked against what refers to it (audit M5): a chat blob against its message's
+ * thread, author device and photo hash; a chore photo against the submission that names it (kid, submission, photo
+ * hash, [ChatBlobs.chorePhotoExpectation]). A failure is a failed [Result] ([BlobUnavailableException] or the
+ * transport's `SyncException`); nothing is logged.
  */
 class TransportBlobLoader @Inject constructor(private val blobs: ChatBlobs, private val transport: SyncTransport) :
     BlobLoader,
     RemotePhotoLoader {
-    @Suppress("TooGenericExceptionCaught") // Every failure is a result: the screen shows "unavailable".
-    override suspend fun load(blobId: String): Result<ByteArray> = try {
+    override suspend fun load(blobId: String, expected: ChatBlobExpectation): Result<ByteArray> = attempt {
+        val target = BlobTarget.Thread(ThreadId.of(expected.threadId))
+        val author = expected.authorDeviceId?.let(::DeviceId)
+        load(BlobId(blobId), BlobExpectation(target, author, expected.sha256))
+    }
+
+    override suspend fun load(blobId: String): Result<ByteArray> = attempt {
         val id = BlobId(blobId)
-        val bytes = blobs.open(id) ?: blobs.ingest(id, transport.fetchBlob(id).getOrThrow())
-        Result.success(bytes)
+        val expected = blobs.chorePhotoExpectation(id)
+            ?: throw BlobUnavailableException(BlobUnavailableException.Reason.INVALID)
+        load(id, expected)
+    }
+
+    private suspend fun load(id: BlobId, expected: BlobExpectation): ByteArray =
+        blobs.open(id, expected) ?: blobs.ingest(id, transport.fetchBlob(id).getOrThrow(), expected)
+
+    @Suppress("TooGenericExceptionCaught") // Every failure is a result: the screen shows "unavailable".
+    private suspend fun attempt(block: suspend () -> ByteArray): Result<ByteArray> = try {
+        Result.success(block())
     } catch (cancellation: CancellationException) {
         throw cancellation
     } catch (failure: Exception) {

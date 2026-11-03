@@ -13,6 +13,7 @@ import dev.kpetriv.sprout.core.domainledger.SignatureCheck
 import dev.kpetriv.sprout.core.domainledger.chat.ThreadKeyDocument
 import dev.kpetriv.sprout.core.domainledger.chat.ThreadKeyPolicy
 import dev.kpetriv.sprout.core.domainledger.chat.ThreadMembers
+import dev.kpetriv.sprout.core.model.DeviceId
 import dev.kpetriv.sprout.core.model.KidId
 import dev.kpetriv.sprout.core.model.ThreadId
 import kotlinx.coroutines.CancellationException
@@ -84,27 +85,43 @@ internal class ThreadKeyStore(private val database: SproutDatabase) {
     /** The documents of [threadId], one per (epoch, creator). */
     suspend fun rows(threadId: ThreadId): List<ThreadKeyEntity> = keys.forThread(threadId.value)
 
-    /**
-     * The latest document of the thread: the highest epoch, and among two creators of that epoch (a rotation race)
-     * the higher lamport, then the higher creator id. Null without any.
-     */
-    suspend fun latest(threadId: ThreadId): ThreadKeyEntity? = latestOf(rows(threadId))
-
-    /** The epochs whose key this device holds. */
-    suspend fun heldEpochs(threadId: ThreadId): Set<Long> =
-        rows(threadId).filter { it.key != null }.mapTo(HashSet()) { it.epoch }
-
-    /** Every key this device holds for ([threadId], [epoch]), [preferred]'s first. */
-    suspend fun keysFor(threadId: ThreadId, epoch: Long, preferred: ThreadKeyEntity? = null): List<ThreadKey> =
-        rows(threadId)
-            .filter { it.epoch == epoch && it.key != null }
-            .sortedByDescending { preferred != null && it.createdByDeviceId == preferred.createdByDeviceId }
-            .map { ThreadKey.fromBytes(threadId, epoch, requireNotNull(it.key)) }
+    /** Every key this device holds for ([threadId], [epoch]), older keys of a creator included, [preferred]'s first. */
+    suspend fun keysFor(threadId: ThreadId, epoch: Long, preferred: DeviceId? = null): List<ThreadKey> = rows(threadId)
+        .filter { it.epoch == epoch }
+        .sortedByDescending { preferred != null && it.createdByDeviceId == preferred }
+        .flatMap { it.allKeys() }
+        .distinctBy { it.toList() }
+        .map { ThreadKey.fromBytes(threadId, epoch, it) }
 
     companion object {
-        fun latestOf(rows: List<ThreadKeyEntity>): ThreadKeyEntity? = rows.maxWithOrNull(
-            compareBy<ThreadKeyEntity>({ it.epoch }, { it.lamport }, { it.createdByDeviceId.value }),
-        )
+        /** The rows whose document still parses, with it. */
+        fun documents(rows: List<ThreadKeyEntity>): List<Pair<ThreadKeyEntity, ThreadKeyDocument>> =
+            rows.mapNotNull { row -> documentOf(row)?.let { row to it } }
+
+        /**
+         * The row whose key [self] sends with (M4 §1.2, review H2): among the latest epoch's rows whose key this device
+         * holds, its own when the server has confirmed it, otherwise the newest (lamport, then creator id) of another
+         * creator. Its own **unconfirmed** row is never used: a document the server refused would leave every
+         * message under it unreadable. Null when there is none.
+         */
+        fun sendingRow(rows: List<ThreadKeyEntity>, self: DeviceId): ThreadKeyEntity? {
+            val latest = ThreadKeyPolicy.latestEpoch(documents(rows).map { it.second }) ?: return null
+            val usable = rows.filter {
+                it.epoch == latest && it.key != null && (it.createdByDeviceId != self || it.confirmed)
+            }
+            return usable.firstOrNull { it.createdByDeviceId == self }
+                ?: usable.maxWithOrNull(compareBy<ThreadKeyEntity>({ it.lamport }, { it.createdByDeviceId.value }))
+        }
+
+        /**
+         * Whether [self] may send in a thread with these [rows] and this [membership]'s excluded devices
+         * ([ThreadKeyPolicy.sendingEpoch] over every document, with [sendingRow] as the usable key); returns the row.
+         */
+        fun sendable(rows: List<ThreadKeyEntity>, self: DeviceId, excluded: Set<DeviceId>): ThreadKeyEntity? {
+            val row = sendingRow(rows, self)
+            val documents = documents(rows).map { it.second }
+            return row?.takeIf { ThreadKeyPolicy.sendingEpoch(documents, holdsUsableKey = true, excluded) != null }
+        }
 
         /** The `wraps` object of [document], as stored in [ThreadKeyEntity.wrapSetJson]. */
         fun wrapSetJson(document: ThreadKeyDocument): String =
@@ -135,28 +152,30 @@ internal class ThreadKeyStore(private val database: SproutDatabase) {
 }
 
 /**
- * The epoch this device may send with in [threadId], and its key, or null when it must wait for a parent device
- * ([ThreadKeyPolicy.sendingEpoch] over the latest document, the epochs this device holds and the devices that must
- * not hold the key). The caller closes the key.
+ * The key [self] may send with in [threadId], or null when it must wait for a parent device: [ThreadKeyStore.sendable]
+ * over the stored documents and the devices that must not hold the key. The caller closes the key.
  */
-@Suppress("ReturnCount") // One early return per missing ingredient.
 internal suspend fun ThreadKeyStore.sendingKey(
     threadId: ThreadId,
+    self: DeviceId,
     devices: List<RegisteredDevice>,
     check: SignatureCheck,
     kidArchived: Boolean,
 ): ThreadKey? {
-    val rows = rows(threadId)
-    val latestRow = ThreadKeyStore.latestOf(rows) ?: return null
-    val latest = ThreadKeyStore.documentOf(latestRow) ?: return null
     val membership = ThreadMembers.resolve(threadId, devices, check, kidArchived)
-    val held = rows.filter { it.key != null }.mapTo(HashSet()) { it.epoch }
-    val epoch = ThreadKeyPolicy.sendingEpoch(latest, held, membership.excluded) ?: return null
-    val candidates = keysFor(threadId, epoch, latestRow)
-    candidates.drop(1).forEach { it.close() }
-    return candidates.firstOrNull()
+    val row = ThreadKeyStore.sendable(rows(threadId), self, membership.excluded) ?: return null
+    return ThreadKey.fromBytes(threadId, row.epoch, requireNotNull(row.key))
 }
 
 /** Whether the kid of [threadId] is archived (its KID devices then leave the thread). */
 internal suspend fun SproutDatabase.isArchivedKid(threadId: ThreadId): Boolean =
     kidDao().get(KidId(threadId.value))?.archived == true
+
+/**
+ * [existing]'s older keys with its current key appended (oldest first): the `olderKeys` of a row whose creator replaced
+ * the key of one epoch (review H2). Null when there is nothing to keep.
+ */
+internal fun olderKeysWith(existing: ThreadKeyEntity?): ByteArray? {
+    val current = existing?.key ?: return existing?.olderKeys
+    return (existing.olderKeys ?: ByteArray(0)) + current
+}

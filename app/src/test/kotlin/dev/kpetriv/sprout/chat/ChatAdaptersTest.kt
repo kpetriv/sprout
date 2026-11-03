@@ -15,9 +15,12 @@ import dev.kpetriv.sprout.core.model.HouseholdId
 import dev.kpetriv.sprout.core.model.KidId
 import dev.kpetriv.sprout.core.sync.BlobChunkJson
 import dev.kpetriv.sprout.core.sync.DocumentJsonCodec
+import dev.kpetriv.sprout.core.sync.PushItemId
+import dev.kpetriv.sprout.core.sync.PushRejection
 import dev.kpetriv.sprout.core.sync.SyncError
 import dev.kpetriv.sprout.core.sync.SyncException
 import dev.kpetriv.sprout.core.sync.SyncTransport
+import dev.kpetriv.sprout.feature.chat.ChatMessage
 import dev.kpetriv.sprout.feature.chat.ChatMode
 import dev.kpetriv.sprout.feature.chat.ChatViewModel
 import dev.kpetriv.sprout.feature.chat.MessageDirection
@@ -26,6 +29,8 @@ import dev.kpetriv.sprout.feature.chat.OutgoingMessage
 import dev.kpetriv.sprout.feature.chat.SendState
 import dev.kpetriv.sprout.feature.chat.ThreadKeyState
 import dev.kpetriv.sprout.feature.chat.VoiceClip
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.JsonObject
@@ -43,6 +48,7 @@ import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import dev.kpetriv.sprout.feature.chat.BlobExpectation as ChatBlobExpectation
 
 /** The chat port adapters over two real Room devices (a parent's phone and the kid's), as the screens use them. */
 @RunWith(RobolectricTestRunner::class)
@@ -66,7 +72,14 @@ class ChatAdaptersTest {
     private fun TestHousehold.reader(mode: ChatMode?) =
         RoomMessageReader(messageReader, chatThreads, sessions, perspective(mode))
 
-    private fun TestHousehold.sender(mode: ChatMode?) = RoomMessageSender(messageWrites, blobWrites, perspective(mode))
+    /** The application scope the sender writes on (review M6). */
+    private val appScope = CoroutineScope(SupervisorJob())
+
+    private fun TestHousehold.sender(mode: ChatMode?) =
+        RoomMessageSender(messageWrites, blobWrites, perspective(mode), appScope)
+
+    private fun expectation(message: ChatMessage) =
+        ChatBlobExpectation(kidId, message.authorDeviceId, message.photoSha256)
 
     private suspend fun TestHousehold.registered() = RegisteredDevice(
         deviceId = deviceId,
@@ -94,6 +107,7 @@ class ChatAdaptersTest {
         kid.applier.applyRegistry(devices, emptyList())
         parent.addKid(kidId.value)
         parent.threadKeyMaintenance()
+        parent.confirmThreadKeys()
         kid.pullFrom(parent)
     }
 
@@ -154,6 +168,7 @@ class ChatAdaptersTest {
         val asParent = parent.reader(ChatMode.PARENT).observe(kidId, 50).first().messages.single()
         assertEquals(MessageDirection.THEIRS, asParent.direction)
         assertEquals("Leo", asParent.authorName)
+        assertTrue(asParent.fromParentPhone, "labelled: written in kid mode on a parent's phone")
         kid.pullFrom(parent)
         assertEquals(
             MessageDirection.MINE,
@@ -177,11 +192,19 @@ class ChatAdaptersTest {
 
         // The sender's own cache serves it without the network.
         val offline = TransportBlobLoader(parent.chatBlobs, transportServing(null))
-        assertContentEquals(jpeg, offline.load(blobId).getOrThrow())
+        assertContentEquals(jpeg, offline.load(blobId, expectation(photo)).getOrThrow())
         kid.pullFrom(parent)
+        val received = kid.reader(ChatMode.KID).observe(kidId, 50).first().messages.single()
+        assertEquals(photo.photoSha256, received.photoSha256)
+        assertEquals(parent.deviceId.value, received.authorDeviceId)
         val loader = TransportBlobLoader(kid.chatBlobs, transportServing(parent))
-        assertContentEquals(jpeg, loader.load(blobId).getOrThrow())
-        assertTrue(TransportBlobLoader(kid.chatBlobs, transportServing(null)).load("missing-blob").isFailure)
+        assertContentEquals(jpeg, loader.load(blobId, expectation(received)).getOrThrow())
+        val missing = TransportBlobLoader(kid.chatBlobs, transportServing(null))
+        assertTrue(missing.load("missing-blob", expectation(received)).isFailure)
+        // A blob that is not the message's (another author claimed) is refused, even from the cache.
+        assertTrue(loader.load(blobId, expectation(received.copy(authorDeviceId = kid.deviceId.value))).isFailure)
+        // As a chore photo loader, a blob no submission names is refused.
+        assertTrue(loader.load(blobId).isFailure)
     }
 
     @Test
@@ -196,7 +219,25 @@ class ChatAdaptersTest {
         assertEquals(4_200L, voice.durationMs)
         assertEquals(MessageDirection.THEIRS, voice.direction)
         val loader = TransportBlobLoader(parent.chatBlobs, transportServing(kid))
-        assertContentEquals(clip.bytes, loader.load(requireNotNull(voice.blobId)).getOrThrow())
+        assertContentEquals(clip.bytes, loader.load(requireNotNull(voice.blobId), expectation(voice)).getOrThrow())
+    }
+
+    @Test
+    fun `a blocked message shows as blocked and is discarded through the sender`() = runTest {
+        linked()
+        val sender = kid.sender(ChatMode.KID)
+        assertTrue(sender.send(kidId, OutgoingMessage.Text("refused")).isSuccess)
+        val stored = kid.reader(ChatMode.KID).observe(kidId, 50).first().messages.single()
+        assertTrue(sender.discard(kidId, stored.id).isFailure, "not blocked")
+        val row = kid.queued(OutboxKind.MESSAGE).single()
+        kid.outbox.fail(row.seq, SyncError.Permanent("permission-denied"), Long.MAX_VALUE)
+        kid.outbox.auditRejections(
+            listOf(PushRejection(row.seq, PushItemId("message/${stored.id}"), "permission-denied", blocking = true)),
+        )
+        assertEquals(SendState.BLOCKED, kid.reader(ChatMode.KID).observe(kidId, 50).first().messages.single().sendState)
+
+        assertTrue(sender.discard(kidId, stored.id).isSuccess)
+        assertTrue(kid.reader(ChatMode.KID).observe(kidId, 50).first().messages.isEmpty())
     }
 
     @Test

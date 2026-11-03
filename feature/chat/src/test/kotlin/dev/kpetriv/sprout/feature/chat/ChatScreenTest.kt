@@ -106,7 +106,8 @@ class ChatScreenTest {
         compose.onNodeWithContentDescription("Recording. Tap to send.").performSemanticsAction(SemanticsActions.OnClick)
 
         assertEquals(listOf<ChatEvent>(ChatEvent.StopRecording), events)
-        compose.onNodeWithText("Recording… 22 seconds left").assertIsDisplayed()
+        // 22 seconds left: screen readers hear it rounded up to a five-second step (at most one update every 5 s).
+        compose.onNodeWithContentDescription("Recording… 25 seconds left", substring = true).assertIsDisplayed()
     }
 
     @Test

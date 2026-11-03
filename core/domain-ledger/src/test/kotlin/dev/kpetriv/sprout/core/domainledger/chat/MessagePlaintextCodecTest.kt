@@ -77,6 +77,27 @@ class MessagePlaintextCodecTest {
     }
 
     @Test
+    fun aPlaintextThatCannotBeEncodedAgainDoesNotDecode() {
+        // A JSON escape of a lone surrogate parses, but the result has no canonical (strict UTF-8) encoding.
+        assertNull(MessagePlaintextCodec.decode(MessageKind.TEXT, """{"text":"\ud800"}""".encodeToByteArray()))
+        assertNull(MessagePlaintextCodec.decode(MessageKind.TEXT, """{"text":"a\udfffb"}""".encodeToByteArray()))
+        val caption = """{"caption":"\ud800","photoRef":{"height":1,"sha256":"$sha","width":1}}"""
+        assertNull(MessagePlaintextCodec.decode(MessageKind.PHOTO, caption.encodeToByteArray()))
+        // A correctly escaped pair is fine.
+        val pair = MessagePlaintextCodec.decode(MessageKind.TEXT, """{"text":"\ud83c\udf31"}""".encodeToByteArray())
+        assertEquals(MessagePlaintext.Text("🌱"), pair)
+    }
+
+    @Test
+    fun oversizedDecodedTextDoesNotDecode() {
+        val tooLong = "x".repeat(MAX_CHAT_TEXT_LENGTH + 1)
+        assertNull(MessagePlaintextCodec.decode(MessageKind.TEXT, """{"text":"$tooLong"}""".encodeToByteArray()))
+        // Escapes that expand past the limit once decoded.
+        val escaped = "\\u0041".repeat(MAX_CHAT_TEXT_LENGTH + 1)
+        assertNull(MessagePlaintextCodec.decode(MessageKind.TEXT, """{"text":"$escaped"}""".encodeToByteArray()))
+    }
+
+    @Test
     fun toStringNeverPrintsContent() {
         assertFalse(MessagePlaintext.Text("secret words").toString().contains("secret"))
         assertFalse(MessagePlaintext.Photo(ChatPhotoRef(sha, 1, 1), "secret").toString().contains("secret"))

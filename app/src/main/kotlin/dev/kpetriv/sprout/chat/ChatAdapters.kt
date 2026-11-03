@@ -18,6 +18,7 @@ import dev.kpetriv.sprout.core.model.KidId
 import dev.kpetriv.sprout.core.model.MessageId
 import dev.kpetriv.sprout.core.model.Role
 import dev.kpetriv.sprout.core.model.ThreadId
+import dev.kpetriv.sprout.di.ApplicationScope
 import dev.kpetriv.sprout.feature.chat.ChatMessage
 import dev.kpetriv.sprout.feature.chat.ChatMode
 import dev.kpetriv.sprout.feature.chat.ChatThreadSummary
@@ -33,6 +34,9 @@ import dev.kpetriv.sprout.feature.chat.SendState
 import dev.kpetriv.sprout.feature.chat.ThreadKeyState
 import dev.kpetriv.sprout.feature.chat.ThreadKeyStatus
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -102,22 +106,27 @@ class RoomMessageReader @Inject constructor(
             direction = if (mine) MessageDirection.MINE else MessageDirection.THEIRS,
             kind = MessageKind.valueOf(kind.name),
             createdAt = createdAt,
-            sendState = when (sendState) {
-                MessageSendState.SENDING -> SendState.SENDING
-                MessageSendState.SENT -> SendState.SENT
-                MessageSendState.FAILED -> SendState.FAILED
-            },
+            sendState = sendState.toPort(),
             locked = locked,
             blobId = blobId?.value,
             authorName = kidName.takeIf { !mine && authorRole == Role.KID },
+            authorDeviceId = authorDeviceId.value,
+            fromParentPhone = authorRole == Role.KID && authorDeviceRole == Role.PARENT,
         )
         return when (val content = content) {
             is MessagePlaintext.Text -> base.copy(text = content.text)
             is MessagePlaintext.Preset -> base.copy(presetId = content.presetId, emoji = content.emoji)
             is MessagePlaintext.Voice -> base.copy(durationMs = content.durationMs)
-            is MessagePlaintext.Photo -> base.copy(text = content.caption)
+            is MessagePlaintext.Photo -> base.copy(text = content.caption, photoSha256 = content.photoRef.sha256)
             null -> base
         }
+    }
+
+    private fun MessageSendState.toPort(): SendState = when (this) {
+        MessageSendState.SENDING -> SendState.SENDING
+        MessageSendState.SENT -> SendState.SENT
+        MessageSendState.FAILED -> SendState.FAILED
+        MessageSendState.BLOCKED -> SendState.BLOCKED
     }
 }
 
@@ -125,42 +134,61 @@ class RoomMessageReader @Inject constructor(
  * [MessageSender] over [MessageWrites]: media first goes through [BlobWrites.store] (encrypted with the thread key
  * and queued before the message that names it). In kid mode on a parent's phone the message is written as the kid
  * (`asKid`, D-M3-12); a KID session always writes as its kid.
+ *
+ * Every write runs on the application scope, not cancellable (review M6): the screen waits for the result, but a
+ * screen that goes away mid-send never cuts a blob off from the message that names it.
  */
 class RoomMessageSender @Inject constructor(
     private val writes: MessageWrites,
     private val blobs: BlobWrites,
     private val perspective: ChatPerspective,
+    @param:ApplicationScope private val scope: CoroutineScope,
 ) : MessageSender {
+    override suspend fun send(threadId: KidId, message: OutgoingMessage): Result<Unit> {
+        val asKid = asKid()
+        return onAppScope { write(ThreadId.of(threadId), message, asKid) }
+    }
+
+    override suspend fun retry(threadId: KidId, messageId: String): Result<Unit> = onAppScope {
+        check(writes.retry(MessageId(messageId))) { "not queued" }
+    }
+
+    override suspend fun discard(threadId: KidId, messageId: String): Result<Unit> = onAppScope {
+        check(writes.discard(MessageId(messageId))) { "not blocked" }
+    }
+
+    /** Runs [block] to the end on the application scope; its failure (not a cancellation) is the result. */
     @Suppress("TooGenericExceptionCaught") // Any storage or key failure is a failed send the screen can retry.
-    override suspend fun send(threadId: KidId, message: OutgoingMessage): Result<Unit> = try {
-        val thread = ThreadId.of(threadId)
+    private suspend fun onAppScope(block: suspend () -> Unit): Result<Unit> = scope.async(NonCancellable) {
+        try {
+            block()
+            Result.success(Unit)
+        } catch (cancellation: CancellationException) {
+            throw cancellation
+        } catch (failure: Exception) {
+            Result.failure(failure)
+        }
+    }.await()
+
+    private suspend fun write(thread: ThreadId, message: OutgoingMessage, asKid: Boolean) {
         when (message) {
-            is OutgoingMessage.Text -> writes.send(thread, MessagePlaintext.Text(message.text), asKid = asKid())
+            is OutgoingMessage.Text -> writes.send(thread, MessagePlaintext.Text(message.text), asKid = asKid)
 
             is OutgoingMessage.Preset ->
-                writes.send(thread, MessagePlaintext.Preset(message.presetId, message.emoji), asKid = asKid())
+                writes.send(thread, MessagePlaintext.Preset(message.presetId, message.emoji), asKid = asKid)
 
             is OutgoingMessage.Voice -> {
                 val blobId = blobs.store(BlobTarget.Thread(thread), message.clip.bytes)
-                writes.send(thread, MessagePlaintext.Voice(message.clip.durationMs), blobId, asKid())
+                writes.send(thread, MessagePlaintext.Voice(message.clip.durationMs), blobId, asKid)
             }
 
             is OutgoingMessage.Photo -> {
                 val size = JpegSize.of(message.jpeg)
                 val ref = ChatPhotoRef(JvmSha256Hasher.sha256(message.jpeg).toHex(), size.width, size.height)
                 val blobId = blobs.store(BlobTarget.Thread(thread), message.jpeg)
-                writes.send(thread, MessagePlaintext.Photo(ref, message.caption), blobId, asKid())
+                writes.send(thread, MessagePlaintext.Photo(ref, message.caption), blobId, asKid)
             }
         }
-        Result.success(Unit)
-    } catch (cancellation: CancellationException) {
-        throw cancellation
-    } catch (failure: Exception) {
-        Result.failure(failure)
-    }
-
-    override suspend fun retry(threadId: KidId, messageId: String): Result<Unit> = runCatching {
-        check(writes.retry(MessageId(messageId))) { "not queued" }
     }
 
     private fun asKid(): Boolean = perspective.kidMode

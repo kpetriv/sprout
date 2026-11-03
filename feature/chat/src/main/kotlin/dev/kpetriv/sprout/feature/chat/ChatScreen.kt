@@ -22,6 +22,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.kpetriv.sprout.core.designsystem.theme.ProvideKidTier
 import dev.kpetriv.sprout.core.model.KidId
@@ -40,6 +42,7 @@ fun ParentChatRoute(threadId: KidId, onBack: () -> Unit, modifier: Modifier = Mo
     }
     val viewModel = chatViewModel<ChatViewModel>(key = "chat:parent:${threadId.value}", args = args)
     val state by viewModel.state.collectAsStateWithLifecycle()
+    LifecycleEventEffect(Lifecycle.Event.ON_STOP) { viewModel.onEvent(ChatEvent.ScreenStopped) }
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
         if (uri != null) viewModel.onEvent(ChatEvent.PhotoPicked(uri.toString()))
     }
@@ -75,6 +78,8 @@ fun KidChatRoute(
     }
     val viewModel = chatViewModel<ChatViewModel>(key = "chat:kid:${kidId.value}:${tier.name}", args = args)
     val state by viewModel.state.collectAsStateWithLifecycle()
+    // Leaving the screen mid-recording (home, lock, a call) cancels the voice note instead of sending it.
+    LifecycleEventEffect(Lifecycle.Event.ON_STOP) { viewModel.onEvent(ChatEvent.ScreenStopped) }
     val context = LocalContext.current
     val microphone = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         // Granted: the kid holds the button again; the press that asked did not record.

@@ -195,9 +195,16 @@ private fun EmojiRow(state: ChatUiState.Ready, onEvent: (ChatEvent) -> Unit) {
 
 private const val MILLIS_PER_SECOND = 1_000L
 
+/** Screen readers hear the remaining time at most this often (every second would talk over the kid). */
+private const val ANNOUNCE_EVERY_SECONDS = 5
+
 @Composable
 private fun RecordingPanel(recording: RecordingUi) {
     val seconds = ((recording.remainingMs + MILLIS_PER_SECOND - 1) / MILLIS_PER_SECOND).toInt()
+    // Rounded up to a step of five: the announced text, so the live region changes at most every five seconds.
+    val announcedSeconds = (seconds + ANNOUNCE_EVERY_SECONDS - 1) / ANNOUNCE_EVERY_SECONDS * ANNOUNCE_EVERY_SECONDS
+    val announcement = pluralStringResource(R.plurals.feature_chat_recording, announcedSeconds, announcedSeconds) +
+        ". " + stringResource(R.string.feature_chat_recording_cancel_hint)
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -205,7 +212,10 @@ private fun RecordingPanel(recording: RecordingUi) {
             .clip(MaterialTheme.shapes.large)
             .background(MaterialTheme.colorScheme.errorContainer)
             .padding(24.dp)
-            .semantics(mergeDescendants = true) { liveRegion = LiveRegionMode.Polite },
+            .clearAndSetSemantics {
+                contentDescription = announcement
+                liveRegion = LiveRegionMode.Polite
+            },
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {

@@ -11,6 +11,7 @@ import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -21,14 +22,15 @@ class ThreadKeyDocumentTest {
     @Test
     fun payloadHasTheDocumentedShapeAndRoundTrips() {
         val doc = keyDoc(3, parent, kid)
-        assertEquals("kid-1.3", doc.docId)
+        assertEquals("kid-1.3.parent-phone", doc.docId)
         assertEquals(
             """{"createdByDeviceId":"parent-phone","epoch":3,"threadId":"kid-1",""" +
                 """"wraps":{"kid-tablet":{"wrapped":"$sampleWrap"},"parent-phone":{"wrapped":"$sampleWrap"}}}""",
             CanonicalEncoder.encodeTreeToString(doc.toPayload()),
         )
         assertEquals(doc, ThreadKeyDocument.fromPayload(doc.toPayload()))
-        assertTrue(doc.matchesDocId("kid-1.3"))
+        assertTrue(doc.matchesDocId("kid-1.3.parent-phone"))
+        assertFalse(doc.matchesDocId("kid-1.3"))
         assertContentEquals(Base64.Default.decode(sampleWrap), doc.wrappedFor(kid.deviceId))
         assertNull(doc.wrappedFor(DeviceId("stranger")))
     }

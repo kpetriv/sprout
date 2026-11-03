@@ -46,6 +46,9 @@ enum class MessageStatus {
  * @property ciphertext the envelope's base64 ciphertext; empty for a [MessageStatus.QUARANTINED] row.
  * @property reason the hold or quarantine reason (`QuarantineReason` name); null otherwise.
  * @property receivedAtEpochMs when the row became visible on this device (local wall clock): the unread count's key.
+ * @property displayedAtEpochMs the time the screens show (audit M4): the signed `createdAt`, raised to the previous
+ *   message's of the same author in the thread when it is earlier, so an author cannot backdate a message.
+ * @property late accepted for a `seq` this device had already skipped (audit L3): the gap timed out before it came.
  */
 @Entity(
     tableName = "messages",
@@ -76,6 +79,8 @@ class MessageEntity(
     val status: MessageStatus,
     val reason: String?,
     val receivedAtEpochMs: Long,
+    val displayedAtEpochMs: Long = createdAtEpochMs,
+    val late: Boolean = false,
 ) {
     /** The envelope this row holds, or null for a quarantined row (or one that no longer passes its own checks). */
     fun toEnvelope(): MessageEnvelope? = if (status == MessageStatus.QUARANTINED) {
@@ -110,9 +115,12 @@ class MessageEntity(
         status: MessageStatus = this.status,
         reason: String? = this.reason,
         receivedAtEpochMs: Long = this.receivedAtEpochMs,
+        ciphertext: String = this.ciphertext,
+        signature: String? = this.signature,
     ): MessageEntity = MessageEntity(
         messageId, householdId, threadId, authorUid, authorDeviceId, authorRole, seq, lamport, createdAtEpochMs,
         epoch, kind, ciphertext, blobId, signature, schemaVersion, plaintext, status, reason, receivedAtEpochMs,
+        displayedAtEpochMs, late,
     )
 
     override fun equals(other: Any?): Boolean = other is MessageEntity && fields() == other.fields() &&
@@ -122,6 +130,7 @@ class MessageEntity(
     private fun fields(): List<Any?> = listOf(
         messageId, householdId, threadId, authorUid, authorDeviceId, authorRole, seq, lamport, createdAtEpochMs,
         epoch, kind, ciphertext, blobId, signature, schemaVersion, status, reason, receivedAtEpochMs,
+        displayedAtEpochMs, late,
     )
 
     override fun hashCode(): Int = messageId.hashCode()
@@ -132,12 +141,15 @@ class MessageEntity(
 
     companion object {
         /** A row for [envelope] in [status]; [plaintext] only for RECEIVED and SENT_LOCAL. */
+        @Suppress("LongParameterList") // The envelope plus what this device knows about it.
         fun of(
             envelope: MessageEnvelope,
             status: MessageStatus,
             plaintext: ByteArray?,
             reason: String?,
             receivedAtEpochMs: Long,
+            displayedAtEpochMs: Long = envelope.createdAt.toEpochMilliseconds(),
+            late: Boolean = false,
         ): MessageEntity = MessageEntity(
             messageId = envelope.messageId.value,
             householdId = envelope.householdId,
@@ -158,6 +170,8 @@ class MessageEntity(
             status = status,
             reason = reason,
             receivedAtEpochMs = receivedAtEpochMs,
+            displayedAtEpochMs = displayedAtEpochMs,
+            late = late,
         )
     }
 }
@@ -166,9 +180,22 @@ class MessageEntity(
  * The next `seq` per (thread, author device) (M4 §1.3): for this device's own sends, the value the next message takes;
  * for every other author, the value [dev.kpetriv.sprout.core.domainledger.chat.MessageVerifier] expects next. A
  * missing row means 1.
+ *
+ * @property lastLamport the lamport of the last message accepted in `seq` order (audit M4): the next one must be
+ *   higher, or it is quarantined `OUT_OF_ORDER`.
+ * @property lastDisplayedAtEpochMs the displayed time of that message: later messages are shown no earlier.
+ * @property skippedRanges the `seq` ranges skipped after a gap timed out (audit L3), as `from-to` (inclusive) pairs
+ *   separated by commas, oldest first; a late message for one of them is still accepted (marked late).
  */
 @Entity(tableName = "message_seq", primaryKeys = ["threadId", "authorDeviceId"])
-data class MessageSeqEntity(val threadId: String, val authorDeviceId: DeviceId, val nextSeq: Long)
+data class MessageSeqEntity(
+    val threadId: String,
+    val authorDeviceId: DeviceId,
+    val nextSeq: Long,
+    val lastLamport: Long = 0,
+    val lastDisplayedAtEpochMs: Long = 0,
+    val skippedRanges: String = "",
+)
 
 /**
  * One thread key document this device verified (M4 §1.2), per (thread, epoch, creator): the key it unwraps to, when
@@ -180,7 +207,12 @@ data class MessageSeqEntity(val threadId: String, val authorDeviceId: DeviceId, 
  *
  * @property key the 32-byte thread key, or null while this device has no wrap it can open (no wrap for it, the
  *   creator's encryption key is not in the registry mirror yet, or this device has no encryption key).
- * @property sourceDocId the document id, `"<kidId>.<epoch>"`.
+ * @property olderKeys earlier keys of the same creator and epoch (32 bytes each, joined) that a later document of
+ *   that creator replaced with a different key (review H2): kept so messages sent under them stay readable.
+ * @property confirmed the server has the document: always for a pulled one; for one this device published, once its
+ *   own copy came back in a pull or its outbox row was acked without a refusal ([dev.kpetriv.sprout.core.database
+ *   .ThreadKeyWrites.settle]). This device never sends under its own unconfirmed key.
+ * @property sourceDocId the document id, `"<kidId>.<epoch>.<createdByDeviceId>"`.
  * @property wrapSetJson the document's `wraps` object (device id to `{wrapped}`), so the document can be rebuilt.
  * @property lamport the document envelope's lamport (last-writer-wins key with [createdByDeviceId]).
  */
@@ -197,23 +229,44 @@ class ThreadKeyEntity(
     val authorUid: UserId,
     val signature: String?,
     val receivedAtEpochMs: Long,
+    val confirmed: Boolean = true,
+    val olderKeys: ByteArray? = null,
 ) {
     fun withKey(key: ByteArray?): ThreadKeyEntity = ThreadKeyEntity(
         threadId, epoch, createdByDeviceId, key, sourceDocId, wrapSetJson, lamport, authorUid, signature,
-        receivedAtEpochMs,
+        receivedAtEpochMs, confirmed, olderKeys,
     )
 
+    fun withConfirmed(confirmed: Boolean): ThreadKeyEntity = ThreadKeyEntity(
+        threadId, epoch, createdByDeviceId, key, sourceDocId, wrapSetJson, lamport, authorUid, signature,
+        receivedAtEpochMs, confirmed, olderKeys,
+    )
+
+    /** Every key of this row: [key] first, then [olderKeys] (each 32 bytes). */
+    fun allKeys(): List<ByteArray> = listOfNotNull(key) +
+        (
+            olderKeys?.let { joined -> (joined.indices step KEY_SIZE).map { joined.copyOfRange(it, it + KEY_SIZE) } }
+                ?: emptyList()
+            )
+
+    @Suppress("CyclomaticComplexMethod") // One comparison per column.
     override fun equals(other: Any?): Boolean = other is ThreadKeyEntity && threadId == other.threadId &&
         epoch == other.epoch && createdByDeviceId == other.createdByDeviceId &&
         (key?.contentEquals(other.key) ?: (other.key == null)) && sourceDocId == other.sourceDocId &&
         wrapSetJson == other.wrapSetJson && lamport == other.lamport && authorUid == other.authorUid &&
-        signature == other.signature && receivedAtEpochMs == other.receivedAtEpochMs
+        signature == other.signature && receivedAtEpochMs == other.receivedAtEpochMs &&
+        confirmed == other.confirmed && (olderKeys?.contentEquals(other.olderKeys) ?: (other.olderKeys == null))
 
     override fun hashCode(): Int = 31 * (31 * threadId.hashCode() + epoch.hashCode()) + createdByDeviceId.hashCode()
 
     override fun toString(): String =
         "ThreadKeyEntity(threadId=$threadId, epoch=$epoch, createdByDeviceId=$createdByDeviceId, " +
-            "hasKey=${key != null}, lamport=$lamport)"
+            "hasKey=${key != null}, lamport=$lamport, confirmed=$confirmed)"
+
+    companion object {
+        /** Bytes of one thread key. */
+        const val KEY_SIZE: Int = 32
+    }
 }
 
 /**

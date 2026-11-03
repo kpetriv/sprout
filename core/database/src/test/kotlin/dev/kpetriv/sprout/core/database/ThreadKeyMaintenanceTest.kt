@@ -4,6 +4,8 @@ import dev.kpetriv.sprout.core.database.entity.AuditAction
 import dev.kpetriv.sprout.core.domainledger.DeviceStatus
 import dev.kpetriv.sprout.core.domainledger.chat.ThreadKeyDocument
 import dev.kpetriv.sprout.core.sync.DocTypes
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.test.runTest
 import org.junit.After
 import org.junit.Test
@@ -110,6 +112,7 @@ class ThreadKeyMaintenanceTest {
         registerChatDevices(parent, kid)
         parent.addKid(KID_X.value)
         parent.threadKeyMaintenance()
+        parent.confirmThreadKeys()
         val id = parent.messageWrites.send(THREAD_X, text("for both parents"))
 
         registerChatDevices(parent, kid, secondParent)
@@ -123,5 +126,42 @@ class ThreadKeyMaintenanceTest {
         assertEquals(text("for both parents"), secondParent.row(id.value)?.content())
         // The second parent holds the latest key and sees nothing to do.
         assertEquals(0, secondParent.threadKeyMaintenance())
+    }
+
+    @Test
+    fun concurrentRunsPlanInsideOneLockAndPublishOneKeyPerEpoch() = runTest {
+        registerChatDevices(parent, kid)
+        parent.addKid(KID_X.value)
+
+        val published = List(4) { async { parent.threadKeyMaintenance() } }.awaitAll()
+
+        assertEquals(1, published.sum())
+        assertEquals(1, parent.database.threadKeyDao().all().size)
+        assertEquals(1, parent.published().size)
+    }
+
+    @Test
+    fun aThreadThatCannotBeKeyedDoesNotStopTheOthers() = runTest {
+        registerChatDevices(parent, kid)
+        // A kid id so long that "<kidId>.<epoch>.<creator>" is no valid document id: that thread is skipped.
+        parent.addKid("k".repeat(100))
+        parent.addKid(KID_X.value)
+
+        assertEquals(1, parent.threadKeyMaintenance())
+        assertEquals(THREAD_X, parent.published().single().threadId)
+    }
+
+    @Test
+    fun anUnconfirmedKeyIsSettledByTheNextRun() = runTest {
+        registerChatDevices(parent, kid)
+        parent.addKid(KID_X.value)
+        parent.threadKeyMaintenance()
+        assertTrue(parent.database.threadKeyDao().all().none { it.confirmed })
+        parent.database.outboxDao().all().forEach { parent.outbox.ack(it.seq) }
+
+        assertEquals(0, parent.threadKeyMaintenance())
+
+        assertTrue(parent.database.threadKeyDao().all().all { it.confirmed })
+        assertTrue(parent.threadKeyWrites.confirmed(parent.database.threadKeyDao().all().single().sourceDocId))
     }
 }

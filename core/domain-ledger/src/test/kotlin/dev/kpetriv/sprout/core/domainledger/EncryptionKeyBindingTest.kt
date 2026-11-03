@@ -26,6 +26,30 @@ class EncryptionKeyBindingTest {
     }
 
     @Test
+    fun aSmallOrderKeyNeverVerifiesEvenWithAValidBinding() {
+        val smallOrder = listOf(
+            ByteArray(32),
+            ByteArray(32).also { it[0] = 1 },
+            ByteArray(32) { 0xff.toByte() }.also {
+                it[0] = 0xec.toByte()
+                it[31] = 0x7f
+            },
+            // The same point with the unused top bit set.
+            ByteArray(32).also {
+                it[0] = 1
+                it[31] = 0x80.toByte()
+            },
+        )
+        for (key in smallOrder) {
+            assertTrue(X25519SmallOrder.isSmallOrder(key))
+            val bound = deviceKey.bindEncryptionKey(household, device, key)
+            assertFalse(bound.verify(SoftwareSignatureCheck, device, deviceKey.publicKey))
+        }
+        assertFalse(X25519SmallOrder.isSmallOrder(x25519))
+        assertFalse(X25519SmallOrder.isSmallOrder(ByteArray(31)))
+    }
+
+    @Test
     fun aBindingVerifiesOnlyForItsHouseholdDeviceKeyAndDeviceKey() {
         val bound = deviceKey.bindEncryptionKey(household, device, x25519)
         assertTrue(bound.verify(SoftwareSignatureCheck, device, deviceKey.publicKey))

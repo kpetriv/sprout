@@ -10,6 +10,7 @@ import kotlinx.coroutines.flow.Flow
 
 /** The sync outbox. Written with every local change; drained by the sync engine through `RoomOutboxSource`. */
 @Dao
+@Suppress("TooManyFunctions") // One query per access path of the outbox.
 interface OutboxDao {
     @Insert(onConflict = OnConflictStrategy.ABORT)
     suspend fun insert(entry: OutboxEntity): Long
@@ -22,11 +23,49 @@ interface OutboxDao {
     suspend fun upsertDocument(entry: OutboxEntity): Long
 
     /**
-     * The oldest [limit] rows in `seq` order, due or not: the caller stops at the first row not yet due
-     * (head-of-line, D-M3-15).
+     * The oldest [limit] rows in `seq` order, due or not, **without** their `data` (a blob chunk is up to 700 KB,
+     * review M5): the caller stops at the first row not yet due (head-of-line, D-M3-15) and loads a chunk's bytes
+     * with [dataOf] when it pushes it.
      */
-    @Query("SELECT * FROM outbox ORDER BY seq LIMIT :limit")
-    suspend fun head(limit: Int): List<OutboxEntity>
+    @Query(
+        """
+        SELECT seq, kind, refId, payload, createdAtEpochMs, attempts, lastError, nextAttemptAtEpochMs, docType, docId,
+        lamport FROM outbox ORDER BY seq LIMIT :limit
+        """,
+    )
+    suspend fun head(limit: Int): List<OutboxHead>
+
+    /** The bytes of row [seq] (a blob chunk's), or null. */
+    @Query("SELECT data FROM outbox WHERE seq = :seq")
+    suspend fun dataOf(seq: Long): ByteArray?
+
+    /** The queued rows of [kinds] without their bytes, in order (blocked-push lookups). */
+    @Query(
+        """
+        SELECT seq, kind, refId, payload, createdAtEpochMs, attempts, lastError, nextAttemptAtEpochMs, docType, docId,
+        lamport FROM outbox WHERE kind IN (:kinds) ORDER BY seq
+        """,
+    )
+    fun observeHeads(kinds: List<OutboxKind>): Flow<List<OutboxHead>>
+
+    /** The queued rows of [kinds] without their bytes, in order. */
+    @Query(
+        """
+        SELECT seq, kind, refId, payload, createdAtEpochMs, attempts, lastError, nextAttemptAtEpochMs, docType, docId,
+        lamport FROM outbox WHERE kind IN (:kinds) ORDER BY seq
+        """,
+    )
+    suspend fun headsOf(kinds: List<OutboxKind>): List<OutboxHead>
+
+    @Query("SELECT COUNT(*) FROM outbox WHERE kind = :kind AND refId = :refId")
+    suspend fun countRef(kind: OutboxKind, refId: String): Int
+
+    @Query("DELETE FROM outbox WHERE kind = :kind AND refId = :refId")
+    suspend fun deleteRef(kind: OutboxKind, refId: String): Int
+
+    /** Removes the queued chunks of blob [blobId] (their `refId`s are `"<blobId>.<chunk>"`). */
+    @Query("DELETE FROM outbox WHERE kind = 'BLOB_CHUNK' AND refId LIKE :blobId || '.%'")
+    suspend fun deleteBlobChunks(blobId: String): Int
 
     /** Records a failed attempt and when to try again. */
     @Query(
@@ -48,9 +87,14 @@ interface OutboxDao {
     @Query("SELECT COUNT(*) FROM outbox")
     suspend fun count(): Int
 
-    /** The queued rows of [kind], in order (chat send states). */
-    @Query("SELECT * FROM outbox WHERE kind = :kind ORDER BY seq")
-    fun observeKind(kind: OutboxKind): Flow<List<OutboxEntity>>
+    /** The queued rows of [kind], in order (chat send states), without their bytes. */
+    @Query(
+        """
+        SELECT seq, kind, refId, payload, createdAtEpochMs, attempts, lastError, nextAttemptAtEpochMs, docType, docId,
+        lamport FROM outbox WHERE kind = :kind ORDER BY seq
+        """,
+    )
+    fun observeKind(kind: OutboxKind): Flow<List<OutboxHead>>
 
     /** Makes the row of [kind]/[refId] due at once (a user's "retry"). */
     @Query("UPDATE outbox SET nextAttemptAtEpochMs = 0 WHERE kind = :kind AND refId = :refId")
@@ -59,4 +103,21 @@ interface OutboxDao {
     /** The `seq` of every queued row of [kind], in order. */
     @Query("SELECT seq FROM outbox WHERE kind = :kind ORDER BY seq")
     fun observeSeqs(kind: OutboxKind): Flow<List<Long>>
+}
+
+/** An outbox row without its `data` ([OutboxDao.head]): what the push loop and the screens read. */
+data class OutboxHead(
+    val seq: Long,
+    val kind: OutboxKind,
+    val refId: String,
+    val payload: String,
+    val createdAtEpochMs: Long,
+    val attempts: Int,
+    val lastError: String?,
+    val nextAttemptAtEpochMs: Long,
+    val docType: String?,
+    val docId: String?,
+    val lamport: Long?,
+) {
+    override fun toString(): String = "OutboxHead(seq=$seq, kind=$kind, refId=$refId, attempts=$attempts)"
 }

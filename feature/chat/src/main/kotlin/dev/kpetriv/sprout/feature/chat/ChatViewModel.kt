@@ -81,7 +81,7 @@ class ChatViewModel @Inject constructor(
     fun onEvent(event: ChatEvent) {
         when (event) {
             is ChatEvent.DraftChanged -> local.update {
-                it.copy(draft = event.text.take(OutgoingMessage.MAX_TEXT_LENGTH), nudge = null)
+                it.copy(draft = event.text.truncatedTo(OutgoingMessage.MAX_TEXT_LENGTH), nudge = null)
             }
 
             ChatEvent.SendText -> sendDraft()
@@ -114,14 +114,15 @@ class ChatViewModel @Inject constructor(
 
             is ChatEvent.Retry -> retry(event.messageId)
 
-            is ChatEvent.Discard -> local.update { s ->
-                s.copy(pending = s.pending.filterNot { it.id == event.messageId && it.failed })
-            }
+            is ChatEvent.Discard -> discard(event.messageId)
 
             ChatEvent.NudgeSendAnyway -> nudgeSendAnyway()
 
             ChatEvent.NudgeUseSuggestion -> local.update { s ->
-                s.copy(draft = s.nudge?.suggestion?.take(OutgoingMessage.MAX_TEXT_LENGTH) ?: s.draft, nudge = null)
+                s.copy(
+                    draft = s.nudge?.suggestion?.truncatedTo(OutgoingMessage.MAX_TEXT_LENGTH) ?: s.draft,
+                    nudge = null,
+                )
             }
 
             ChatEvent.NudgeDismiss -> local.update { it.copy(nudge = null) }
@@ -132,7 +133,31 @@ class ChatViewModel @Inject constructor(
 
             ChatEvent.NoticeShown -> local.update { it.copy(notice = null) }
 
-            ChatEvent.Reload -> refreshes.update { it + 1 }
+            ChatEvent.Reload -> {
+                // Photos that could not be loaded are asked for again.
+                photos.update { map -> map.filterValues { it != PhotoUi.Unavailable } }
+                refreshes.update { it + 1 }
+            }
+
+            ChatEvent.ScreenStopped -> {
+                // A hold the screen lost (backgrounded, locked, a call) is a cancel, never a send.
+                recordingEnd?.complete(false)
+                stopPlayback()
+            }
+        }
+    }
+
+    /** A failed message never stored leaves the list; a stored one whose sending is blocked is discarded. */
+    private fun discard(messageId: String) {
+        val pending = local.value.pending.firstOrNull { it.id == messageId }
+        if (pending != null) {
+            if (pending.failed) local.update { s -> s.copy(pending = s.pending.filterNot { it.id == messageId }) }
+            return
+        }
+        val blocked = ready()?.messages?.any { it.id == messageId && it.sendState == SendState.BLOCKED } == true
+        if (!blocked) return
+        viewModelScope.launch {
+            if (attempt { sender.discard(threadId, messageId) }.isFailure) notify(ChatNotice.DISCARD_FAILED)
         }
     }
 
@@ -186,8 +211,9 @@ class ChatViewModel @Inject constructor(
             if (requested) it + (blobId to PhotoUi.Loading) else it
         }
         if (!requested) return
+        val expected = BlobExpectation(threadId, message.authorDeviceId, message.photoSha256)
         viewModelScope.launch {
-            val photo = attempt { blobs.load(blobId) }.fold({ PhotoUi.Loaded(it) }, { PhotoUi.Unavailable })
+            val photo = attempt { blobs.load(blobId, expected) }.fold({ PhotoUi.Loaded(it) }, { PhotoUi.Unavailable })
             photos.update { it + (blobId to photo) }
         }
     }
@@ -386,14 +412,15 @@ class ChatViewModel @Inject constructor(
     private fun audioOf(messageId: String): (suspend () -> Result<ByteArray>)? {
         if (ready()?.messages?.any { it.id == messageId && it.isVoice } != true) return null
         val clip = (local.value.pending.firstOrNull { it.id == messageId }?.message as? OutgoingMessage.Voice)?.clip
-        val blobId = lastPage?.messages?.firstOrNull { it.id == messageId }?.blobId
+        val stored = lastPage?.messages?.firstOrNull { it.id == messageId }
+        val blobId = stored?.blobId
         return when {
             clip != null -> {
                 { Result.success(clip.bytes) }
             }
 
             blobId != null -> {
-                { blobs.load(blobId) }
+                { blobs.load(blobId, BlobExpectation(threadId, stored.authorDeviceId, sha256 = null)) }
             }
 
             else -> null
@@ -422,6 +449,7 @@ class ChatViewModel @Inject constructor(
         durationMs = durationMs.takeUnless { locked },
         photo = if (kind == MessageKind.PHOTO && !locked) photoMap[blobId] ?: PhotoUi.Unavailable else null,
         authorName = authorName,
+        fromParentPhone = fromParentPhone,
     )
 
     private fun notify(notice: ChatNotice) = local.update { it.copy(notice = notice) }
@@ -501,4 +529,14 @@ class ChatViewModel @Inject constructor(
         private const val RECORDING_TICK_MS = 1_000L
         private const val STOP_TIMEOUT_MILLIS = 5_000L
     }
+}
+
+/**
+ * This text cut to at most [maxChars] UTF-16 units without splitting a surrogate pair (review M7): an emoji at the
+ * boundary is dropped whole rather than leaving half of it, which could not be encoded or sent.
+ */
+internal fun String.truncatedTo(maxChars: Int): String {
+    if (length <= maxChars) return this
+    val end = if (maxChars > 0 && Character.isHighSurrogate(this[maxChars - 1])) maxChars - 1 else maxChars
+    return substring(0, end)
 }

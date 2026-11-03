@@ -1,13 +1,19 @@
 package dev.kpetriv.sprout.core.database
 
+import dev.kpetriv.sprout.core.database.entity.AuditAction
+import dev.kpetriv.sprout.core.database.entity.OutboxKind
 import dev.kpetriv.sprout.core.domainhousehold.Chore
 import dev.kpetriv.sprout.core.domainhousehold.ChoreReward
+import dev.kpetriv.sprout.core.domainledger.JvmSha256Hasher
 import dev.kpetriv.sprout.core.domainledger.Money
 import dev.kpetriv.sprout.core.domainledger.chat.BlobJson
+import dev.kpetriv.sprout.core.domainledger.toHex
 import dev.kpetriv.sprout.core.model.CalendarDate
 import dev.kpetriv.sprout.core.model.ChoreId
 import dev.kpetriv.sprout.core.model.ChoreSchedule
 import dev.kpetriv.sprout.core.model.SubmissionStatus
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.test.runTest
 import org.junit.After
 import org.junit.Test
@@ -15,6 +21,7 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -48,6 +55,7 @@ class ChorePhotoUploadsTest {
             ),
         )
         parent.threadKeyMaintenance()
+        parent.confirmThreadKeys()
         kid.applier.applyDocuments(parent.queuedDocuments())
     }
 
@@ -68,49 +76,78 @@ class ChorePhotoUploadsTest {
         assertEquals(KID_X, header.kidId)
         assertNull(header.threadId)
         assertEquals(upload.submissionId, header.submissionId)
-        // The parent fetches, verifies and decrypts it with the same thread key.
-        assertContentEquals(bytes, parent.chatBlobs.ingest(blobId, kid.queuedBlobChunks()))
+        // The parent applies the re-signed submission, then fetches, verifies and decrypts the photo it names.
+        parent.applier.applyDocuments(kid.queuedDocuments())
+        val expected = assertNotNull(parent.chatBlobs.chorePhotoExpectation(blobId))
+        assertContentEquals(bytes, parent.chatBlobs.ingest(blobId, kid.queuedBlobChunks(), expected))
         assertTrue(kid.uploadChorePhotos().isEmpty(), "never uploaded twice")
         assertNotNull(submission)
     }
 
     @Test
-    fun theUploadedBlobIdReachesTheParentThroughTheSignedSubmission() = runTest {
+    fun queuingTheChunksMarkingThePhotoAndAttachingTheBlobHappenTogetherAndInPushOrder() = runTest {
         linkedWithChore()
         val bytes = byteArrayOf(5, 6, 7)
         val photo = kid.photos.save(KID_X, bytes)
         val submission = kid.chores.submit(bed, today, photo = photo)
-        val (upload, blobId) = kid.uploadChorePhotos().single()
+        val (_, blobId) = kid.uploadChorePhotos().single()
 
-        val updated = assertNotNull(kid.chores.attachPhotoBlob(upload.submissionId, upload.ref, blobId))
-        assertEquals(photo.copy(blobId = blobId.value), updated.photoRef)
         assertEquals(blobId.value, kid.chores.getSubmission(submission.id)?.photoRef?.blobId)
-        assertNull(kid.chores.attachPhotoBlob(upload.submissionId, upload.ref, blobId), "attached once")
+        assertEquals(blobId.value, kid.database.photoDao().get(photo.fileName)?.blobId)
+        val rows = kid.database.outboxDao().all()
+        val chunkSeq = rows.single { it.kind == OutboxKind.BLOB_CHUNK }.seq
+        val submissionSeq = rows.single { it.kind == OutboxKind.DOCUMENT && it.docId == submission.id.value }.seq
+        assertTrue(chunkSeq < submissionSeq, "the blob is pushed before the submission that names it")
+        assertNull(kid.chores.attachPhotoBlob(submission.id, photo, blobId), "attached once")
 
         // The parent's next pull applies the re-signed submission: it now names the blob, which decrypts there.
         parent.applier.applyDocuments(kid.queuedDocuments())
         val received = assertNotNull(parent.chores.getSubmission(submission.id))
         assertEquals(blobId.value, received.photoRef?.blobId)
-        assertContentEquals(bytes, parent.chatBlobs.ingest(blobId, kid.queuedBlobChunks()))
+        val expected = assertNotNull(parent.chatBlobs.chorePhotoExpectation(blobId))
+        assertContentEquals(bytes, parent.chatBlobs.ingest(blobId, kid.queuedBlobChunks(), expected))
+        // A blob whose bytes are not the submission's photo is refused.
+        val other = BlobExpectation(
+            BlobTarget.ChorePhoto(KID_X, submission.id),
+            plaintextSha256 = JvmSha256Hasher.sha256(byteArrayOf(1)).toHex(),
+        )
+        assertEquals(
+            BlobUnavailableException.Reason.INVALID,
+            assertFailsWith<BlobUnavailableException> { parent.chatBlobs.open(blobId, other) }.reason,
+        )
     }
 
     @Test
-    fun aBlobIsNotAttachedToAReplacedPhotoOrADecidedSubmission() = runTest {
+    fun concurrentRunsUploadEachPhotoOnce() = runTest {
+        linkedWithChore()
+        kid.chores.submit(bed, today, photo = kid.photos.save(KID_X, byteArrayOf(4, 4)))
+        val runs = List(3) { async { kid.uploadChorePhotos() } }.awaitAll()
+
+        assertEquals(1, runs.sumOf { it.size })
+        assertEquals(1, kid.database.outboxDao().all().count { it.kind == OutboxKind.BLOB_CHUNK })
+        assertEquals(1, kid.database.auditLogDao().all().count { it.action == AuditAction.BLOB_QUEUED })
+    }
+
+    @Test
+    fun aReplacedPhotoOrADecidedSubmissionIsNeverUploaded() = runTest {
         linkedWithChore()
         val first = kid.photos.save(KID_X, byteArrayOf(1))
         val submission = kid.chores.submit(bed, today, photo = first)
-        val (upload, blobId) = kid.uploadChorePhotos().single()
-        // The kid replaced the photo before the upload was recorded on the submission.
+        // The kid replaced the photo before any upload: only the new one is pending and uploaded.
         val second = kid.photos.save(KID_X, byteArrayOf(2))
         kid.chores.submit(bed, today, photo = second)
-        assertNull(kid.chores.attachPhotoBlob(upload.submissionId, upload.ref, blobId))
-        assertNull(kid.chores.getSubmission(submission.id)?.photoRef?.blobId)
+        assertEquals(listOf(second.fileName), kid.photoUploads.pending().map { it.ref.fileName })
+        val (upload, blobId) = kid.uploadChorePhotos().single()
+        assertEquals(second.fileName, upload.ref.fileName)
+        assertEquals(blobId.value, kid.chores.getSubmission(submission.id)?.photoRef?.blobId)
+        assertNull(kid.database.photoDao().get(first.fileName)?.blobId)
 
         parent.applier.applyDocuments(kid.queuedDocuments())
         parent.chores.decide(submission.id, SubmissionDecision.REJECT)
         kid.applier.applyDocuments(parent.queuedDocuments())
         assertEquals(SubmissionStatus.REJECTED, kid.chores.getSubmission(submission.id)?.status)
-        assertNull(kid.chores.attachPhotoBlob(submission.id, second, blobId), "decided submissions stay as they are")
+        assertTrue(kid.photoUploads.pending().isEmpty(), "decided submissions stay as they are")
+        assertTrue(kid.uploadChorePhotos().isEmpty())
     }
 
     @Test

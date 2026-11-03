@@ -16,9 +16,16 @@ import dev.kpetriv.sprout.core.model.SubmissionId
 import dev.kpetriv.sprout.core.model.ThreadId
 import dev.kpetriv.sprout.core.sync.BlobChunkJson
 import dev.kpetriv.sprout.core.sync.OutboxItem
+import dev.kpetriv.sprout.core.sync.PushItemId
+import dev.kpetriv.sprout.core.sync.PushRejection
 import dev.kpetriv.sprout.core.sync.SyncError
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
 import org.junit.After
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -47,8 +54,15 @@ class ChatWritesTest {
         registerChatDevices(parent, kid)
         parent.addKid(KID_X.value)
         parent.threadKeyMaintenance()
+        parent.confirmThreadKeys()
         kid.applier.applyDocuments(parent.queuedDocuments())
     }
+
+    private fun threadBlob(author: TestHousehold, plaintext: ByteArray? = null) = BlobExpectation(
+        BlobTarget.Thread(THREAD_X),
+        author.deviceId,
+        plaintext?.let { JvmSha256Hasher.sha256(it).toHex() },
+    )
 
     @Test
     fun withoutAThreadKeyNothingIsSentOrQueued() = runTest {
@@ -123,12 +137,122 @@ class ChatWritesTest {
         assertEquals(blobId, message.blobId)
         assertEquals(MessageKind.PHOTO, message.kind)
         // The sender reads its own blob from the cache.
-        assertContentEquals(photo, kid.chatBlobs.open(blobId))
+        assertContentEquals(photo, kid.chatBlobs.open(blobId, threadBlob(kid, photo)))
         // The parent fetches the chunks, verifies, caches and decrypts them.
         parent.applier.applyMessages(kid.queuedMessages())
-        assertNull(parent.chatBlobs.open(blobId))
-        assertContentEquals(photo, parent.chatBlobs.ingest(blobId, kid.queuedBlobChunks()))
-        assertContentEquals(photo, parent.chatBlobs.open(blobId))
+        assertNull(parent.chatBlobs.open(blobId, threadBlob(kid, photo)))
+        assertContentEquals(photo, parent.chatBlobs.ingest(blobId, kid.queuedBlobChunks(), threadBlob(kid, photo)))
+        assertContentEquals(photo, parent.chatBlobs.open(blobId, threadBlob(kid, photo)))
+    }
+
+    @Test
+    fun aBlobThatIsNotWhatTheMessageNamesIsInvalid() = runTest {
+        linked()
+        val photo = byteArrayOf(9, 8, 7)
+        val blobId = kid.blobWrites.store(BlobTarget.Thread(THREAD_X), photo)
+        val chunks = kid.queuedBlobChunks()
+        suspend fun refused(expectation: BlobExpectation) = assertEquals(
+            BlobUnavailableException.Reason.INVALID,
+            assertFailsWith<BlobUnavailableException> { parent.chatBlobs.ingest(blobId, chunks, expectation) }.reason,
+        )
+        // Another author, another target, another plaintext hash.
+        refused(threadBlob(parent, photo))
+        refused(BlobExpectation(BlobTarget.ChorePhoto(KID_X, SubmissionId("s-1")), kid.deviceId))
+        refused(threadBlob(kid, byteArrayOf(1)))
+        assertNull(parent.blobCache.get(blobId), "nothing invalid is cached")
+        // The cached copy is checked the same way.
+        assertContentEquals(photo, parent.chatBlobs.ingest(blobId, chunks, threadBlob(kid, photo)))
+        assertEquals(
+            BlobUnavailableException.Reason.INVALID,
+            assertFailsWith<BlobUnavailableException> { parent.chatBlobs.open(blobId, threadBlob(parent)) }.reason,
+        )
+    }
+
+    @Test
+    fun aDueBatchCarriesAtMostTwoBlobChunksAndNoRowBytesAreReadForTheRest() = runTest {
+        linked()
+        val first = kid.blobWrites.store(BlobTarget.Thread(THREAD_X), Random(1).nextBytes(PHOTO_BYTES))
+        kid.blobWrites.store(BlobTarget.Thread(THREAD_X), Random(2).nextBytes(PHOTO_BYTES))
+        val due = kid.outbox.due(Long.MAX_VALUE, limit = 10)
+        assertEquals(2, due.size)
+        assertTrue(due.all { it.blobChunk?.header?.get("blobId")?.toString()?.contains(first.value) == true })
+        assertTrue(kid.database.outboxDao().head(10).size == 4)
+    }
+
+    @Test
+    fun onlyABlockedMessageCanBeDiscardedAndItsSeqStaysUsed() = runTest {
+        linked()
+        val id = kid.messageWrites.send(THREAD_X, text("refused"))
+        assertFalse(kid.messageWrites.discard(id), "not blocked")
+        val row = kid.database.outboxDao().all().single { it.kind == OutboxKind.MESSAGE }
+        kid.outbox.fail(row.seq, SyncError.Permanent("permission-denied"), Long.MAX_VALUE)
+        kid.outbox.auditRejections(
+            listOf(PushRejection(row.seq, PushItemId("message/${id.value}"), "permission-denied", blocking = true)),
+        )
+        assertEquals(MessageSendState.BLOCKED, kid.messageReader.observe(THREAD_X).first().messages.single().sendState)
+        assertEquals(OutboxKind.MESSAGE, kid.outbox.observeBlocked().first()?.kind)
+
+        assertTrue(kid.messageWrites.discard(id))
+        assertNull(kid.row(id.value))
+        assertEquals(0, kid.database.outboxDao().count())
+        assertNull(kid.outbox.observeBlocked().first())
+        assertEquals(1, kid.database.auditLogDao().all().count { it.action == AuditAction.MESSAGE_DISCARDED })
+        val next = kid.messageWrites.send(THREAD_X, text("next"))
+        assertEquals(2, kid.queuedMessages().single().envelope().seq, "receivers see seq 1 as a gap")
+        assertEquals(next, kid.queuedMessages().single().envelope().messageId)
+    }
+
+    @Test
+    fun theSenderNeverUsesItsOwnUnconfirmedKey() = runTest {
+        registerChatDevices(parent, kid)
+        parent.addKid(KID_X.value)
+        parent.threadKeyMaintenance()
+        assertFailsWith<ThreadKeyUnavailableException> { parent.messageWrites.send(THREAD_X, text("too soon")) }
+        assertFalse(parent.threadKeyStatus.observeSendable(THREAD_X).first())
+        // The push was accepted (the outbox row is gone, no refusal): settling confirms it.
+        parent.database.outboxDao().all().forEach { parent.outbox.ack(it.seq) }
+        parent.threadKeyWrites.settle()
+        assertTrue(parent.threadKeyStatus.observeSendable(THREAD_X).first())
+        parent.messageWrites.send(THREAD_X, text("now"))
+    }
+
+    @Test
+    fun theSendableStatusFollowsTheKidsArchiving() = runTest {
+        registerChatDevices(parent, kid)
+        val (kidX, _) = parent.addKid(KID_X.value)
+        parent.threadKeyMaintenance()
+        parent.confirmThreadKeys()
+        val values = Channel<Boolean>(Channel.UNLIMITED)
+        val collector =
+            launch(Dispatchers.IO) { parent.threadKeyStatus.observeSendable(THREAD_X).collect(values::send) }
+        suspend fun next() = withContext(Dispatchers.IO) { withTimeout(5_000) { values.receive() } }
+        assertTrue(next())
+
+        // Archiving the kid alone (no key or registry change) makes its devices excluded: not sendable until rotated.
+        parent.kids.archive(kidX.id)
+
+        assertFalse(next())
+        collector.cancel()
+    }
+
+    @Test
+    fun aRefusedNewKeyIsWithdrawn() = runTest {
+        registerChatDevices(parent, kid)
+        parent.addKid(KID_X.value)
+        parent.threadKeyMaintenance()
+        val document = parent.database.outboxDao().all().single {
+            it.kind == OutboxKind.DOCUMENT &&
+                it.docType == "thread_key"
+        }
+        parent.outbox.ack(document.seq)
+        parent.outbox.auditRejections(
+            listOf(
+                PushRejection(document.seq, PushItemId("document/thread_key/${document.docId}"), "permission-denied"),
+            ),
+        )
+        assertEquals(1, parent.threadKeyWrites.settle())
+        assertTrue(parent.database.threadKeyDao().all().isEmpty())
+        assertEquals(1, parent.database.auditLogDao().all().count { it.action == AuditAction.THREAD_KEY_WITHDRAWN })
     }
 
     @Test
@@ -139,18 +263,20 @@ class ChatWritesTest {
         val flipped = chunk.data.also { it[0] = (it[0].toInt() xor 1).toByte() }
 
         val invalid = assertFailsWith<BlobUnavailableException> {
-            parent.chatBlobs.ingest(blobId, listOf(BlobChunkJson(chunk.header, flipped)))
+            parent.chatBlobs.ingest(blobId, listOf(BlobChunkJson(chunk.header, flipped)), threadBlob(kid))
         }
         assertEquals(BlobUnavailableException.Reason.INVALID, invalid.reason)
         assertEquals(
             BlobUnavailableException.Reason.INVALID,
             assertFailsWith<BlobUnavailableException> {
-                parent.chatBlobs.ingest(BlobId("another"), listOf(chunk))
+                parent.chatBlobs.ingest(BlobId("another"), listOf(chunk), threadBlob(kid))
             }.reason,
         )
         assertEquals(
             BlobUnavailableException.Reason.NOT_FOUND,
-            assertFailsWith<BlobUnavailableException> { parent.chatBlobs.ingest(blobId, emptyList()) }.reason,
+            assertFailsWith<BlobUnavailableException> {
+                parent.chatBlobs.ingest(blobId, emptyList(), threadBlob(kid))
+            }.reason,
         )
     }
 

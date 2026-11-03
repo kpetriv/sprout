@@ -1,5 +1,6 @@
 package dev.kpetriv.sprout.core.database.entity
 
+import androidx.room.ColumnInfo
 import androidx.room.Entity
 import androidx.room.PrimaryKey
 import dev.kpetriv.sprout.core.domainledger.AttestationLevel
@@ -30,6 +31,8 @@ enum class RegistrationStatus {
  *   [encryptionKeySignature], the device-key signature binding it to [encryptionKeyHouseholdId] and this device. Only
  *   stored when it is bound to the session's household; receivers verify the binding on every read
  *   (`RegisteredDevice.verifiedEncryptionKey`) and ignore a key whose binding fails.
+ * @property encryptionKeyConflict the registry later listed a different encryption key than [encryptionKey] (audit
+ *   H1, D-M4-16): the first key stays pinned and the device is excluded from every thread.
  */
 @Entity(tableName = "devices")
 data class DeviceEntity(
@@ -46,14 +49,17 @@ data class DeviceEntity(
     val encryptionKey: ByteArray? = null,
     val encryptionKeySignature: ByteArray? = null,
     val encryptionKeyHouseholdId: HouseholdId? = null,
+    @ColumnInfo(defaultValue = "0") val encryptionKeyConflict: Boolean = false,
 ) {
+    @Suppress("CyclomaticComplexMethod") // One comparison per column.
     override fun equals(other: Any?): Boolean = other is DeviceEntity && deviceId == other.deviceId &&
         uid == other.uid && role == other.role && kidId == other.kidId && publicKey.contentEquals(other.publicKey) &&
         status == other.status && revokedAtLamport == other.revokedAtLamport && attestation == other.attestation &&
         registeredAtEpochMs == other.registeredAtEpochMs && lamport == other.lamport &&
         sameBytes(encryptionKey, other.encryptionKey) &&
         sameBytes(encryptionKeySignature, other.encryptionKeySignature) &&
-        encryptionKeyHouseholdId == other.encryptionKeyHouseholdId
+        encryptionKeyHouseholdId == other.encryptionKeyHouseholdId &&
+        encryptionKeyConflict == other.encryptionKeyConflict
 
     override fun hashCode(): Int = deviceId.hashCode()
 
