@@ -1,6 +1,6 @@
 package dev.kpetriv.sprout.core.database
 
-import androidx.room.withTransaction
+import dev.kpetriv.sprout.core.crypto.DeviceSigner
 import dev.kpetriv.sprout.core.database.entity.AccountEntity
 import dev.kpetriv.sprout.core.database.entity.AuditAction
 import dev.kpetriv.sprout.core.domainledger.Account
@@ -8,11 +8,11 @@ import dev.kpetriv.sprout.core.domainledger.AccountKind
 import dev.kpetriv.sprout.core.domainledger.Currency
 import dev.kpetriv.sprout.core.model.AccountId
 import dev.kpetriv.sprout.core.model.KidId
+import dev.kpetriv.sprout.core.sync.DocTypes
 import dev.kpetriv.sprout.core.time.Clock
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 import kotlinx.serialization.json.put
-import java.util.UUID
 import javax.inject.Inject
 
 /** Ledger accounts. */
@@ -26,14 +26,27 @@ interface AccountRepository {
     suspend fun ensureDefaultAccounts(kidId: KidId, fiatCurrency: Currency.Fiat): List<Account>
 }
 
-/** [AccountRepository] on Room. Account creation is audited in the same transaction. */
+/**
+ * Deterministic account ids (D-M3-4): `<kidId>.<currency>.<kind>`, so every device of a household that creates a
+ * kid's default accounts creates the same ones. Accounts created before M3 keep their random ids.
+ */
+object AccountIds {
+    fun of(kidId: KidId, currency: Currency, kind: AccountKind): AccountId =
+        AccountId("${kidId.value}.${Converters.currencyToString(currency)}.${kind.name}")
+}
+
+/**
+ * [AccountRepository] on Room. Accounts are synced documents ([DocTypes.ACCOUNT]); creating one takes a lamport,
+ * queues the signed document and is audited in the same transaction. New accounts get [AccountIds] ids.
+ */
 class RoomAccountRepository @Inject constructor(
     private val database: SproutDatabase,
     private val authors: SessionAuthorProvider,
     private val clock: Clock,
+    signer: DeviceSigner,
 ) : AccountRepository {
     private val accounts = database.accountDao()
-    private val audit = database.auditLogDao()
+    private val writes = DocumentWrites(database, clock, signer)
 
     override fun accountsFor(kidId: KidId): Flow<List<Account>> =
         accounts.observeForKid(kidId).map { rows -> rows.map(AccountEntity::toDomain) }
@@ -45,26 +58,27 @@ class RoomAccountRepository @Inject constructor(
             fiatCurrency to AccountKind.SAVINGS,
             Currency.Minutes to AccountKind.MAIN,
         )
-        return database.withTransaction {
+        return writes.transaction {
             val now = clock.now().toEpochMilliseconds()
             for ((currency, kind) in defaults) {
-                val account = Account(AccountId(UUID.randomUUID().toString()), kidId, currency, kind)
-                if (accounts.insertIfAbsent(AccountEntity.from(account, now)) != NOT_INSERTED) {
-                    audit.insert(
-                        auditEntry(author, now, AuditAction.ACCOUNT_CREATED, account.id.value) {
-                            put("kidId", kidId.value)
-                            put("currency", Converters.currencyToString(currency))
-                            put("kind", kind.name)
-                        },
-                    )
+                if (accounts.find(kidId, currency, kind) != null) continue
+                val account = Account(AccountIds.of(kidId, currency, kind), kidId, currency, kind)
+                val lamport = writes.nextLamport(author.deviceId)
+                val stamp = writes.record(
+                    author,
+                    DocTypes.ACCOUNT,
+                    account.id.value,
+                    lamport,
+                    DocumentPayloads.encode(Account.serializer(), account),
+                    AuditAction.ACCOUNT_CREATED,
+                ) {
+                    put("kidId", kidId.value)
+                    put("currency", Converters.currencyToString(currency))
+                    put("kind", kind.name)
                 }
+                accounts.insertIfAbsent(AccountEntity.from(account, now).copy(lamport = lamport, stamp = stamp))
             }
             accounts.forKid(kidId).map(AccountEntity::toDomain)
         }
-    }
-
-    private companion object {
-        /** Room's row id for an `INSERT OR IGNORE` that was ignored. */
-        const val NOT_INSERTED = -1L
     }
 }

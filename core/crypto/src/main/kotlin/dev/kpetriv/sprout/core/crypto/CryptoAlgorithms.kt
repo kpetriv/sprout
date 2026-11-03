@@ -29,6 +29,18 @@ object KeyAliases {
     const val DEVICE_SIGNING = "sprout.device.signing.v1"
 
     /**
+     * EC P-256 device signing key created at household registration (M3) with an attestation challenge from the
+     * backend ([DeviceKeyStore.regenerateForRegistration]); one of the two registration slots. Same key properties
+     * as v1. A registration key is created in the slot the active key does not use and becomes active only once the
+     * server accepted it ([DeviceKeyStore.promotePendingKey]); Keystore cannot rename an entry, so which slot is
+     * active is recorded next to the keys (`AndroidKeystoreDeviceKeyStore`). Once a slot is active, v1 is deleted.
+     */
+    const val DEVICE_SIGNING_V2 = "sprout.device.signing.v2"
+
+    /** The second registration slot, where a registration key is created while [DEVICE_SIGNING_V2] is active. */
+    const val DEVICE_SIGNING_V2_PENDING = "sprout.device.signing.v2.pending"
+
+    /**
      * EC P-256 parent authentication key (ADR-0004): every signature needs its own strong-biometric
      * `BiometricPrompt` bound through a `CryptoObject`; device credential is not accepted.
      */

@@ -101,6 +101,7 @@ private fun SettingsMessage.textRes(): Int = when (this) {
     SettingsMessage.GOAL_DELETED -> R.string.feature_settings_message_goal_deleted
     SettingsMessage.PIN_CHANGED -> R.string.feature_settings_message_pin_changed
     SettingsMessage.KEY_REGISTERED -> R.string.feature_settings_message_key_registered
+    SettingsMessage.KEY_NOT_SHARED -> R.string.feature_settings_message_key_not_shared
     SettingsMessage.SAVE_FAILED -> R.string.feature_settings_message_save_failed
 }
 

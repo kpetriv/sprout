@@ -14,6 +14,8 @@ plugins {
     alias(libs.plugins.ktlint) apply false
     // Applied by the sprout.android.screenshot convention plugin to modules with screenshot tests.
     alias(libs.plugins.roborazzi) apply false
+    // Applied by app only when app/google-services.json exists (a real Firebase project, D-M3-1).
+    alias(libs.plugins.google.services) apply false
     // Applied to every module by build-logic (DependencyCheck.kt), not part of `build`.
     alias(libs.plugins.dependency.check) apply false
 }

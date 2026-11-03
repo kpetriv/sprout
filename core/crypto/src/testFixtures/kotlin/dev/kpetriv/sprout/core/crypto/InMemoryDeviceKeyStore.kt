@@ -4,17 +4,66 @@ import dev.kpetriv.sprout.core.time.Clock
 import kotlin.time.Instant
 
 /**
- * Software [DeviceKeyStore] with an in-memory P-256 key. Test fixture only; production binds
- * [AndroidKeystoreDeviceKeyStore].
+ * Software [DeviceKeyStore] with in-memory P-256 keys. Test fixture only; production binds
+ * [AndroidKeystoreDeviceKeyStore]. [regenerateForRegistration] creates a fresh pending software key with an empty
+ * attestation chain (software keys cannot be attested); [promotePendingKey] makes it the active key.
  */
 class InMemoryDeviceKeyStore(private val clock: Clock) : DeviceKeyStore {
-    private val key: SigningKeyHandle by lazy { generateSoftwareSigningKey() }
-    private val createdAt: Instant by lazy { clock.now() }
+    @Volatile
+    private var key: SigningKeyHandle? = null
 
-    override suspend fun deviceSigningKey(): SigningKeyHandle = key
+    @Volatile
+    private var pending: SigningKeyHandle? = null
+    private var createdAt: Instant? = null
 
-    override fun publicKey(): PublicKeyBytes = key.publicKey
+    /** How many times [regenerateForRegistration] ran. */
+    @Volatile
+    var registrations: Int = 0
+        private set
 
-    override fun keyProperties(): DeviceKeyProperties =
-        DeviceKeyProperties(isHardwareBacked = false, isStrongBox = false, createdAt = createdAt)
+    override suspend fun deviceSigningKey(): SigningKeyHandle = current()
+
+    override fun publicKey(): PublicKeyBytes = current().publicKey
+
+    override fun keyProperties(): DeviceKeyProperties {
+        current()
+        return DeviceKeyProperties(isHardwareBacked = false, isStrongBox = false, createdAt = createdAt)
+    }
+
+    override suspend fun regenerateForRegistration(challenge: ByteArray): DeviceRegistrationMaterial {
+        require(challenge.isNotEmpty()) { "the attestation challenge must not be empty" }
+        val fresh = synchronized(this) {
+            generateSoftwareSigningKey().also {
+                pending = it
+                registrations++
+            }
+        }
+        return DeviceRegistrationMaterial(fresh.publicKey, emptyList())
+    }
+
+    override suspend fun pendingSigningKey(): SigningKeyHandle? = pending
+
+    override suspend fun promotePendingKey(): PublicKeyBytes = synchronized(this) {
+        val promoted = checkNotNull(pending) { "no pending device key" }
+        key = promoted
+        pending = null
+        createdAt = clock.now()
+        promoted.publicKey
+    }
+
+    override suspend fun discardPendingKey() {
+        pending = null
+    }
+
+    /** Registers and promotes in one go, as a device that finished linking. */
+    suspend fun registerAndPromote(challenge: ByteArray = byteArrayOf(1)): PublicKeyBytes {
+        regenerateForRegistration(challenge)
+        return promotePendingKey()
+    }
+
+    @Synchronized
+    private fun current(): SigningKeyHandle = key ?: generateSoftwareSigningKey().also {
+        key = it
+        createdAt = clock.now()
+    }
 }

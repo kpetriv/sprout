@@ -11,10 +11,14 @@ internal fun interface ParentSignatureVerifier {
 }
 
 /**
- * The ledger policy in force for one transaction, and the registered parent key's verifier (null while no parent key
- * is registered).
+ * The ledger policy in force for one transaction, the registered parent key's verifier for **local** appends (null
+ * while this device has registered none), and the author-device roles projections resolve conflicts with ([roles]).
  */
-internal class ActivePolicy(val policy: LedgerPolicy, val parentKey: ParentSignatureVerifier?)
+internal class ActivePolicy(
+    val policy: LedgerPolicy,
+    val parentKey: ParentSignatureVerifier?,
+    val roles: RoleLookup = RoleLookup.LOCAL,
+)
 
 /** Where [RoomLedgerRepository] gets its policy. [load] runs inside the repository's transaction. */
 internal fun interface LedgerPolicySource {
@@ -23,13 +27,21 @@ internal fun interface LedgerPolicySource {
 
 /**
  * The production [LedgerPolicySource]: [LedgerPolicy] defaults, with `requireParentSignature` and
- * `parentSignatureRequiredFromLamport` from `household_policy`, and the stored parent public key for verification.
- * Without a policy row nothing requires a parent signature.
+ * `parentSignatureRequiredFromLamport` from `household_policy`, and the stored parent public key for verifying parent
+ * signatures on events appended on this device. Without a policy row nothing requires a parent signature.
+ *
+ * Remote events never use this key: `RemoteEventVerifier` checks their parent signatures against every registered
+ * parent key in the registry (`parent_keys`), with no from-lamport exemption (M3 §2). [ActivePolicy.roles] comes
+ * from the registry ([RoomDeviceRegistry.roleLookup]): registry roles once any device is registered, envelope roles
+ * only for the pre-linking local household.
  */
 internal class HouseholdPolicySource(private val database: SproutDatabase, private val verifier: Verifier) :
     LedgerPolicySource {
+    private val registry = RoomDeviceRegistry(database)
+
     override suspend fun load(): ActivePolicy {
-        val row = database.householdPolicyDao().get() ?: return ActivePolicy(LedgerPolicy(), null)
+        val roles = registry.roleLookup()
+        val row = database.householdPolicyDao().get() ?: return ActivePolicy(LedgerPolicy(), null, roles)
         val policy = LedgerPolicy(
             requireParentSignature = row.requireParentSignature,
             parentSignatureRequiredFromLamport = row.parentSignatureFromLamport,
@@ -42,6 +54,7 @@ internal class HouseholdPolicySource(private val database: SproutDatabase, priva
                     verifyParentSignature(it, payload, signature, verifier)
                 }
             },
+            roles,
         )
     }
 }

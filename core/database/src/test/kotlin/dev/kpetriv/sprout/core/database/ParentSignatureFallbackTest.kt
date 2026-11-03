@@ -42,7 +42,7 @@ import kotlin.test.assertTrue
  */
 @RunWith(RobolectricTestRunner::class)
 class ParentSignatureFallbackTest {
-    private val household = TestHousehold()
+    private val household = testHousehold()
     private val today = CalendarDate(2026, 11, 2)
     private var prompts = 0
 
@@ -72,7 +72,7 @@ class ParentSignatureFallbackTest {
     private suspend fun submission(kid: KidId): ChoreSubmission {
         val chore = Chore(
             ChoreId("tidy"),
-            LocalOnlyAuthorProvider.LOCAL_HOUSEHOLD,
+            LocalTrial.HOUSEHOLD,
             kid,
             "Tidy your room",
             reward = ChoreReward(money = Money(50), minutes = Money(15)),

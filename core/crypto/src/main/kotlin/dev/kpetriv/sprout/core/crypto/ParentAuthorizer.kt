@@ -13,8 +13,17 @@ interface ParentAuthKeyStore {
     /**
      * Creates the key if missing and returns its public key. Throws [ParentAuthUnavailableException] when Keystore
      * refuses to create it (typically: no strong biometric is enrolled). Never leaves a partial key behind.
+     *
+     * With [attestationChallenge] a new key is generated with `setAttestationChallenge` (falling back to an
+     * unattested key where Keystore cannot attest); an existing key is returned as is, whatever challenge it carries.
      */
-    suspend fun ensureKey(): PublicKeyBytes
+    suspend fun ensureKey(attestationChallenge: ByteArray? = null): PublicKeyBytes
+
+    /**
+     * The key's attestation chain, DER certificates leaf first; empty before [ensureKey], for a key created without a
+     * challenge, or where Keystore could not attest (only a self-signed certificate).
+     */
+    fun attestationChain(): List<ByteArray>
 
     /** The public key, or null before [ensureKey]. */
     fun publicKey(): PublicKeyBytes?
@@ -68,8 +77,18 @@ interface ParentAuthorizer {
      *
      * Throws [ParentAuthUnavailableException] (with the reason) when no key exists yet and [availability] is not
      * [ParentAuthAvailability.STRONG_BIOMETRIC_AVAILABLE], or when Keystore refuses the key.
+     *
+     * [attestationChallenge] is the server's registration challenge (`beginDeviceRegistration`): a new key is created
+     * with it bound into its Keystore attestation ([parentKeyAttestationChain]); null (the trial household, no
+     * session) creates the key without attestation. An existing key is returned unchanged.
      */
-    suspend fun createParentKey(): PublicKeyBytes
+    suspend fun createParentKey(attestationChallenge: ByteArray? = null): PublicKeyBytes
+
+    /**
+     * The attestation chain of this device's parent key (DER certificates, leaf first), for `registerParentKey`.
+     * Empty when there is no key, it was created without a challenge, or Keystore could not attest it.
+     */
+    fun parentKeyAttestationChain(): List<ByteArray>
 
     /**
      * A new [Signature] initialised with the parent private key and ready for a `BiometricPrompt.CryptoObject`.
@@ -93,14 +112,16 @@ class KeystoreParentAuthorizer(
 
     override fun existingParentPublicKey(): PublicKeyBytes? = keyStore.publicKey()
 
-    override suspend fun createParentKey(): PublicKeyBytes {
+    override suspend fun createParentKey(attestationChallenge: ByteArray?): PublicKeyBytes {
         keyStore.publicKey()?.let { return it }
         val availability = availability()
         if (availability != ParentAuthAvailability.STRONG_BIOMETRIC_AVAILABLE) {
             throw ParentAuthUnavailableException(availability)
         }
-        return keyStore.ensureKey()
+        return keyStore.ensureKey(attestationChallenge)
     }
+
+    override fun parentKeyAttestationChain(): List<ByteArray> = keyStore.attestationChain()
 
     override fun initSignature(): Signature = keyStore.initSignature()
 

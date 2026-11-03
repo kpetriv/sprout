@@ -32,6 +32,13 @@ object Fixtures {
 
     val start: Instant = Instant.parse("2026-11-02T08:00:00Z")
 
+    /**
+     * The registered role of each fixture device, as a device registry would report it: a `roleOf` for
+     * [Ledger.project] and [appliedCopyOf]. Null for any other device.
+     */
+    fun roleOf(deviceId: DeviceId): Role? =
+        listOf(parentPhone, parentTablet, kidTablet).firstOrNull { it.deviceId == deviceId }?.role
+
     /** Deterministic event ids for reproducible tests. */
     fun seededIds(seed: Int): EventIdGenerator {
         val random = Random(seed)
@@ -47,7 +54,9 @@ object Fixtures {
  * allowance or interest into one projection must pass their own keys, or the later one is a duplicate period.
  *
  * @param parentKey when set, every parent-only event written ([isParentOnly]) is parent-signed with it, as
- *   [LedgerWriter.appendAsParent] would. Events are never device-signed.
+ *   [LedgerWriter.appendAsParent] would.
+ * @param deviceKey when set, every event is device-signed with it ([signWith]) after any parent signature, as a real
+ *   device would before upload (see [SoftwareKey]). Unset, events are never device-signed.
  */
 class DeviceWriter(
     val author: EventAuthor,
@@ -55,6 +64,7 @@ class DeviceWriter(
     val lamport: LamportClock = LamportClock(),
     private val clock: FakeClock = FakeClock(Fixtures.start),
     private val parentKey: ParentAuthorization? = null,
+    private val deviceKey: Signer? = null,
 ) {
     private val factory = LedgerEventFactory(clock, lamport, Fixtures.seededIds(seed))
     var head: String? = null
@@ -79,8 +89,11 @@ class DeviceWriter(
         val created = factory.create(author, account.kidId, account.id, head, body)
         val key = parentKey
 
+        val parentSigned = if (key != null && created.isParentOnly()) created.parentSignWith(key) else created
+        val signed = deviceKey?.let(parentSigned::signWith) ?: parentSigned
+
         @Suppress("UNCHECKED_CAST") // withEnvelope is a data class copy, so the type is preserved.
-        val event = if (key != null && created.isParentOnly()) created.parentSignWith(key) as E else created
+        val event = signed as E
         return event.also {
             head = it.envelope.hash
             written += it

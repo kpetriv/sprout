@@ -1,0 +1,94 @@
+{
+  "indexes": [
+    {
+      "collectionGroup": "events",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "authorDeviceId", "order": "ASCENDING" },
+        { "fieldPath": "lamport", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "kids",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "authorDeviceId", "order": "ASCENDING" },
+        { "fieldPath": "lamport", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "accounts",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "authorDeviceId", "order": "ASCENDING" },
+        { "fieldPath": "lamport", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "householdPolicy",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "authorDeviceId", "order": "ASCENDING" },
+        { "fieldPath": "lamport", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "chores",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "authorDeviceId", "order": "ASCENDING" },
+        { "fieldPath": "lamport", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "choreSubmissions",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "authorDeviceId", "order": "ASCENDING" },
+        { "fieldPath": "lamport", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "rewards",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "authorDeviceId", "order": "ASCENDING" },
+        { "fieldPath": "lamport", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "allowanceSchedules",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "authorDeviceId", "order": "ASCENDING" },
+        { "fieldPath": "lamport", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "savingsGoals",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "authorDeviceId", "order": "ASCENDING" },
+        { "fieldPath": "lamport", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "interestPolicy",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "authorDeviceId", "order": "ASCENDING" },
+        { "fieldPath": "lamport", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "linkCodes",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "hid", "order": "ASCENDING" },
+        { "fieldPath": "used", "order": "ASCENDING" },
+        { "fieldPath": "expiresAt", "order": "ASCENDING" }
+      ]
+    }
+  ],
+  "fieldOverrides": []
+}

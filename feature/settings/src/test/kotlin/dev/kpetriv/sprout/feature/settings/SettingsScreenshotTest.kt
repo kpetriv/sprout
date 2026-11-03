@@ -45,6 +45,17 @@ class SettingsScreenshotTest : ScreenshotTest() {
 
     @Test
     @Config(qualifiers = "+h1100dp")
+    fun `parent security, signing key not registered with the household (D-M3-39)`() =
+        screenshot.captureLightDark("settings_security_key_not_shared") {
+            ParentSecurityScreen(
+                SettingsPreviewData.security(keyNotRegisteredWithHousehold = true),
+                onEvent = {},
+                onBack = {},
+            )
+        }
+
+    @Test
+    @Config(qualifiers = "+h1100dp")
     fun `parent security, fingerprint changed`() = screenshot.captureLightDark("settings_security_key_changed") {
         ParentSecurityScreen(
             SettingsPreviewData.security(

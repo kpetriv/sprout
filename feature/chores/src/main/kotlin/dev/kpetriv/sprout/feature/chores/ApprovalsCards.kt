@@ -138,6 +138,18 @@ private fun SubmissionPhoto(photo: PhotoUi, kidName: String, choreTitle: String)
                 modifier = Modifier.padding(16.dp),
             )
         }
+
+        PhotoUi.OnKidDevice -> Surface(
+            color = MaterialTheme.colorScheme.surfaceVariant,
+            shape = shape,
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Text(
+                text = stringResource(R.string.feature_chores_photo_on_kid_device),
+                style = MaterialTheme.typography.bodyMedium,
+                modifier = Modifier.padding(16.dp),
+            )
+        }
     }
 }
 

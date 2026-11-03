@@ -15,8 +15,9 @@ data class StoredCopy(val hash: String, val quarantined: Boolean)
 
 /** Append-only access to `ledger_events`. There is deliberately no delete; the only update is [quarantine]. */
 @Dao
+@Suppress("TooManyFunctions") // Inserts, chain heads, verified and quarantined reads.
 interface LedgerEventDao {
-    /** Fails on a duplicate `(eventId, hash)`: callers check [hashesOf] first, inside the same transaction. */
+    /** Fails on a duplicate `(eventId, hash)`: callers check [copiesOf] first, inside the same transaction. */
     @Insert(onConflict = OnConflictStrategy.ABORT)
     suspend fun insert(event: LedgerEventEntity)
 
@@ -68,6 +69,48 @@ interface LedgerEventDao {
 
     @Query("SELECT COUNT(*) FROM ledger_events")
     suspend fun count(): Int
+
+    /** Quarantined rows, newest first, for the parent's "Rejected events" card. */
+    @Query("SELECT * FROM ledger_events WHERE quarantined = 1 ORDER BY receivedAtEpochMs DESC, eventId")
+    fun observeQuarantined(): Flow<List<LedgerEventEntity>>
+
+    /**
+     * Hashes of [authorDeviceId]'s stored events whose `prevHash` is [prevHash] (null: genesis) and that count as
+     * branches for fork detection (`IngestOrdering.plan`'s `storedSuccessors`): verified rows, and rows quarantined
+     * after their device signature was checked (`FORKED_CHAIN`, or a broken ledger rule: [invariantPrefix]). Rows
+     * the verifier refused (bad signature, unknown or revoked device, ...) are not proven to be the author's and are
+     * never treated as a branch, exactly as such events are never planned when they arrive.
+     */
+    @Query(
+        """
+        SELECT hash FROM ledger_events WHERE authorDeviceId = :authorDeviceId AND prevHash IS :prevHash
+        AND (quarantined = 0 OR quarantineReason = :forkedReason
+             OR substr(quarantineReason, 1, length(:invariantPrefix)) = :invariantPrefix)
+        """,
+    )
+    suspend fun branchHashes(
+        authorDeviceId: DeviceId,
+        prevHash: String?,
+        forkedReason: String,
+        invariantPrefix: String,
+    ): List<String>
+
+    /** [authorDeviceId]'s stored rows (quarantined ones included) with one of [hashes]. */
+    @Query("SELECT * FROM ledger_events WHERE authorDeviceId = :authorDeviceId AND hash IN (:hashes)")
+    suspend fun byHashes(authorDeviceId: DeviceId, hashes: List<String>): List<LedgerEventEntity>
+
+    /** [authorDeviceId]'s stored rows (quarantined ones included) whose `prevHash` is one of [prevHashes]. */
+    @Query("SELECT * FROM ledger_events WHERE authorDeviceId = :authorDeviceId AND prevHash IN (:prevHashes)")
+    suspend fun childrenOf(authorDeviceId: DeviceId, prevHashes: List<String>): List<LedgerEventEntity>
+
+    /** Hashes of [authorDeviceId]'s rows quarantined with exactly [reason]. */
+    @Query(
+        """
+        SELECT hash FROM ledger_events
+        WHERE authorDeviceId = :authorDeviceId AND quarantined = 1 AND quarantineReason = :reason
+        """,
+    )
+    suspend fun quarantinedHashes(authorDeviceId: DeviceId, reason: String): List<String>
 
     /** Every row, quarantined ones included; for tests and the audit view. */
     @Query("SELECT * FROM ledger_events ORDER BY rowid")

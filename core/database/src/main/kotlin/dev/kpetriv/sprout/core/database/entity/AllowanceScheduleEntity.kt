@@ -1,5 +1,6 @@
 package dev.kpetriv.sprout.core.database.entity
 
+import androidx.room.Embedded
 import androidx.room.Entity
 import androidx.room.Index
 import androidx.room.PrimaryKey
@@ -28,6 +29,7 @@ enum class CadenceKind {
  * @property lastPaidOn device-local planning bookkeeping (never synced): the due date of the latest period already
  *   queued for payment, which `AllowancePlanner` plans after. Advanced when a period is queued in
  *   `pending_parent_actions`, not when it is signed; the ledger's period claim keeps the payment itself idempotent.
+ * @property stamp author, signature and tombstone flag of the row's current state (schema version 3).
  */
 @Entity(tableName = "allowance_schedules", indices = [Index(value = ["kidId"])])
 data class AllowanceScheduleEntity(
@@ -42,6 +44,7 @@ data class AllowanceScheduleEntity(
     val active: Boolean,
     val lastPaidOn: CalendarDate?,
     val lamport: Long,
+    @Embedded val stamp: DocumentStamp = DocumentStamp(),
 ) {
     fun toDomain(): AllowanceSchedule = AllowanceSchedule(
         id = scheduleId,

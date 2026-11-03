@@ -1,0 +1,116 @@
+package dev.kpetriv.sprout.di
+
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.ProcessLifecycleOwner
+import dagger.Binds
+import dagger.Module
+import dagger.Provides
+import dagger.hilt.InstallIn
+import dagger.hilt.components.SingletonComponent
+import dev.kpetriv.sprout.core.database.RoomOutboxSource
+import dev.kpetriv.sprout.core.syncfirebase.AccountInfoReader
+import dev.kpetriv.sprout.core.syncfirebase.FirebaseAuthSession
+import dev.kpetriv.sprout.sync.AppRestarter
+import dev.kpetriv.sprout.sync.AuthStateReader
+import dev.kpetriv.sprout.sync.BackgroundSync
+import dev.kpetriv.sprout.sync.BackgroundWork
+import dev.kpetriv.sprout.sync.CredentialCheck
+import dev.kpetriv.sprout.sync.CredentialGate
+import dev.kpetriv.sprout.sync.EngineSyncRunner
+import dev.kpetriv.sprout.sync.EraseConfirmation
+import dev.kpetriv.sprout.sync.FirebaseAuthStateReader
+import dev.kpetriv.sprout.sync.FirebaseGateAuth
+import dev.kpetriv.sprout.sync.ForegroundState
+import dev.kpetriv.sprout.sync.GateAuth
+import dev.kpetriv.sprout.sync.HouseholdRemovals
+import dev.kpetriv.sprout.sync.LocalDataEraser
+import dev.kpetriv.sprout.sync.LocalEraseConfirmation
+import dev.kpetriv.sprout.sync.OutboxSyncTrigger
+import dev.kpetriv.sprout.sync.ParentSecrets
+import dev.kpetriv.sprout.sync.ProcessAppRestarter
+import dev.kpetriv.sprout.sync.RejectionAuditor
+import dev.kpetriv.sprout.sync.RemovalHandler
+import dev.kpetriv.sprout.sync.SessionBackgroundSync
+import dev.kpetriv.sprout.sync.SharedShellPreferences
+import dev.kpetriv.sprout.sync.ShellPreferences
+import dev.kpetriv.sprout.sync.StoredParentSecrets
+import dev.kpetriv.sprout.sync.SyncRunner
+import dev.kpetriv.sprout.sync.SyncScheduler
+import dev.kpetriv.sprout.sync.SyncTrigger
+import dev.kpetriv.sprout.sync.WipingLocalDataEraser
+import dev.kpetriv.sprout.sync.WorkManagerBackgroundWork
+import dev.kpetriv.sprout.sync.WorkManagerSyncScheduler
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
+
+/**
+ * The app's sync shell: trigger, scheduling, worker seam, session reconciliation, the wipe owner, the "Sign in again"
+ * gate and restart (M3 §6).
+ */
+@Module
+@InstallIn(SingletonComponent::class)
+@Suppress("TooManyFunctions") // One binding per seam.
+internal abstract class SyncModule {
+    @Binds
+    abstract fun syncRunner(impl: EngineSyncRunner): SyncRunner
+
+    @Binds
+    abstract fun syncTrigger(impl: OutboxSyncTrigger): SyncTrigger
+
+    @Binds
+    abstract fun syncScheduler(impl: WorkManagerSyncScheduler): SyncScheduler
+
+    @Binds
+    abstract fun shellPreferences(impl: SharedShellPreferences): ShellPreferences
+
+    @Binds
+    abstract fun backgroundSync(impl: SessionBackgroundSync): BackgroundSync
+
+    @Binds
+    abstract fun authStateReader(impl: FirebaseAuthStateReader): AuthStateReader
+
+    @Binds
+    abstract fun appRestarter(impl: ProcessAppRestarter): AppRestarter
+
+    /** The Account screen's e-mail address, read on demand and never stored (`FirebaseAuthSession.accountInfo`). */
+    @Binds
+    abstract fun accountInfoReader(impl: FirebaseAuthSession): AccountInfoReader
+
+    @Binds
+    abstract fun localDataEraser(impl: WipingLocalDataEraser): LocalDataEraser
+
+    @Binds
+    abstract fun householdRemovals(impl: RemovalHandler): HouseholdRemovals
+
+    @Binds
+    abstract fun backgroundWork(impl: WorkManagerBackgroundWork): BackgroundWork
+
+    @Binds
+    abstract fun credentialCheck(impl: CredentialGate): CredentialCheck
+
+    @Binds
+    abstract fun gateAuth(impl: FirebaseGateAuth): GateAuth
+
+    @Binds
+    abstract fun parentSecrets(impl: StoredParentSecrets): ParentSecrets
+
+    @Binds
+    abstract fun eraseConfirmation(impl: LocalEraseConfirmation): EraseConfirmation
+
+    companion object {
+
+        @Provides
+        fun rejectionAuditor(outbox: RoomOutboxSource): RejectionAuditor = RejectionAuditor(outbox::auditRejections)
+
+        @Provides
+        fun foregroundState(): ForegroundState = object : ForegroundState {
+            private val lifecycle get() = ProcessLifecycleOwner.get().lifecycle
+
+            override fun isForeground(): Boolean = lifecycle.currentStateFlow.value.isAtLeast(Lifecycle.State.STARTED)
+
+            override fun changes(): Flow<Boolean> =
+                lifecycle.currentStateFlow.map { it.isAtLeast(Lifecycle.State.STARTED) }.distinctUntilChanged()
+        }
+    }
+}

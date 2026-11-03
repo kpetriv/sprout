@@ -1,5 +1,6 @@
 package dev.kpetriv.sprout.core.database.entity
 
+import androidx.room.Embedded
 import androidx.room.Entity
 import androidx.room.PrimaryKey
 import dev.kpetriv.sprout.core.model.HouseholdId
@@ -12,6 +13,7 @@ data class InterestPolicyEntity(
     val annualRateBasisPoints: Int,
     val accrualDay: Int,
     val lamport: Long,
+    @Embedded val stamp: DocumentStamp = DocumentStamp(),
 ) {
     fun toDomain(): InterestPolicy = InterestPolicy(householdId, annualRateBasisPoints, accrualDay)
 

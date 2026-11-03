@@ -346,4 +346,32 @@ class CanonicalEncoderTest {
             )
         }
     }
+
+    @Test
+    fun encodeTreeSortsEveryLevelAndStripsNothing() {
+        val tree = Json.parseToJsonElement(
+            """{"z":1,"signature":"kept","a":{"y":[3,{"b":true,"a":null}],"x":"q\"\n"},"hash":"h"}""",
+        ).jsonObject
+        val expected = """{"a":{"x":"q\"\n","y":[3,{"a":null,"b":true}]},"hash":"h","signature":"kept","z":1}"""
+        assertEquals(expected, CanonicalEncoder.encodeTreeToString(tree))
+        assertContentEquals(expected.encodeToByteArray(), CanonicalEncoder.encodeTree(tree))
+    }
+
+    @Test
+    fun encodeTreeMatchesTheEventEncodingOfTheStrippedTree() {
+        val tree = LedgerJson.encodeToJsonObject(golden)
+        val envelope = tree.getValue("envelope").jsonObject - setOf("hash", "signature", "parentSignature")
+        val stripped = JsonObject(tree + ("envelope" to JsonObject(envelope)))
+        assertContentEquals(CanonicalEncoder.encode(golden), CanonicalEncoder.encodeTree(stripped))
+    }
+
+    @Test
+    fun encodeTreeRejectsFractionsAndUnpairedSurrogates() {
+        assertFailsWith<IllegalArgumentException> {
+            CanonicalEncoder.encodeTree(Json.parseToJsonElement("""{"a":1.5}""").jsonObject)
+        }
+        assertFailsWith<CharacterCodingException> {
+            CanonicalEncoder.encodeTree(JsonObject(mapOf("a" to JsonPrimitive("\uD800"))))
+        }
+    }
 }

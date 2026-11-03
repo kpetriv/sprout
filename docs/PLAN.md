@@ -8,7 +8,7 @@ Kiril wants a Play-Store-ready Android app that demonstrates senior/lead-level e
 
 Decisions made:
 - **Concept:** a "family economy" app. Kids earn credits via chores and short brain games; credits convert to pocket money or screen time; parent runs budgets, allowances, savings goals, and a ledger. Parent↔kid chat. No device-locking in v1 (avoids Accessibility/UsageStats/overlay policy review).
-- **Backend:** Firebase (Auth, Firestore, Storage, Cloud Functions, App Check). Sync engine written against a `SyncTransport` interface so the transport can be swapped.
+- **Backend:** Firebase (Auth, Firestore, Storage, App Check) on the free Spark plan, plus the Sprout server (`server/`, Hono on Vercel, speaking the Firebase callable protocol with the Admin SDK) for the privileged operations, because Spark has no Cloud Functions (D-M3-29, ADR-0007). Sync engine written against a `SyncTransport` interface so the transport can be swapped.
 - **App shape:** one app, two roles. Parent area behind PIN/biometric; kid mode on the kid's device, with an age-tiered UI.
 - **Play audience:** parents, 18+. Kid mode is a parent-configured feature. Keeps chat and generative AI outside the Families policy regime.
 - **Scope:** full showcase — Glance widget, Baseline Profiles + Macrobenchmark, screenshot tests, KMP-ready shared domain.
@@ -59,7 +59,7 @@ Event-sourced ledger in a pure-Kotlin module (KMP-ready).
 - Money is `Long` minor units in a `Money` value class; no floating point in the ledger.
 - Invariants in the domain: no negative balances, reward > 0, daily game cap, only PARENT role may author `ChoreRewarded`, `AllowancePaid`, `ManualAdjustment`, `InterestAccrued`.
 
-Chores, rewards, kids, chat messages are synced documents (LWW by lamport, with status precedence for chores: `APPROVED` > `SUBMITTED` > `PENDING`).
+Chores, rewards, kids, chat messages are synced, device-signed documents: tombstones beat live copies, chore submissions resolve by status rank first (`APPROVED` > `REJECTED` > `SUBMITTED`), and everything else is last-writer-wins on `(lamport, authorDeviceId)` (ADR-0006).
 
 ## Architecture
 
@@ -73,13 +73,14 @@ core/
   model/                     — shared models (Kid, Chore, Reward, Message, KidUiTier)
   crypto/                    — Keystore-backed device keys, household key, signing, AES-GCM, Tink wrappers
   database/                  — Room (SQLCipher) entities, DAOs, projection cache, outbox, audit log
-  sync/                      — SyncEngine, Outbox, ConflictResolver, SyncTransport interface
-  sync-firebase/             — Firestore/Storage/Auth/AppCheck transport
+  sync/                      — JVM module: SyncEngine, DocumentEnvelope, ConflictResolver, SyncTransport interface (FakeSyncTransport in testFixtures)
+  sync-firebase/             — Firestore/Auth/AppCheck transport, callable client for the Sprout server (Storage from M4)
   ai/                        — AiGateway interface + Gemini Nano impl + rules-based fallback
   designsystem/              — theme, tier-scaled tokens, components, previews
   ui/                        — shared composables (charts, balance jar/ring), window-size helpers
-  testing/                   — fakes (FakeSyncTransport, FakeClock, FakeCrypto), screenshot infra
-  common/                    — dispatchers, Result, Clock, logging (PII-safe)
+  testing/                   — screenshot infra only (Roborazzi rule and options); fakes live in each module's testFixtures (FakeSyncTransport in core/sync, FakeClock in core/time, in-memory key stores in core/crypto, TestHousehold in core/database)
+  time/                      — pure Kotlin: Clock over kotlin.time.Instant
+  common/                    — dispatchers, Result, logging (PII-safe)
 feature/
   onboarding/                — sign-in (Credential Manager), household setup, device linking
   lock/                      — parent PIN/biometric gate, kid-mode exit gate
@@ -90,11 +91,11 @@ feature/
   chat/                      — E2EE threads, kindness check, presets/voice for Seedling
   timebank/                  — kid time bank timer
   settings/                  — kids & tiers, devices, PIN, data export, delete household
-functions/                   — Cloud Functions (TypeScript): link-device, delete-household, export, interest cron guard
-firestore/                   — security rules + rules tests
+server/                      — the Sprout server (TypeScript, Hono on Vercel, firebase-admin): the callables for households, devices, link codes, parent keys, revocation, export and deletion, plus tests against the emulators
+firestore/                   — security rules, indexes, rules tests (vitest + emulator)
 widget/                      — Glance widget: kid balance + chores due
 benchmark/                   — Macrobenchmark + Baseline Profile generator
-docs/adr/                    — architecture decision records, threat model, controls matrix
+docs/                        — plan, ADRs (docs/adr/), threat model, controls matrix, runbook, privacy, Firebase backend
 ```
 
 Each feature exposes `ViewModel` → `StateFlow<UiState>` and consumes repositories from `core/`. Writes go to Room + outbox in one transaction; `SyncEngine` drains the outbox.
@@ -104,11 +105,11 @@ Each feature exposes `ViewModel` → `StateFlow<UiState>` and consumes repositor
 Documented in `docs/THREAT_MODEL.md` and `docs/CONTROLS.md` (controls mapped to SOC 2 trust criteria).
 
 **Identity and access**
-- Parents sign in with Firebase Auth via Credential Manager (Google + passkeys). Kid devices get their own Firebase Auth identity (anonymous auth, upgraded with custom claims `{householdId, role: KID, kidId}`) — never the parent's credentials.
-- Device linking: parent taps "link device" → Cloud Function creates an 8-char code (crypto-random, 10-minute TTL, single use, rate-limited per uid and IP, hashed at rest). Kid device submits code + its device public key → function validates, registers the key, sets claims. Code is never a URL and never logged.
-- Adding a second parent device requires approval on an existing parent device (QR with public key fingerprint).
+- Parents sign in with Firebase Auth via Credential Manager (Google + passkeys). Kid devices get their own Firebase Auth identity (anonymous auth, upgraded with custom claims `{hid, role: KID, kidId}` set by the server) — never the parent's credentials.
+- Device linking: parent taps "link device" → the server's `createLinkCode` creates an 8-char code (crypto-random, 10-minute TTL, single use, rate-limited per uid and IP, stored as an HMAC). Kid device submits code + its attested device public key → the server validates, registers the key, sets claims. Code is never a URL and never logged.
+- Adding a second parent device requires approval on an existing parent device (public key fingerprint comparison and a signed approval; ADR-0007).
 - Firestore rules enforce: household membership, `authorUid == request.auth.uid` on every write, role-gated document types (kid cannot write approvals, rewards, allowance, kid profiles), immutable ledger events (no update/delete), schema validation of required fields. Rules tested in CI with the emulator.
-- App Check with Play Integrity on every Firebase call, enforced in Firestore/Storage/Functions, so requests from repackaged or scripted clients are rejected.
+- App Check with Play Integrity on every Firebase call, enforced by the server on every callable and in Firestore/Storage from M8, so requests from repackaged or scripted clients are rejected.
 
 **Anti-spoofing and tamper evidence**
 - Each device generates a P-256 key pair in Android Keystore (StrongBox when available, hardware-backed otherwise, `setUserAuthenticationRequired` for parent keys). Public key registered at link time; stored under the household's device list.
@@ -139,12 +140,12 @@ Documented in `docs/THREAT_MODEL.md` and `docs/CONTROLS.md` (controls mapped to 
 **Privacy compliance (GDPR/UK GDPR, COPPA-adjacent)**
 - Data minimisation: kids are first name + avatar + birth month/year; no email, no location, no contacts, no advertising ID.
 - Lawful basis and consent captured at household creation; parent is the controller of the child's data in-app.
-- Right of access/portability: `export household` Cloud Function produces a JSON/CSV bundle. Right to erasure: `delete household` function removes Firestore docs, Storage objects, Auth users, and emits a deletion audit record; local wipe on all devices on next sync.
+- Right of access/portability: the server's `exportHousehold` returns a JSON bundle (a ledger CSV is derived on device). Right to erasure: `deleteHousehold` removes Firestore docs, Storage objects (from M4), Auth users, and writes a deletion audit record; local wipe on all devices on next sync.
 - Retention policy: chat messages optional auto-delete after N days (parent setting); linking codes and audit logs with fixed TTL.
 - Privacy policy page + Play data-safety form generated from `docs/PRIVACY.md`; security.txt and a disclosure policy in the repo.
 
 **Availability and operations**
-- Offline-first by design; Firestore backups scheduled; Functions have alerting on error rate; incident runbook in `docs/RUNBOOK.md`.
+- Offline-first by design; Firestore backups need the Blaze plan (open, CONTROLS AV-7); server error alerting M8; incident runbook in `docs/RUNBOOK.md`.
 - In-app audit log (who did what, when, from which device) visible to parents; append-only.
 
 ## Sync design
@@ -165,14 +166,14 @@ Documented in `docs/THREAT_MODEL.md` and `docs/CONTROLS.md` (controls mapped to 
 
 ## Tech stack
 
-Pin at scaffold time to latest stable: Kotlin 2.x (K2), AGP, Compose BOM, Room (KSP) + SQLCipher, Hilt, WorkManager, Coil, Kotlinx Serialization/Coroutines/DateTime, Credential Manager, Biometric, Tink, Firebase BoM (Auth, Firestore, Storage, Functions, App Check), ML Kit GenAI, Glance, Macrobenchmark, Baseline Profiles, Roborazzi (screenshot tests), Turbine, MockK/Kotest, Detekt + ktlint, Version Catalog, Gradle config cache, Renovate.
+Pin at scaffold time to latest stable: Kotlin 2.x (K2), AGP, Compose BOM, Room (KSP) + SQLCipher, Hilt, WorkManager, Coil, Kotlinx Serialization/Coroutines/DateTime, Credential Manager, Biometric, Tink, Firebase BoM (Auth, Firestore, Storage, Functions client, App Check), Node 22/24 + TypeScript + Hono + firebase-admin for `server/`, ML Kit GenAI, Glance, Macrobenchmark, Baseline Profiles, Roborazzi (screenshot tests), Turbine, MockK/Kotest, Detekt + ktlint, Version Catalog, Gradle config cache, Renovate.
 
 ## Milestones (each ends with green CI and a tagged build)
 
 1. **M0 Scaffold** — repo, `build-logic`, version catalog, module skeleton, Hilt, theme + tier tokens, CI (build, unit tests, lint, Detekt, dependency verification, dependency-check), Renovate, README, ADR-001 architecture, ADR-002 ledger as events, `docs/THREAT_MODEL.md` first draft.
 2. **M1 Ledger core + crypto** — `core/domain-ledger` with hash chain and property-style tests; `core/crypto` (Keystore keys, signing, AES-GCM, PIN hashing) with tests; Room (SQLCipher) schema, outbox, audit log; wallet screen (all 3 tiers) from local events; manual adjustment.
 3. **M2 Chores + rewards + tiers** — parent CRUD, kid today (3 tiers), submit/approve, rewards shop (3 tiers), allowance scheduler, savings goals + interest, parent lock screen with PIN/biometric.
-4. **M3 Sync + identity** — `core/sync`, Firebase transport, App Check, Credential Manager sign-in, Cloud Functions (link-device, delete, export), Firestore rules + emulator tests, device registry, signature/chain verification on pull, multi-device JVM convergence tests, `docs/CONTROLS.md`.
+4. **M3 Sync + identity** — `core/sync` (JVM), Firebase transport, App Check, Credential Manager sign-in, the Sprout server on Vercel (households, devices, link codes, parent keys, revocation, export, delete; replaces Cloud Functions, D-M3-29), Firestore rules + emulator tests, device registry with key attestation, signature/chain verification on pull with held and forked handling, multi-device JVM convergence tests, ADR-0006/0007, `docs/CONTROLS.md`, `docs/RUNBOOK.md`. Spec and as-built notes: `docs/milestones/M3.md`.
 5. **M4 Chat (E2EE) + time bank** — key agreement, encrypted threads, Seedling presets/voice notes, key rotation on device removal, time bank timer with foreground notification.
 6. **M5 Games** — three games, tier difficulty, daily cap, scoring → signed ledger events.
 7. **M6 AI** — `core/ai`, Gemini Nano integration, fallbacks, kindness check, chore suggestions, weekly summary.
@@ -224,7 +225,7 @@ This session stays on Fable 5.1 as coordinator and quality gate. Implementation 
 **`sprout/CLAUDE.md`** delegation rules (so any coordinator session follows them):
 - Coordinator (Fable) plans, writes briefs, reviews, and merges; it does not write feature code itself except one-line fixes.
 - One implementer per module set at a time; never two writers on the same files.
-- Every implementer result goes through `reviewer`; anything touching `core/crypto`, `core/sync`, `firestore/`, `functions/`, or `feature/lock` also goes through `security-auditor` before merge.
+- Every implementer result goes through `reviewer`; anything touching `core/crypto`, `core/sync`, `core/sync-firebase`, `firestore/`, `server/`, or `feature/lock` also goes through `security-auditor` before merge.
 - Briefs name the module, the done condition, and the tests that must pass; results come back as a diff summary plus test output, not file dumps.
 - Commits per milestone slice on a feature branch; PRs reviewed in-session before merge.
 

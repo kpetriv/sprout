@@ -43,6 +43,37 @@ class AndroidKeystoreInstrumentedTest {
     }
 
     @Test
+    fun registrationKeyReplacesTheProvisionalKeyAndCarriesTheChallenge() = runTest {
+        val store = AndroidKeystoreDeviceKeyStore(context, Dispatchers.IO)
+        val provisional = store.publicKey()
+        val challenge = ByteArray(32).also(random::nextBytes)
+
+        val material = store.regenerateForRegistration(challenge)
+        assertEquals("pending until promoted", provisional, store.publicKey())
+        store.promotePendingKey()
+
+        assertFalse("a fresh key", material.publicKey == provisional)
+        assertEquals(material.publicKey, store.publicKey())
+        val handle = store.deviceSigningKey()
+        assertTrue(handle.alias == KeyAliases.DEVICE_SIGNING_V2 || handle.alias == KeyAliases.DEVICE_SIGNING_V2_PENDING)
+        val keyStore = java.security.KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
+        assertFalse("v1 is deleted once a v2 key is active", keyStore.containsAlias(KeyAliases.DEVICE_SIGNING))
+        val payload = "document".encodeToByteArray()
+        assertTrue(JceEcdsaVerifier().verify(material.publicKey, payload, JceEcdsaSigner(handle).sign(payload)))
+        // A fresh instance (next process start) picks the v2 key.
+        assertEquals(material.publicKey, AndroidKeystoreDeviceKeyStore(context, Dispatchers.IO).publicKey())
+        val chain = material.attestationChain
+        if (chain.isNotEmpty()) {
+            val leaf = java.security.cert.CertificateFactory.getInstance("X.509")
+                .generateCertificate(chain.first().inputStream())
+            assertArrayEquals(material.publicKey.encoded, leaf.publicKey.encoded)
+            assertTrue("a chain up to an attestation root", chain.size >= 2)
+        }
+        store.keyProperties()
+        keyStore.deleteEntry(KeyAliases.DEVICE_SIGNING_V2)
+    }
+
+    @Test
     fun wrappedSecretRoundTripsThroughKeystoreAndFiles() = runTest {
         val store = WrappedSecretStore(
             AndroidKeystoreKeyWrapper(context),

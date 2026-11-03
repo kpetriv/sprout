@@ -1,4 +1,76 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
   <string name="feature_onboarding_title">Welcome to Sprout</string>
+  <string name="feature_onboarding_back">Back</string>
+
+  <!-- Welcome -->
+  <string name="feature_onboarding_welcome_subtitle">Chores, pocket money and screen time, shared between the family’s phones.</string>
+  <string name="feature_onboarding_welcome_parent">I’m a parent</string>
+  <string name="feature_onboarding_welcome_parent_detail">Set up your household, or join it from another phone</string>
+  <string name="feature_onboarding_welcome_kid">This is a kid’s device</string>
+  <string name="feature_onboarding_welcome_kid_detail">Link it with a code from a parent’s phone</string>
+  <string name="feature_onboarding_welcome_not_now">Not now</string>
+
+  <!-- Parent sign-in -->
+  <string name="feature_onboarding_sign_in_title">Sign in</string>
+  <string name="feature_onboarding_sign_in_google_detail">Sign in with the Google account you want to manage the household with.</string>
+  <string name="feature_onboarding_sign_in_google">Continue with Google</string>
+  <string name="feature_onboarding_sign_in_emulator_detail">Debug build: sign in to the local Firebase emulator. A new e-mail address creates a test account.</string>
+  <string name="feature_onboarding_sign_in_email">E-mail</string>
+  <string name="feature_onboarding_sign_in_password">Password (at least 6 characters)</string>
+  <string name="feature_onboarding_sign_in_submit">Sign in</string>
+
+  <!-- Create household -->
+  <string name="feature_onboarding_create_title">Create your household</string>
+  <string name="feature_onboarding_create_detail">Money in your household is counted in this currency. It can’t be changed later.</string>
+  <string name="feature_onboarding_create_currency">Currency</string>
+  <string name="feature_onboarding_create_submit">Create household</string>
+
+  <!-- Trial data -->
+  <string name="feature_onboarding_purge_title">Your trial data</string>
+  <string name="feature_onboarding_purge_text">Your trial data stays on this phone until you continue; it will be deleted.</string>
+  <string name="feature_onboarding_purge_detail_parent">The kids, chores, rewards and balances you tried Sprout with are not copied into your household.</string>
+  <string name="feature_onboarding_purge_detail_kid">The kids, chores, rewards and balances tried on this phone are not copied. The phone gets everything from the household instead.</string>
+  <string name="feature_onboarding_purge_continue">Continue</string>
+  <string name="feature_onboarding_purge_cancel">Cancel</string>
+
+  <!-- Second parent device -->
+  <string name="feature_onboarding_waiting_title">Approve this device on your other phone</string>
+  <string name="feature_onboarding_waiting_detail">On a phone that already runs your household, open the dashboard or Settings → Devices and approve the new device. Check that it shows this code:</string>
+  <string name="feature_onboarding_waiting_progress">Waiting for approval…</string>
+  <string name="feature_onboarding_waiting_cancel">Cancel</string>
+
+  <!-- Kid device code -->
+  <string name="feature_onboarding_code_title">Enter the code</string>
+  <string name="feature_onboarding_code_detail">On a parent’s phone, open Settings → Kids, pick the kid and choose “Link a device”.</string>
+  <string name="feature_onboarding_code_field">Link code</string>
+  <string name="feature_onboarding_code_note">Codes are single-use and expire after 10 minutes.</string>
+  <string name="feature_onboarding_code_submit">Link this phone</string>
+
+  <!-- First sync -->
+  <string name="feature_onboarding_first_sync">Getting everything from the household…</string>
+  <string name="feature_onboarding_working">Working…</string>
+
+  <!-- Fingerprint signing for an existing PIN -->
+  <string name="feature_onboarding_signing_title">Turn on fingerprint signing</string>
+  <string name="feature_onboarding_signing_detail">Enter your parent PIN, then touch the fingerprint sensor. Every payment you make from this phone will carry your signature.</string>
+  <string name="feature_onboarding_signing_later">Later</string>
+  <string name="feature_onboarding_signing_wrong_pin">Wrong PIN</string>
+  <string name="feature_onboarding_signing_locked_out">Too many wrong PINs. Try again later.</string>
+  <string name="feature_onboarding_signing_cancelled">The fingerprint prompt was closed. Enter the PIN to try again.</string>
+  <string name="feature_onboarding_signing_failed">Couldn’t turn on signing. Enter the PIN to try again.</string>
+
+  <!-- Failures -->
+  <string name="feature_onboarding_failure_network">Couldn’t reach Sprout. Check the connection and try again.</string>
+  <string name="feature_onboarding_failure_invalid_credential">That e-mail and password don’t match.</string>
+  <string name="feature_onboarding_failure_cancelled">Sign-in was cancelled.</string>
+  <string name="feature_onboarding_failure_no_google_account">There’s no Google account on this phone that can sign in.</string>
+  <string name="feature_onboarding_failure_google_not_configured">Google sign-in isn’t set up in this build.</string>
+  <string name="feature_onboarding_failure_not_available">This way of signing in isn’t available in this build.</string>
+  <string name="feature_onboarding_failure_too_many">Too many attempts. Wait a while and try again.</string>
+  <string name="feature_onboarding_failure_disabled">This account was disabled or deleted.</string>
+  <string name="feature_onboarding_failure_code">That code didn’t work. Check it, or ask for a new one: codes are single-use and expire after 10 minutes.</string>
+  <string name="feature_onboarding_failure_not_allowed">This account can’t be used as a parent here.</string>
+  <string name="feature_onboarding_failure_rejected">This device wasn’t approved.</string>
+  <string name="feature_onboarding_failure_unknown">Something went wrong. Try again.</string>
 </resources>

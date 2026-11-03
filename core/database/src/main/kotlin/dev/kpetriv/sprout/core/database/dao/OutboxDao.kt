@@ -5,8 +5,10 @@ import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.Query
 import dev.kpetriv.sprout.core.database.entity.OutboxEntity
+import dev.kpetriv.sprout.core.database.entity.OutboxKind
+import kotlinx.coroutines.flow.Flow
 
-/** The sync outbox. Written with every local change; drained by the sync engine (M3). */
+/** The sync outbox. Written with every local change; drained by the sync engine through `RoomOutboxSource`. */
 @Dao
 interface OutboxDao {
     @Insert(onConflict = OnConflictStrategy.ABORT)
@@ -19,9 +21,12 @@ interface OutboxDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsertDocument(entry: OutboxEntity): Long
 
-    /** Rows due at [nowEpochMs], oldest first. */
-    @Query("SELECT * FROM outbox WHERE nextAttemptAtEpochMs <= :nowEpochMs ORDER BY seq LIMIT :limit")
-    suspend fun due(nowEpochMs: Long, limit: Int): List<OutboxEntity>
+    /**
+     * The oldest [limit] rows in `seq` order, due or not: the caller stops at the first row not yet due
+     * (head-of-line, D-M3-15).
+     */
+    @Query("SELECT * FROM outbox ORDER BY seq LIMIT :limit")
+    suspend fun head(limit: Int): List<OutboxEntity>
 
     /** Records a failed attempt and when to try again. */
     @Query(
@@ -38,4 +43,12 @@ interface OutboxDao {
 
     @Query("SELECT * FROM outbox ORDER BY seq")
     suspend fun all(): List<OutboxEntity>
+
+    /** Rows not yet accepted by the server (unsynced changes). */
+    @Query("SELECT COUNT(*) FROM outbox")
+    suspend fun count(): Int
+
+    /** The `seq` of every queued row of [kind], in order. */
+    @Query("SELECT seq FROM outbox WHERE kind = :kind ORDER BY seq")
+    fun observeSeqs(kind: OutboxKind): Flow<List<Long>>
 }

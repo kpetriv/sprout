@@ -23,4 +23,51 @@
   <string name="startup_failed_keys">The secure key store on this device couldn’t be read.</string>
   <string name="startup_failed_database">The local data couldn’t be opened.</string>
   <string name="startup_failed_unknown">Something went wrong while starting up.</string>
+
+  <!-- Sync (M3) -->
+  <string name="sync_channel_name">Sync</string>
+  <string name="sync_notification_title">Syncing your household</string>
+
+  <!-- This phone was removed from the household (M3 §6) -->
+  <string name="removed_title">This phone was removed from the household</string>
+  <string name="removed_signed_out_title">Signed out</string>
+  <string name="removed_signed_out">This phone signed out, so its copy of the household is erased. Your household stays in the cloud.</string>
+  <string name="removed_household_gone">The household was deleted, or this phone is no longer part of it.</string>
+  <string name="removed_device_revoked">A parent removed this phone from the household.</string>
+  <string name="removed_wiping">Erasing the household’s data from this phone…</string>
+  <string name="removed_wiped">The household’s data has been erased from this phone.</string>
+  <string name="removed_continue">Continue</string>
+  <string name="removed_failed">Some of this phone’s data couldn’t be erased. Restart the app to try again.</string>
+  <string name="removed_restart">Restart</string>
+
+  <!-- Sign in again (the account's credentials on this phone are gone) -->
+  <string name="gate_title">Sign in again</string>
+  <string name="gate_text">This phone’s sign-in has ended. Sign in with the same parent account to keep using it here.</string>
+  <string name="gate_checking">Checking this phone with your household…</string>
+  <string name="gate_unreachable">Couldn’t reach Sprout to check this phone. Connect to the internet and try again.</string>
+  <string name="gate_retry">Try again</string>
+  <string name="gate_sign_in_google">Continue with Google</string>
+  <string name="gate_email">E-mail</string>
+  <string name="gate_password">Password</string>
+  <string name="gate_sign_in">Sign in</string>
+  <string name="gate_erase">Erase this phone’s copy instead</string>
+  <string name="gate_failure_wrong_account">That’s a different account. Sign in with the account this phone belongs to.</string>
+  <string name="gate_failure_invalid">That sign-in didn’t work. Check it and try again.</string>
+  <string name="gate_failure_cancelled">Sign-in was cancelled.</string>
+  <string name="gate_failure_network">Couldn’t reach Sprout. Check the connection and try again.</string>
+  <string name="gate_failure_failed">Something went wrong. Try again.</string>
+  <string name="gate_erase_title">Erase this phone’s copy?</string>
+  <string name="gate_erase_text">Your household stays in the cloud. This phone’s copy is erased and the app starts over.</string>
+  <plurals name="gate_erase_unsynced">
+    <item quantity="one">%1$d change made on this phone hasn’t synced yet. It will be lost.</item>
+    <item quantity="other">%1$d changes made on this phone haven’t synced yet. They will be lost.</item>
+  </plurals>
+  <string name="gate_erase_unsynced_unknown">Changes made on this phone that haven’t synced yet will be lost.</string>
+  <string name="gate_erase_unsynced_none">Everything on this phone has synced.</string>
+  <string name="gate_erase_pin">Parent PIN</string>
+  <string name="gate_erase_confirm">Erase</string>
+  <string name="gate_erase_cancel">Cancel</string>
+  <string name="gate_erase_wrong_pin">That PIN isn’t right.</string>
+  <string name="gate_erase_locked_out">Too many wrong PINs. Try again later.</string>
+  <string name="gate_erase_unavailable">The PIN can’t be checked on this phone right now.</string>
 </resources>

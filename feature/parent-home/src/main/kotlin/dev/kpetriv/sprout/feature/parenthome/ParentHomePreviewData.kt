@@ -6,11 +6,14 @@ import dev.kpetriv.sprout.core.designsystem.theme.SproutTheme
 import dev.kpetriv.sprout.core.domainledger.Currency
 import dev.kpetriv.sprout.core.domainledger.Money
 import dev.kpetriv.sprout.core.model.CalendarDate
+import dev.kpetriv.sprout.core.model.DeviceId
 import dev.kpetriv.sprout.core.model.HouseholdId
 import dev.kpetriv.sprout.core.model.Kid
 import dev.kpetriv.sprout.core.model.KidId
 import dev.kpetriv.sprout.core.model.KidUiTier
+import dev.kpetriv.sprout.core.model.Role
 import dev.kpetriv.sprout.core.model.YearMonth
+import kotlin.time.Instant
 
 /** Fixed dashboard states for previews and screenshot tests. No clock, no random ids, no real people. */
 @Suppress("MagicNumber") // Sample balances, dates and counts are the data itself.
@@ -39,6 +42,52 @@ object ParentHomePreviewData {
             KidSummaryUi(zoe, MoneyUi(Money(4_210), gbp), Money(120), CalendarDate(2026, 12, 1), anomalies = 0),
         ),
         signing = signing,
+    )
+
+    /** The trial household on a fresh install: the banner offering "Set up sync". */
+    fun trial(): ParentHomeUiState.Ready = empty().copy(household = HouseholdStatus(trial = true))
+
+    /** A synced household with a parent phone waiting for approval and two refused events. */
+    fun household(): ParentHomeUiState.Ready = empty().copy(
+        household = HouseholdStatus(
+            sync = SyncLine(Instant.parse("2026-11-03T09:41:00Z"), blockedCode = null, failing = false),
+            rejected = listOf(
+                RejectedEvent(
+                    "PARENT_SIGNATURE_MISSING",
+                    DeviceLabel(Role.KID, "Leo", "c0ff ee00 d00d feed"),
+                    Instant.parse("2026-11-03T08:15:00Z"),
+                ),
+                RejectedEvent(
+                    "DEVICE_NOT_ACTIVE",
+                    DeviceLabel(Role.KID, "Mia", "dead 0000 beef 1111"),
+                    Instant.parse("2026-11-02T19:02:00Z"),
+                ),
+            ),
+            pendingDevices = listOf(PendingDevice(DeviceId("3fa9c01d77e2b4a8".padEnd(64, '0')), "3fa9 c01d 77e2 b4a8")),
+        ),
+    )
+
+    /** Sync blocked by a refused ledger entry of this phone. */
+    fun syncBlocked(): ParentHomeUiState.Ready = empty().copy(
+        household = HouseholdStatus(
+            sync = SyncLine(Instant.parse("2026-11-03T09:41:00Z"), blockedCode = "permission-denied", failing = false),
+        ),
+    )
+
+    /** A synced household whose parent signing key never reached the server (D-M3-39). */
+    fun signingKeyNotRegistered(): ParentHomeUiState.Ready = empty().copy(
+        household = HouseholdStatus(
+            sync = SyncLine(Instant.parse("2026-11-03T09:41:00Z"), blockedCode = null, failing = false),
+            signingKeyNotRegistered = true,
+        ),
+    )
+
+    /** A synced household whose parent phone has fingerprint signing off (D-M3-46). */
+    fun signingOff(): ParentHomeUiState.Ready = empty().copy(
+        household = HouseholdStatus(
+            sync = SyncLine(Instant.parse("2026-11-03T09:41:00Z"), blockedCode = null, failing = false),
+            signingOff = true,
+        ),
     )
 
     /** Key of the skipped allowance in [needsAttention]. */

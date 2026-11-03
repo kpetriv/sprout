@@ -46,7 +46,7 @@ class PhotoIntegrityException(message: String, cause: Throwable? = null) : Gener
  * Files are written to a temporary name and renamed, so a crash never leaves a partial photo under a real name.
  */
 @Suppress("LongParameterList") // Storage, crypto, audit and dispatch are all separate collaborators.
-class EncryptedPhotoStore internal constructor(
+class EncryptedPhotoStore(
     private val database: SproutDatabase,
     private val directory: File,
     private val aead: Aead,
@@ -56,7 +56,7 @@ class EncryptedPhotoStore internal constructor(
     private val dispatcher: CoroutineDispatcher,
 ) : PhotoStore {
     private val photos = database.photoDao()
-    private val writes = DocumentWrites(database, clock)
+    private val audit = database.auditLogDao()
 
     override suspend fun save(kidId: KidId, bytes: ByteArray): PhotoRef {
         require(bytes.isNotEmpty()) { "a photo must not be empty" }
@@ -68,7 +68,11 @@ class EncryptedPhotoStore internal constructor(
         withContext(dispatcher) { writeAtomically(fileOf(ref), ciphertext) }
         database.withTransaction {
             photos.insert(PhotoEntity(ref.fileName, ref.sha256, kidId, null, clock.now().toEpochMilliseconds()))
-            writes.auditOnly(author, AuditAction.PHOTO_SAVED, ref.fileName) { put("kidId", kidId.value) }
+            audit.insert(
+                auditEntry(author, clock.now().toEpochMilliseconds(), AuditAction.PHOTO_SAVED, ref.fileName) {
+                    put("kidId", kidId.value)
+                },
+            )
         }
         return ref
     }
@@ -98,7 +102,11 @@ class EncryptedPhotoStore internal constructor(
         val author = authors.currentAuthor()
         val deleted = database.withTransaction {
             (photos.delete(ref.fileName) > 0).also { deleted ->
-                if (deleted) writes.auditOnly(author, AuditAction.PHOTO_DELETED, ref.fileName)
+                if (deleted) {
+                    audit.insert(
+                        auditEntry(author, clock.now().toEpochMilliseconds(), AuditAction.PHOTO_DELETED, ref.fileName),
+                    )
+                }
             }
         }
         withContext(dispatcher) { fileOf(ref).delete() }

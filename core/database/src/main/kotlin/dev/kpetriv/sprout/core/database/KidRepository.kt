@@ -1,11 +1,13 @@
 package dev.kpetriv.sprout.core.database
 
-import androidx.room.withTransaction
+import dev.kpetriv.sprout.core.crypto.DeviceSigner
 import dev.kpetriv.sprout.core.database.entity.AuditAction
 import dev.kpetriv.sprout.core.database.entity.KidEntity
+import dev.kpetriv.sprout.core.domainledger.EventAuthor
 import dev.kpetriv.sprout.core.model.Kid
 import dev.kpetriv.sprout.core.model.KidId
 import dev.kpetriv.sprout.core.model.PhotoRef
+import dev.kpetriv.sprout.core.sync.DocTypes
 import dev.kpetriv.sprout.core.time.Clock
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
@@ -30,47 +32,55 @@ interface KidRepository {
 }
 
 /**
- * [KidRepository] on Room. Every write is audited (ids only, never the name) in the same transaction.
- * Kid profiles are synced documents (PLAN "Domain model"); their outbox entries arrive with sync in M3.
+ * [KidRepository] on Room. Kid profiles are synced documents ([DocTypes.KID]): every write takes a lamport, queues
+ * the signed document and is audited (ids only, never the name) in the same transaction.
  */
 class RoomKidRepository @Inject constructor(
     private val database: SproutDatabase,
     private val authors: SessionAuthorProvider,
     private val clock: Clock,
     private val photoStore: PhotoStore,
+    signer: DeviceSigner,
 ) : KidRepository {
     private val kids = database.kidDao()
-    private val audit = database.auditLogDao()
+    private val writes = DocumentWrites(database, clock, signer)
 
     override fun observeKids(): Flow<List<Kid>> = kids.observeActive().map { rows -> rows.map(KidEntity::toDomain) }
 
-    override suspend fun getKid(id: KidId): Kid? = kids.get(id)?.toDomain()
+    override suspend fun getKid(id: KidId): Kid? = kids.get(id)?.takeUnless { it.stamp.deleted }?.toDomain()
 
     override suspend fun upsert(kid: Kid) {
         val author = authors.currentAuthor()
-        database.withTransaction {
-            kids.upsert(KidEntity.from(kid))
-            audit.insert(
-                auditEntry(author, clock.now().toEpochMilliseconds(), AuditAction.KID_UPSERTED, kid.id.value) {
-                    put("uiTier", kid.uiTier.name)
-                    put("archived", kid.archived)
-                },
-            )
-        }
+        writes.transaction { write(author, kid, AuditAction.KID_UPSERTED) }
     }
 
     override suspend fun archive(id: KidId): Boolean {
         val author = authors.currentAuthor()
-        val changed = database.withTransaction {
-            val changed = kids.archive(id) > 0
-            if (changed) {
-                audit.insert(auditEntry(author, clock.now().toEpochMilliseconds(), AuditAction.KID_ARCHIVED, id.value))
-            }
-            changed
+        val found = writes.transaction {
+            val kid = kids.get(id)?.takeUnless { it.stamp.deleted }?.toDomain()
+            if (kid != null && !kid.archived) write(author, kid.copy(archived = true), AuditAction.KID_ARCHIVED)
+            kid != null
         }
-        if (changed) {
+        if (found) {
             database.photoDao().forKid(id).forEach { photoStore.delete(PhotoRef(it.fileName, it.sha256)) }
         }
-        return changed
+        return found
+    }
+
+    private suspend fun write(author: EventAuthor, kid: Kid, action: AuditAction) {
+        val lamport = writes.nextLamport(author.deviceId)
+        val row = KidEntity.from(kid)
+        val stamp = writes.record(
+            author,
+            DocTypes.KID,
+            kid.id.value,
+            lamport,
+            DocumentPayloads.encode(Kid.serializer(), row.toDomain()),
+            action,
+        ) {
+            put("uiTier", kid.uiTier.name)
+            put("archived", kid.archived)
+        }
+        kids.upsert(row.copy(lamport = lamport, stamp = stamp))
     }
 }

@@ -65,8 +65,8 @@ class LedgerOrderingTest {
         assertEquals(1, set.size)
         assertEquals(setOf(chore.eventId), set.conflictingIds)
         assertNull(set[chore.eventId])
-        // The parent's copy is the one projections apply; the kid's reuse is excluded.
-        assertEquals(chore, appliedCopyOf(set.copiesOf(chore.eventId)))
+        // The parent device's copy is the one projections apply; the kid device's reuse is excluded.
+        assertEquals(chore, appliedCopyOf(set.copiesOf(chore.eventId), Fixtures::roleOf))
         assertEquals(listOf(chore, reused), set.copiesOf(chore.eventId))
         assertEquals(listOf(reused, chore), set.sorted())
         assertFalse(set.containsEvent(chore.copy(amount = Money(11))))

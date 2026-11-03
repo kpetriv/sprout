@@ -1,0 +1,22 @@
+{
+  "name": "sprout-firestore",
+  "private": true,
+  "description": "Sprout Firestore security rules and their tests (run against the Firestore emulator).",
+  "license": "UNLICENSED",
+  "type": "module",
+  "engines": {
+    "node": ">=24.12.0"
+  },
+  "scripts": {
+    "test": "firebase emulators:exec --only firestore --project demo-sprout \"vitest run\"",
+    "lint": "tsc --noEmit -p ."
+  },
+  "devDependencies": {
+    "@firebase/rules-unit-testing": "6.0.0",
+    "@types/node": "24.19.2",
+    "firebase": "13.0.0",
+    "firebase-tools": "15.34.0",
+    "typescript": "6.0.3",
+    "vitest": "5.0.5"
+  }
+}

@@ -12,19 +12,18 @@ interface KidDao {
     @Upsert
     suspend fun upsert(kid: KidEntity)
 
-    @Query("SELECT * FROM kids WHERE archived = 0 ORDER BY birthYearMonth, kidId")
+    @Query("SELECT * FROM kids WHERE archived = 0 AND deleted = 0 ORDER BY birthYearMonth, kidId")
     fun observeActive(): Flow<List<KidEntity>>
 
+    /** The row, tombstones included; the repository hides tombstones. */
     @Query("SELECT * FROM kids WHERE kidId = :kidId")
     suspend fun get(kidId: KidId): KidEntity?
 
-    @Query("UPDATE kids SET archived = 1 WHERE kidId = :kidId")
-    suspend fun archive(kidId: KidId): Int
-
+    /** Every kid row (archived and tombstoned ones included). */
     @Query("SELECT COUNT(*) FROM kids")
     suspend fun count(): Int
 
-    /** Active (not archived) kids, for planners. */
-    @Query("SELECT * FROM kids WHERE archived = 0 ORDER BY birthYearMonth, kidId")
+    /** Active (not archived, not deleted) kids, for planners. */
+    @Query("SELECT * FROM kids WHERE archived = 0 AND deleted = 0 ORDER BY birthYearMonth, kidId")
     suspend fun active(): List<KidEntity>
 }

@@ -110,4 +110,49 @@
   <string name="feature_parent_home_link_shop">Shop (parent view)</string>
   <string name="feature_parent_home_link_settings">Settings</string>
   <string name="feature_parent_home_link_kid_mode">Switch to kid mode</string>
+
+  <!-- Household and sync (M3) -->
+  <string name="feature_parent_home_trial_title">Trial data on this phone</string>
+  <string name="feature_parent_home_trial_text">Everything here stays on this phone. Set up sync to share the household with the other parent and the kids’ phones.</string>
+  <string name="feature_parent_home_trial_set_up">Set up sync</string>
+  <string name="feature_parent_home_sync_never">Not synced yet</string>
+  <string name="feature_parent_home_sync_last">Synced %1$s</string>
+  <string name="feature_parent_home_sync_failing">Couldn’t sync just now. Sprout keeps trying.</string>
+  <string name="feature_parent_home_sync_blocked">Sync is blocked: the server refused an entry from this phone because %1$s. Later entries from this phone wait behind it.</string>
+  <string name="feature_parent_home_sync_blocked_not_allowed">this phone isn’t allowed to make it</string>
+  <string name="feature_parent_home_sync_blocked_invalid">it wasn’t valid</string>
+  <string name="feature_parent_home_sync_blocked_other">of a server problem</string>
+  <string name="feature_parent_home_signing_key_title">Signing key not registered with the household</string>
+  <string name="feature_parent_home_signing_key_text">Your fingerprint signing works on this phone, but the household never received the key, so your other devices can’t check your signatures. Retry in Settings with your PIN and fingerprint.</string>
+  <string name="feature_parent_home_signing_key_retry">Retry</string>
+  <string name="feature_parent_home_signing_off_title">Fingerprint signing is off</string>
+  <string name="feature_parent_home_signing_off_text">Money changes from this phone are not signed with your fingerprint, so the household can’t tell them apart from changes made by someone else holding it unlocked.</string>
+  <string name="feature_parent_home_signing_off_turn_on">Turn on</string>
+  <string name="feature_parent_home_devices_title">New device waiting</string>
+  <string name="feature_parent_home_devices_text">A parent’s phone wants to join the household. Compare the code with that phone before approving.</string>
+  <string name="feature_parent_home_devices_review">Review</string>
+  <string name="feature_parent_home_rejected_title">Rejected events</string>
+  <plurals name="feature_parent_home_rejected_count">
+    <item quantity="one">%d entry from another phone was refused and not applied.</item>
+    <item quantity="other">%d entries from other phones were refused and not applied.</item>
+  </plurals>
+  <string name="feature_parent_home_rejected_row">%1$s · %2$s · %3$s</string>
+  <string name="feature_parent_home_rejected_more">and %1$d more</string>
+  <string name="feature_parent_home_device_parent">Parent’s phone %1$s</string>
+  <string name="feature_parent_home_device_kid">%1$s’s phone</string>
+  <string name="feature_parent_home_device_kid_unknown">A kid’s phone</string>
+  <string name="feature_parent_home_device_unknown">Unknown device %1$s</string>
+  <string name="feature_parent_home_reason_unreadable">Couldn’t be read</string>
+  <string name="feature_parent_home_reason_altered">Was altered</string>
+  <string name="feature_parent_home_reason_unknown_device">From an unknown device</string>
+  <string name="feature_parent_home_reason_device_not_active">From a removed or unapproved phone</string>
+  <string name="feature_parent_home_reason_wrong_account">Wrong account for its phone</string>
+  <string name="feature_parent_home_reason_role">Not allowed from a kid’s phone</string>
+  <string name="feature_parent_home_reason_wrong_kid">Wrong kid for this phone</string>
+  <string name="feature_parent_home_reason_bad_signature">Signature didn’t match</string>
+  <string name="feature_parent_home_reason_parent_signature_missing">Missing a parent’s signature</string>
+  <string name="feature_parent_home_reason_parent_signature_invalid">Parent’s signature didn’t match</string>
+  <string name="feature_parent_home_reason_out_of_order">Out of order</string>
+  <string name="feature_parent_home_reason_conflicting_history">Conflicting history from this phone</string>
+  <string name="feature_parent_home_reason_other">Didn’t pass the ledger’s checks</string>
 </resources>

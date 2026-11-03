@@ -151,6 +151,21 @@ class EcdsaTest {
         assertEquals(store.publicKey(), deviceSigner.publicKey())
         assertFalse(store.keyProperties().isHardwareBacked)
     }
+
+    @Test
+    fun `device signer ignores a pending registration key until it is promoted`() = runTest {
+        val store = InMemoryDeviceKeyStore(FakeClock())
+        val deviceSigner = DeviceSigner(store, Dispatchers.Unconfined)
+        val active = store.publicKey()
+        val pending = store.regenerateForRegistration(byteArrayOf(1)).publicKey
+
+        assertTrue(verifier.verify(active, payload, deviceSigner.sign(payload)))
+        assertFalse(verifier.verify(pending, payload, deviceSigner.sign(payload)))
+
+        store.promotePendingKey()
+        assertTrue(verifier.verify(pending, payload, deviceSigner.sign(payload)))
+        assertEquals(pending, deviceSigner.publicKey())
+    }
 }
 
 /** Test-only JCA provider whose ECDSA verification throws [ThrowingEcdsaSpi.failure], like a buggy provider. */

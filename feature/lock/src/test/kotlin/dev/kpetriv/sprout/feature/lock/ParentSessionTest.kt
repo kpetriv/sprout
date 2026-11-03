@@ -43,6 +43,26 @@ class ParentSessionTest {
     }
 
     @Test
+    fun `reload after the stored PIN was deleted asks the next parent to set their own`() = test {
+        val f = fixture()
+        assertEquals(PinUnlockResult.Unlocked, f.session.unlockWithPin(PIN.toCharArray()))
+        f.pinStore.hash = null
+
+        f.session.reload()
+
+        assertEquals(ParentSessionState.SetupRequired, f.session.state.value)
+        assertEquals(PinSetupResult.Saved, f.session.setupPin("731958".toCharArray(), "731958".toCharArray()))
+    }
+
+    @Test
+    fun `reload with a PIN still stored locks the session`() = test {
+        val f = fixture()
+        f.session.unlockWithPin(PIN.toCharArray())
+        f.session.reload()
+        assertEquals(ParentSessionState.Locked, f.session.state.value)
+    }
+
+    @Test
     fun `a stored but unreadable PIN never offers setup`() = test {
         val f = SessionFixture(backgroundScope, unreadablePin = true)
         assertEquals(ParentSessionState.Locked, f.session.state.value)

@@ -1,6 +1,7 @@
 package dev.kpetriv.sprout.core.database
 
 import androidx.room.withTransaction
+import dev.kpetriv.sprout.core.crypto.DeviceSigner
 import dev.kpetriv.sprout.core.domainhousehold.AllowanceSchedule
 import dev.kpetriv.sprout.core.domainhousehold.Chore
 import dev.kpetriv.sprout.core.domainhousehold.ChoreReward
@@ -41,32 +42,38 @@ class HouseholdSeedTargets @Inject constructor(
 )
 
 /**
- * TEMPORARY (debug builds only, replaced by onboarding's household setup in M3): seeds the local household so the
- * wallet, chores and shop have data before sign-in exists.
+ * TEMPORARY (debug builds only, replaced by onboarding's household setup in M3): seeds the local trial household so
+ * the wallet, chores and shop have data before sign-in exists. Runs only while there is no session or the session is
+ * the trial session ([SessionStore.ensureLocalTrialSession]); a device signed in to a real household is never seeded.
  */
+@Suppress("LongParameterList") // Storage, seed targets, session, signer, currency, clock and calendar.
 class HouseholdBootstrap @Inject constructor(
     private val database: SproutDatabase,
     private val targets: HouseholdSeedTargets,
-    private val authors: SessionAuthorProvider,
+    private val sessions: SessionStore,
+    private val signer: DeviceSigner,
     private val currency: FiatCurrencyProvider,
     private val clock: Clock,
     private val calendar: HouseholdCalendar,
 ) {
 
     /**
-     * If no kid exists (archived ones included), creates the demo household and returns true:
+     * Makes sure the trial session exists (creating it for this device's key when there is no session; a real
+     * session means no seeding and false), then, if no kid exists (archived ones included), creates the demo
+     * household and returns true:
      * - three kids, one per [KidUiTier] (Mia 6, Leo 9, Zoe 13), each with its default accounts in the household's
      *   fiat currency, and the household policy with that currency;
      * - two chores per kid (one paying money, one money and screen time);
      * - three rewards (screen time, a treat, an outing);
      * - a weekly allowance for Leo and a savings goal for Zoe.
      *
-     * The author (whose device id is the Keystore key's fingerprint) is resolved before the transaction opens, so
-     * the repositories' own author lookups inside it hit the provider's cache and no Keystore call runs while the
-     * database is locked.
+     * The device id (the Keystore key's fingerprint) is read before the transaction opens, so no Keystore read runs
+     * while the database is locked except the document signatures.
      */
     suspend fun ensureLocalHousehold(): Boolean {
-        authors.currentAuthor()
+        val session = sessions.get()
+        if (session != null && !session.isLocalTrial) return false
+        if (session == null) sessions.ensureLocalTrialSession(signer.deviceId())
         return seed()
     }
 
@@ -78,7 +85,7 @@ class HouseholdBootstrap @Inject constructor(
         val seeded = DEMO_KIDS.mapIndexed { index, (name, age) ->
             val kid = Kid(
                 id = KidId(UUID.randomUUID().toString()),
-                householdId = LocalOnlyAuthorProvider.LOCAL_HOUSEHOLD,
+                householdId = LocalTrial.HOUSEHOLD,
                 firstName = name,
                 avatarId = "avatar-${index + 1}",
                 birthYearMonth = YearMonth(today.year - age, today.month),
@@ -132,7 +139,7 @@ class HouseholdBootstrap @Inject constructor(
             targets.rewards.upsert(
                 Reward(
                     id = RewardId(UUID.randomUUID().toString()),
-                    householdId = LocalOnlyAuthorProvider.LOCAL_HOUSEHOLD,
+                    householdId = LocalTrial.HOUSEHOLD,
                     title = title,
                     kind = kind,
                     cost = Money(cost),

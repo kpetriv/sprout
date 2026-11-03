@@ -1,5 +1,6 @@
 package dev.kpetriv.sprout.core.database.entity
 
+import androidx.room.Embedded
 import androidx.room.Entity
 import androidx.room.Index
 import androidx.room.PrimaryKey
@@ -17,7 +18,8 @@ import kotlin.time.Instant
  * A chore definition ([Chore]). A synced document: every write also queues an outbox `DOCUMENT` row.
  *
  * @property scheduleJson the [ChoreSchedule] in its kotlinx-serialization JSON form (`{"type":"weekly",...}`).
- * @property lamport the device Lamport value of the last local write (last-writer-wins key for sync, M3).
+ * @property lamport the Lamport value of the row's current state, local or pulled (last-writer-wins key, M3).
+ * @property stamp author, signature and tombstone flag of the row's current state (schema version 3).
  */
 @Entity(tableName = "chores", indices = [Index(value = ["kidId"])])
 data class ChoreEntity(
@@ -32,6 +34,7 @@ data class ChoreEntity(
     val state: ChoreState,
     val createdAtEpochMs: Long,
     val lamport: Long,
+    @Embedded val stamp: DocumentStamp = DocumentStamp(),
 ) {
     fun toDomain(): Chore = Chore(
         id = choreId,

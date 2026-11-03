@@ -15,6 +15,7 @@ import dev.kpetriv.sprout.core.model.KidId
 import dev.kpetriv.sprout.core.model.PhotoRef
 import dev.kpetriv.sprout.core.model.SubmissionId
 import dev.kpetriv.sprout.core.model.SubmissionStatus
+import dev.kpetriv.sprout.core.sync.DocTypes
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.runTest
 import org.junit.After
@@ -31,7 +32,7 @@ import kotlin.time.Duration.Companion.minutes
 
 @RunWith(RobolectricTestRunner::class)
 class ChoreRepositoryTest {
-    private val household = TestHousehold()
+    private val household = testHousehold()
     private val chores = household.chores
     private val database = household.database
     private val kid = KidId("kid-leo")
@@ -39,7 +40,7 @@ class ChoreRepositoryTest {
 
     private fun chore(id: String = "dishes", schedule: ChoreSchedule = ChoreSchedule.Weekly(DayOfWeek.MONDAY)) = Chore(
         id = ChoreId(id),
-        householdId = LocalOnlyAuthorProvider.LOCAL_HOUSEHOLD,
+        householdId = LocalTrial.HOUSEHOLD,
         kidId = kid,
         title = "Do the dishes",
         description = "After dinner",
@@ -107,7 +108,7 @@ class ChoreRepositoryTest {
         val rejected = chores.decide(first.id, SubmissionDecision.REJECT, reason = "still dirty").submission
         assertEquals(SubmissionStatus.REJECTED, rejected.status)
         assertEquals("still dirty", rejected.rejectionReason)
-        assertEquals(LocalOnlyAuthorProvider.LOCAL_PARENT, rejected.decidedBy)
+        assertEquals(LocalTrial.PARENT, rejected.decidedBy)
         assertEquals(emptyList(), chores.observeSubmissions(SubmissionFilter.PendingForParent).first())
         // A decided occurrence is not re-opened by submitting again.
         assertEquals(rejected, chores.submit(dishes.id, monday, note = "please"))

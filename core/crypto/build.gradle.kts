@@ -28,6 +28,8 @@ dependencies {
 
     testImplementation(libs.kotlinx.coroutines.test)
     testImplementation(testFixtures(projects.core.time))
+    // AndroidKeystoreParentAuthKeyStore against a fake "AndroidKeyStore" JCA provider (KeyGenParameterSpec is real).
+    testImplementation(libs.robolectric)
 
     androidTestImplementation(libs.androidx.test.runner)
     androidTestImplementation(libs.androidx.test.ext.junit)

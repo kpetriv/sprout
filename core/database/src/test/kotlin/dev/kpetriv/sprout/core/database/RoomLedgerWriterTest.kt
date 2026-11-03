@@ -41,7 +41,7 @@ class RoomLedgerWriterTest {
     private val database = inMemoryDatabase()
     private val keyStore = InMemoryDeviceKeyStore(clock)
     private val signer = DeviceSigner(keyStore, Dispatchers.Unconfined)
-    private val authors = LocalOnlyAuthorProvider(signer)
+    private val authors = TrialAuthorProvider(signer)
     private val repository = RoomLedgerRepository(database, clock, signer, JceEcdsaVerifier())
 
     private val kidId = KidId("kid-a")
@@ -82,7 +82,7 @@ class RoomLedgerWriterTest {
         events.forEach { event ->
             assertEquals(expectedDevice, event.envelope.authorDeviceId.value)
             assertEquals(Role.PARENT, event.envelope.authorRole)
-            assertEquals(LocalOnlyAuthorProvider.LOCAL_HOUSEHOLD, event.envelope.householdId)
+            assertEquals(LocalTrial.HOUSEHOLD, event.envelope.householdId)
             val signature = assertNotNull(event.signatureBytes())
             assertTrue(verifier.verify(keyStore.publicKey(), event.signedPayload(), signature))
         }
@@ -132,8 +132,11 @@ class RoomLedgerWriterTest {
 
         assertIs<AppendResult.Conflict>(second)
         assertEquals(2, database.deviceStateDao().get()?.lamport)
-        // Two parent copies of one id: neither applies, and the conflict is reported.
-        assertEquals(emptyList(), repository.observeBalances(kidId).first().filter { it.amount != Money.ZERO })
-        assertIs<LedgerAnomaly.ConflictingDuplicate>(repository.observeAnomalies(kidId).first().single())
+        // Two parent copies of one id (D-M3-30): exactly one applies, the first by (lamport, author, hash), and the
+        // conflict is reported with it.
+        assertEquals(listOf(Money(10)), repository.observeBalances(kidId).first().map { it.amount })
+        val conflict =
+            assertIs<LedgerAnomaly.ConflictingDuplicate>(repository.observeAnomalies(kidId).first().single())
+        assertEquals(1, conflict.applied?.lamport)
     }
 }

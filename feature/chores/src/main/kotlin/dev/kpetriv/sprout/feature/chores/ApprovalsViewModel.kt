@@ -53,6 +53,12 @@ sealed interface PhotoUi {
 
     /** Missing, tampered with, or not an image ([dev.kpetriv.sprout.core.database.PhotoIntegrityException]). */
     data object Unavailable : PhotoUi
+
+    /**
+     * The submission came from the kid's own phone: its photo reference synced but the photo stays on that phone
+     * until uploads exist (M4, D-M3-9).
+     */
+    data object OnKidDevice : PhotoUi
 }
 
 data class SubmissionUi(
@@ -188,6 +194,7 @@ class ApprovalsViewModel @Inject internal constructor(
     private val chores: ChoreRepository,
     private val kids: KidRepository,
     private val photoStore: PhotoStore,
+    private val localPhotos: LocalPhotoCheck,
     private val approver: SubmissionApprover,
     private val requester: ParentAuthorizationRequester,
     private val reasons: ApprovalReasonText,
@@ -288,6 +295,10 @@ class ApprovalsViewModel @Inject internal constructor(
         photos.update { map -> map + missing.associateWith { PhotoUi.Loading } }
         missing.forEach { ref ->
             viewModelScope.launch {
+                if (attempt { localPhotos.isStoredHere(ref) }.getOrNull() == false) {
+                    photos.update { map -> map + (ref to PhotoUi.OnKidDevice) }
+                    return@launch
+                }
                 val image = attempt { photoStore.load(ref) }.getOrNull()?.let { bytes ->
                     attempt { decoder.decode(bytes) }.getOrNull()
                 }

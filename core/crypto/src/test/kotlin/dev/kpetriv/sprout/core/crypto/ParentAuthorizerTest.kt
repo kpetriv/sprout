@@ -104,6 +104,39 @@ class ParentAuthorizerTest {
     }
 
     @Test
+    fun `keystore authorizer passes the attestation challenge through and exposes the chain`() = runTest {
+        val keyStore = SoftwareParentAuthKeyStore()
+        val authorizer = KeystoreParentAuthorizer(keyStore) { ParentAuthAvailability.STRONG_BIOMETRIC_AVAILABLE }
+        assertEquals(emptyList(), authorizer.parentKeyAttestationChain())
+        val challenge = byteArrayOf(7, 7, 7)
+
+        authorizer.createParentKey(challenge)
+
+        assertTrue(challenge.contentEquals(keyStore.lastChallenge))
+        assertTrue(authorizer.parentKeyAttestationChain().first().contentEquals(challenge))
+        authorizer.resetParentKey()
+        authorizer.createParentKey()
+        assertNull(keyStore.lastChallenge)
+        assertEquals(emptyList(), authorizer.parentKeyAttestationChain())
+    }
+
+    @Test
+    fun `fake authorizer binds a stand-in chain to the challenge, or none when it cannot attest`() = runTest {
+        val authorizer = FakeParentAuthorizer()
+        val challenge = byteArrayOf(1, 2, 3)
+        authorizer.createParentKey(challenge)
+        val chain = authorizer.parentKeyAttestationChain()
+        assertEquals(2, chain.size)
+        assertTrue(chain[0].contentEquals(FakeParentAuthorizer.FAKE_LEAF_PREFIX + challenge))
+
+        authorizer.resetParentKey()
+        authorizer.canAttest = false
+        authorizer.createParentKey(challenge)
+        assertEquals(emptyList(), authorizer.parentKeyAttestationChain())
+        assertTrue(challenge.contentEquals(authorizer.keyChallenge))
+    }
+
+    @Test
     fun `parent signer rejects other algorithms and uninitialised signatures`() {
         assertFailsWith<IllegalArgumentException> { signer.sign(Signature.getInstance("SHA256withRSA"), payload) }
         assertFailsWith<SignatureException> { signer.sign(Signature.getInstance(CryptoAlgorithms.SIGNATURE), payload) }
@@ -147,14 +180,20 @@ class ParentAuthorizerTest {
     /** [ParentAuthKeyStore] with a software key, to test [KeystoreParentAuthorizer]'s gating on the JVM. */
     private class SoftwareParentAuthKeyStore : ParentAuthKeyStore {
         private var key: SigningKeyHandle? = null
+        private var chain: List<ByteArray> = emptyList()
         var creations = 0
+        var lastChallenge: ByteArray? = null
 
-        override suspend fun ensureKey(): PublicKeyBytes = (
+        override suspend fun ensureKey(attestationChallenge: ByteArray?): PublicKeyBytes = (
             key ?: generateSoftwareSigningKey().also {
                 key = it
                 creations++
+                lastChallenge = attestationChallenge
+                chain = attestationChallenge?.let { challenge -> listOf(challenge, byteArrayOf(1)) }.orEmpty()
             }
             ).publicKey
+
+        override fun attestationChain(): List<ByteArray> = chain
 
         override fun publicKey(): PublicKeyBytes? = key?.publicKey
 
@@ -166,6 +205,7 @@ class ParentAuthorizerTest {
 
         override suspend fun deleteKey() {
             key = null
+            chain = emptyList()
         }
     }
 }

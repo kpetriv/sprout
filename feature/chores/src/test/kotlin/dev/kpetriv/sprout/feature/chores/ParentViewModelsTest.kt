@@ -202,6 +202,7 @@ class ApprovalsViewModelTest {
         chores = chores,
         kids = kids,
         photoStore = photos,
+        localPhotos = { ref -> ref in photos.stored },
         approver = approver,
         requester = requester,
         reasons = TestReasons,
@@ -226,6 +227,15 @@ class ApprovalsViewModelTest {
         assertEquals("Leo", state.submissions[1].kidName)
         assertEquals(PhotoUi.Loaded(decoded), state.submissions[1].photo)
         assertNull(state.submissions[0].photo)
+    }
+
+    @Test
+    fun `a photo taken on the kid's own phone is labelled as such instead of loaded (D-M3-9)`() = runTest {
+        chores.chores.value = listOf(bed)
+        val remote = dev.kpetriv.sprout.core.model.PhotoRef("synced.photo", "b".repeat(64))
+        chores.submissions.value = listOf(TestData.submission(bed).copy(photoRef = remote))
+        val state = assertIs<ApprovalsUiState.Ready>(subscribe(viewModel().state).value)
+        assertEquals(PhotoUi.OnKidDevice, state.submissions.single().photo)
     }
 
     @Test

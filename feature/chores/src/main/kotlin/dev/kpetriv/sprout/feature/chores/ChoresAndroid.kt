@@ -5,10 +5,17 @@ import android.graphics.BitmapFactory
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import dagger.hilt.android.qualifiers.ApplicationContext
+import dev.kpetriv.sprout.core.common.Dispatcher
+import dev.kpetriv.sprout.core.common.SproutDispatchers
+import dev.kpetriv.sprout.core.database.LocalDataFiles
 import dev.kpetriv.sprout.core.domainledger.Currency
 import dev.kpetriv.sprout.core.domainledger.Money
+import dev.kpetriv.sprout.core.model.PhotoRef
 import dev.kpetriv.sprout.core.ui.MoneyFormatter
 import dev.kpetriv.sprout.core.ui.MoneyLabels
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.withContext
+import java.io.File
 import javax.inject.Inject
 
 /** Turns a decrypted chore photo into something Compose can draw; null when the bytes are not an image. */
@@ -44,4 +51,21 @@ internal class ResourceApprovalReasonText @Inject constructor(@ApplicationContex
             choreTitle,
         )
     }
+}
+
+/**
+ * Whether a submission's photo file is on this phone. A submission synced from the kid's own phone carries a
+ * [PhotoRef] whose file stays on that phone until uploads exist (M4, D-M3-9).
+ */
+internal fun interface LocalPhotoCheck {
+    suspend fun isStoredHere(ref: PhotoRef): Boolean
+}
+
+/** [LocalPhotoCheck] over the encrypted photo directory ([LocalDataFiles.photoDirectory]). */
+internal class FileLocalPhotoCheck @Inject constructor(
+    private val files: LocalDataFiles,
+    @param:Dispatcher(SproutDispatchers.IO) private val dispatcher: CoroutineDispatcher,
+) : LocalPhotoCheck {
+    override suspend fun isStoredHere(ref: PhotoRef): Boolean =
+        withContext(dispatcher) { File(files.photoDirectory, ref.fileName).isFile }
 }

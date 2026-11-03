@@ -34,11 +34,42 @@ enum class AuditAction {
     PARENT_ACTION_SKIPPED,
     PHOTO_SAVED,
     PHOTO_DELETED,
+
+    /** A pulled event passed verification and was stored (M3). */
+    LEDGER_EVENT_INGESTED,
+
+    /** A pulled event was refused and stored quarantined, or only audited when it was too broken to store. */
+    LEDGER_EVENT_QUARANTINED,
+
+    /** A pulled document was verified and replaced the local copy. */
+    DOCUMENT_APPLIED,
+
+    /** A pulled document was refused; the reason code only. */
+    DOCUMENT_REJECTED,
+    DEVICE_REGISTERED,
+    DEVICE_REVOKED,
+
+    /**
+     * The backend refused an outbox item for good (`SyncError.Permanent`): its push id, `seq`, code and whether it
+     * blocks the outbox (a ledger event, D-M3-33). One row per `(seq, code)`.
+     */
+    SYNC_REJECTED,
+
+    /**
+     * A held pulled event or document was dropped because its author device had more than the cap of held rows
+     * (`RoomLedgerRepository.MAX_HELD_PER_AUTHOR`); ids and the hold reason only.
+     */
+    HELD_DROPPED,
+
+    /** The local trial household was deleted when this device joined a real household; counts only. */
+    LOCAL_HOUSEHOLD_PURGED,
+    SESSION_STARTED,
+    SESSION_CLEARED,
 }
 
 /**
  * The append-only, parent-visible audit trail: who did what, when, from which device (PLAN "Availability and
- * operations"). The DAO has no update or delete.
+ * operations"). The DAO has no update; the only delete is the local-household purge (M3 §6).
  *
  * @property target the id acted on (an eventId, kidId, accountId, document id, action key or photo file name);
  *   never a name.

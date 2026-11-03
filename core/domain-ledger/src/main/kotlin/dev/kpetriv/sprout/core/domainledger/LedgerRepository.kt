@@ -25,8 +25,9 @@ interface LedgerRepository {
      * Validates, verifies and stores [event]. Idempotent by content: the same event again (even re-signed) is
      * [AppendResult.Duplicate]. A different event under a stored eventId is [AppendResult.Conflict]: once it passes
      * chain and signature verification it is kept next to the stored copy, and projections report
-     * [LedgerAnomaly.ConflictingDuplicate] and apply only [appliedCopyOf] (the parent's copy when every other copy is
-     * a kid's, otherwise none) on every device, whatever order the copies arrive in.
+     * [LedgerAnomaly.ConflictingDuplicate] and apply only [appliedCopyOf] (a registered PARENT device's copy over
+     * KID copies, otherwise the first by `(lamport, authorDeviceId, hash)`) on every device, whatever order the
+     * copies arrive in.
      */
     suspend fun append(event: LedgerEvent): AppendResult
 
@@ -47,7 +48,7 @@ sealed interface AppendResult {
 
     /**
      * A different event with the same [eventId] is already stored ([storedHash]); the incoming one has
-     * [incomingHash]. Both copies are kept; at most one of them reaches the balances ([appliedCopyOf], reported in
+     * [incomingHash]. Both copies are kept; exactly one of them reaches the balances ([appliedCopyOf], reported in
      * [LedgerAnomaly.ConflictingDuplicate]).
      */
     data class Conflict(val eventId: EventId, val storedHash: String, val incomingHash: String) : AppendResult

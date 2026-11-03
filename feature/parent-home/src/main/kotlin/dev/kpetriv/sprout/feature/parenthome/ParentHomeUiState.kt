@@ -19,6 +19,7 @@ sealed interface ParentHomeUiState {
      *   rule, or the ledger refused them three times in a row) and allowance periods skipped by the catch-up cap.
      * @property signing progress while "Sign now" runs; null otherwise.
      * @property signResult how the last "Sign now" ended, until acknowledged.
+     * @property household the trial banner, the sync line, refused events and phones waiting for approval (M3).
      */
     data class Ready(
         val pendingApprovals: Int,
@@ -27,6 +28,7 @@ sealed interface ParentHomeUiState {
         val attention: List<AttentionItemUi> = emptyList(),
         val signing: SigningProgress? = null,
         val signResult: SignResult? = null,
+        val household: HouseholdStatus = HouseholdStatus(),
     ) : ParentHomeUiState {
         /** Ledger anomalies across every kid. */
         val anomaliesTotal: Int get() = kids.sumOf { it.anomalies }

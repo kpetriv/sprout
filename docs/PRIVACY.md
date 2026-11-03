@@ -2,9 +2,9 @@
 
 > **DRAFT.** First draft written at the end of M1 as the skeleton for the Play Store listing and data-safety form. It describes the app as planned for v1, with the milestone each part arrives in. Not legal advice and not yet reviewed. M8 finalises it: legal review, contact details, effective date, and the published page. Items marked **TODO (M8)** are open.
 
-- **Last updated:** 2026-11-02 (draft)
+- **Last updated:** 2026-11-03 (draft; M3 items resolved)
 - **Applies to:** the Sprout Android app (`dev.kpetriv.sprout`)
-- **Related:** [threat model](THREAT_MODEL.md), [ADR-0003 Security model](adr/0003-security-model.md)
+- **Related:** [threat model](THREAT_MODEL.md), [controls matrix](CONTROLS.md), [ADR-0003 Security model](adr/0003-security-model.md), [ADR-0007 Identity and linking](adr/0007-identity-linking-and-device-registry.md)
 
 ## The short version
 
@@ -52,14 +52,19 @@ Sprout's Play audience is adults (18+). Kid mode is a feature the parent configu
 
 | Data | Why | Notes |
 |---|---|---|
-| Sign-in identity | Signing in with Google or a passkey through Firebase Authentication | The account identifier and the email address your Google account provides. Sprout never sees or stores a password. |
+| Google account e-mail address | Signing in with Google through Firebase Authentication, and showing which account is signed in | Held by Firebase Authentication and shown in Settings → Account. Not copied into the household's data. Sprout never sees or stores your Google password. |
+| Firebase user id (uid) | Identifies the parent's account inside the household: membership, role, and the author of each ledger entry and document | A random identifier, not derived from your e-mail address. |
 
 ### Technical data (from M3)
 
 | Data | Why | Notes |
 |---|---|---|
-| Device public keys and device ids | Proving which household device wrote what, and encrypting chat to the right devices | Private keys never leave the device |
-| App integrity tokens (Firebase App Check, Play Integrity) | Rejecting modified apps and scripts | Not used for tracking |
+| Device id and device public key | Proving which household device wrote what; listing the household's devices | The device id is the fingerprint (SHA-256) of the device's public signing key. Private keys never leave the device. |
+| Key attestation level | Showing whether a device's key is protected by secure hardware (StrongBox, TEE, software) | Verified by our server from the certificate chain the phone's keystore produces at registration; the chain itself is not stored. |
+| Kid device account id | A kid's phone gets its own anonymous Firebase account, so it never holds the parent's sign-in | No e-mail, name or phone number. Disabled when the parent removes the device; deleted with the household. |
+| IP address | Rate limiting the server's sign-up, linking and admin operations against abuse | Used transiently. Stored only inside a hashed rate-limit bucket id (with the operation name), never in clear, and deleted when the limit window ends (at most an hour). Not logged. |
+| App integrity tokens (Firebase App Check, Play Integrity) | Rejecting modified apps and scripts | Checked on each request to our server, not stored, not used for tracking. |
+| Server logs | Operating and securing the server | Identifiers (household, account and device ids), counts and outcome codes only: never names, e-mail addresses, link codes, keys, IP addresses or household content. Kept for at most 30 days. |
 | Crash reports | Fixing bugs | **Off unless you turn them on.** Personal data is scrubbed before sending. **TODO (M8):** confirm whether Crashlytics ships in v1. |
 
 ## What we do not collect
@@ -79,8 +84,8 @@ AI features (chore suggestions, the weekly parent summary, the "kindness check" 
 ## Where your data is stored
 
 - **On your devices.** Everything is stored in an encrypted database (SQLCipher) whose key is protected by the phone's hardware-backed keystore. Sprout's data is excluded from Android cloud backup and device-to-device transfer.
-- **In the cloud (from M3).** Household data syncs between your family's devices through Google Firebase (Authentication, Firestore, Cloud Storage, Cloud Functions). Firebase encrypts data at rest and in transit. We will use an EU region if one is available for the services Sprout needs. **TODO (M3):** confirm the region and list it here.
-- **Until M3, nothing leaves the device.** The app is local-only.
+- **In the cloud (from M3).** Household data syncs between your family's devices through Google Firebase: **Cloud Firestore in the `eur3` multi-region (Europe)** holds the household's data, and Firebase Authentication (a global Google service, not pinned to the EU) holds the sign-in accounts. Account and admin operations (creating a household, linking devices, export, deletion) run on **our server, hosted by Vercel in Frankfurt (`fra1`)**, which processes requests and stores nothing of its own beyond logs. Data is encrypted in transit and, by Google, at rest. Cloud Storage is used from M4 for encrypted photos and voice notes.
+- **Before you set up sync, nothing leaves the device.** A household tried out on one phone stays there. When that phone joins a real household, the app tells you the trial data will be deleted, and deletes it; it is never uploaded.
 
 ## Who can see your data
 
@@ -88,8 +93,9 @@ AI features (chore suggestions, the weekly parent summary, the "kindness check" 
 |---|---|
 | Parents in the household | Everything in the household, including the full ledger and audit log |
 | A child, in kid mode | Their own chores, balance, ledger entries, shop, and chat with the parent; never parent settings or other children's data |
-| Sprout's backend and its operator | Household data and the ledger, in order to sync it, run scheduled jobs (interest), and export or delete it. **Not** the content of chat messages or photos. |
+| Sprout's backend and its operator | Household data and the ledger, in order to sync it and to export or delete it. **Not** the content of chat messages or photos. Allowance and interest are calculated on the parent's phone, not on the server. |
 | Google, as our cloud provider | Stores the data on our behalf under its data processing terms |
+| Vercel, as host of our server | Processes requests to the server on our behalf; sees the request contents in transit and keeps request logs |
 | Anyone else | Nobody. We do not sell or share data, and there are no advertising or analytics partners. |
 
 We will disclose data only if the law requires it, and then only what is required. **TODO (M8):** legal review of this statement.
@@ -97,10 +103,11 @@ We will disclose data only if the law requires it, and then only what is require
 ## How long we keep it, and how to delete it
 
 - **Your household's data** is kept for as long as the household exists.
-- **Export (M3):** a parent can download the household's data (profiles, chores, rewards, ledger) as a JSON and CSV bundle. Chat content is exported from a device that can decrypt it.
-- **Delete household (M3):** a parent can delete the household. This removes its cloud data (database records, stored files, and sign-in accounts for linked devices) and wipes local data on every household device the next time it syncs. We keep a minimal record that a deletion happened, with no household content. **TODO (M8):** state how long backups take to expire.
+- **Export (M3):** a parent can download the household's data from Settings → Data → Export household: one JSON file with the household, its members' roles, its devices and parent keys, every kid profile, chore, submission, reward, schedule, goal and policy, and every ledger entry, plus a `ledger.csv` made on the phone. The parent chooses where to save it. Households above 4 MB cannot export yet. Chat content (from M4) is exported from a device that can decrypt it.
+- **Delete household (M3):** a parent can delete the household from Settings → Data → Delete household, after typing the household id and signing in again if the last sign-in is older than 5 minutes. This removes all of the household's cloud data, the sign-in accounts of every parent and kid device linked to it, its link codes and registration records, and wipes local data on every household device the next time it syncs. We keep one record that a deletion happened: a one-way hash of the household id, the time, and how many members, devices, events and documents were deleted, with no household content, for 12 months. Sprout keeps no backups of its own on the current plan; Google's own retention of deleted data follows its data processing terms. **TODO (M8):** confirm the processor retention figures for the published policy.
 - **Chat retention (M7):** parents can choose to auto-delete chat messages after a set number of days.
-- **Short-lived data:** device-linking codes expire after 10 minutes and are stored only as a hash. **TODO (M3):** retention period for audit records.
+- **Short-lived data:** device-linking codes expire after 10 minutes, work once, and are stored only as a keyed hash; device registration challenges expire after 10 minutes; rate-limit records after the limit window (at most an hour).
+- **Audit records:** the household's audit log lives on each device, holds ids and reason codes only, and is deleted with the device's data. Deletion records are kept for 12 months and server logs for at most 30 days (proposed in M3; enforcement of the 12 months is still to be set up, and both figures are confirmed at M8).
 - **Uninstalling** the app removes all local data from that device. Cloud data remains until the household is deleted.
 
 ## Children's data and your rights
@@ -117,7 +124,8 @@ Summary for the listing; the detail is in the [threat model](THREAT_MODEL.md).
 - Parent area behind a PIN or biometric; money events signed by the parent's biometric-bound key (from M2).
 - Every ledger event signed and chained, so tampering is detectable.
 - Chat and photos end-to-end encrypted (from M4).
-- All network traffic over TLS; modified apps rejected by App Check (from M3).
+- All network traffic over TLS; modified apps rejected by App Check on our server (from M3) and on the database (from M8).
+- New devices join only with a code or an approval from an existing parent device, and a lost device can be removed from another parent phone (from M3).
 
 ## Changes to this policy
 

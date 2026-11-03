@@ -1,6 +1,9 @@
 package dev.kpetriv.sprout.startup
 
 import dagger.Lazy
+import dev.kpetriv.sprout.core.database.Session
+import dev.kpetriv.sprout.parentSession
+import dev.kpetriv.sprout.trialSession
 import dev.kpetriv.sprout.work.PlanScheduler
 import dev.kpetriv.sprout.work.ScheduledActionsPlanner
 import kotlinx.coroutines.test.StandardTestDispatcher
@@ -25,7 +28,132 @@ class AppInitializerTest {
     private val scheduler = Lazy<PlanScheduler> { PlanScheduler { steps += "schedule" } }
 
     private fun initializer(seed: (suspend () -> Unit)? = null, quarantine: suspend () -> Unit = { steps += "check" }) =
-        AppInitializer(scope, seed, quarantine, planner, scheduler) { photoCacheClears += 1 }
+        AppInitializer(
+            scope,
+            seed,
+            quarantine,
+            planner,
+            scheduler,
+            clearPhotoCache = { photoCacheClears += 1 },
+            // The trial session exists once seeded (or always, without seeding).
+            reconcileSession = { trialSession().takeIf { seed == null || "seed" in steps } },
+        )
+
+    private var removing = false
+    private var storedRemoval = false
+
+    private fun withSession(
+        session: Session?,
+        linked: Boolean = false,
+        firebase: () -> Unit = { steps += "firebase" },
+        seed: (suspend () -> Unit)? = { steps += "seed" },
+        reconciled: () -> Unit = {},
+        quarantine: suspend () -> Unit = { steps += "check" },
+    ) = AppInitializer(
+        scope = scope,
+        seedDemoHousehold = seed,
+        quarantineLedger = quarantine,
+        planner = planner,
+        scheduler = scheduler,
+        initialiseFirebase = firebase,
+        reconcileSession = {
+            steps += "session"
+            reconciled()
+            session
+        },
+        wasLinked = { linked },
+        startSync = { steps += "sync" },
+        resumeRemoval = {
+            if (storedRemoval) steps += "resume wipe"
+            storedRemoval
+        },
+        removing = { removing || storedRemoval },
+    )
+
+    @Test
+    fun `a real household's session is not seeded and plans only after its first pull, then sync starts`() =
+        scope.runTest {
+            withSession(parentSession()).apply {
+                start()
+                advanceUntilIdle()
+                assertEquals(StartupState.Ready, state.value)
+            }
+            assertEquals(listOf("firebase", "session", "check", "schedule", "sync"), steps)
+        }
+
+    @Test
+    fun `the trial session is not seeded again and still plans at start`() = scope.runTest {
+        withSession(trialSession()).apply {
+            start()
+            advanceUntilIdle()
+        }
+        assertEquals(listOf("firebase", "session", "check", "plan", "schedule", "sync"), steps)
+    }
+
+    @Test
+    fun `a device that was linked once (signed out or wiped) is never seeded and plans nothing`() = scope.runTest {
+        withSession(null, linked = true).apply {
+            start()
+            advanceUntilIdle()
+        }
+        assertEquals(listOf("firebase", "session", "check", "schedule", "sync"), steps)
+    }
+
+    @Test
+    fun `a removal stored by an earlier process resumes its wipe and skips every other step`() = scope.runTest {
+        storedRemoval = true
+        withSession(parentSession()).apply {
+            start()
+            advanceUntilIdle()
+            assertEquals(StartupState.Ready, state.value)
+        }
+        assertEquals(listOf("firebase", "resume wipe"), steps)
+    }
+
+    @Test
+    fun `a removal found while reconciling skips the rest and still ends Ready`() = scope.runTest {
+        withSession(parentSession(), reconciled = { removing = true }).apply {
+            start()
+            advanceUntilIdle()
+            assertEquals(StartupState.Ready, state.value)
+        }
+        assertEquals(listOf("firebase", "session"), steps)
+    }
+
+    @Test
+    fun `a step that fails because a removal closed the database never ends in Failed`() = scope.runTest {
+        withSession(
+            parentSession(),
+            quarantine = {
+                removing = true
+                throw android.database.SQLException("database closed by the wipe")
+            },
+        ).apply {
+            start()
+            advanceUntilIdle()
+            assertEquals(StartupState.Ready, state.value)
+        }
+        assertEquals(listOf("firebase", "session"), steps)
+    }
+
+    @Test
+    fun `a fresh debug device seeds the trial and re-reads the session`() = scope.runTest {
+        withSession(null).apply {
+            start()
+            advanceUntilIdle()
+        }
+        assertEquals(listOf("firebase", "session", "seed", "session", "check", "schedule", "sync"), steps)
+    }
+
+    @Test
+    fun `a Firebase start-up failure never stops the app from opening`() = scope.runTest {
+        withSession(parentSession(), firebase = { error("no google play services") }).apply {
+            start()
+            advanceUntilIdle()
+            assertEquals(StartupState.Ready, state.value)
+        }
+        assertEquals(listOf("session", "check", "schedule", "sync"), steps)
+    }
 
     @Test
     fun `a failure becomes a failed state instead of a crash, and retry runs the work again`() = scope.runTest {
@@ -105,9 +233,15 @@ class AppInitializerTest {
 
     @Test
     fun `a failure to clear the photo cache does not fail startup`() = scope.runTest {
-        val initializer = AppInitializer(scope, null, { steps += "check" }, planner, scheduler) {
-            throw SecurityException("cache unavailable")
-        }
+        val initializer = AppInitializer(
+            scope,
+            null,
+            { steps += "check" },
+            planner,
+            scheduler,
+            clearPhotoCache = { throw SecurityException("cache unavailable") },
+            reconcileSession = { trialSession() },
+        )
         initializer.start()
         advanceUntilIdle()
         assertEquals(StartupState.Ready, initializer.state.value)

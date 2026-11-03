@@ -4,6 +4,7 @@
 - **Date:** 2026-11-02
 - **Milestone:** Decided at the M1 review and security audit; implemented in M2 (parent signature, PIN pepper) and M3 (verification, registry, attestation, lamport bounds)
 - **Amends:** [ADR-0002](0002-ledger-as-events.md) (signed payload, duplicate handling) and [ADR-0003](0003-security-model.md) (parent key policy, PIN hashing, device key provenance). The rest of both stays in force.
+- **Amendments:** M2 review (2026-11-03) and M3 (2026-11-03), at the end; the M3 design is in [ADR-0006](0006-sync-protocol-and-document-envelope.md) and [ADR-0007](0007-identity-linking-and-device-registry.md)
 
 ## Context
 
@@ -151,3 +152,31 @@ These are requirements for M3, not M2 work:
 - **Reward catalogue definitions become parent-signed documents**, so a receiver can verify the cost and minutes a `RewardPurchased` and its `TimeBankCredited` claim against what the parent defined.
 - **Parent key generated with a server challenge**, and the attestation checked at registration: hardware-backed, `AUTH_BIOMETRIC_STRONG` only, per-use (timeout 0), invalidated on biometric enrolment.
 - **Instrumented runs on API 28 and 29** for the per-use key policy, where `setUserAuthenticationParameters` is unavailable and the deprecated validity-duration API is used instead.
+
+## Amendments (M3, 2026-11-03)
+
+M3 built the verification side of this ADR (registry, attestation, receiver checks). Building it changed some details; none reverses the decision. The sync protocol is [ADR-0006](0006-sync-protocol-and-document-envelope.md), identity and the registry [ADR-0007](0007-identity-linking-and-device-registry.md).
+
+### Conflicting copies resolve to one copy (replaces section 6's "neither")
+
+A conflicting duplicate (same `eventId`, different content) no longer excludes every copy. **Exactly one copy applies** (D-M3-30, amending D-M1-1): among the copies whose author device the registry lists as PARENT, the first by `(lamport, authorDeviceId, hash)`; if none, the first of all copies. Every device sees the same set of copies and the same registry, so every device applies the same copy and the convergence argument of section 6 still holds. "Neither" let a kid who reused a parent's eventId erase the parent's event everywhere. The server lets only PARENT members store a conflicting copy (`events/{eventId}__{hash}`), and the conflict is still reported as `ConflictingDuplicate`.
+
+### Roles come from the registry, not the envelope
+
+Every role decision on received data uses the **registered** role of the author device, never `authorRole` as written: the verifier refuses a PARENT-role envelope from a non-PARENT device (`ROLE_NOT_ALLOWED`) and a KID device writing for another kid (`KID_MISMATCH`); `appliedCopyOf` takes `roleOf` from the registry; document writer roles (ADR-0006 §4) are checked the same way. The local `authorRole` rule stays a first filter, as section 1 says.
+
+### Parent keys are bound to their device and fingerprint-checked
+
+Parent keys are registered **by the server** (`registerParentKey`, D-M3-34), which checks the attestation (TEE or StrongBox, biometric for every use), a signature by the caller's ACTIVE parent device, and sets `validFromLamport` itself. A parent signature verifies only against a key whose `deviceId` is the event's author device, whose fingerprint (its document id) is the SHA-256 of its public key, and whose `[validFromLamport, revokedAtLamport)` covers the event's lamport. This replaces the single `household_policy.parentPublicKey` for verification; that field stays as "this device's key" for the lock UI. Renewal after a biometric change (M2 amendments) now registers the new key the same way; the server does not revoke the previous key, so the lamports it covered stay verifiable.
+
+### No from-lamport exemption on pull, one synced exemption for PARENT devices
+
+As required at the M2 review, a pulled parent-only event needs a valid registered parent signature **regardless of its lamport**; `parentSignatureRequiredFromLamport` is not consulted on ingest. The one exemption is the household's **synced** `requireParentSignature = false` (the no-biometric fallback of D-M2-1, kept by Kiril on 2026-11-03): then a parent-only event from a PARENT device with a PARENT-role envelope needs no parent signature (D-M3-32). Kid devices never benefit from it. A parent-only event that arrives before the household policy document is held (`POLICY_UNKNOWN`), not quarantined (D-M3-36).
+
+### Unknown and pending devices are held; forks are quarantined
+
+Section 1 says a failing event is quarantined. Two cases are **held** instead, because the answer may still change: an author device the registry mirror does not know yet, and a PENDING device (D-M3-31). Held events are verified again on every ingest; REVOKED devices stay quarantined at and above `revokedAtLamport`. An author that signs two different events on the same `prevHash` has forked its chain: every branch is quarantined `FORKED_CHAIN` on every device, including a branch already applied (ADR-0006 §6).
+
+### Wording: key aliases and the registration challenge
+
+Section 1's alias `sprout.parent.auth.v1` reads **`sprout.parent.auth.v2`**: v1 (30-second window, device credential accepted) was retired in M2 before any production use and must not be reused. Section 2's "household identity key" is the device key **`sprout.device.signing.v2`**, created with the challenge from the server's `beginDeviceRegistration` (not a `link-device` Cloud Function; the backend runs on the Spark plan, ADR-0007 §10).

@@ -14,20 +14,21 @@ enum class OutboxKind {
     LEDGER_EVENT,
 
     /**
-     * A synced document (chore, submission, reward, allowance schedule, savings goal, interest policy):
-     * [OutboxEntity.refId] is `<docType>/<docId>`, [OutboxEntity.docType], [OutboxEntity.docId] and
-     * [OutboxEntity.lamport] are set, and the payload is the document's latest JSON. One row per document: a later
-     * write of the same document replaces a row that has not been sent yet (last writer wins by
-     * [OutboxEntity.lamport]).
+     * A synced document (`DocTypes` in core/sync): [OutboxEntity.refId] is `<docType>/<docId>`,
+     * [OutboxEntity.docType], [OutboxEntity.docId] and [OutboxEntity.lamport] are set, and the payload is the signed
+     * `DocumentEnvelope` of the document's latest state (schema version 3; version 2 rows held unsigned JSON and were
+     * dropped by the migration). One row per document: a later write of the same document replaces a row that has not
+     * been sent yet and takes a new [OutboxEntity.seq].
      */
     DOCUMENT,
 }
 
 /**
  * Work for the sync engine (M3), written in the same transaction as the change it publishes. Drained in [seq]
- * order; a row is deleted once the transport has acknowledged it.
+ * order, head of line (D-M3-15); a row is deleted once the transport has acknowledged it or refused it for good.
  *
  * @property nextAttemptAtEpochMs earliest time to retry (backoff); 0 means immediately.
+ * @property lastError the `SyncError` code of the last failed attempt; never free text.
  * @property docType for [OutboxKind.DOCUMENT]: the document collection, see `DocTypes`.
  * @property docId for [OutboxKind.DOCUMENT]: the document's id.
  * @property lamport for [OutboxKind.DOCUMENT]: the device Lamport value of the write (last-writer-wins key).

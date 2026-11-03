@@ -21,7 +21,7 @@ import dev.kpetriv.sprout.core.database.FiatCurrencyProvider
 import dev.kpetriv.sprout.core.database.HouseholdPolicyRepository
 import dev.kpetriv.sprout.core.database.InterestPolicyRepository
 import dev.kpetriv.sprout.core.database.KidRepository
-import dev.kpetriv.sprout.core.database.LocalOnlyAuthorProvider
+import dev.kpetriv.sprout.core.database.LocalDataFiles
 import dev.kpetriv.sprout.core.database.LocaleFiatCurrencyProvider
 import dev.kpetriv.sprout.core.database.PendingActionDescriber
 import dev.kpetriv.sprout.core.database.PendingParentActionRepository
@@ -30,17 +30,24 @@ import dev.kpetriv.sprout.core.database.RewardRepository
 import dev.kpetriv.sprout.core.database.RoomAccountRepository
 import dev.kpetriv.sprout.core.database.RoomAllowanceRepository
 import dev.kpetriv.sprout.core.database.RoomChoreRepository
+import dev.kpetriv.sprout.core.database.RoomDeviceRegistry
 import dev.kpetriv.sprout.core.database.RoomHouseholdPolicyRepository
 import dev.kpetriv.sprout.core.database.RoomInterestPolicyRepository
 import dev.kpetriv.sprout.core.database.RoomKidRepository
 import dev.kpetriv.sprout.core.database.RoomLedgerRepository
 import dev.kpetriv.sprout.core.database.RoomLedgerWriter
+import dev.kpetriv.sprout.core.database.RoomOutboxSource
 import dev.kpetriv.sprout.core.database.RoomPendingParentActionRepository
+import dev.kpetriv.sprout.core.database.RoomRemoteApplier
 import dev.kpetriv.sprout.core.database.RoomRewardRepository
 import dev.kpetriv.sprout.core.database.RoomSavingsGoalRepository
+import dev.kpetriv.sprout.core.database.RoomSessionStore
 import dev.kpetriv.sprout.core.database.SavingsGoalRepository
 import dev.kpetriv.sprout.core.database.SessionAuthorProvider
+import dev.kpetriv.sprout.core.database.SessionBackedAuthorProvider
+import dev.kpetriv.sprout.core.database.SessionStore
 import dev.kpetriv.sprout.core.database.SproutDatabase
+import dev.kpetriv.sprout.core.database.VerifierSignatureCheck
 import dev.kpetriv.sprout.core.database.dao.AccountDao
 import dev.kpetriv.sprout.core.database.dao.AnomalyDao
 import dev.kpetriv.sprout.core.database.dao.AuditLogDao
@@ -49,8 +56,12 @@ import dev.kpetriv.sprout.core.database.dao.DeviceStateDao
 import dev.kpetriv.sprout.core.database.dao.KidDao
 import dev.kpetriv.sprout.core.database.dao.LedgerEventDao
 import dev.kpetriv.sprout.core.database.dao.OutboxDao
+import dev.kpetriv.sprout.core.domainledger.DeviceRegistry
 import dev.kpetriv.sprout.core.domainledger.LedgerRepository
 import dev.kpetriv.sprout.core.domainledger.LedgerWriter
+import dev.kpetriv.sprout.core.domainledger.SignatureCheck
+import dev.kpetriv.sprout.core.sync.OutboxSource
+import dev.kpetriv.sprout.core.sync.RemoteApplier
 import dev.kpetriv.sprout.core.time.Clock
 import kotlinx.coroutines.CoroutineDispatcher
 import java.io.File
@@ -97,9 +108,27 @@ internal abstract class DatabaseModule {
     @Binds
     abstract fun pendingActionDescriber(impl: EnglishPendingActionDescriber): PendingActionDescriber
 
-    /** TEMPORARY until M3 auth: a single local parent. */
+    /** Every author comes from the signed-in session (M3 §1). */
     @Binds
-    abstract fun sessionAuthorProvider(impl: LocalOnlyAuthorProvider): SessionAuthorProvider
+    abstract fun sessionAuthorProvider(impl: SessionBackedAuthorProvider): SessionAuthorProvider
+
+    @Binds
+    @Singleton
+    abstract fun sessionStore(impl: RoomSessionStore): SessionStore
+
+    /** The local registry mirror remote events and documents are verified against. */
+    @Binds
+    abstract fun deviceRegistry(impl: RoomDeviceRegistry): DeviceRegistry
+
+    @Binds
+    abstract fun remoteApplier(impl: RoomRemoteApplier): RemoteApplier
+
+    @Binds
+    abstract fun outboxSource(impl: RoomOutboxSource): OutboxSource
+
+    /** ECDSA P-256 checks for the ledger and document verifiers, over core/crypto's `Verifier`. */
+    @Binds
+    abstract fun signatureCheck(impl: VerifierSignatureCheck): SignatureCheck
 
     @Suppress("TooManyFunctions") // One provider per DAO.
     companion object {
@@ -111,12 +140,20 @@ internal abstract class DatabaseModule {
         @Provides
         fun fiatCurrencyProvider(): FiatCurrencyProvider = LocaleFiatCurrencyProvider()
 
+        /** The files the purge and the wipe delete (M3 §6). */
+        @Provides
+        fun localDataFiles(@ApplicationContext context: Context): LocalDataFiles = LocalDataFiles(
+            databaseFile = context.getDatabasePath(DatabaseFactory.DATABASE_NAME),
+            photoDirectory = File(context.noBackupFilesDir, EncryptedPhotoStore.DIRECTORY_NAME),
+            secretsDirectory = File(context.noBackupFilesDir, LocalDataFiles.SECRETS_DIRECTORY_NAME),
+        )
+
         /** Photos live encrypted in `noBackupFilesDir/photos`, outside cloud backups (D-M2-3). */
         @Provides
         @Singleton
         @Suppress("LongParameterList") // Every collaborator of the photo store comes from the graph.
         fun photoStore(
-            @ApplicationContext context: Context,
+            files: LocalDataFiles,
             database: SproutDatabase,
             aead: Aead,
             secretStore: SecretStore,
@@ -125,7 +162,7 @@ internal abstract class DatabaseModule {
             @Dispatcher(SproutDispatchers.IO) dispatcher: CoroutineDispatcher,
         ): PhotoStore = EncryptedPhotoStore(
             database = database,
-            directory = File(context.noBackupFilesDir, EncryptedPhotoStore.DIRECTORY_NAME),
+            directory = files.photoDirectory,
             aead = aead,
             secretStore = secretStore,
             authors = authors,

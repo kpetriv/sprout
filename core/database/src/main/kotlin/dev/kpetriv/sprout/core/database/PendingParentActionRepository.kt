@@ -97,7 +97,7 @@ class RoomPendingParentActionRepository @Inject constructor(
     private val clock: Clock,
 ) : PendingParentActionRepository {
     private val actions = database.pendingParentActionDao()
-    private val writes = DocumentWrites(database, clock)
+    private val writes = LocalAudit(database, clock)
 
     override suspend fun enqueue(action: PendingParentAction): Boolean =
         insert(action, PendingActionStatus.PENDING, AuditAction.PARENT_ACTION_QUEUED)

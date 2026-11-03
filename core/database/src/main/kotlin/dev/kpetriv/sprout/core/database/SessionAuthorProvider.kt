@@ -4,47 +4,51 @@ import dev.kpetriv.sprout.core.crypto.DeviceSigner
 import dev.kpetriv.sprout.core.domainledger.EventAuthor
 import dev.kpetriv.sprout.core.domainledger.toHex
 import dev.kpetriv.sprout.core.model.DeviceId
-import dev.kpetriv.sprout.core.model.HouseholdId
 import dev.kpetriv.sprout.core.model.KidId
 import dev.kpetriv.sprout.core.model.Role
-import dev.kpetriv.sprout.core.model.UserId
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
 import javax.inject.Inject
-import javax.inject.Singleton
 
 /** Who is writing right now: household, user, role and this device. */
 interface SessionAuthorProvider {
+    /** The author of this device's own writes. Throws [NoSessionException] when nobody is signed in. */
     suspend fun currentAuthor(): EventAuthor
 
     /**
-     * The author of what [kidId] does on this device in kid mode: [currentAuthor]'s household and device with role
-     * [Role.KID] and the kid's own user id. TEMPORARY until kid devices sign in (M3): the uid is the kid id.
+     * The author of what [kidId] does on this device in kid mode (D-M3-12). On a parent device this is the parent's
+     * uid and device with role [Role.KID] (receivers accept KID-role writes from a PARENT device, never the other way
+     * round). This default covers parent sessions only; [SessionBackedAuthorProvider] also handles KID sessions.
      */
-    suspend fun kidAuthor(kidId: KidId): EventAuthor = currentAuthor().copy(uid = UserId(kidId.value), role = Role.KID)
+    suspend fun kidAuthor(kidId: KidId): EventAuthor {
+        val author = currentAuthor()
+        check(author.role == Role.PARENT) { "kid authors on a KID session need the session's kid" }
+        return author.copy(role = Role.KID)
+    }
 }
 
 /**
- * TEMPORARY (M1 only, replaced by the signed-in session in M3): every local write is authored by a single local
- * parent in household [LOCAL_HOUSEHOLD]. The device id is the hex SHA-256 fingerprint of this device's signing key,
- * which is what M3 registers, so the hash chain written now keeps its author id.
+ * The production [SessionAuthorProvider]: every author comes from the signed-in [Session] ([SessionStore]).
+ * - [currentAuthor]: the session's household, uid, role and device; [NoSessionException] without a session.
+ * - [kidAuthor] on a PARENT session: the parent's uid and device with role KID (D-M3-12).
+ * - [kidAuthor] on a KID session: the session's own author, only for the kid the device is linked to; any other
+ *   kid is an [IllegalArgumentException]. A KID session can never produce a PARENT author.
  */
-@Singleton
-class LocalOnlyAuthorProvider @Inject constructor(private val signer: DeviceSigner) : SessionAuthorProvider {
-    private val mutex = Mutex()
-    private var author: EventAuthor? = null
+class SessionBackedAuthorProvider @Inject constructor(private val sessions: SessionStore) : SessionAuthorProvider {
+    override suspend fun currentAuthor(): EventAuthor = session().author()
 
-    override suspend fun currentAuthor(): EventAuthor = mutex.withLock {
-        author ?: EventAuthor(
-            householdId = LOCAL_HOUSEHOLD,
-            uid = LOCAL_PARENT,
-            role = Role.PARENT,
-            deviceId = DeviceId(signer.publicKey().fingerprint().toHex()),
-        ).also { author = it }
+    override suspend fun kidAuthor(kidId: KidId): EventAuthor {
+        val session = session()
+        return when (session.role) {
+            Role.PARENT -> session.author().copy(role = Role.KID)
+
+            Role.KID -> {
+                require(session.kidId == kidId) { "this device is linked to another kid" }
+                session.author()
+            }
+        }
     }
 
-    companion object {
-        val LOCAL_HOUSEHOLD: HouseholdId = HouseholdId("local")
-        val LOCAL_PARENT: UserId = UserId("local-parent")
-    }
+    private suspend fun session(): Session = sessions.get() ?: throw NoSessionException()
 }
+
+/** This device's id: the hex SHA-256 fingerprint of its signing key (a Keystore read). */
+suspend fun DeviceSigner.deviceId(): DeviceId = DeviceId(publicKey().fingerprint().toHex())

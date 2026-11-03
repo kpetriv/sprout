@@ -10,16 +10,23 @@ import dev.kpetriv.sprout.core.database.dao.AuditLogDao
 import dev.kpetriv.sprout.core.database.dao.BalanceDao
 import dev.kpetriv.sprout.core.database.dao.ChoreDao
 import dev.kpetriv.sprout.core.database.dao.ChoreSubmissionDao
+import dev.kpetriv.sprout.core.database.dao.DeviceDao
 import dev.kpetriv.sprout.core.database.dao.DeviceStateDao
+import dev.kpetriv.sprout.core.database.dao.DocumentInboxDao
 import dev.kpetriv.sprout.core.database.dao.HouseholdPolicyDao
 import dev.kpetriv.sprout.core.database.dao.InterestPolicyDao
 import dev.kpetriv.sprout.core.database.dao.KidDao
 import dev.kpetriv.sprout.core.database.dao.LedgerEventDao
+import dev.kpetriv.sprout.core.database.dao.LedgerInboxDao
 import dev.kpetriv.sprout.core.database.dao.OutboxDao
+import dev.kpetriv.sprout.core.database.dao.ParentKeyDao
 import dev.kpetriv.sprout.core.database.dao.PendingParentActionDao
 import dev.kpetriv.sprout.core.database.dao.PhotoDao
+import dev.kpetriv.sprout.core.database.dao.PurgeDao
 import dev.kpetriv.sprout.core.database.dao.RewardDao
 import dev.kpetriv.sprout.core.database.dao.SavingsGoalDao
+import dev.kpetriv.sprout.core.database.dao.SessionDao
+import dev.kpetriv.sprout.core.database.dao.SyncCursorDao
 import dev.kpetriv.sprout.core.database.entity.AccountEntity
 import dev.kpetriv.sprout.core.database.entity.AllowanceScheduleEntity
 import dev.kpetriv.sprout.core.database.entity.AnomalyEntity
@@ -27,16 +34,22 @@ import dev.kpetriv.sprout.core.database.entity.AuditLogEntity
 import dev.kpetriv.sprout.core.database.entity.BalanceEntity
 import dev.kpetriv.sprout.core.database.entity.ChoreEntity
 import dev.kpetriv.sprout.core.database.entity.ChoreSubmissionEntity
+import dev.kpetriv.sprout.core.database.entity.DeviceEntity
 import dev.kpetriv.sprout.core.database.entity.DeviceStateEntity
+import dev.kpetriv.sprout.core.database.entity.DocumentInboxEntity
 import dev.kpetriv.sprout.core.database.entity.HouseholdPolicyEntity
 import dev.kpetriv.sprout.core.database.entity.InterestPolicyEntity
 import dev.kpetriv.sprout.core.database.entity.KidEntity
 import dev.kpetriv.sprout.core.database.entity.LedgerEventEntity
+import dev.kpetriv.sprout.core.database.entity.LedgerInboxEntity
 import dev.kpetriv.sprout.core.database.entity.OutboxEntity
+import dev.kpetriv.sprout.core.database.entity.ParentKeyEntity
 import dev.kpetriv.sprout.core.database.entity.PendingParentActionEntity
 import dev.kpetriv.sprout.core.database.entity.PhotoEntity
 import dev.kpetriv.sprout.core.database.entity.RewardEntity
 import dev.kpetriv.sprout.core.database.entity.SavingsGoalEntity
+import dev.kpetriv.sprout.core.database.entity.SessionEntity
+import dev.kpetriv.sprout.core.database.entity.SyncCursorEntity
 
 /**
  * Sprout's local database. Encrypted with SQLCipher in production (see [DatabaseFactory]). The schema is exported
@@ -61,6 +74,12 @@ import dev.kpetriv.sprout.core.database.entity.SavingsGoalEntity
         PendingParentActionEntity::class,
         PhotoEntity::class,
         HouseholdPolicyEntity::class,
+        DeviceEntity::class,
+        ParentKeyEntity::class,
+        LedgerInboxEntity::class,
+        DocumentInboxEntity::class,
+        SyncCursorEntity::class,
+        SessionEntity::class,
     ],
     version = SproutDatabase.VERSION,
     exportSchema = true,
@@ -102,12 +121,35 @@ abstract class SproutDatabase : RoomDatabase() {
 
     abstract fun householdPolicyDao(): HouseholdPolicyDao
 
+    abstract fun deviceDao(): DeviceDao
+
+    abstract fun parentKeyDao(): ParentKeyDao
+
+    abstract fun ledgerInboxDao(): LedgerInboxDao
+
+    abstract fun documentInboxDao(): DocumentInboxDao
+
+    abstract fun syncCursorDao(): SyncCursorDao
+
+    abstract fun sessionDao(): SessionDao
+
+    abstract fun purgeDao(): PurgeDao
+
     companion object {
         /**
          * 2 (M2): chores, submissions, rewards, allowance, savings, interest, pending parent actions, photos and the
          * household policy; `ledger_events.parentSignature`, `accounts.lastAccruedOn` and the outbox document
          * columns. See [Migrations.MIGRATION_1_2].
+         *
+         * 3 (M3): device registry mirror (`devices`, `parent_keys`), held events and documents (`ledger_inbox`,
+         * `document_inbox`), pull cursors, the session, author/signature/tombstone columns on every synced document,
+         * `ledger_events.ingestedAtEpochMs` and `anomalies.appliedCopyJson`. See [Migrations.MIGRATION_2_3].
+         *
+         * 4 (M3 fix pass): `ledger_inbox.reason` and `document_inbox.authorDeviceId` for held events and documents
+         * (D-M3-31). See [Migrations.MIGRATION_3_4].
+         *
+         * 5 (M3 fix pass 2): `sync_cursor` keyed by household. See [Migrations.MIGRATION_4_5].
          */
-        const val VERSION: Int = 2
+        const val VERSION: Int = 5
     }
 }

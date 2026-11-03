@@ -37,4 +37,36 @@ class ParentHomeScreenshotTest : ScreenshotTest() {
             links = ParentHomeLinks(),
         )
     }
+
+    @Test
+    fun `trial household banner`() = screenshot.captureLightDark("parent_home_trial") {
+        ParentHomeScreen(ParentHomePreviewData.trial(), onEvent = {}, onSignNow = {}, links = ParentHomeLinks())
+    }
+
+    @Test
+    @Config(qualifiers = "+h1200dp")
+    fun `new device waiting and rejected events`() = screenshot.captureLightDark("parent_home_household") {
+        ParentHomeScreen(ParentHomePreviewData.household(), onEvent = {}, onSignNow = {}, links = ParentHomeLinks())
+    }
+
+    @Test
+    fun `signing key not registered with the household`() =
+        screenshot.captureLightDark("parent_home_signing_key_not_registered") {
+            ParentHomeScreen(
+                ParentHomePreviewData.signingKeyNotRegistered(),
+                onEvent = {},
+                onSignNow = {},
+                links = ParentHomeLinks(),
+            )
+        }
+
+    @Test
+    fun `fingerprint signing off`() = screenshot.captureLightDark("parent_home_signing_off") {
+        ParentHomeScreen(ParentHomePreviewData.signingOff(), onEvent = {}, onSignNow = {}, links = ParentHomeLinks())
+    }
+
+    @Test
+    fun `sync blocked`() = screenshot.captureLightDark("parent_home_sync_blocked") {
+        ParentHomeScreen(ParentHomePreviewData.syncBlocked(), onEvent = {}, onSignNow = {}, links = ParentHomeLinks())
+    }
 }

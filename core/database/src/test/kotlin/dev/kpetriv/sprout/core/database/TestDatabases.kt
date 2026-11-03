@@ -1,10 +1,6 @@
 package dev.kpetriv.sprout.core.database
 
 import androidx.room.Room
-import dev.kpetriv.sprout.core.crypto.AesGcmAead
-import dev.kpetriv.sprout.core.crypto.InMemoryBlobStorage
-import dev.kpetriv.sprout.core.crypto.InMemoryKeyWrapper
-import dev.kpetriv.sprout.core.crypto.WrappedSecretStore
 import dev.kpetriv.sprout.core.database.entity.AccountEntity
 import dev.kpetriv.sprout.core.domainledger.Account
 import dev.kpetriv.sprout.core.domainledger.FakeParentAuthorization
@@ -13,17 +9,17 @@ import dev.kpetriv.sprout.core.domainledger.LedgerPolicy
 import dev.kpetriv.sprout.core.domainledger.RewardPurchased
 import dev.kpetriv.sprout.core.time.Clock
 import dev.kpetriv.sprout.core.time.FakeClock
-import kotlinx.coroutines.Dispatchers
 import org.robolectric.RuntimeEnvironment
 import java.io.File
-import java.security.SecureRandom
-import java.util.UUID
 
 internal fun testClock() = FakeClock(Fixtures.start)
 
 /** An unencrypted in-memory database on the platform SQLite (no SQLCipher native library on the JVM). */
-internal fun inMemoryDatabase(): SproutDatabase =
-    Room.inMemoryDatabaseBuilder(RuntimeEnvironment.getApplication(), SproutDatabase::class.java).build()
+internal fun inMemoryDatabase(): SproutDatabase = inMemoryDatabase(RuntimeEnvironment.getApplication())
+
+/** The production-wired data layer of one device ([TestHousehold]) under the trial session, on Robolectric. */
+internal fun testHousehold(clock: FakeClock = testClock()): TestHousehold =
+    TestHousehold(RuntimeEnvironment.getApplication(), clock)
 
 /** A plain (unencrypted) file database, for tests that close and reopen. */
 internal fun fileDatabase(name: String): SproutDatabase =
@@ -67,8 +63,7 @@ internal fun multiDeviceRepository(
 ) = RoomLedgerRepository(database, clock, AcceptAnyEvent, fixedPolicy(policy), AnyPurchase)
 
 /** A fresh, not yet created directory under `noBackupFilesDir` for a test's photos. */
-internal fun newPhotoDirectory(): File =
-    File(RuntimeEnvironment.getApplication().noBackupFilesDir, "photos-${UUID.randomUUID()}")
+internal fun newPhotoDirectory(): File = newPhotoDirectory(RuntimeEnvironment.getApplication())
 
 /** An [EncryptedPhotoStore] with in-memory key storage, writing to [directory]. */
 internal fun testPhotoStore(
@@ -76,15 +71,7 @@ internal fun testPhotoStore(
     authors: SessionAuthorProvider,
     clock: Clock,
     directory: File = newPhotoDirectory(),
-) = EncryptedPhotoStore(
-    database,
-    directory,
-    AesGcmAead(SecureRandom()),
-    WrappedSecretStore(InMemoryKeyWrapper(), InMemoryBlobStorage(), SecureRandom(), Dispatchers.Unconfined),
-    authors,
-    clock,
-    Dispatchers.Unconfined,
-)
+) = encryptedPhotoStore(database, authors, clock, directory)
 
 /** A ledger in which no chore occurrence is paid, for chore repositories built without one. */
 internal val NothingPaid = ChoreRewardLedger { _, _, _ -> emptyList() }

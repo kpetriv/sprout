@@ -59,6 +59,12 @@ class SchemaTest {
                 "pending_parent_actions",
                 "photos",
                 "household_policy",
+                "devices",
+                "parent_keys",
+                "ledger_inbox",
+                "document_inbox",
+                "sync_cursor",
+                "session",
             ),
             entities().map { it.getValue("tableName").jsonPrimitive.content }.toSet(),
         )
@@ -95,9 +101,22 @@ class SchemaTest {
                 "parentPublicKey",
                 "fiatCurrency",
                 "createdAtEpochMs",
+                "lamport",
+                "authorUid",
+                "authorDeviceId",
+                "signature",
+                "deleted",
             ),
             columns("household_policy"),
         )
+        val stamp = setOf("authorUid", "authorDeviceId", "signature", "deleted")
+        for (table in listOf("chores", "chore_submissions", "rewards", "allowance_schedules", "savings_goals")) {
+            assertTrue(stamp.all { it in columns(table) }, table)
+        }
+        assertTrue((stamp + "lamport").all { it in columns("interest_policy") })
+        assertTrue((stamp + "lamport").all { it in columns("kids") && it in columns("accounts") })
+        assertTrue(setOf("quarantineReason", "ingestedAtEpochMs").all { it in columns("ledger_events") })
+        assertTrue("appliedCopyJson" in columns("anomalies"))
         assertTrue("parentSignature" in columns("ledger_events"))
         assertTrue(setOf("docType", "docId", "lamport").all { it in columns("outbox") })
     }

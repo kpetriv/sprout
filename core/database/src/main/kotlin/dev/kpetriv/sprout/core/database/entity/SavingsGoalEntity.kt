@@ -1,5 +1,6 @@
 package dev.kpetriv.sprout.core.database.entity
 
+import androidx.room.Embedded
 import androidx.room.Entity
 import androidx.room.Index
 import androidx.room.PrimaryKey
@@ -9,7 +10,10 @@ import dev.kpetriv.sprout.core.model.CalendarDate
 import dev.kpetriv.sprout.core.model.GoalId
 import dev.kpetriv.sprout.core.model.KidId
 
-/** A kid's savings goal ([SavingsGoal]). A synced document. Progress is projected from the SAVINGS balance. */
+/**
+ * A kid's savings goal ([SavingsGoal]). A synced document. Progress is projected from the SAVINGS balance. A deleted
+ * goal stays as a tombstone ([DocumentStamp.deleted]).
+ */
 @Entity(tableName = "savings_goals", indices = [Index(value = ["kidId"])])
 data class SavingsGoalEntity(
     @PrimaryKey val goalId: GoalId,
@@ -19,6 +23,7 @@ data class SavingsGoalEntity(
     val createdOn: CalendarDate,
     val achievedOn: CalendarDate?,
     val lamport: Long,
+    @Embedded val stamp: DocumentStamp = DocumentStamp(),
 ) {
     fun toDomain(): SavingsGoal = SavingsGoal(
         id = goalId,

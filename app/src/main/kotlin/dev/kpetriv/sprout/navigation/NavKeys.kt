@@ -2,6 +2,7 @@ package dev.kpetriv.sprout.navigation
 
 import androidx.navigation3.runtime.NavKey
 import dev.kpetriv.sprout.core.model.ChoreId
+import dev.kpetriv.sprout.core.model.DeviceId
 import dev.kpetriv.sprout.core.model.KidId
 import dev.kpetriv.sprout.core.model.KidUiTier
 import dev.kpetriv.sprout.feature.wallet.WalletMode
@@ -36,6 +37,14 @@ data object ApprovalsKey : NavKey
 /** Parent settings. */
 @Serializable
 data object SettingsKey : NavKey
+
+/** Settings → Devices, opened from the dashboard's "New device waiting" card on [reviewDeviceId]'s approval sheet. */
+@Serializable
+data class DevicesKey(val reviewDeviceId: DeviceId? = null) : NavKey
+
+/** Settings → Security, opened from the dashboard's "Signing key not registered with the household" card. */
+@Serializable
+data object SecurityKey : NavKey
 
 // Kid area (no lock).
 

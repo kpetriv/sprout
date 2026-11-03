@@ -14,6 +14,7 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.onStart
 import kotlinx.coroutines.flow.stateIn
@@ -28,6 +29,8 @@ import kotlin.time.Duration
  *
  * @property policy the household policy, or null before one exists (treated as "no parent key").
  * @property keyNeedsRenewal a key is registered but this device's key can no longer sign for it.
+ * @property keyNotRegisteredWithHousehold the key is registered on this device but the household's server never
+ *   recorded it (D-M3-39), so other devices refuse its signatures; "Retry" renews the key.
  * @property signingPin the PIN entry for turning signing on or renewing the key, or null when closed.
  * @property changePin the change-PIN form.
  */
@@ -35,6 +38,7 @@ data class ParentSecurityUiState(
     val availability: ParentAuthAvailability = ParentAuthAvailability.UNAVAILABLE_OTHER,
     val policy: SignaturePolicyUi? = null,
     val keyNeedsRenewal: Boolean = false,
+    val keyNotRegisteredWithHousehold: Boolean = false,
     val lockWhenLeaving: Boolean = true,
     val changePin: ChangePinUi = ChangePinUi(),
     val isChangingPin: Boolean = false,
@@ -49,6 +53,7 @@ data class ParentSecurityUiState(
         get() = when {
             availability != ParentAuthAvailability.STRONG_BIOMETRIC_AVAILABLE -> SigningStatus.UNAVAILABLE
             policy?.hasParentKey == true && keyNeedsRenewal -> SigningStatus.KEY_INVALIDATED
+            policy?.hasParentKey == true && keyNotRegisteredWithHousehold -> SigningStatus.NOT_REGISTERED_WITH_HOUSEHOLD
             policy?.hasParentKey == true -> SigningStatus.ON
             else -> SigningStatus.NOT_SET_UP
         }
@@ -69,6 +74,13 @@ enum class SigningStatus {
 
     /** Registered, but a fingerprint change invalidated this device's key: "Renew" asks for the PIN, then renews. */
     KEY_INVALIDATED,
+
+    /**
+     * Registered and usable on this device, but the household's server has no record of it (the registration after
+     * enrolment failed, D-M3-39): other devices refuse its signatures. "Retry" asks for the PIN and renews the key
+     * (new challenge, new key, fingerprint, server registration), since the old key's attestation cannot be reused.
+     */
+    NOT_REGISTERED_WITH_HOUSEHOLD,
 }
 
 /** Which signing-key action the PIN entry is for. */
@@ -159,7 +171,8 @@ sealed interface ParentSecurityEvent {
 
 /**
  * PIN change ([PinChanger]) on a three-step `PinPad` form, fingerprint signing status ([ParentAuthorizer.availability],
- * the household policy from [HouseholdPolicyRepository.observe] and [ParentKeyRegistrar.needsRenewal]) with PIN-gated
+ * the household policy from [HouseholdPolicyRepository.observe], the server registration from
+ * [HouseholdPolicyRepository.observeServerRegistrationPending] and [ParentKeyRegistrar.needsRenewal]) with PIN-gated
  * enrolment and renewal ([ParentKeyRegistrar]), and the "lock when leaving the app" preference ([LockPreferences]).
  */
 @HiltViewModel
@@ -168,7 +181,7 @@ class ParentSecurityViewModel @Inject constructor(
     private val registrar: ParentKeyRegistrar,
     private val lockPreferences: LockPreferences,
     private val authorizer: ParentAuthorizer,
-    policies: HouseholdPolicyRepository,
+    private val policies: HouseholdPolicyRepository,
 ) : ViewModel() {
     private val local = MutableStateFlow(ParentSecurityUiState(availability = authorizer.availability()))
 
@@ -184,9 +197,15 @@ class ParentSecurityViewModel @Inject constructor(
         .onStart { emit(Load.Loading) }
         .catch { emit(Load.Failed) }
 
+    private val serverPending = policies.observeServerRegistrationPending().catch { emit(false) }
+
     val state: StateFlow<ParentSecurityUiState> =
-        combine(local, policy, lockPreferences.lockWhenLeaving) { localState, loaded, lockWhenLeaving ->
-            localState.copy(policy = (loaded as? Load.Ready)?.value, lockWhenLeaving = lockWhenLeaving)
+        combine(local, policy, serverPending, lockPreferences.lockWhenLeaving) { localState, loaded, pending, lock ->
+            localState.copy(
+                policy = (loaded as? Load.Ready)?.value,
+                keyNotRegisteredWithHousehold = pending,
+                lockWhenLeaving = lock,
+            )
         }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MILLIS), local.value)
 
     init {
@@ -239,7 +258,7 @@ class ParentSecurityViewModel @Inject constructor(
         val current = state.value
         val purpose = when (current.signing) {
             SigningStatus.NOT_SET_UP -> SigningPinPurpose.ENROL
-            SigningStatus.KEY_INVALIDATED -> SigningPinPurpose.RENEW
+            SigningStatus.KEY_INVALIDATED, SigningStatus.NOT_REGISTERED_WITH_HOUSEHOLD -> SigningPinPurpose.RENEW
             SigningStatus.ON, SigningStatus.UNAVAILABLE -> return
         }
         if (current.isRegistering) return
@@ -274,7 +293,10 @@ class ParentSecurityViewModel @Inject constructor(
             when (outcome) {
                 SigningKeyOutcome.Registered -> {
                     closeSigningPin(error = null)
-                    local.update { it.copy(keyNeedsRenewal = false, message = SettingsMessage.KEY_REGISTERED) }
+                    // The key is registered here; whether the household's server took it too decides the message.
+                    val shared = !serverRegistrationPending()
+                    val message = if (shared) SettingsMessage.KEY_REGISTERED else SettingsMessage.KEY_NOT_SHARED
+                    local.update { it.copy(keyNeedsRenewal = false, message = message) }
                 }
 
                 // A wrong PIN keeps the entry open (and shakes it) so the parent can retry.
@@ -289,6 +311,14 @@ class ParentSecurityViewModel @Inject constructor(
             }
             refresh()
         }
+    }
+
+    private suspend fun serverRegistrationPending(): Boolean = try {
+        policies.observeServerRegistrationPending().first()
+    } catch (e: CancellationException) {
+        throw e
+    } catch (@Suppress("TooGenericExceptionCaught") _: Exception) {
+        false
     }
 
     private fun closeSigningPin(error: RegisterError?) {

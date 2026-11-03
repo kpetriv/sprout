@@ -14,6 +14,7 @@ import dev.kpetriv.sprout.core.domainledger.Fixtures
 import dev.kpetriv.sprout.core.domainledger.LedgerEvent
 import dev.kpetriv.sprout.core.domainledger.Money
 import dev.kpetriv.sprout.core.model.KidUiTier
+import dev.kpetriv.sprout.core.model.RewardId
 import dev.kpetriv.sprout.core.model.YearMonth
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.runTest
@@ -23,7 +24,10 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertNotNull
 import kotlin.test.assertNull
+import kotlin.test.assertTrue
 
 /**
  * Every migration in [Migrations.ALL] runs against a database created at the old version from its exported schema,
@@ -92,6 +96,198 @@ class MigrationTest {
         } finally {
             database.close()
         }
+    }
+
+    @Test
+    fun migration2To3StampsTheTrialRowsAndDropsUnsignedDocumentRows() = runTest {
+        helper.createDatabase(TEST_DB, 2).use { db ->
+            insertVersion1Rows(db, chore)
+            db.insertRow(
+                "rewards",
+                "rewardId" to "treat",
+                "householdId" to "local",
+                "title" to "Treat",
+                "kind" to "TREAT",
+                "cost" to 100L,
+                "currency" to "GBP",
+                "minutesGranted" to null,
+                "active" to 1,
+                "forKidsJson" to "[]",
+                "lamport" to 2L,
+            )
+            db.insertRow(
+                "outbox",
+                "kind" to OutboxKind.DOCUMENT.name,
+                "refId" to "reward/treat",
+                "payload" to "{}",
+                "createdAtEpochMs" to receivedAt,
+                "docType" to "reward",
+                "docId" to "treat",
+                "lamport" to 2L,
+            )
+        }
+
+        helper.runMigrationsAndValidate(TEST_DB, 3, true, Migrations.MIGRATION_2_3).use { db ->
+            NEW_TABLES_3.forEach { table ->
+                db.query("SELECT COUNT(*) FROM $table").use { cursor ->
+                    cursor.moveToFirst()
+                    assertEquals(0, cursor.getInt(0), table)
+                }
+            }
+        }
+
+        val database = Room.databaseBuilder(RuntimeEnvironment.getApplication(), SproutDatabase::class.java, TEST_DB)
+            .addMigrations(*Migrations.ALL)
+            .build()
+        try {
+            val device = chore.envelope.authorDeviceId
+            val reward = assertNotNull(database.rewardDao().get(RewardId("treat")))
+            assertEquals(LocalTrial.PARENT, reward.stamp.authorUid)
+            assertEquals(device, reward.stamp.authorDeviceId)
+            assertNull(reward.stamp.signature)
+            assertFalse(reward.stamp.deleted)
+            val kid = assertNotNull(database.kidDao().get(Fixtures.kid))
+            assertEquals(0, kid.lamport)
+            assertEquals(device, kid.stamp.authorDeviceId)
+            assertEquals(device, database.accountDao().all().single().stamp.authorDeviceId)
+            // The unsigned version 2 document row is gone; the ledger event row stays queued.
+            assertEquals(listOf(OutboxKind.LEDGER_EVENT), database.outboxDao().all().map { it.kind })
+            assertNull(database.ledgerEventDao().all().single().ingestedAtEpochMs)
+            assertNull(database.sessionDao().get())
+        } finally {
+            database.close()
+        }
+    }
+
+    @Test
+    fun migration1To3KeepsTheM1Rows() = runTest {
+        helper.createDatabase(TEST_DB, 1).use { db -> insertVersion1Rows(db, chore) }
+
+        helper.runMigrationsAndValidate(TEST_DB, 3, true, Migrations.MIGRATION_1_2, Migrations.MIGRATION_2_3).close()
+
+        val database = Room.databaseBuilder(RuntimeEnvironment.getApplication(), SproutDatabase::class.java, TEST_DB)
+            .addMigrations(*Migrations.ALL)
+            .build()
+        try {
+            assertEquals(chore, LedgerEventMapper.toDomain(database.ledgerEventDao().all().single()))
+            assertEquals(Money(250), database.balanceDao().forKid(Fixtures.kid).single().amountMinor)
+            assertEquals("Mia", database.kidDao().observeActive().first().single().firstName)
+            assertEquals(OutboxKind.LEDGER_EVENT, database.outboxDao().all().single().kind)
+            assertEquals(1, database.deviceStateDao().get()?.lamport)
+        } finally {
+            database.close()
+        }
+    }
+
+    @Test
+    fun migration3To4AddsTheHoldColumnsAndKeepsTheHeldRows() = runTest {
+        helper.createDatabase(TEST_DB, 3).use { db ->
+            db.insertRow(
+                "ledger_inbox",
+                "eventId" to chore.eventId.value,
+                "hash" to chore.envelope.hash,
+                "payloadJson" to "{}",
+                "authorDeviceId" to chore.envelope.authorDeviceId.value,
+                "lamport" to 1L,
+                "receivedAtEpochMs" to receivedAt,
+            )
+            db.insertRow(
+                "document_inbox",
+                "docType" to "reward",
+                "docId" to "treat",
+                "envelopeJson" to "{}",
+                "reason" to "LAMPORT_TOO_FAR_AHEAD",
+                "receivedAtEpochMs" to receivedAt,
+            )
+        }
+
+        helper.runMigrationsAndValidate(TEST_DB, 4, true, Migrations.MIGRATION_3_4).use { db ->
+            db.query("SELECT eventId, reason FROM ledger_inbox").use { cursor ->
+                cursor.moveToFirst()
+                assertEquals(chore.eventId.value, cursor.getString(0))
+                assertTrue(cursor.isNull(1))
+            }
+            db.query("SELECT reason, authorDeviceId FROM document_inbox").use { cursor ->
+                cursor.moveToFirst()
+                assertEquals("LAMPORT_TOO_FAR_AHEAD", cursor.getString(0))
+                assertTrue(cursor.isNull(1))
+            }
+        }
+
+        val database = Room.databaseBuilder(RuntimeEnvironment.getApplication(), SproutDatabase::class.java, TEST_DB)
+            .addMigrations(*Migrations.ALL)
+            .build()
+        try {
+            assertNull(database.ledgerInboxDao().all().single().reason)
+            assertNull(database.documentInboxDao().all().single().authorDeviceId)
+        } finally {
+            database.close()
+        }
+    }
+
+    @Test
+    fun migration1To4KeepsTheM1Rows() = runTest {
+        helper.createDatabase(TEST_DB, 1).use { db -> insertVersion1Rows(db, chore) }
+
+        helper.runMigrationsAndValidate(
+            TEST_DB,
+            4,
+            true,
+            Migrations.MIGRATION_1_2,
+            Migrations.MIGRATION_2_3,
+            Migrations.MIGRATION_3_4,
+        ).close()
+    }
+
+    @Test
+    fun migration4To5DropsEveryCursorEvenWithARealSession() = runTest {
+        helper.createDatabase(TEST_DB, 4).use { db ->
+            db.insertRow(
+                "session",
+                "id" to 0,
+                "uid" to "parent-uid",
+                "householdId" to "hh-real",
+                "role" to "PARENT",
+                "kidId" to null,
+                "deviceId" to "d".repeat(64),
+                "deviceStatus" to "ACTIVE",
+                "signedInAtEpochMs" to receivedAt,
+            )
+            db.insertRow("sync_cursor", "collection" to "events", "cursor" to "2026-11-03T09:00:00Z|e1")
+            db.insertRow("sync_cursor", "collection" to "devices", "cursor" to "digest")
+        }
+
+        helper.runMigrationsAndValidate(TEST_DB, 5, true, Migrations.MIGRATION_4_5).use { db ->
+            db.query("SELECT COUNT(*) FROM sync_cursor").use { cursor ->
+                cursor.moveToFirst()
+                assertEquals(0, cursor.getInt(0), "the next sync pulls everything again")
+            }
+            db.query("SELECT householdId FROM session").use { cursor ->
+                cursor.moveToFirst()
+                assertEquals("hh-real", cursor.getString(0), "the session itself stays")
+            }
+        }
+    }
+
+    @Test
+    fun migration4To5DropsCursorsWithoutARealSession() = runTest {
+        helper.createDatabase(TEST_DB, 4).use { db ->
+            db.insertRow("sync_cursor", "collection" to "events", "cursor" to "x")
+        }
+
+        helper.runMigrationsAndValidate(TEST_DB, 5, true, Migrations.MIGRATION_4_5).use { db ->
+            db.query("SELECT COUNT(*) FROM sync_cursor").use { cursor ->
+                cursor.moveToFirst()
+                assertEquals(0, cursor.getInt(0))
+            }
+        }
+    }
+
+    @Test
+    fun migration1To5KeepsTheM1Rows() = runTest {
+        helper.createDatabase(TEST_DB, 1).use { db -> insertVersion1Rows(db, chore) }
+
+        helper.runMigrationsAndValidate(TEST_DB, 5, true, *Migrations.ALL).close()
     }
 
     @Test
@@ -202,5 +398,6 @@ class MigrationTest {
             "photos",
             "household_policy",
         )
+        val NEW_TABLES_3 = listOf("devices", "parent_keys", "ledger_inbox", "document_inbox", "sync_cursor", "session")
     }
 }

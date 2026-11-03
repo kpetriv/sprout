@@ -29,7 +29,7 @@ import kotlin.test.assertTrue
 
 @RunWith(RobolectricTestRunner::class)
 class ParentSignaturePolicyTest {
-    private val household = TestHousehold()
+    private val household = testHousehold()
 
     @After
     fun close() = household.close()
@@ -47,7 +47,9 @@ class ParentSignaturePolicyTest {
         // No parent key yet: an unsigned parent event is fine (M1 behaviour).
         assertEquals(AppendResult.Accepted, writer.append(kid.id, main.id, allowance(44)))
 
-        assertEquals(2L, household.registerParentKey().parentSignatureFromLamport)
+        // Lamports 1 to 5: the kid and its three accounts (documents) and the allowance; registering creates the
+        // household policy document (6), so the requirement starts at 7.
+        assertEquals(7L, household.registerParentKey().parentSignatureFromLamport)
 
         val unsigned = assertIs<AppendResult.Rejected>(writer.append(kid.id, main.id, allowance(45)))
         assertEquals(RoomLedgerRepository.INVARIANT_REJECTION, unsigned.reason)

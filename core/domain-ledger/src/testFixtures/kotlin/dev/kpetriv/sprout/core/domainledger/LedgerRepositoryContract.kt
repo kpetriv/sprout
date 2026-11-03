@@ -142,7 +142,7 @@ abstract class LedgerRepositoryContract {
     }
 
     @Test
-    fun copiesFromTheSameRoleAreAllExcluded() = runTest {
+    fun copiesFromTheSameRoleApplyTheFirstByLamportDeviceAndHash() = runTest {
         val repository = createRepository(Fixtures.accounts)
         val phone = DeviceWriter(Fixtures.parentPhone)
         val tablet = DeviceWriter(Fixtures.parentTablet)
@@ -150,17 +150,19 @@ abstract class LedgerRepositoryContract {
         val chore = phone.chore(100)
         listOf(allowance, chore).forEach { assertEquals(AppendResult.Accepted, repository.append(it)) }
 
-        // A second parent device reuses the id: two parent copies, so neither applies.
+        // A second parent device reuses the id: two parent copies, so the first by (lamport, device, hash) applies
+        // on every device. The tablet has not synced, so its copy has the lower lamport.
         val reused = tablet.writeWithId(chore.eventId, Fixtures.main) {
             ChoreRewarded(it, Fixtures.gbp, Money(900), "other", Fixtures.today)
         }
+        assertEquals(true, reused.lamport < chore.lamport)
         assertIs<AppendResult.Conflict>(repository.append(reused))
 
-        assertEquals(listOf(Money(500)), repository.observeBalances(Fixtures.kid).first().map { it.amount })
+        assertEquals(listOf(Money(1_400)), repository.observeBalances(Fixtures.kid).first().map { it.amount })
         val conflict = assertIs<LedgerAnomaly.ConflictingDuplicate>(
             repository.observeAnomalies(Fixtures.kid).first().single(),
         )
-        assertEquals(null, conflict.applied)
+        assertEquals(reused.envelope.hash, conflict.applied?.hash)
         assertEquals(2, conflict.copies.size)
     }
 

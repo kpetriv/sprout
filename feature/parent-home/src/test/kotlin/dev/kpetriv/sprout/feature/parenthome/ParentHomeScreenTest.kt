@@ -34,6 +34,7 @@ class ParentHomeScreenTest {
         onOpenSettings = { opened += "settings" },
         onSwitchToKidMode = { opened += "kid mode" },
         onOpenKid = { opened += "kid ${it.value}" },
+        onRegisterSigningKey = { opened += "security" },
     )
 
     private fun show(state: ParentHomeUiState) = compose.setContent {
@@ -56,6 +57,41 @@ class ParentHomeScreenTest {
         compose.onNodeWithText("Sapling").assertIsDisplayed()
         compose.onAllNodes(hasText("Next allowance:", substring = true)).assertCountEquals(2)
         compose.onNodeWithText("Weekly summary").assertIsDisplayed()
+    }
+
+    @Test
+    fun `an unregistered signing key is shown and Retry opens security settings`() {
+        show(ParentHomePreviewData.signingKeyNotRegistered())
+
+        compose.onNodeWithText("Signing key not registered with the household").assertIsDisplayed()
+        compose.onNodeWithText("Retry").performClick()
+
+        assertEquals(listOf("security"), opened)
+    }
+
+    @Test
+    fun `signing off is shown and Turn on opens security settings`() {
+        show(ParentHomePreviewData.signingOff())
+
+        compose.onNodeWithText("Fingerprint signing is off").assertIsDisplayed()
+        compose.onNodeWithText("Turn on").performClick()
+
+        assertEquals(listOf("security"), opened)
+    }
+
+    @Test
+    fun `a blocked sync names a human reason, never the server's code`() {
+        show(ParentHomePreviewData.syncBlocked())
+
+        compose.onAllNodes(hasText("permission-denied", substring = true)).assertCountEquals(0)
+        compose.onNodeWithText("isn’t allowed to make it", substring = true).assertIsDisplayed()
+    }
+
+    @Test
+    fun `a registered signing key shows no such card`() {
+        show(ParentHomePreviewData.household())
+
+        compose.onAllNodes(hasText("Signing key not registered with the household")).assertCountEquals(0)
     }
 
     @Test
