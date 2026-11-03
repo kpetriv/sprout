@@ -14,6 +14,7 @@ import dev.kpetriv.sprout.core.sync.DocTypes
  *   kids/{docId}, accounts/…   one collection per document type (see [collectionOf]); thread keys in threadKeys
  *   messages/{messageId}       chat messages (M4 §1.3), create-only, KID members read their own thread only
  *   blobs/{blobId}.{chunk}     encrypted blob chunks (M4 §2), create-only, fetched by id, never pulled
+ *   quotas/{yyyymmdd}          the household's blob chunk counter for one UTC day ({chunks, last}), audit H2
  * ```
  */
 object FirestoreLayout {
@@ -24,6 +25,7 @@ object FirestoreLayout {
     const val MESSAGES: String = "messages"
     const val BLOBS: String = "blobs"
     const val THREAD_KEYS: String = "threadKeys"
+    const val QUOTAS: String = "quotas"
 
     /** Separator between `eventId` and `hash` in the id of a conflicting event copy. */
     const val CONFLICT_SEPARATOR: String = "__"
@@ -68,6 +70,9 @@ object FirestoreLayout {
         document(hid, EVENTS, "$eventId$CONFLICT_SEPARATOR$hash")
 
     fun message(hid: HouseholdId, messageId: String): String = document(hid, MESSAGES, messageId)
+
+    /** `quotas/{yyyymmdd}`: the blob chunk counter of one UTC day. */
+    fun quota(hid: HouseholdId, day: String): String = document(hid, QUOTAS, day)
 
     /** `blobs/{blobId}.{chunk}`. */
     fun blobChunk(hid: HouseholdId, blobId: String, chunk: Int): String = document(hid, BLOBS, "$blobId.$chunk")

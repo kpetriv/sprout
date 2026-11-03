@@ -8,6 +8,14 @@ import kotlinx.serialization.json.JsonObject
  * [due] has **head-of-line** semantics: it returns pending items in `seq` order and stops at the first item that is
  * not yet due, so an item waiting for its backoff holds back everything queued after it. That keeps the push order
  * equal to the write order across syncs (a device's ledger events form a hash chain).
+ *
+ * **Blocked outbox.** An item whose kind [blocks on refusal][OutboxItem.Kind.blocksOnRefusal] (a ledger event, a chat
+ * message, a blob chunk) and that the server refused for good stays queued with its next attempt
+ * [SyncEngine.EVENT_REJECTION_RETRY_MS] later ([fail] with a [SyncError.Permanent]), so it holds back everything after
+ * it. Implementations that back a UI expose that state as `observeBlocked()`: the lowest queued `seq` whose latest
+ * failure was a blocking permanent refusal, **of any of those kinds** (messages and blob chunks included, not only
+ * ledger events), with the server's code; null when nothing blocks (core/database `RoomOutboxSource`, the test
+ * fixture `InMemoryOutboxSource`). It is not a member of this interface because the engine never reads it.
  */
 interface OutboxSource {
     /**
@@ -69,12 +77,30 @@ class OutboxItem(
 
     override fun toString(): String = "OutboxItem(seq=$seq, kind=$kind, pushId=$pushId, attempts=$attempts)"
 
+    /** This item as handed to [SyncTransport.push]. */
+    fun toPushItem(): PushItem = when (kind) {
+        Kind.EVENT -> PushItem.Event(requireNotNull(eventJson))
+        Kind.DOCUMENT -> PushItem.Document(requireNotNull(document))
+        Kind.MESSAGE -> PushItem.Message(requireNotNull(messageJson))
+        Kind.BLOB_CHUNK -> PushItem.BlobChunk(requireNotNull(blobChunk))
+    }
+
     /**
-     * What an item carries. [EVENT] and [MESSAGE] are sequenced per author device (a hash chain, a per-thread `seq`),
-     * so a permanent refusal keeps them queued and blocks the outbox ([SyncEngine]); [DOCUMENT] and [BLOB_CHUNK] are
-     * acked when refused for good.
+     * What an item carries. [EVENT] and [MESSAGE] are sequenced per author device (a hash chain, a per-thread `seq`);
+     * a [BLOB_CHUNK] is queued before the message or chore submission that names its blob. A permanent refusal of any
+     * of the three keeps it queued and blocks the outbox ([blocksOnRefusal], [SyncEngine]), so nothing that depends on
+     * it goes out; a [DOCUMENT] refused for good is acked.
      */
-    enum class Kind { EVENT, DOCUMENT, MESSAGE, BLOB_CHUNK }
+    enum class Kind {
+        EVENT,
+        DOCUMENT,
+        MESSAGE,
+        BLOB_CHUNK,
+        ;
+
+        /** A permanent refusal keeps the item queued and stops the push (everything after it waits). */
+        val blocksOnRefusal: Boolean get() = this != DOCUMENT
+    }
 
     companion object {
         fun event(seq: Long, json: JsonObject, attempts: Int = 0): OutboxItem =

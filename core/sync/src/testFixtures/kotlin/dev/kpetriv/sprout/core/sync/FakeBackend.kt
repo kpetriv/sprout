@@ -57,8 +57,13 @@ import kotlin.io.encoding.Base64
  *   message is accepted; another message under a taken id is [PERMISSION_DENIED].
  * - **Blob chunks** (`blobs/{blobId}.{chunk}`) are create-only: a closed key set, an ACTIVE author device of the
  *   caller, exactly one of `threadId` (equal to `kidId`) and `submissionId`, a KID member only for its own `kidId`,
- *   `chunk` in 0..1, `chunks` in 1..2 (`chunk < chunks`), a hex `sha256`, and 1 to [MAX_BLOB_CHUNK_BYTES] bytes of
- *   data. Identical re-sends are accepted.
+ *   a `kidId` with a stored `kid` document, `chunk` in 0..1, `chunks` in 1..2 (`chunk < chunks`), a hex `sha256`, and
+ *   1 to [MAX_BLOB_CHUNK_BYTES] bytes of data. Identical re-sends are accepted. At most [DAILY_BLOB_CHUNKS] new chunks
+ *   per household per UTC day ([nowEpochMs]), as the rules' `quotas/{yyyymmdd}` counter allows; a chunk over the cap
+ *   is refused [SyncError.Transient] with a retry at the next UTC midnight, as the transport reports it.
+ * - **Thread keys** (`thread_key` documents, PARENT only like every non-submission type): never a tombstone; docId
+ *   `"<threadId>.<epoch>.<createdByDeviceId>"`; `createdByDeviceId` is the author device; `lamport` at most
+ *   [MAX_THREAD_KEY_LAMPORT]; an update only from the same author device (one creator per document, D-M4-3).
  * - **Read scoping**: a PARENT member pulls every message; a KID member only those of its own thread, and fetches
  *   only blobs of its own kid ([PERMISSION_DENIED] otherwise). Blobs are never pulled, only fetched by id.
  * - **Encryption keys** (M4 §1.1): [registerEncryptionKey] mirrors the `registerEncryptionKey` callable (binding
@@ -66,7 +71,11 @@ import kotlin.io.encoding.Base64
  *   with [RegisteredDevice.encryptionKey] already set mirrors the registration callables' optional key.
  *
  * Every rules refusal is [PERMISSION_DENIED], as Firestore reports it. Signatures are not checked here, as rules
- * cannot; receivers do. [injectEvent], [injectDocument], [injectMessage] and [injectBlobChunk] bypass every rule (a
+ * cannot; receivers do.
+ *
+ * **Push order** (like `FirebaseSyncTransport`): items are processed in the order given. After a permanent refusal of
+ * an item whose kind [blocks on refusal][OutboxItem.Kind.blocksOnRefusal] (event, message, blob chunk), or a transient
+ * one of any item, the rest of the push is left unprocessed (in neither result list). [injectEvent], [injectDocument], [injectMessage] and [injectBlobChunk] bypass every rule (a
  * compromised server or a rules bug).
  *
  * Each collection has its own monotonic sequence; a pull returns what was written after the cursor's position in
@@ -76,6 +85,13 @@ class FakeBackend(val householdId: HouseholdId, private val pageSize: Int = DEFA
     init {
         require(pageSize > 0) { "pageSize must be positive" }
     }
+
+    /** The server clock (epoch ms) that decides the blob budget's UTC day; tests may replace it. */
+    @Volatile
+    var nowEpochMs: () -> Long = System::currentTimeMillis
+
+    /** New blob chunks stored per UTC day (epoch day), as `quotas/{yyyymmdd}.chunks`. */
+    private val blobChunksPerDay = mutableMapOf<Long, Int>()
 
     /** A server-side write; [author] is null for writes made by the test itself (registry, injections). */
     data class Write(val collection: String, val author: DeviceId?)
@@ -304,43 +320,23 @@ class FakeBackend(val householdId: HouseholdId, private val pageSize: Int = DEFA
     internal fun isAvailable(caller: DeviceId): Boolean = !gone && caller !in partitioned
 
     @Synchronized
-    internal fun push(
-        caller: Caller,
-        events: List<JsonObject>,
-        documents: List<DocumentEnvelope>,
-        messages: List<JsonObject> = emptyList(),
-        blobChunks: List<BlobChunkJson> = emptyList(),
-    ): PushResult {
+    internal fun push(caller: Caller, items: List<PushItem>): PushResult {
         checkReachable(caller.deviceId)
         val accepted = mutableListOf<PushItemId>()
         val rejected = mutableListOf<Pair<PushItemId, SyncError>>()
-        for (event in events) {
-            val id = PushItemId.ofEvent(event)
-            when (val code = pushEvent(caller, event)) {
-                null -> accepted += id
-                else -> rejected += id to SyncError.Permanent(code)
+        for (item in items) {
+            val error = when (item) {
+                is PushItem.Event -> pushEvent(caller, item.json)?.let(SyncError::Permanent)
+                is PushItem.Document -> pushDocument(caller, item.envelope)?.let(SyncError::Permanent)
+                is PushItem.Message -> pushMessage(caller, item.json)?.let(SyncError::Permanent)
+                is PushItem.BlobChunk -> pushBlobChunk(caller, item.chunk)
             }
-        }
-        for (document in documents) {
-            val id = PushItemId.ofDocument(document)
-            when (val code = pushDocument(caller, document)) {
-                null -> accepted += id
-                else -> rejected += id to SyncError.Permanent(code)
-            }
-        }
-        // Blob chunks before messages, as the real transport writes them.
-        for (chunk in blobChunks) {
-            val id = PushItemId.ofBlobChunk(chunk)
-            when (val code = pushBlobChunk(caller, chunk)) {
-                null -> accepted += id
-                else -> rejected += id to SyncError.Permanent(code)
-            }
-        }
-        for (message in messages) {
-            val id = PushItemId.ofMessage(message)
-            when (val code = pushMessage(caller, message)) {
-                null -> accepted += id
-                else -> rejected += id to SyncError.Permanent(code)
+            if (error == null) {
+                accepted += item.id
+            } else {
+                rejected += item.id to error
+                // Head of line: the rest of the push waits behind a blocking or transient refusal.
+                if (error is SyncError.Transient || item.kind.blocksOnRefusal) break
             }
         }
         return PushResult(accepted, rejected)
@@ -372,7 +368,8 @@ class FakeBackend(val householdId: HouseholdId, private val pageSize: Int = DEFA
 
     /**
      * Every stored chunk of [blobId] in chunk order, as the transport's `fetchBlob` reads them: empty when chunk 0
-     * does not exist; [PERMISSION_DENIED] when a KID member asks for another kid's blob.
+     * does not exist; [BlobIncompleteException] when fewer than chunk 0's `chunks` are stored; [PERMISSION_DENIED]
+     * when a KID member asks for another kid's blob.
      */
     @Synchronized
     internal fun fetchBlob(caller: Caller, blobId: BlobId): Result<List<BlobChunkJson>> {
@@ -381,12 +378,16 @@ class FakeBackend(val householdId: HouseholdId, private val pageSize: Int = DEFA
         } catch (failure: SyncException) {
             return Result.failure(failure)
         }
-        val chunks = (0 until MAX_BLOB_CHUNKS).mapNotNull { blobs["${blobId.value}.$it"]?.value }
-        val readable = chunks.all { mayReadKid(caller, it.header.string(KID_ID)) }
-        return if (readable) {
-            Result.success(chunks)
-        } else {
-            Result.failure(SyncException(SyncError.Permanent(PERMISSION_DENIED)))
+        val first = blobs["${blobId.value}.0"]?.value ?: return Result.success(emptyList())
+        if (!mayReadKid(caller, first.header.string(KID_ID))) {
+            return Result.failure(SyncException(SyncError.Permanent(PERMISSION_DENIED)))
+        }
+        val expected = first.header.long(CHUNKS)?.toInt()?.coerceIn(1, MAX_BLOB_CHUNKS) ?: 1
+        val chunks = (0 until expected).mapNotNull { blobs["${blobId.value}.$it"]?.value }
+        return when {
+            chunks.size < expected -> Result.failure(BlobIncompleteException(chunks.size, expected))
+            chunks.all { mayReadKid(caller, it.header.string(KID_ID)) } -> Result.success(chunks)
+            else -> Result.failure(SyncException(SyncError.Permanent(PERMISSION_DENIED)))
         }
     }
 
@@ -493,7 +494,24 @@ class FakeBackend(val householdId: HouseholdId, private val pageSize: Int = DEFA
         return document.authorUid == caller.uid &&
             isActiveDeviceOf(document.authorDeviceId, caller.uid) &&
             roleMayWrite &&
+            (document.docType != DocTypes.THREAD_KEY || threadKeyAllowed(document, stored)) &&
             (stored == null || updateAllowed(stored, document))
+    }
+
+    /**
+     * The `threadKeys` hardening (audit M2): no tombstone, docId `"<threadId>.<epoch>.<createdByDeviceId>"`, created
+     * by the author device, a sane lamport, and an update only from the same author device.
+     */
+    private fun threadKeyAllowed(document: DocumentEnvelope, stored: DocumentEnvelope?): Boolean {
+        val payload = document.payload
+        val creator = payload.string("createdByDeviceId")
+        val epoch = payload.long("epoch")
+        return !document.deleted &&
+            creator == document.authorDeviceId.value &&
+            epoch != null && epoch >= 0 &&
+            document.docId == "${payload.string(THREAD_ID)}.$epoch.$creator" &&
+            document.lamport <= MAX_THREAD_KEY_LAMPORT &&
+            (stored == null || stored.authorDeviceId == document.authorDeviceId)
     }
 
     /**
@@ -612,24 +630,36 @@ class FakeBackend(val householdId: HouseholdId, private val pageSize: Int = DEFA
 
     // ---- blobs ----
 
-    /** Null when accepted (stored, or the identical chunk already there); otherwise the refusal code. */
-    private fun pushBlobChunk(caller: Caller, chunk: BlobChunkJson): String? {
+    /**
+     * Null when accepted (stored, or the identical chunk already there); otherwise the refusal: permanent for the
+     * rules, transient (until the next UTC midnight) when the household's daily blob budget is used up.
+     */
+    private fun pushBlobChunk(caller: Caller, chunk: BlobChunkJson): SyncError? {
         val header = chunk.header
         when {
-            chunk.blobId == null || chunk.chunk == null || !ID_PATTERN.matches(chunk.docId) -> return MALFORMED
-            header.string(HOUSEHOLD_ID) != householdId.value -> return WRONG_HOUSEHOLD
-            header.string(SIGNATURE) == null -> return UNSIGNED
+            chunk.blobId == null || chunk.chunk == null || !ID_PATTERN.matches(chunk.docId) ->
+                return SyncError.Permanent(MALFORMED)
+
+            header.string(HOUSEHOLD_ID) != householdId.value -> return SyncError.Permanent(WRONG_HOUSEHOLD)
+
+            header.string(SIGNATURE) == null -> return SyncError.Permanent(UNSIGNED)
         }
         val stored = blobs[chunk.docId]?.value
+        val now = nowEpochMs()
+        val day = Math.floorDiv(now, DAY_MS)
         return when {
-            stored != null -> if (stored == chunk) null else PERMISSION_DENIED
+            stored != null -> if (stored == chunk) null else SyncError.Permanent(PERMISSION_DENIED)
 
-            blobCreateAllowed(caller, chunk) -> {
+            !blobCreateAllowed(caller, chunk) -> SyncError.Permanent(PERMISSION_DENIED)
+
+            blobChunksPerDay.getOrDefault(day, 0) >= DAILY_BLOB_CHUNKS ->
+                SyncError.Transient(retryAfterMs = (day + 1) * DAY_MS - now)
+
+            else -> {
+                blobChunksPerDay[day] = blobChunksPerDay.getOrDefault(day, 0) + 1
                 storeBlobChunk(chunk, caller.deviceId, replace = false)
                 null
             }
-
-            else -> PERMISSION_DENIED
         }
     }
 
@@ -645,6 +675,7 @@ class FakeBackend(val householdId: HouseholdId, private val pageSize: Int = DEFA
             h.keys.containsAll(BLOB_KEYS - THREAD_ID - SUBMISSION_ID) &&
             h.long(SCHEMA_VERSION) == 1L &&
             kidId != null && kidId.length in 1..MAX_ID &&
+            documents.containsKey("${DocTypes.KID}/$kidId") &&
             ((threadId == null) != (submissionId == null)) &&
             (threadId == null || threadId == kidId) &&
             (submissionId == null || submissionId.length in 1..MAX_ID) &&
@@ -709,6 +740,14 @@ class FakeBackend(val householdId: HouseholdId, private val pageSize: Int = DEFA
         const val MAX_MESSAGE_CIPHERTEXT_BYTES: Int = 8192
         const val MAX_BLOB_CHUNK_BYTES: Int = 716_800
         const val MAX_BLOB_CHUNKS: Int = 2
+
+        /** New blob chunks a household may store per UTC day (`quotas/{yyyymmdd}`, audit H2). */
+        const val DAILY_BLOB_CHUNKS: Int = 60
+
+        /** The rules' sanity bound on a thread key document's lamport (2^50). */
+        const val MAX_THREAD_KEY_LAMPORT: Long = 1L shl 50
+
+        private const val DAY_MS: Long = 86_400_000
 
         const val MALFORMED: String = "malformed"
         const val WRONG_HOUSEHOLD: String = "wrong-household"

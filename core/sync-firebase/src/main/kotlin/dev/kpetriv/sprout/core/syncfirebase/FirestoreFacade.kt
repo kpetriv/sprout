@@ -10,11 +10,12 @@ import java.time.Instant
  *
  * Paths are slash-separated document or collection paths (`households/h1/events/e1`). Document data are plain values
  * ([PlainValues]): `Map<String, Any?>`, `List`, `String`, `Long`, `Double`, `Boolean`, null, [ServerTime] and
- * [FacadeBytes] (a Firestore `bytes` field); on writes, [ServerTimestamp] stands for `FieldValue.serverTimestamp()`.
+ * [FacadeBytes] (a Firestore `bytes` field); on writes, [ServerTimestamp] stands for `FieldValue.serverTimestamp()`
+ * and [FieldIncrement] for `FieldValue.increment()`.
  * Every failure is a [FirestoreFailure].
  */
 interface FirestoreFacade {
-    /** Applies [writes] (full-document sets) atomically in one batch. */
+    /** Applies [writes] (full-document sets, or merges where [SetWrite.merge]) atomically in one batch. */
     suspend fun commit(writes: List<SetWrite>)
 
     /** The document at [path] read from the server, or null if it does not exist. */
@@ -50,8 +51,14 @@ interface FirestoreFacade {
     }
 }
 
-/** One full-document set of [data] at [path]. */
-data class SetWrite(val path: String, val data: Map<String, Any?>)
+/**
+ * One set of [data] at [path]: the whole document, or with [merge] only the given fields (`SetOptions.merge()`), which
+ * is how a [FieldIncrement] adds to a counter that may not exist yet.
+ */
+data class SetWrite(val path: String, val data: Map<String, Any?>, val merge: Boolean = false)
+
+/** Placeholder for `FieldValue.increment(by)` in [SetWrite.data] (a missing field counts as 0). */
+data class FieldIncrement(val by: Long)
 
 /** A query filter `field == value` (a string field). */
 data class FieldEquals(val field: String, val value: String)

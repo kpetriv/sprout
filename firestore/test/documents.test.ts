@@ -45,12 +45,16 @@ describe('documents: parent happy path', () => {
   for (const coll of Object.keys(COLLECTIONS)) {
     it(`a parent creates, updates, tombstones and reads ${coll}`, async () => {
       const parent = asParent(env);
-      await assertSucceeds(put(parent, coll, document(coll, { docId: 'p-1', lamport: 1 })));
+      // A thread key's id names its thread, epoch and creator; it is never tombstoned (audit M2).
+      const threadKey = coll === 'threadKeys';
+      const docId = threadKey ? `${KID_ID}.0.${PARENT_DEVICE}` : 'p-1';
+      await assertSucceeds(put(parent, coll, document(coll, { docId, lamport: 1 })));
       await assertSucceeds(
-        put(parent, coll, document(coll, { docId: 'p-1', lamport: 2, serverReceivedAt: serverTimestamp() })),
+        put(parent, coll, document(coll, { docId, lamport: 2, serverReceivedAt: serverTimestamp() })),
       );
-      await assertSucceeds(put(parent, coll, document(coll, { docId: 'p-1', lamport: 3, deleted: true })));
-      await assertSucceeds(getDoc(doc(parent, `households/${HID}/${coll}/p-1`)));
+      const tombstone = put(parent, coll, document(coll, { docId, lamport: 3, deleted: true }));
+      await (threadKey ? assertFails(tombstone) : assertSucceeds(tombstone));
+      await assertSucceeds(getDoc(doc(parent, `households/${HID}/${coll}/${docId}`)));
       await assertSucceeds(getDocs(collection(parent, `households/${HID}/${coll}`)));
     });
   }

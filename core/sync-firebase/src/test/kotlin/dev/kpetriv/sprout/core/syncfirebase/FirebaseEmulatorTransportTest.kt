@@ -81,8 +81,17 @@ class FirebaseEmulatorTransportTest {
         context = RuntimeEnvironment.getApplication()
         // Each test bootstraps its own default app (the configs differ); Firebase keeps apps in a static map.
         com.google.firebase.FirebaseApp.clearInstancesForTest()
-        http("DELETE", "$FIRESTORE/emulator/v1/projects/$PROJECT/databases/(default)/documents")
-        http("DELETE", "$AUTH/emulator/v1/projects/$PROJECT/accounts")
+        clearing { http("DELETE", "$FIRESTORE/emulator/v1/projects/$PROJECT/databases/(default)/documents") }
+        clearing { http("DELETE", "$AUTH/emulator/v1/projects/$PROJECT/accounts") }
+    }
+
+    /** The emulator sometimes answers a clear right after the previous test's listeners closed with a 500: retry. */
+    private fun clearing(block: () -> Unit) {
+        repeat(CLEAR_ATTEMPTS - 1) {
+            if (runCatching(block).isSuccess) return
+            Thread.sleep(CLEAR_RETRY_MS)
+        }
+        block()
     }
 
     @After
@@ -106,8 +115,9 @@ class FirebaseEmulatorTransportTest {
         )
         assertEquals(HouseholdId(HID), blocking { session.refreshClaims().getOrThrow() }.hid)
 
+        val facade = SdkFirestoreFacade(bootstrap, context)
         val transport = FirebaseSyncTransport(
-            firestore = SdkFirestoreFacade(bootstrap, context),
+            firestore = facade,
             // As the app's session scope: the account and device are known, so a refused batch (Firestore limits the
             // documents a batch's rules may read) is retried item by item instead of being treated as unconfirmed.
             household = object : HouseholdScope {
@@ -116,6 +126,8 @@ class FirebaseEmulatorTransportTest {
                 override suspend fun currentUserId() = UserId(uid)
 
                 override suspend fun currentDeviceId() = DeviceId(DEVICE)
+
+                override suspend fun currentRole() = Role.PARENT
             },
             foreground = MutableStateFlow(true),
             authProbe = session,
@@ -126,7 +138,7 @@ class FirebaseEmulatorTransportTest {
         assertTrue(blocking { transport.isAvailable() })
 
         val pushed = pushEverything(transport, uid)
-        val chat = pushChat(transport, uid)
+        val chat = pushChat(transport, facade, uid)
         assertPullsBack(transport, pushed, chat)
         assertChangesSeeRemoteWrite(transport)
     }
@@ -135,7 +147,7 @@ class FirebaseEmulatorTransportTest {
      * Pushes a photo message and its two blob chunks through the rules (bytes fields, create-only, size limits) and
      * reads the blob back by id. Returns the message as pushed.
      */
-    private fun pushChat(transport: FirebaseSyncTransport, uid: String): JsonObject {
+    private fun pushChat(transport: FirebaseSyncTransport, facade: FirestoreFacade, uid: String): JsonObject {
         val hid = HouseholdId(HID)
         val header = { chunk: Int, size: Int ->
             dev.kpetriv.sprout.core.domainledger.chat.BlobChunkHeader(
@@ -174,6 +186,11 @@ class FirebaseEmulatorTransportTest {
         )
         val pushed = blocking { transport.push(emptyList(), emptyList(), listOf(message), chunks) }
         assertEquals(3, pushed.accepted.size, "rejected: ${pushed.rejected}")
+        // Each chunk raised the household's daily blob counter by one, in the same batch (audit H2).
+        val day = java.time.LocalDate.now(java.time.ZoneOffset.UTC)
+            .format(java.time.format.DateTimeFormatter.BASIC_ISO_DATE)
+        val quota = blocking { facade.get("households/$HID/quotas/$day") }
+        assertEquals(2L, quota?.data?.get("chunks"))
         // Create-only: the same items again are read back and accepted; a changed copy is refused.
         val again = blocking { transport.push(emptyList(), emptyList(), listOf(message), chunks) }
         assertEquals(3, again.accepted.size, "rejected: ${again.rejected}")
@@ -388,6 +405,8 @@ class FirebaseEmulatorTransportTest {
 
     private fun seedHousehold(uid: String) {
         seed("households?documentId=$HID", mapOf("createdBy" to str(uid), "fiatCurrency" to str("EUR")))
+        // Blob chunks must name a kid the household has (the rules' exists(kids/<kidId>)).
+        seed("households/$HID/kids?documentId=kid-a", mapOf("docId" to str("kid-a")))
         seed("households/$HID/members?documentId=$uid", mapOf("role" to str("PARENT")))
         seed(
             "households/$HID/devices?documentId=$DEVICE",
@@ -423,8 +442,9 @@ class FirebaseEmulatorTransportTest {
             connection.outputStream.use { it.write(body.encodeToByteArray()) }
         }
         val status = connection.responseCode
+        val error = if (status in 200..299) "" else connection.errorStream?.use { it.readBytes().decodeToString() }
         connection.disconnect()
-        check(status in 200..299) { "$method $url -> $status" }
+        check(status in 200..299) { "$method $url -> $status $error" }
     }
 
     /** Runs [block] off the main thread while pumping Robolectric's main looper (Firebase posts callbacks to it). */
@@ -471,10 +491,14 @@ class FirebaseEmulatorTransportTest {
         val FIRESTORE = "http://$HOST:$FIRESTORE_PORT"
         val AUTH = "http://$HOST:$AUTH_PORT"
         const val HID = "h1"
-        val DEVICE = "a".repeat(64)
+
+        /** The SHA-256 of the device key AQID (bytes 1, 2, 3), as the server derives a device id. */
+        val DEVICE = TestData.DEVICE
         val FINGERPRINT = "c".repeat(64)
         const val TIMEOUT_MS = 30_000L
         const val POLL_MS = 10L
         const val MAX_PAGES = 10
+        const val CLEAR_ATTEMPTS = 5
+        const val CLEAR_RETRY_MS = 500L
     }
 }

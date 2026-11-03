@@ -6,7 +6,9 @@ import dev.kpetriv.sprout.core.model.BlobId
 import dev.kpetriv.sprout.core.model.DeviceId
 import dev.kpetriv.sprout.core.model.HouseholdId
 import dev.kpetriv.sprout.core.model.KidId
+import dev.kpetriv.sprout.core.model.Role
 import dev.kpetriv.sprout.core.model.UserId
+import dev.kpetriv.sprout.core.sync.PushItem
 import dev.kpetriv.sprout.core.sync.PushItemId
 import dev.kpetriv.sprout.core.sync.SyncCursor
 import dev.kpetriv.sprout.core.sync.SyncError
@@ -37,6 +39,10 @@ class FirebaseSyncTransportChatTest {
     private var kidScope: KidId? = null
     private var deviceId: DeviceId? = DeviceId(TestData.DEVICE)
 
+    /** The session's role claim; a parent unless a test says otherwise (a kid session sets [kidScope]). */
+    private var role: Role? = Role.PARENT
+    private var now = java.time.Instant.parse("2026-11-03T12:00:00Z").toEpochMilli()
+
     private fun transport(pageSize: Int = FirebaseSyncTransport.PAGE_SIZE) = FirebaseSyncTransport(
         firestore = firestore,
         household = object : HouseholdScope {
@@ -47,12 +53,15 @@ class FirebaseSyncTransportChatTest {
             override suspend fun currentUserId() = UserId(TestData.UID)
 
             override suspend fun currentKidId() = kidScope
+
+            override suspend fun currentRole() = if (kidScope != null) Role.KID else role
         },
         foreground = MutableStateFlow(true),
         authProbe = { TestData.member() },
         pageSize = pageSize,
         batchSize = FirebaseSyncTransport.MAX_BATCH_WRITES,
         callTimeoutMs = 5_000,
+        nowEpochMs = { now },
     )
 
     private fun seedHousehold() = firestore.seed("households/h1", mapOf("createdBy" to TestData.UID))
@@ -74,7 +83,7 @@ class FirebaseSyncTransportChatTest {
     }
 
     @Test
-    fun `blob chunks are committed alone and before the messages of the same push`() = runTest {
+    fun `blob chunks are committed alone with their quota counter, in outbox order`() = runTest {
         val first = ChatData.chunk("b1", chunk = 0, chunks = 2)
         val second = ChatData.chunk("b1", chunk = 1, chunks = 2, data = byteArrayOf(1))
         val message = ChatData.message("m1", kind = MessageKind.PHOTO)
@@ -86,12 +95,17 @@ class FirebaseSyncTransportChatTest {
         assertEquals(
             listOf(
                 listOf("households/h1/events/evt-1"),
-                listOf("households/h1/blobs/b1.0"),
-                listOf("households/h1/blobs/b1.1"),
+                listOf("households/h1/blobs/b1.0", "households/h1/quotas/20261103"),
+                listOf("households/h1/blobs/b1.1", "households/h1/quotas/20261103"),
                 listOf("households/h1/messages/m1"),
             ),
             firestore.commits.map { batch -> batch.map { it.path } },
         )
+        assertEquals(
+            mapOf("chunks" to 2L, "last" to "b1.1"),
+            firestore.docs.getValue("households/h1/quotas/20261103"),
+        )
+        assertTrue(firestore.commits[1][1].merge)
         val stored = firestore.docs.getValue("households/h1/blobs/b1.1")
         assertEquals(FacadeBytes(byteArrayOf(1)), stored["data"])
         assertEquals(2L, stored["chunks"])
@@ -111,16 +125,13 @@ class FirebaseSyncTransportChatTest {
             byteArrayOf(1),
         )
 
-        val result = transport().push(
-            emptyList(),
-            emptyList(),
-            listOf(noId, notBase64, foreign, unsigned),
-            listOf(foreignChunk, badChunk),
-        )
+        // One push each: every one of them is refused before any write and would end its push (head of line).
+        val codes = listOf(foreignChunk, badChunk).map { transport().push(listOf(PushItem.BlobChunk(it))) } +
+            listOf(noId, notBase64, foreign, unsigned).map { transport().push(listOf(PushItem.Message(it))) }
 
         assertEquals(
             listOf("wrong-household", "malformed", "malformed", "malformed", "wrong-household", "unsigned"),
-            result.rejected.map { (it.second as SyncError.Permanent).code },
+            codes.map { (it.rejected.single().second as SyncError.Permanent).code },
         )
         assertTrue(firestore.commits.isEmpty())
     }
@@ -133,17 +144,13 @@ class FirebaseSyncTransportChatTest {
         transport().push(emptyList(), emptyList(), listOf(message), listOf(chunk))
 
         val again = transport().push(emptyList(), emptyList(), listOf(message), listOf(chunk))
-        val changed = transport().push(
-            emptyList(),
-            emptyList(),
-            listOf(ChatData.message("m1", seq = 2)),
-            listOf(ChatData.chunk("b1", data = byteArrayOf(5))),
-        )
+        val changedChunk = transport().push(listOf(PushItem.BlobChunk(ChatData.chunk("b1", data = byteArrayOf(5)))))
+        val changedMessage = transport().push(emptyList(), emptyList(), listOf(ChatData.message("m1", seq = 2)))
 
         assertEquals(2, again.accepted.size, "rejected: ${again.rejected}")
         assertEquals(
             listOf(SyncError.Permanent("permission-denied"), SyncError.Permanent("permission-denied")),
-            changed.rejected.map { it.second },
+            (changedChunk.rejected + changedMessage.rejected).map { it.second },
         )
     }
 
@@ -176,6 +183,7 @@ class FirebaseSyncTransportChatTest {
 
     @Test
     fun `without a kid claim the scope comes from the device's own registry entry`() = runTest {
+        role = null
         firestore.seed(
             "households/h1/devices/${TestData.DEVICE}",
             mapOf(
@@ -193,6 +201,67 @@ class FirebaseSyncTransportChatTest {
         val page = transport().pull(SyncCursor.START)
 
         assertEquals(listOf("m2"), page.messages.map { (it["messageId"] as JsonPrimitive).content })
+    }
+
+    @Test
+    fun `a session with no kid, no role and no own registry entry skips the messages lane`() = runTest {
+        role = null
+        firestore.seed("households/h1/messages/m1", ChatData.message("m1").plain())
+
+        val page = transport().pull(SyncCursor.START)
+
+        assertTrue(page.messages.isEmpty())
+        assertTrue(firestore.queries.none { it.first.endsWith("/messages") }, "no unscoped query is issued")
+        assertNull(page.next.perCollection[FirestoreLayout.MESSAGES])
+        transport().changes().test {
+            testScheduler.advanceUntilIdle()
+            assertTrue(firestore.listenFilters.keys.none { it.first.endsWith("/messages") })
+            assertTrue(firestore.listenFilters.keys.any { it.first.endsWith("/events") })
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun `a blob with a missing later chunk is incomplete, a retryable failure`() = runTest {
+        transport().push(emptyList(), emptyList(), emptyList(), listOf(ChatData.chunk("b1", chunk = 0, chunks = 2)))
+
+        val failure = transport().fetchBlob(BlobId("b1")).exceptionOrNull()
+
+        val incomplete = assertIs<dev.kpetriv.sprout.core.sync.BlobIncompleteException>(failure)
+        assertEquals(1 to 2, incomplete.stored to incomplete.expected)
+        assertEquals(SyncError.Transient(), incomplete.error)
+    }
+
+    @Test
+    fun `a chunk over the daily budget is transient until midnight and stops the push`() = runTest {
+        seedHousehold()
+        firestore.seed("households/h1/quotas/20261103", mapOf("chunks" to 60L, "last" to "x.0"))
+        firestore.rule = { write, existing ->
+            val quota = write.path.endsWith("/quotas/20261103")
+            if (quota && ((existing?.get("chunks") as? Long) ?: 0) >= 60) FirestoreCode.PERMISSION_DENIED else null
+        }
+        val message = ChatData.message("m1", kind = MessageKind.PHOTO)
+
+        val result = transport().push(emptyList(), emptyList(), listOf(message), listOf(ChatData.chunk("b1")))
+
+        assertEquals(listOf(SyncError.Transient(retryAfterMs = 12 * 3_600_000L)), result.rejected.map { it.second })
+        assertTrue(result.accepted.isEmpty(), "the message behind the chunk is not processed")
+        assertNull(firestore.docs["households/h1/messages/m1"])
+    }
+
+    @Test
+    fun `near midnight a refused chunk is retried against the neighbouring day`() = runTest {
+        seedHousehold()
+        now = java.time.Instant.parse("2026-11-03T23:55:00Z").toEpochMilli()
+        // The server's clock is already on the 4th: only that day's counter is accepted.
+        firestore.rule = { write, _ ->
+            if ("/quotas/" in write.path && !write.path.endsWith("20261104")) FirestoreCode.PERMISSION_DENIED else null
+        }
+
+        val result = transport().push(emptyList(), emptyList(), emptyList(), listOf(ChatData.chunk("b1")))
+
+        assertEquals(1, result.accepted.size, "rejected: ${result.rejected}")
+        assertEquals(1L, firestore.docs.getValue("households/h1/quotas/20261104")["chunks"])
     }
 
     @Test

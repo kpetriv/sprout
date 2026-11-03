@@ -65,6 +65,7 @@ export async function seed(env: RulesTestEnvironment): Promise<void> {
     await setDoc(doc(db, `households/${HID}/devices/${PENDING_DEVICE}`), device(PARENT_UID, 'PARENT', 'PENDING'));
     await setDoc(doc(db, `households/${HID}/devices/${REVOKED_DEVICE}`), device(PARENT_UID, 'PARENT', 'REVOKED'));
     await setDoc(doc(db, `households/${HID}/kids/${KID_ID}`), document('kids', { docId: KID_ID }));
+    await setDoc(doc(db, `households/${HID}/kids/${KID2_ID}`), document('kids', { docId: KID2_ID }));
 
     await setDoc(doc(db, `households/${OTHER_HID}`), { createdBy: OTHER_PARENT_UID, createdAt: now, fiatCurrency: 'GBP' });
     await setDoc(doc(db, `households/${OTHER_HID}/members/${OTHER_PARENT_UID}`), { role: 'PARENT', addedAt: now });
@@ -275,6 +276,11 @@ export function blobChunk(overrides: Record<string, unknown> = {}): Record<strin
 }
 
 export { serverTimestamp };
+
+/** Today's UTC date as yyyymmdd: the id of the blob quota counter the rules accept (quotas/{day}). */
+export function todayUtc(now: Date = new Date()): string {
+  return now.toISOString().slice(0, 10).replaceAll('-', '');
+}
 
 /** Drops keys whose value is undefined (the client SDK refuses undefined values). */
 export function clean(data: Record<string, unknown>): Record<string, unknown> {

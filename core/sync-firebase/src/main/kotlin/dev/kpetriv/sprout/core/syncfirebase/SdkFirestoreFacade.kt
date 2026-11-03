@@ -10,6 +10,7 @@ import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.FirebaseFirestoreException
 import com.google.firebase.firestore.MetadataChanges
 import com.google.firebase.firestore.Query
+import com.google.firebase.firestore.SetOptions
 import com.google.firebase.firestore.Source
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.channels.awaitClose
@@ -35,7 +36,14 @@ class SdkFirestoreFacade @Inject constructor(
 
     override suspend fun commit(writes: List<SetWrite>) = mapped {
         val batch = firestore.batch()
-        writes.forEach { write -> batch.set(firestore.document(write.path), toSdk(write.data)) }
+        writes.forEach { write ->
+            val document = firestore.document(write.path)
+            if (write.merge) {
+                batch.set(document, toSdk(write.data), SetOptions.merge())
+            } else {
+                batch.set(document, toSdk(write.data))
+            }
+        }
         batch.commit().await()
         Unit
     }
@@ -101,6 +109,7 @@ class SdkFirestoreFacade @Inject constructor(
 
         fun toSdkValue(value: Any?): Any? = when (value) {
             ServerTimestamp -> FieldValue.serverTimestamp()
+            is FieldIncrement -> FieldValue.increment(value.by)
             is ServerTime -> Timestamp(value.seconds, value.nanos)
             is FacadeBytes -> Blob.fromBytes(value.toByteArray())
             is Map<*, *> -> value.entries.associate { (key, item) -> key.toString() to toSdkValue(item) }

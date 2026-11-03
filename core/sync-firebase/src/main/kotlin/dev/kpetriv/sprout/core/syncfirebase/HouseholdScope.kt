@@ -39,6 +39,13 @@ fun interface HouseholdScope {
      * messages (the read is refused). `app` implements it from the session.
      */
     suspend fun currentKidId(): KidId? = null
+
+    /**
+     * The role of the signed-in session (its `role` claim), or null when unknown. Only used to tell a parent session
+     * from a kid session whose kid is unknown: without a kid ([currentKidId]) and without this device's own registry
+     * entry, the transport reads `messages` unscoped only for a known PARENT and otherwise skips the lane.
+     */
+    suspend fun currentRole(): Role? = null
 }
 
 /** [HouseholdScope] from the `hid` custom claim and uid of the signed-in Firebase user (no device id). */
@@ -49,6 +56,8 @@ class ClaimsHouseholdScope @Inject constructor(private val session: FirebaseAuth
 
     override suspend fun currentKidId(): KidId? =
         (session.current() as? AuthState.SignedIn)?.claims?.takeIf { it.role == Role.KID }?.kidId
+
+    override suspend fun currentRole(): Role? = (session.current() as? AuthState.SignedIn)?.claims?.role
 }
 
 /**

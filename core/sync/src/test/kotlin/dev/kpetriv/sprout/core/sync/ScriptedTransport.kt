@@ -27,25 +27,28 @@ internal class ScriptedTransport(private val log: MutableList<String> = mutableL
         return pages.removeFirstOrNull() ?: emptyPage(cursor)
     }
 
-    override suspend fun push(
-        events: List<JsonObject>,
-        documents: List<DocumentEnvelope>,
-        messages: List<JsonObject>,
-        blobChunks: List<BlobChunkJson>,
-    ): PushResult {
+    /** Every pushed item in the order the transport received it. */
+    val pushedItems = mutableListOf<PushItem>()
+
+    /**
+     * Processes [items] in order like a real transport: after a permanent refusal of a kind that blocks the outbox,
+     * or a transient one, the rest stays unprocessed.
+     */
+    override suspend fun push(items: List<PushItem>): PushResult {
         log += "push"
-        val ids = events.map(PushItemId::ofEvent) + documents.map(PushItemId::ofDocument) +
-            blobChunks.map(PushItemId::ofBlobChunk) + messages.map(PushItemId::ofMessage)
-        pushedBatches += ids
+        pushedBatches += items.map { it.id }
+        pushedItems += items
         pushError?.let { throw SyncException(it) }
         val accepted = mutableListOf<PushItemId>()
         val rejected = mutableListOf<Pair<PushItemId, SyncError>>()
-        for (id in ids) {
-            if (id !in outcomes) {
-                accepted += id
-            } else {
-                outcomes[id]?.let { rejected += id to it }
+        for (item in items) {
+            val id = item.id
+            val error = outcomes[id]
+            when {
+                id !in outcomes -> accepted += id
+                error != null -> rejected += id to error
             }
+            if (error is SyncError.Transient || (error is SyncError.Permanent && item.kind.blocksOnRefusal)) break
         }
         return PushResult(accepted, rejected)
     }

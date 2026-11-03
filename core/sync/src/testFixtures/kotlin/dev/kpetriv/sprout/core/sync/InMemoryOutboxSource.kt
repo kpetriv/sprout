@@ -1,17 +1,40 @@
 package dev.kpetriv.sprout.core.sync
 
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.serialization.json.JsonObject
 
 /**
  * An in-memory outbox with the [OutboxSource] contract: head-of-line [due], one row per document (a newer write of
- * the same document replaces a pending row and takes a new `seq`, like core/database's upsert).
+ * the same document replaces a pending row and takes a new `seq`, like core/database's upsert), and
+ * [observeBlocked] as the contract describes it (any kind that [blocks on refusal][OutboxItem.Kind.blocksOnRefusal]).
  */
 class InMemoryOutboxSource : OutboxSource {
-    /** One queued row and its retry state. */
-    data class Row(val item: OutboxItem, val nextAttemptAtEpochMs: Long = 0, val lastError: String? = null)
+    /**
+     * One queued row and its retry state; [blocking] when its latest failure was a permanent refusal of a kind that
+     * blocks the outbox.
+     */
+    data class Row(
+        val item: OutboxItem,
+        val nextAttemptAtEpochMs: Long = 0,
+        val lastError: String? = null,
+        val blocking: Boolean = false,
+    )
+
+    /** The row holding the outbox back: its `seq` and the server's code. */
+    data class Blocked(val seq: Long, val code: String)
 
     private val rows = sortedMapOf<Long, Row>()
     private var nextSeq = 1L
+    private val blocked = MutableStateFlow<Blocked?>(null)
+
+    /** The lowest queued row whose latest failure was a blocking permanent refusal (event, message or blob chunk). */
+    fun observeBlocked(): Flow<Blocked?> = blocked.asStateFlow()
+
+    private fun publishBlocked() {
+        blocked.value = rows.values.firstOrNull { it.blocking }?.let { Blocked(it.item.seq, it.lastError.orEmpty()) }
+    }
 
     @Synchronized
     fun enqueueEvent(json: JsonObject): Long = (nextSeq++).also { rows[it] = Row(OutboxItem.event(it, json)) }
@@ -44,7 +67,10 @@ class InMemoryOutboxSource : OutboxSource {
     }
 
     override suspend fun ack(seq: Long) {
-        synchronized(this) { rows.remove(seq) }
+        synchronized(this) {
+            rows.remove(seq)
+            publishBlocked()
+        }
     }
 
     override suspend fun fail(seq: Long, error: SyncError, nextAttemptAtEpochMs: Long) {
@@ -54,7 +80,9 @@ class InMemoryOutboxSource : OutboxSource {
                 item = item.withAttempts(item.attempts + 1),
                 nextAttemptAtEpochMs = nextAttemptAtEpochMs,
                 lastError = error.code,
+                blocking = error is SyncError.Permanent && item.kind.blocksOnRefusal,
             )
+            publishBlocked()
         }
     }
 }

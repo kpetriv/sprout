@@ -29,20 +29,22 @@ import kotlinx.coroutines.sync.withLock
  *    [DocTypes.applyOrder]; `thread_key` documents among them), then events, then chat messages (after the documents,
  *    so the thread keys that decrypt them are applied first), then [RemoteApplier.saveCursor] with the page's cursor;
  * 2. [RemoteApplier.retryHeld] for events whose gap the pull may have filled;
- * 3. push the outbox in `seq` order in batches of at most [PUSH_BATCH_SIZE]. A batch never carries two items with
- *    the same [PushItemId] (it is cut before the second one, which goes in the next batch), so every per-item result
- *    maps back to exactly one outbox `seq`. Then, per item:
+ * 3. push the outbox in `seq` order in batches of at most [PUSH_BATCH_SIZE], handed to the transport as one ordered
+ *    list ([SyncTransport.push]; the transport keeps that order, so a blob chunk reaches the server before the message
+ *    or chore submission that names its blob). A batch never carries two items with the same [PushItemId] (it is cut
+ *    before the second one, which goes in the next batch), so every per-item result maps back to exactly one outbox
+ *    `seq`. Then, per item:
  *    - accepted: acked;
  *    - a **document** refused with [SyncError.Permanent]: acked too (retrying cannot help) and listed in
  *      [SyncReport.rejections];
- *    - a **blob chunk** refused with [SyncError.Permanent]: acked too (the message that refers to it is still sent;
- *      receivers show the blob as missing);
- *    - a **ledger event** or a **chat message** refused with [SyncError.Permanent]: **not** acked, because dropping
- *      it would break the device's hash chain (events) or its per-thread `seq` (messages: receivers would hold every
- *      later message of the thread for the gap) for every receiver. It is marked failed with its next attempt
- *      [EVENT_REJECTION_RETRY_MS] later, listed in [SyncReport.rejections] with [PushRejection.blocking] set, and
- *      the push stops: everything queued behind it waits (head-of-line), so the parent sees one blocking item rather
- *      than a silent gap;
+ *    - a **ledger event**, a **chat message** or a **blob chunk** refused with [SyncError.Permanent]
+ *      ([OutboxItem.Kind.blocksOnRefusal]): **not** acked, because dropping it would break the device's hash chain
+ *      (events), its per-thread `seq` (messages: receivers would hold every later message of the thread for the gap),
+ *      or send the message or submission that names the blob without it (blob chunks: the photo or voice note would
+ *      be silently lost). It is marked failed with its next attempt [EVENT_REJECTION_RETRY_MS] later, listed in
+ *      [SyncReport.rejections] with [PushRejection.blocking] set, and the push stops: everything queued behind it
+ *      waits (head-of-line), so the parent sees one blocking item rather than a silent gap. The transport does not
+ *      process the items after it in the same call; the engine leaves those untouched (no attempt counted);
  *    - [SyncError.Transient]: the attempt is recorded with a [backoff] time and the push stops;
  *    - [SyncError.Unauthenticated]: the push stops **without** recording an attempt, so the backoff does not grow
  *      while the user is signed out and the outbox resumes as soon as the session is back.
@@ -206,12 +208,7 @@ class SyncEngine(
 
     private suspend fun pushBatch(batch: List<OutboxItem>, pushed: PushAccumulator): SyncError? {
         val result = try {
-            transport.push(
-                events = batch.mapNotNull { it.eventJson },
-                documents = batch.mapNotNull { it.document },
-                messages = batch.mapNotNull { it.messageJson },
-                blobChunks = batch.mapNotNull { it.blobChunk },
-            )
+            transport.push(batch.map(OutboxItem::toPushItem))
         } catch (failure: SyncException) {
             if (failure.error is SyncError.Transient || failure.error is SyncError.Permanent) {
                 batch.forEach { fail(it, failure.error) }
@@ -224,27 +221,22 @@ class SyncEngine(
     /**
      * Acks or fails every item of [batch]; returns the error that ends the push, if any. Results are matched to
      * items by [PushItemId], unique within a batch ([untilRepeatedId]), so each outbox `seq` gets its own outcome.
+     * Items the transport did not process behind a blocking refusal are left as they are: they wait behind it.
      */
     private suspend fun settle(batch: List<OutboxItem>, result: PushResult, pushed: PushAccumulator): SyncError? {
         val accepted = result.accepted.toSet()
         val rejected = result.rejected.toMap()
         var stop: SyncError? = null
+        var blocked = false
         for (item in batch) {
             when (val error = rejected[item.pushId]) {
-                null -> if (item.pushId in accepted) {
-                    outbox.ack(item.seq)
-                    pushed.accepted++
-                } else {
-                    // Not processed by the server: retry it like a transient failure.
-                    val missing = SyncError.Transient()
-                    fail(item, missing)
-                    stop = stop ?: missing
-                }
+                null -> settleUnrejected(item, item.pushId in accepted, blocked, pushed)?.let { stop = stop ?: it }
 
-                is SyncError.Permanent -> if (item.kind in SEQUENCED) {
+                is SyncError.Permanent -> if (item.kind.blocksOnRefusal) {
                     outbox.fail(item.seq, error, clock.nowEpochMs() + EVENT_REJECTION_RETRY_MS)
                     pushed.rejections += PushRejection(item.seq, item.pushId, error.code, blocking = true)
                     stop = stop ?: error
+                    blocked = true
                 } else {
                     outbox.ack(item.seq)
                     pushed.rejections += PushRejection(item.seq, item.pushId, error.code)
@@ -264,6 +256,28 @@ class SyncEngine(
         return stop
     }
 
+    /**
+     * An item the transport did not refuse: acked when [accepted]; left untouched behind a [blocked] head (not
+     * attempted, so no attempt is counted); otherwise not processed by the server, so retried like a transient
+     * failure (the returned error).
+     */
+    private suspend fun settleUnrejected(
+        item: OutboxItem,
+        accepted: Boolean,
+        blocked: Boolean,
+        pushed: PushAccumulator,
+    ): SyncError? = when {
+        accepted -> {
+            outbox.ack(item.seq)
+            pushed.accepted++
+            null
+        }
+
+        blocked -> null
+
+        else -> SyncError.Transient().also { fail(item, it) }
+    }
+
     private suspend fun fail(item: OutboxItem, error: SyncError) {
         val retryAfter = (error as? SyncError.Transient)?.retryAfterMs
         outbox.fail(item.seq, error, clock.nowEpochMs() + backoff.delayMs(item.attempts, retryAfter))
@@ -277,14 +291,17 @@ class SyncEngine(
         var events = EventApplyReport()
         var messages = MessageApplyReport()
 
+        var malformed = 0
+
         fun add(page: PullPage) {
             pages++
             devices += page.devices.size
             parentKeys += page.parentKeys.size
+            malformed += page.malformed
         }
 
         fun report(error: SyncError?, pushed: PushAccumulator = PushAccumulator(), held: Int = 0) = SyncReport(
-            pulled = PullCounts(pages, devices, parentKeys, documents, events, messages),
+            pulled = PullCounts(pages, devices, parentKeys, documents, events, messages, malformed),
             pushed = pushed.accepted,
             rejections = pushed.rejections.toList(),
             quarantined = events.quarantined + documents.rejectedTotal + messages.quarantined,
@@ -302,12 +319,9 @@ class SyncEngine(
     companion object {
         const val PUSH_BATCH_SIZE: Int = 100
 
-        /** Kinds a permanent refusal does not drop (see the class comment). */
-        private val SEQUENCED = setOf(OutboxItem.Kind.EVENT, OutboxItem.Kind.MESSAGE)
-
         /**
-         * When a ledger event or chat message the server refused for good is offered again (a rules fix, an
-         * approval).
+         * When a ledger event, chat message or blob chunk the server refused for good is offered again (a rules fix,
+         * an approval, the next day's blob budget).
          */
         const val EVENT_REJECTION_RETRY_MS: Long = 3_600_000
         const val DEFAULT_DEBOUNCE_MS: Long = 500
@@ -326,9 +340,8 @@ data class SyncReport(
     /** Outbox items the server accepted. */
     val pushed: Int = 0,
     /**
-     * Outbox items the server refused for good, to be audited as `SYNC_REJECTED` by the caller: documents and blob
-     * chunks are acked; ledger events and messages are kept and [blocking][PushRejection.blocking] (see
-     * [SyncEngine]).
+     * Outbox items the server refused for good, to be audited as `SYNC_REJECTED` by the caller: documents are acked;
+     * ledger events, messages and blob chunks are kept and [blocking][PushRejection.blocking] (see [SyncEngine]).
      */
     val rejections: List<PushRejection> = emptyList(),
     /** Pulled events and messages quarantined plus pulled documents rejected. */
@@ -354,13 +367,15 @@ data class PullCounts(
     val documents: DocumentApplyReport = DocumentApplyReport(),
     val events: EventApplyReport = EventApplyReport(),
     val messages: MessageApplyReport = MessageApplyReport(),
+    /** Stored rows the transport dropped as unreadable ([PullPage.malformed]), e.g. a forged registry row. */
+    val malformed: Int = 0,
 )
 
 /**
  * One outbox item the server refused for good: its `seq`, push id and the server's code (no free text).
  *
- * @property blocking the item is a ledger event or a chat message and stays in the outbox, holding back everything
- *   queued after it until it is accepted (retried every [SyncEngine.EVENT_REJECTION_RETRY_MS]) or a parent deals with
- *   it. False for documents and blob chunks, which are acked.
+ * @property blocking the item is a ledger event, a chat message or a blob chunk and stays in the outbox, holding back
+ *   everything queued after it until it is accepted (retried every [SyncEngine.EVENT_REJECTION_RETRY_MS]) or a parent
+ *   deals with it. False for documents, which are acked.
  */
 data class PushRejection(val seq: Long, val id: PushItemId, val code: String, val blocking: Boolean = false)

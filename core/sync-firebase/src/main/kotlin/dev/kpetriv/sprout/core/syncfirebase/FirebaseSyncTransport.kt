@@ -1,13 +1,16 @@
 package dev.kpetriv.sprout.core.syncfirebase
 
+import dev.kpetriv.sprout.core.domainledger.RegisteredDevice
 import dev.kpetriv.sprout.core.model.BlobId
 import dev.kpetriv.sprout.core.model.HouseholdId
-import dev.kpetriv.sprout.core.model.KidId
+import dev.kpetriv.sprout.core.model.Role
 import dev.kpetriv.sprout.core.sync.BlobChunkJson
+import dev.kpetriv.sprout.core.sync.BlobIncompleteException
 import dev.kpetriv.sprout.core.sync.ConflictResolver
 import dev.kpetriv.sprout.core.sync.DocTypes
 import dev.kpetriv.sprout.core.sync.DocumentEnvelope
 import dev.kpetriv.sprout.core.sync.PullPage
+import dev.kpetriv.sprout.core.sync.PushItem
 import dev.kpetriv.sprout.core.sync.PushItemId
 import dev.kpetriv.sprout.core.sync.PushResult
 import dev.kpetriv.sprout.core.sync.RemoteChange
@@ -36,20 +39,28 @@ import javax.inject.Singleton
  * [SyncTransport] over Firestore (M3 §5), talking to the SDK only through [FirestoreFacade]. Shapes and paths are
  * [StoredShapes] and [FirestoreLayout]; `firestore/firestore.rules` enforces them.
  *
- * **Push** writes in batches of at most [batchSize] sets, each stamped with `serverReceivedAt`. A batch is atomic, so
- * when the rules refuse one item the batch is retried item by item to find it. A refused item is then classified
- * by reading the server copy: an event already stored under the same hash, or a document whose server copy beats or
- * equals this one ([ConflictResolver]), is accepted (pushes are idempotent); an event whose id is taken by a
- * different hash is stored as the conflicting copy `events/{eventId}__{hash}`; anything else is
- * `Permanent("permission-denied")`. Parent keys are never pushed: the server registers them (`registerParentKey`,
- * D-M3-34) and the rules refuse client writes, so there is no `parent_key` document type and one is
- * `Permanent("unknown-doc-type")` unsent.
+ * **Push** writes the items **in the order given** (outbox order, review M2), each stamped with `serverReceivedAt`.
+ * Consecutive items of one kind share a batch; a batch is cut where the kind changes, when its estimated rules cost
+ * reaches [BATCH_BUDGET] (at most [MAX_EVENTS_PER_BATCH] events, [MAX_DOCUMENTS_PER_BATCH] documents or
+ * [MAX_MESSAGES_PER_BATCH] messages), or at [batchSize] writes; a thread key document (16 wraps checked one by one) and
+ * a blob chunk (up to 700 KB, plus its quota counter) always go alone. A batch is atomic, so when the rules refuse one
+ * item the batch is retried item by item to find it. A refused item is then classified by reading the server copy: an
+ * event already stored under the same hash, or a document whose server copy beats or equals this one
+ * ([ConflictResolver]), is accepted (pushes are idempotent); an event whose id is taken by a different hash is stored
+ * as the conflicting copy `events/{eventId}__{hash}`; anything else is `Permanent("permission-denied")`. Parent keys
+ * are never pushed: the server registers them (`registerParentKey`, D-M3-34) and the rules refuse client writes, so
+ * there is no `parent_key` document type and one is `Permanent("unknown-doc-type")` unsent.
+ *
+ * **Head of line** (review H3): once an event, a message or a blob chunk is refused for good (by the rules, or before
+ * any write because it is malformed), the push ends and every later item is left unprocessed, so nothing that depends
+ * on it (the next event of the hash chain, the next message `seq`, the message naming the blob) reaches the server
+ * first. A refused document does not stop the push.
  *
  * **Chat** (M4 §3): messages (`messages/{messageId}`, ciphertext as bytes) and blob chunks (`blobs/{blobId}.{chunk}`,
- * data as bytes) are create-only. Within one push the order is events, documents, blob chunks, messages, so a blob is
- * on the server before a message that refers to it; each blob chunk (up to 700 KB) is committed on its own to stay
- * well below Firestore's request size limit. A refused message or chunk is read back: an identical stored copy makes
- * it accepted, anything else is `Permanent("permission-denied")`.
+ * data as bytes) are create-only. Each blob chunk is committed with an increment of the household's daily counter
+ * `quotas/{yyyymmdd}` (UTC; `{chunks, last}`), which the rules cap at [DAILY_BLOB_CHUNKS] (audit H2). A refused
+ * message or chunk is read back: an identical stored copy makes it accepted; a chunk refused because the day's budget
+ * is used up is [SyncError.Transient] until the next UTC midnight; anything else is `Permanent("permission-denied")`.
  *
  * **Household gone** needs positive evidence ([membership]), because a bare `PERMISSION_DENIED` also follows a
  * revoked session (sign in again), a rules deploy or a clock skew: the account is gone ([AuthState.UserGone] from a
@@ -60,9 +71,12 @@ import javax.inject.Singleton
  * **Pull** reads the registry in full (devices and parent keys are small and change in place, so their cursor is a
  * digest of the collection), then each document collection in [DocTypes.applyOrder], then events, then messages,
  * each by `(serverReceivedAt, document id)` after its cursor, [pageSize] per collection. Parent keys come back as
- * registry entries only. A KID session reads only its own kid's messages (`where threadId == kidId`, the read scope
- * the rules enforce; the kid comes from [HouseholdScope.currentKidId], else this device's registry entry). Blob chunks
- * are never pulled: [fetchBlob] reads one blob's chunks by id.
+ * registry entries only. A device row that does not parse, or whose id is not the SHA-256 of its public key (audit H1),
+ * is dropped and counted in [PullPage.malformed]. A KID session reads only its own kid's messages
+ * (`where threadId == kidId`, the read scope the rules enforce; the kid comes from [HouseholdScope.currentKidId], else
+ * this device's registry entry); a session whose kid cannot be determined and that is not known to be a parent skips
+ * the messages lane and its listener instead of issuing a query the rules refuse. Blob chunks are never pulled:
+ * [fetchBlob] reads one blob's chunks by id.
  *
  * **Changes** come from snapshot listeners (messages included, scoped like the pull), open only while [foreground]
  * is true.
@@ -79,6 +93,7 @@ internal constructor(
     private val pageSize: Int,
     private val batchSize: Int,
     private val callTimeoutMs: Long,
+    private val nowEpochMs: () -> Long = System::currentTimeMillis,
 ) : SyncTransport {
 
     @Inject
@@ -98,18 +113,45 @@ internal constructor(
 
     // ---- push ----
 
-    private sealed class PendingWrite(val id: PushItemId, val path: String, val data: Map<String, Any?>) {
-        class Event(id: PushItemId, path: String, data: Map<String, Any?>, val eventId: String, val hash: String) :
-            PendingWrite(id, path, data)
+    /**
+     * One item ready to commit: its [SetWrite] at [path], plus [extra] writes that must land in the same batch (a blob
+     * chunk's daily quota counter).
+     */
+    private sealed class PendingWrite(val item: PushItem, val path: String, val data: Map<String, Any?>) {
+        val id: PushItemId get() = item.id
 
-        class Document(id: PushItemId, path: String, data: Map<String, Any?>, val envelope: DocumentEnvelope) :
-            PendingWrite(id, path, data)
+        class Event(item: PushItem, path: String, data: Map<String, Any?>, val eventId: String, val hash: String) :
+            PendingWrite(item, path, data)
 
-        /** A create-only chat write (a message or a blob chunk): refused rewrites are compared with the stored copy. */
-        class CreateOnly(id: PushItemId, path: String, data: Map<String, Any?>, val alone: Boolean) :
-            PendingWrite(id, path, data)
+        class Document(item: PushItem, path: String, data: Map<String, Any?>, val envelope: DocumentEnvelope) :
+            PendingWrite(item, path, data)
 
-        fun write(): SetWrite = SetWrite(path, data)
+        /** A create-only message: a refused rewrite is compared with the stored copy. */
+        class Message(item: PushItem, path: String, data: Map<String, Any?>) : PendingWrite(item, path, data)
+
+        /** A create-only blob chunk with the quota counter of [day] (`yyyymmdd`, UTC) it is counted against. */
+        class BlobChunk(
+            item: PushItem,
+            path: String,
+            data: Map<String, Any?>,
+            val hid: HouseholdId,
+            val docId: String,
+        ) : PendingWrite(item, path, data) {
+            fun quotaWrite(day: String): SetWrite = SetWrite(
+                FirestoreLayout.quota(hid, day),
+                mapOf(QUOTA_CHUNKS to FieldIncrement(1), QUOTA_LAST to docId),
+                merge = true,
+            )
+        }
+
+        /** What this item costs of a batch's rules evaluation budget ([BATCH_BUDGET]); [ALONE] = its own batch. */
+        val cost: Int
+            get() = when (this) {
+                is Event -> EVENT_COST
+                is Document -> if (envelope.docType == DocTypes.THREAD_KEY) ALONE else DOCUMENT_COST
+                is Message -> MESSAGE_COST
+                is BlobChunk -> ALONE
+            }
     }
 
     /** What happened to one item retried on its own; [stop] ends the push (the rest stays unprocessed). */
@@ -119,58 +161,72 @@ internal constructor(
         data class Rejected(val error: SyncError, val stop: Boolean = false) : ItemOutcome
     }
 
-    override suspend fun push(
-        events: List<JsonObject>,
-        documents: List<DocumentEnvelope>,
-        messages: List<JsonObject>,
-        blobChunks: List<BlobChunkJson>,
-    ): PushResult {
-        val hid = requireHousehold()
+    /** The outcome lists of one push, filled in item order. */
+    private class Outcomes {
         val accepted = mutableListOf<PushItemId>()
         val rejected = mutableListOf<Pair<PushItemId, SyncError>>()
-        val pending = buildList {
-            events.forEach { event -> eventWrite(hid, event).fold({ add(it) }, { rejected += it }) }
-            documents.forEach { document -> documentWrite(hid, document).fold({ add(it) }, { rejected += it }) }
-            blobChunks.forEach { chunk -> blobChunkWrite(hid, chunk).fold({ add(it) }, { rejected += it }) }
-            messages.forEach { message -> messageWrite(hid, message).fold({ add(it) }, { rejected += it }) }
-        }
-        for (chunk in batches(pending)) {
-            if (!pushChunk(hid, chunk, accepted, rejected)) break
-        }
-        return PushResult(accepted, rejected)
+
+        fun result() = PushResult(accepted, rejected)
     }
 
-    /** [pending] in order, cut into batches of at most [batchSize]; a blob chunk always goes in a batch of its own. */
-    private fun batches(pending: List<PendingWrite>): List<List<PendingWrite>> {
-        val batches = mutableListOf<List<PendingWrite>>()
-        var current = mutableListOf<PendingWrite>()
-        for (item in pending) {
-            val alone = item is PendingWrite.CreateOnly && item.alone
-            if (current.isNotEmpty() && (alone || current.size == batchSize)) {
-                batches += current
-                current = mutableListOf()
-            }
-            current += item
-            if (alone) {
-                batches += current
-                current = mutableListOf()
+    /**
+     * Writes [items] in order (review M2): consecutive items of one kind share a batch, a batch is cut where the kind
+     * changes or the [cost] budget is spent, and a thread key or a blob chunk is always committed alone. A permanent
+     * refusal of an event, a message or a blob chunk (before or after the commit) ends the push: the items after it
+     * are left unprocessed (review H3), as is everything after an error that stops the push.
+     */
+    @Suppress("ReturnCount") // Each return ends the push at a refusal that stops it.
+    override suspend fun push(items: List<PushItem>): PushResult {
+        val hid = requireHousehold()
+        val out = Outcomes()
+        var batch = mutableListOf<PendingWrite>()
+        suspend fun flush(): Boolean {
+            val full = batch
+            batch = mutableListOf()
+            return full.isEmpty() || pushBatch(hid, full, out)
+        }
+        for (item in items) {
+            when (val pending = pendingWrite(hid, item)) {
+                is Either.Rejected -> {
+                    out.rejected += pending.rejection
+                    if (item.kind.blocksOnRefusal) {
+                        flush()
+                        return out.result()
+                    }
+                }
+
+                is Either.Write -> {
+                    val write = pending.write
+                    val fits = batch.isNotEmpty() && batch.first().item.kind == item.kind &&
+                        write.cost != ALONE && batch.first().cost != ALONE &&
+                        batch.sumOf { it.cost } + write.cost <= BATCH_BUDGET && batch.size < batchSize
+                    if (!fits && !flush()) return out.result()
+                    batch += write
+                }
             }
         }
-        if (current.isNotEmpty()) batches += current
-        return batches
+        flush()
+        return out.result()
     }
 
-    /** Commits one batch; false when the push must stop (the remaining batches stay unprocessed). */
-    private suspend fun pushChunk(
-        hid: HouseholdId,
-        chunk: List<PendingWrite>,
-        accepted: MutableList<PushItemId>,
-        rejected: MutableList<Pair<PushItemId, SyncError>>,
-    ): Boolean {
-        val failure = commitCode(chunk.map(PendingWrite::write))
+    private fun pendingWrite(hid: HouseholdId, item: PushItem): Either = when (item) {
+        is PushItem.Event -> eventWrite(hid, item)
+        is PushItem.Document -> documentWrite(hid, item)
+        is PushItem.Message -> messageWrite(hid, item)
+        is PushItem.BlobChunk -> blobChunkWrite(hid, item)
+    }
+
+    /** The writes of [batch]: each item's own, a blob chunk's quota counter included. */
+    private fun writesOf(batch: List<PendingWrite>, day: String = utcDay()): List<SetWrite> = batch.flatMap { write ->
+        listOfNotNull(SetWrite(write.path, write.data), (write as? PendingWrite.BlobChunk)?.quotaWrite(day))
+    }
+
+    /** Commits one batch; false when the push must stop (the remaining items stay unprocessed). */
+    private suspend fun pushBatch(hid: HouseholdId, batch: List<PendingWrite>, out: Outcomes): Boolean {
+        val failure = commitCode(writesOf(batch))
         return when {
             failure == null -> {
-                accepted += chunk.map { it.id }
+                out.accepted += batch.map { it.id }
                 true
             }
 
@@ -181,37 +237,36 @@ internal constructor(
 
                     // Nothing says which item is at fault, or that any is: retry the whole push later.
                     Membership.UNCONFIRMED -> {
-                        chunk.forEach { rejected += it.id to SyncError.Transient() }
+                        batch.forEach { out.rejected += it.id to SyncError.Transient() }
                         false
                     }
 
-                    Membership.READABLE -> settleOneByOne(hid, chunk, accepted, rejected)
+                    Membership.READABLE -> settleOneByOne(hid, batch, out)
                 }
             }
 
             else -> {
                 val error = unauthenticatedOrGone(failure)
                 if (error == SyncError.HouseholdGone) throw SyncException(error)
-                chunk.forEach { rejected += it.id to error }
+                batch.forEach { out.rejected += it.id to error }
                 false
             }
         }
     }
 
-    /** Retries [chunk] one item at a time; false when an item hit an error that ends the push. */
-    private suspend fun settleOneByOne(
-        hid: HouseholdId,
-        chunk: List<PendingWrite>,
-        accepted: MutableList<PushItemId>,
-        rejected: MutableList<Pair<PushItemId, SyncError>>,
-    ): Boolean {
-        for (item in chunk) {
+    /**
+     * Retries [batch] one item at a time; false when an item hit an error that ends the push: a stopping error, or a
+     * permanent refusal of a kind that blocks the outbox (the items after it stay unprocessed).
+     */
+    private suspend fun settleOneByOne(hid: HouseholdId, batch: List<PendingWrite>, out: Outcomes): Boolean {
+        for (item in batch) {
             when (val outcome = settle(hid, item)) {
-                ItemOutcome.Accepted -> accepted += item.id
+                ItemOutcome.Accepted -> out.accepted += item.id
 
                 is ItemOutcome.Rejected -> {
-                    rejected += item.id to outcome.error
-                    if (outcome.stop) return false
+                    out.rejected += item.id to outcome.error
+                    val blocking = outcome.error is SyncError.Permanent && item.item.kind.blocksOnRefusal
+                    if (outcome.stop || blocking) return false
                 }
             }
         }
@@ -219,19 +274,20 @@ internal constructor(
     }
 
     private suspend fun settle(hid: HouseholdId, item: PendingWrite): ItemOutcome =
-        when (val code = commitCode(listOf(item.write()))) {
+        when (val code = commitCode(writesOf(listOf(item)))) {
             null -> ItemOutcome.Accepted
 
             FirestoreCode.PERMISSION_DENIED -> when (item) {
                 is PendingWrite.Event -> resolveRefusedEvent(hid, item)
                 is PendingWrite.Document -> resolveRefusedDocument(item)
-                is PendingWrite.CreateOnly -> resolveRefusedCreate(item)
+                is PendingWrite.Message -> resolveRefusedCreate(item)
+                is PendingWrite.BlobChunk -> resolveRefusedChunk(item)
             }
 
             // Not produced by sets today; an event that "already exists" is the idempotent case.
             FirestoreCode.ALREADY_EXISTS, FirestoreCode.FAILED_PRECONDITION -> when (item) {
                 is PendingWrite.Event -> ItemOutcome.Accepted
-                is PendingWrite.CreateOnly -> resolveRefusedCreate(item)
+                is PendingWrite.Message, is PendingWrite.BlobChunk -> resolveRefusedCreate(item)
                 is PendingWrite.Document -> ItemOutcome.Rejected(permanentOf(code))
             }
 
@@ -273,8 +329,42 @@ internal constructor(
         return if (serverWins) ItemOutcome.Accepted else ItemOutcome.Rejected(PERMISSION_DENIED)
     }
 
+    /**
+     * A refused blob chunk: an identical stored copy (an earlier push landed) is accepted. Otherwise the chunk is
+     * retried against the neighbouring UTC day's counter when this device's clock is within [DAY_EDGE_MS] of midnight
+     * (the rules count against the server's day). If the household's counter for today is used up, the refusal is
+     * [SyncError.Transient] until the next UTC midnight (audit H2: not a rules violation, the daily budget); anything
+     * else is `Permanent("permission-denied")`.
+     */
+    @Suppress("ReturnCount")
+    private suspend fun resolveRefusedChunk(item: PendingWrite.BlobChunk): ItemOutcome {
+        val created = resolveRefusedCreate(item)
+        if (created == ItemOutcome.Accepted) return created
+        val now = nowEpochMs()
+        val sinceMidnight = Math.floorMod(now, DAY_MS)
+        val neighbour = when {
+            sinceMidnight < DAY_EDGE_MS -> now - DAY_MS
+            DAY_MS - sinceMidnight < DAY_EDGE_MS -> now + DAY_MS
+            else -> null
+        }
+        if (neighbour != null) {
+            when (val code = commitCode(writesOf(listOf(item), utcDay(neighbour)))) {
+                null -> return ItemOutcome.Accepted
+                FirestoreCode.PERMISSION_DENIED -> Unit
+                else -> return ItemOutcome.Rejected(syncErrorOf(code), stop = true)
+            }
+        }
+        val quota = readOrOutcome(FirestoreLayout.quota(item.hid, utcDay(now))) { return it }
+        val used = quota?.data?.get(QUOTA_CHUNKS) as? Long ?: 0
+        return if (used >= DAILY_BLOB_CHUNKS) {
+            ItemOutcome.Rejected(SyncError.Transient(retryAfterMs = DAY_MS - sinceMidnight), stop = true)
+        } else {
+            created
+        }
+    }
+
     /** A refused create-only write is accepted only when the stored copy is the same (an earlier push landed). */
-    private suspend fun resolveRefusedCreate(item: PendingWrite.CreateOnly): ItemOutcome {
+    private suspend fun resolveRefusedCreate(item: PendingWrite): ItemOutcome {
         val stored = readOrOutcome(item.path) { return it }
         val same = stored != null &&
             stored.data - FirestoreFacade.SERVER_RECEIVED_AT == item.data - FirestoreFacade.SERVER_RECEIVED_AT
@@ -295,20 +385,21 @@ internal constructor(
     }
 
     @Suppress("ReturnCount")
-    private fun eventWrite(hid: HouseholdId, event: JsonObject): Either {
-        val id = PushItemId.ofEvent(event)
-        val flat = StoredShapes.flattenEvent(event) ?: return Either.Rejected(id to SyncError.Permanent(MALFORMED))
+    private fun eventWrite(hid: HouseholdId, item: PushItem.Event): Either {
+        val id = item.id
+        val flat = StoredShapes.flattenEvent(item.json) ?: return Either.Rejected(id to SyncError.Permanent(MALFORMED))
         val householdId = (flat.fields["householdId"] as? JsonPrimitive)?.content
         if (householdId != hid.value) return Either.Rejected(id to SyncError.Permanent(WRONG_HOUSEHOLD))
         val data = PlainValues.toPlainMap(flat.fields) + (FirestoreFacade.SERVER_RECEIVED_AT to ServerTimestamp)
         return Either.Write(
-            PendingWrite.Event(id, FirestoreLayout.event(hid, flat.eventId), data, flat.eventId, flat.hash),
+            PendingWrite.Event(item, FirestoreLayout.event(hid, flat.eventId), data, flat.eventId, flat.hash),
         )
     }
 
     @Suppress("ReturnCount")
-    private fun documentWrite(hid: HouseholdId, envelope: DocumentEnvelope): Either {
-        val id = PushItemId.ofDocument(envelope)
+    private fun documentWrite(hid: HouseholdId, item: PushItem.Document): Either {
+        val envelope = item.envelope
+        val id = item.id
         val collection = FirestoreLayout.collectionOf(envelope.docType)
         val fields = when {
             collection == null -> return Either.Rejected(id to SyncError.Permanent(UNKNOWN_DOC_TYPE))
@@ -318,13 +409,14 @@ internal constructor(
         }
         val data = fields + (FirestoreFacade.SERVER_RECEIVED_AT to ServerTimestamp)
         return Either.Write(
-            PendingWrite.Document(id, FirestoreLayout.document(hid, collection, envelope.docId), data, envelope),
+            PendingWrite.Document(item, FirestoreLayout.document(hid, collection, envelope.docId), data, envelope),
         )
     }
 
     @Suppress("ReturnCount")
-    private fun messageWrite(hid: HouseholdId, message: JsonObject): Either {
-        val id = PushItemId.ofMessage(message)
+    private fun messageWrite(hid: HouseholdId, item: PushItem.Message): Either {
+        val message = item.json
+        val id = item.id
         val stored = StoredShapes.messageFields(message) ?: return Either.Rejected(id to SyncError.Permanent(MALFORMED))
         when {
             message.string("householdId") != hid.value ->
@@ -333,14 +425,13 @@ internal constructor(
             message.string("signature") == null -> return Either.Rejected(id to SyncError.Permanent(UNSIGNED))
         }
         val data = stored.fields + (FirestoreFacade.SERVER_RECEIVED_AT to ServerTimestamp)
-        return Either.Write(
-            PendingWrite.CreateOnly(id, FirestoreLayout.message(hid, stored.messageId), data, alone = false),
-        )
+        return Either.Write(PendingWrite.Message(item, FirestoreLayout.message(hid, stored.messageId), data))
     }
 
     @Suppress("ReturnCount")
-    private fun blobChunkWrite(hid: HouseholdId, chunk: BlobChunkJson): Either {
-        val id = PushItemId.ofBlobChunk(chunk)
+    private fun blobChunkWrite(hid: HouseholdId, item: PushItem.BlobChunk): Either {
+        val chunk = item.chunk
+        val id = item.id
         val stored = StoredShapes.blobChunkFields(chunk)
             ?: return Either.Rejected(id to SyncError.Permanent(MALFORMED))
         when {
@@ -351,18 +442,18 @@ internal constructor(
         }
         val data = stored.fields + (FirestoreFacade.SERVER_RECEIVED_AT to ServerTimestamp)
         val path = FirestoreLayout.blobChunk(hid, stored.blobId, stored.chunk)
-        return Either.Write(PendingWrite.CreateOnly(id, path, data, alone = true))
+        return Either.Write(PendingWrite.BlobChunk(item, path, data, hid, "${stored.blobId}.${stored.chunk}"))
     }
+
+    /** `yyyymmdd` of the UTC day of [epochMs], the id of the blob quota counter the rules check. */
+    private fun utcDay(epochMs: Long = nowEpochMs()): String =
+        java.time.Instant.ofEpochMilli(epochMs).atZone(java.time.ZoneOffset.UTC).toLocalDate()
+            .format(java.time.format.DateTimeFormatter.BASIC_ISO_DATE)
 
     private sealed interface Either {
         class Write(val write: PendingWrite) : Either
 
         class Rejected(val rejection: Pair<PushItemId, SyncError>) : Either
-
-        fun fold(onWrite: (PendingWrite) -> Unit, onRejected: (Pair<PushItemId, SyncError>) -> Unit) = when (this) {
-            is Write -> onWrite(write)
-            is Rejected -> onRejected(rejection)
-        }
     }
 
     // ---- pull ----
@@ -384,10 +475,11 @@ internal constructor(
 
         val deviceDocs = call { getAll(FirestoreLayout.collection(hid, FirestoreLayout.DEVICES)) }
         val devicesDigest = StoredShapes.digestOf(deviceDocs)
+        var malformed = 0
         val devices = if (devicesDigest == cursor.perCollection[FirestoreLayout.DEVICES]) {
             emptyList()
         } else {
-            deviceDocs.mapNotNull { StoredShapes.deviceOf(it, hid) }
+            deviceDocs.mapNotNull { StoredShapes.deviceOf(it, hid) }.also { malformed += deviceDocs.size - it.size }
         }
         next[FirestoreLayout.DEVICES] = devicesDigest
 
@@ -412,11 +504,17 @@ internal constructor(
         hasMore = hasMore || eventPage.size >= pageSize
         val events = eventPage.mapNotNull { StoredShapes.nestEvent(it.data) }
 
-        val messagePage = page(hid, FirestoreLayout.MESSAGES, cursor, next, messageScope(hid, deviceDocs))
-        hasMore = hasMore || messagePage.size >= pageSize
-        val messages = messagePage.map { StoredShapes.messageOf(it.data) }
+        val messages = when (val scope = messageScope(hid, deviceDocs)) {
+            MessageScope.Skip -> emptyList()
 
-        return PullPage(devices, parentKeys, documents, events, SyncCursor(next), hasMore, messages)
+            is MessageScope.Read -> {
+                val messagePage = page(hid, FirestoreLayout.MESSAGES, cursor, next, scope.where)
+                hasMore = hasMore || messagePage.size >= pageSize
+                messagePage.map { StoredShapes.messageOf(it.data) }
+            }
+        }
+
+        return PullPage(devices, parentKeys, documents, events, SyncCursor(next), hasMore, messages, malformed)
     }
 
     @Suppress("LongParameterList")
@@ -435,23 +533,40 @@ internal constructor(
         return page
     }
 
+    /** How this session may read `messages`. */
+    private sealed interface MessageScope {
+        /** Read with [where] (`threadId == kidId` for a KID session, null for a parent). */
+        data class Read(val where: FieldEquals?) : MessageScope
+
+        /** A session whose kid is unknown and that is not known to be a parent: no messages lane (review Low). */
+        data object Skip : MessageScope
+    }
+
     /**
-     * The `messages` read scope of this session: `threadId == kidId` for a KID session, null (everything) for a
-     * parent. The kid comes from [HouseholdScope.currentKidId], else this device's own registry entry ([deviceDocs]
-     * when already read, otherwise one read of it).
+     * The `messages` read scope of this session: `threadId == kidId` for a KID session, everything for a parent. The
+     * kid comes from [HouseholdScope.currentKidId]; otherwise a session known to be a parent
+     * ([HouseholdScope.currentRole]) reads everything; otherwise this device's own registry entry ([deviceDocs] when
+     * already read, otherwise one read of it) decides. With none of these the lane is skipped: an unscoped query would
+     * be refused for a kid and end the whole pull.
      */
-    private suspend fun messageScope(hid: HouseholdId, deviceDocs: List<FacadeDocument>? = null): FieldEquals? {
-        val kidId = household.currentKidId() ?: ownKidId(hid, deviceDocs)
-        return kidId?.let { FieldEquals(THREAD_ID, it.value) }
+    @Suppress("ReturnCount")
+    private suspend fun messageScope(hid: HouseholdId, deviceDocs: List<FacadeDocument>? = null): MessageScope {
+        household.currentKidId()?.let { return MessageScope.Read(FieldEquals(THREAD_ID, it.value)) }
+        if (household.currentRole() == Role.PARENT) return MessageScope.Read(null)
+        val own = ownDevice(hid, deviceDocs) ?: return MessageScope.Skip
+        return when (own.role) {
+            Role.PARENT -> MessageScope.Read(null)
+            Role.KID -> own.kidId?.let { MessageScope.Read(FieldEquals(THREAD_ID, it.value)) } ?: MessageScope.Skip
+        }
     }
 
     @Suppress("ReturnCount")
-    private suspend fun ownKidId(hid: HouseholdId, deviceDocs: List<FacadeDocument>?): KidId? {
+    private suspend fun ownDevice(hid: HouseholdId, deviceDocs: List<FacadeDocument>?): RegisteredDevice? {
         val deviceId = household.currentDeviceId() ?: return null
         val own = deviceDocs?.firstOrNull { it.id == deviceId.value }
             ?: call { get(FirestoreLayout.document(hid, FirestoreLayout.DEVICES, deviceId.value)) }
             ?: return null
-        return StoredShapes.deviceOf(own, hid)?.takeIf { it.role == dev.kpetriv.sprout.core.model.Role.KID }?.kidId
+        return StoredShapes.deviceOf(own, hid)
     }
 
     // ---- blobs ----
@@ -464,12 +579,13 @@ internal constructor(
         return try {
             val first = call { get(FirestoreLayout.blobChunk(hid, blobId.value, 0)) }
                 ?: return Result.success(emptyList())
-            val chunks = mutableListOf(first)
-            val count = first.data["chunks"] as? Long ?: 1
-            for (index in 1 until count.coerceIn(1, MAX_BLOB_CHUNKS.toLong()).toInt()) {
-                call { get(FirestoreLayout.blobChunk(hid, blobId.value, index)) }?.let { chunks += it }
+            val expected = ((first.data["chunks"] as? Long) ?: 1L).coerceIn(1, MAX_BLOB_CHUNKS.toLong()).toInt()
+            val stored = listOf(first) + (1 until expected).mapNotNull { index ->
+                call { get(FirestoreLayout.blobChunk(hid, blobId.value, index)) }
             }
-            Result.success(chunks.mapNotNull { StoredShapes.blobChunkOf(it.data) })
+            // The uploader has not pushed every chunk yet: a transient outcome, so the caller retries (review M2).
+            if (stored.size < expected) return Result.failure(BlobIncompleteException(stored.size, expected))
+            Result.success(stored.mapNotNull { StoredShapes.blobChunkOf(it.data) })
         } catch (failure: FirestoreFailure) {
             Result.failure(SyncException(readErrorOf(hid, failure.code)))
         }
@@ -496,9 +612,10 @@ internal constructor(
         }
     }
 
-    private fun listeners(hid: HouseholdId, messageScope: FieldEquals?): Flow<RemoteChange> = watched
+    private fun listeners(hid: HouseholdId, messageScope: MessageScope): Flow<RemoteChange> = watched
+        .filter { (collection, _) -> collection != FirestoreLayout.MESSAGES || messageScope is MessageScope.Read }
         .map { (collection, latestOnly) ->
-            val where = messageScope.takeIf { collection == FirestoreLayout.MESSAGES }
+            val where = (messageScope as? MessageScope.Read)?.where.takeIf { collection == FirestoreLayout.MESSAGES }
             firestore.listen(FirestoreLayout.collection(hid, collection), latestOnly, where)
                 .map { RemoteChange(collection) }
         }
@@ -606,8 +723,35 @@ internal constructor(
         }
 
     companion object {
-        /** Firestore allows 500 writes per batch; 400 leaves room (M3 §5). */
-        const val MAX_BATCH_WRITES: Int = 400
+        /** Firestore's limit on writes per batch; the cost budget below keeps batches far smaller. */
+        const val MAX_BATCH_WRITES: Int = 500
+
+        /**
+         * The rules evaluation budget of one request (1,000 expressions), spent per batch by an estimate per item
+         * ([EVENT_COST], [DOCUMENT_COST], [MESSAGE_COST]). Firebase documents the limit per request; the emulator
+         * applies it per written document (it commits 500 maximal events in one batch;
+         * `firestore/test/batches.test.ts`),
+         * so whether production charges a whole batch against one budget cannot be tested locally. The estimate assumes
+         * it does: a batch it refuses would be retried item by item anyway, at the cost of one more commit per item.
+         */
+        const val BATCH_BUDGET: Int = 1_000
+        private const val EVENT_COST = 100
+        private const val DOCUMENT_COST = 125
+        private const val MESSAGE_COST = 50
+        private const val ALONE = Int.MAX_VALUE
+
+        const val MAX_EVENTS_PER_BATCH: Int = BATCH_BUDGET / EVENT_COST
+        const val MAX_DOCUMENTS_PER_BATCH: Int = BATCH_BUDGET / DOCUMENT_COST
+        const val MAX_MESSAGES_PER_BATCH: Int = BATCH_BUDGET / MESSAGE_COST
+
+        /** New blob chunks a household may store per UTC day (`quotas/{yyyymmdd}.chunks` in the rules, audit H2). */
+        const val DAILY_BLOB_CHUNKS: Int = 60
+        private const val QUOTA_CHUNKS = "chunks"
+        private const val QUOTA_LAST = "last"
+        private const val DAY_MS = 86_400_000L
+
+        /** How close to UTC midnight a refused chunk is retried against the neighbouring day's counter. */
+        private const val DAY_EDGE_MS = 15 * 60_000L
 
         /** Documents per collection per pull page. */
         const val PAGE_SIZE: Int = 500

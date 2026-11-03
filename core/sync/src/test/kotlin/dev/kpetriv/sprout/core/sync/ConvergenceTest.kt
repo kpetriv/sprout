@@ -506,6 +506,8 @@ class ConvergenceTest {
         val parent = world.parent("parent-device")
         val kid = world.kid()
         val otherKid = world.kid("kid2-device", "kid2-uid", KID_2)
+        // Blob chunks name a kid the household has (the rules' exists(kids/<kidId>)).
+        world.backend.injectDocument(parent.identity.signed(DocTypes.KID, KID_1.value, lamport = 1))
         val photo = parent.identity.blobChunk("blob-p1", thread = KID_1)
         parent.chat(
             parent.identity.message("p1", kind = dev.kpetriv.sprout.core.domainledger.chat.MessageKind.PHOTO),

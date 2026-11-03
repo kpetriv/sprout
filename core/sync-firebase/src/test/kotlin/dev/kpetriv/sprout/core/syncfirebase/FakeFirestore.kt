@@ -7,7 +7,8 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 /**
  * An in-memory [FirestoreFacade]. Every committed batch gets one server time (as in Firestore, where all writes of a
  * batch share `request.time`), so tests see equal `serverReceivedAt` values across a page boundary. A [rule] can
- * refuse single writes (refusing the whole batch, like Firestore), and failures can be scripted per call.
+ * refuse single writes (refusing the whole batch, like Firestore), and failures can be scripted per call. Merge writes
+ * keep the stored fields and apply [FieldIncrement]s.
  */
 class FakeFirestore : FirestoreFacade {
     val docs = linkedMapOf<String, Map<String, Any?>>()
@@ -43,7 +44,12 @@ class FakeFirestore : FirestoreFacade {
         commitFailures.removeFirstOrNull()?.let { throw FirestoreFailure(it) }
         writes.firstNotNullOfOrNull { rule(it, docs[it.path]) }?.let { throw FirestoreFailure(it) }
         val now = ServerTime(clock++, 0)
-        writes.forEach { write -> docs[write.path] = stamp(write.data, now) }
+        writes.forEach { write ->
+            val base = if (write.merge) docs[write.path].orEmpty() else emptyMap()
+            docs[write.path] = base + stamp(write.data, now).mapValues { (key, value) ->
+                if (value is FieldIncrement) ((base[key] as? Long) ?: 0L) + value.by else value
+            }
+        }
     }
 
     /** Stores [data] at [path] bypassing the rules (seeding), stamped with a fresh server time. */

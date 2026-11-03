@@ -1,8 +1,8 @@
 import { sign } from 'node:crypto';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { FieldValue } from 'firebase-admin/firestore';
-import { DOCUMENT_COLLECTIONS } from '../src/config.js';
-import { encryptionKeyBindingPayload, registerEncryptionKeyPayload } from '../src/crypto.js';
+import { DOCUMENT_COLLECTIONS, EXPORT_PAGE_SIZE, MAX_EXPORT_MESSAGES } from '../src/config.js';
+import { encryptionKeyBindingPayload, isLowOrderX25519, registerEncryptionKeyPayload } from '../src/crypto.js';
 import {
   call,
   db,
@@ -150,6 +150,17 @@ describe('registerEncryptionKey', () => {
     await expectCode(register(h.parent, { ...args, publicKey: Buffer.alloc(31).toString('base64') }), 'invalid-argument');
     await expectCode(register(h.parent, { ...args, publicKey: Buffer.alloc(33).toString('base64') }), 'invalid-argument');
     await expectCode(register(h.parent, { ...args, bindingSignature: undefined }), 'invalid-argument');
+    // Low-order points (audit L1): the all-zero key, 1, an order-8 point, p, and p - 1 with the unused top bit set.
+    for (const hex of [
+      '00'.repeat(32),
+      '01' + '00'.repeat(31),
+      '5f9c95bca3508c24b1d0b1559c83ef5b04445cc4581c8e86d8224eddd09f1157',
+      'ed' + 'ff'.repeat(30) + '7f',
+      'ec' + 'ff'.repeat(31),
+    ]) {
+      const bad = Buffer.from(hex, 'hex');
+      await expectCode(register(h.parent, encryptionKeyArgs(h.device, h.hid, bad)), 'invalid-argument');
+    }
     await expectCode(register(h.parent, { ...args, deviceId: 'nope' }), 'invalid-argument');
     await expectCode(call(fns.registerEncryptionKey, req(null, args)), 'unauthenticated');
   });
@@ -257,6 +268,26 @@ describe('registration callables with an encryption key', () => {
     expect((await db.collection('households').get()).empty).toBe(true);
   });
 
+  it('the registration callables refuse a low-order key too', async () => {
+    const h = await newHousehold();
+    const zero = Buffer.alloc(32);
+    const device = newDevice();
+    await expectCode(
+      call(fns.registerParentDevice, req(h.parent, {
+        devicePublicKey: device.publicKey,
+        encryptionKey: zero.toString('base64'),
+        encryptionKeySignature: encryptionKeyBinding(device, h.hid, zero),
+      })),
+      'invalid-argument',
+    );
+  });
+
+  it('the low-order check ignores the unused top bit and accepts ordinary keys', () => {
+    expect(isLowOrderX25519(Buffer.from('e0eb7a7c3b41b8ae1656e3faf19fc46ada098deb9c32b1fd866205165f49b880', 'hex'))).toBe(true);
+    expect(isLowOrderX25519(Buffer.from('ee' + 'ff'.repeat(31), 'hex'))).toBe(true);
+    expect(isLowOrderX25519(newEncryptionKey())).toBe(false);
+  });
+
   it('the binding payload matches core/domain-ledger EncryptionKeyBindingPayload', () => {
     // Golden bytes shared with the Kotlin side (domain, hid, device id, raw key, 0x00-separated).
     expect(encryptionKeyBindingPayload('home-1', 'b'.repeat(64), Buffer.alloc(32, 7)).toString('hex')).toBe(
@@ -329,4 +360,33 @@ describe('chat collections on the server', () => {
     ]);
     expect(JSON.stringify(bundle)).not.toContain(Buffer.alloc(1000, 9).toString('base64'));
   });
+
+  it('reads messages in pages and refuses a history above the message cap (audit L5)', async () => {
+    const h = await newHousehold();
+    const base = `households/${h.hid}`;
+    async function seedMessages(from: number, to: number) {
+      for (let start = from; start < to; start += 500) {
+        const batch = db.batch();
+        for (let i = start; i < Math.min(start + 500, to); i++) {
+          const id = `m${String(i).padStart(5, '0')}`;
+          batch.set(db.doc(`${base}/messages/${id}`), { messageId: id, lamport: i % 7, ciphertext: Buffer.from([i % 256]) });
+        }
+        await batch.commit();
+      }
+    }
+    await seedMessages(0, EXPORT_PAGE_SIZE + 1);
+
+    const bundle = await call(fns.exportHousehold, req(h.parent, withProof(h, 'exportHousehold')));
+
+    expect(bundle.messages).toHaveLength(EXPORT_PAGE_SIZE + 1);
+    const keys = bundle.messages.map((m) => `${String(m.lamport)}:${String(m.id)}`);
+    expect(new Set(keys).size).toBe(keys.length);
+    const order = bundle.messages.map((m) => [m.lamport as number, m.id as string] as const);
+    const sorted = [...order].sort((a, b) => a[0] - b[0] || (a[1] < b[1] ? -1 : a[1] > b[1] ? 1 : 0));
+    expect(order).toEqual(sorted);
+
+    await seedMessages(EXPORT_PAGE_SIZE + 1, MAX_EXPORT_MESSAGES + 1);
+    await clearLimits();
+    await expectCode(call(fns.exportHousehold, req(h.parent, withProof(h, 'exportHousehold'))), 'resource-exhausted');
+  }, 120_000);
 });

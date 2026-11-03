@@ -10,6 +10,8 @@ import dev.kpetriv.sprout.core.model.Role
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
@@ -28,7 +30,31 @@ class FakeBackendRulesTest {
         registerDevice(parent.registered)
         registerDevice(kid.registered)
         registerDevice(otherKid.registered)
+        injectDocument(parent.signed(DocTypes.KID, KID_1.value, lamport = 1))
+        injectDocument(parent.signed(DocTypes.KID, KID_2.value, lamport = 1))
     }
+
+    /** A thread key document for [thread] and [epoch] created by [by], with its per-creator docId. */
+    private fun threadKey(
+        by: TestIdentity,
+        thread: String = KID_1.value,
+        epoch: Long = 0,
+        lamport: Long = 1,
+        docId: String = "$thread.$epoch.${by.deviceId.value}",
+        createdBy: String = by.deviceId.value,
+        deleted: Boolean = false,
+    ): DocumentEnvelope = by.signed(
+        DocTypes.THREAD_KEY,
+        docId,
+        lamport,
+        payload = buildJsonObject {
+            put("threadId", thread)
+            put("epoch", epoch)
+            put("createdByDeviceId", createdBy)
+            put("wraps", buildJsonObject { put(by.deviceId.value, buildJsonObject { put("wrapped", "AAAA") }) })
+        },
+        deleted = deleted,
+    )
     private val transport = FakeSyncTransport(backend, parent.deviceId, parent.uid, parent.role)
     private val kidTransport = FakeSyncTransport(backend, kid.deviceId, kid.uid, kid.role)
     private val otherKidTransport = FakeSyncTransport(backend, otherKid.deviceId, otherKid.uid, otherKid.role)
@@ -54,12 +80,14 @@ class FakeBackendRulesTest {
             documents.map { PushItemId.ofDocument(it) to SyncError.Permanent(FakeBackend.PERMISSION_DENIED) },
             result.rejected,
         )
-        assertTrue(backend.documents().isEmpty())
+        assertTrue(backend.documents().none { it.docType in FakeBackend.SERVER_ONLY })
     }
 
     @Test
     fun everyClientTypeIsWritableByAParent() = runTest {
-        val documents = DocTypes.all.map { parent.signed(it, "doc-1", lamport = 1) }
+        val documents = DocTypes.all.map {
+            if (it == DocTypes.THREAD_KEY) threadKey(parent) else parent.signed(it, "doc-1", lamport = 2)
+        }
 
         val result = transport.push(emptyList(), documents)
 
@@ -87,12 +115,77 @@ class FakeBackendRulesTest {
 
     @Test
     fun threadKeysAreWrittenByParentsOnly() = runTest {
-        val byParent = parent.signed(DocTypes.THREAD_KEY, "kid-1.0", lamport = 1)
-        val byKid = kid.signed(DocTypes.THREAD_KEY, "kid-1.1", lamport = 1)
+        val byParent = threadKey(parent)
+        val byKid = threadKey(kid, epoch = 1)
 
         assertEquals(emptyList(), transport.push(emptyList(), listOf(byParent)).rejected)
         assertEquals(denied, codes(kidTransport.push(emptyList(), listOf(byKid))))
         assertEquals(Role.PARENT, DocTypes.writerRole(DocTypes.THREAD_KEY))
+    }
+
+    @Test
+    fun threadKeysAreHardened() = runTest {
+        val second = TestIdentity("parent2-device", "parent-uid", Role.PARENT)
+        backend.registerDevice(second.registered)
+        val secondTransport = FakeSyncTransport(backend, second.deviceId, second.uid, second.role)
+        val refused = listOf(
+            // The old "<threadId>.<epoch>" id, and ids that do not name the creator.
+            threadKey(parent, docId = "${KID_1.value}.0"),
+            threadKey(parent, docId = "${KID_1.value}.1.${parent.deviceId.value}"),
+            threadKey(parent, createdBy = second.deviceId.value, docId = "${KID_1.value}.0.${second.deviceId.value}"),
+            // No tombstones, and a sane lamport.
+            threadKey(parent, deleted = true),
+            threadKey(parent, lamport = FakeBackend.MAX_THREAD_KEY_LAMPORT + 1),
+        )
+        refused.forEachIndexed { index, document ->
+            assertEquals(denied, codes(transport.push(emptyList(), listOf(document))), "case $index")
+        }
+
+        assertEquals(emptyList(), transport.push(emptyList(), listOf(threadKey(parent, lamport = 2))).rejected)
+        // Two parents rotating the same epoch each write their own document.
+        assertEquals(emptyList(), secondTransport.push(emptyList(), listOf(threadKey(second, lamport = 1))).rejected)
+        assertEquals(2, backend.documents().count { it.docType == DocTypes.THREAD_KEY })
+        // Only the creator updates its document: another device's newer copy under that id is refused.
+        val hijack = second.signed(
+            DocTypes.THREAD_KEY,
+            "${KID_1.value}.0.${parent.deviceId.value}",
+            lamport = 9,
+            payload = threadKey(parent).payload,
+        )
+        assertEquals(denied, codes(secondTransport.push(emptyList(), listOf(hijack))))
+        assertEquals(emptyList(), transport.push(emptyList(), listOf(threadKey(parent, lamport = 3))).rejected)
+    }
+
+    // ---- push order ----
+
+    @Test
+    fun aPushIsProcessedInOrderAndStopsAtABlockingRefusal() = runTest {
+        val chunk = parent.blobChunk("b1")
+        val refusedMessage = parent.message("m1").with("seq", 0)
+        val behind = listOf(
+            PushItem.Message(parent.message("m2", seq = 2)),
+            PushItem.Document(parent.signed(DocTypes.REWARD, "reward-1", lamport = 1)),
+        )
+
+        val result = transport.push(
+            listOf(PushItem.BlobChunk(chunk), PushItem.Message(refusedMessage)) + behind,
+        )
+
+        assertEquals(listOf(PushItemId.ofBlobChunk(chunk)), result.accepted)
+        assertEquals(listOf(PushItemId.ofMessage(refusedMessage)), result.rejected.map { it.first })
+        assertTrue(backend.messages().isEmpty(), "nothing behind the refused message is written")
+        assertNull(backend.document(DocTypes.REWARD, "reward-1"))
+    }
+
+    @Test
+    fun aRefusedDocumentDoesNotStopThePush() = runTest {
+        val refused = parent.signed("gift_card", "doc-1", lamport = 1)
+        val message = parent.message("m1")
+
+        val result = transport.push(listOf(PushItem.Document(refused), PushItem.Message(message)))
+
+        assertEquals(listOf(PushItemId.ofMessage(message)), result.accepted)
+        assertEquals(1, result.rejected.size)
     }
 
     // ---- messages ----
@@ -272,6 +365,45 @@ class FakeBackendRulesTest {
         val refused = kidTransport.fetchBlob(BlobId("b2")).exceptionOrNull() as SyncException
         assertEquals(SyncError.Permanent(FakeBackend.PERMISSION_DENIED), refused.error)
         assertTrue(transport.pull(SyncCursor.START).messages.isEmpty(), "blobs are never pulled")
+    }
+
+    @Test
+    fun aBlobNamesAKidTheHouseholdHas() = runTest {
+        val unknownKid = dev.kpetriv.sprout.core.model.KidId("kid-unknown")
+
+        assertEquals(denied, codes(transport.pushChunks(parent.blobChunk("b1", thread = unknownKid))))
+    }
+
+    @Test
+    fun aHouseholdStoresAtMostSixtyNewChunksPerUtcDay() = runTest {
+        val day = 20_000L * 86_400_000
+        backend.nowEpochMs = { day + 3_600_000 }
+        val stored = (0 until FakeBackend.DAILY_BLOB_CHUNKS).map { n -> parent.blobChunk("b$n") }
+        stored.forEachIndexed { n, chunk -> assertTrue(transport.pushChunks(chunk).rejected.isEmpty(), "chunk $n") }
+        val over = parent.blobChunk("over")
+        val behind = parent.message("m1")
+
+        val result = transport.push(listOf(PushItem.BlobChunk(over), PushItem.Message(behind)))
+
+        assertEquals(listOf(PushItemId.ofBlobChunk(over) to SyncError.Transient(23 * 3_600_000L)), result.rejected)
+        assertTrue(result.accepted.isEmpty(), "the push stops at the chunk over the budget")
+        // A re-send of a stored chunk is not a new chunk; the next UTC day has a fresh budget.
+        assertTrue(transport.pushChunks(stored.first()).rejected.isEmpty())
+        backend.nowEpochMs = { day + 86_400_000 }
+        assertTrue(transport.pushChunks(over).rejected.isEmpty())
+    }
+
+    @Test
+    fun aBlobWithAMissingLaterChunkIsIncomplete() = runTest {
+        transport.pushChunks(parent.blobChunk("b1", chunk = 0, chunks = 2))
+
+        val failure = transport.fetchBlob(BlobId("b1")).exceptionOrNull()
+
+        assertEquals(BlobIncompleteException::class, failure!!::class)
+        assertEquals(SyncError.Transient(), (failure as SyncException).error)
+        assertEquals(1 to 2, (failure as BlobIncompleteException).stored to failure.expected)
+        transport.pushChunks(parent.blobChunk("b1", chunk = 1, chunks = 2))
+        assertEquals(2, transport.fetchBlob(BlobId("b1")).getOrThrow().size)
     }
 
     @Test

@@ -218,11 +218,39 @@ export function encryptionKeyBindingPayload(hid: string, deviceId: string, publi
   ]);
 }
 
-/** A base64 X25519 public key: exactly 32 bytes, or `invalid-argument`. */
+/**
+ * The X25519 public keys of small order (RFC 7748 §6.1; libsodium's blocklist), in canonical form with the top bit
+ * clear: 0, 1, the two points of order 8, and p - 1, p, p + 1 (p = 2^255 - 19). A shared secret with any of them is
+ * all zeros or one of a handful of values whatever the private key, so a wrap made with it protects nothing.
+ */
+const LOW_ORDER_X25519 = [
+  '0000000000000000000000000000000000000000000000000000000000000000',
+  '0100000000000000000000000000000000000000000000000000000000000000',
+  'e0eb7a7c3b41b8ae1656e3faf19fc46ada098deb9c32b1fd866205165f49b800',
+  '5f9c95bca3508c24b1d0b1559c83ef5b04445cc4581c8e86d8224eddd09f1157',
+  'ecffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f',
+  'edffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f',
+  'eeffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f',
+];
+
+/** Whether [key] (32 bytes, little-endian u-coordinate) is a low-order point; the unused top bit is ignored. */
+export function isLowOrderX25519(key: Buffer): boolean {
+  const masked = Buffer.from(key);
+  masked[31] &= 0x7f;
+  return LOW_ORDER_X25519.includes(masked.toString('hex'));
+}
+
+/**
+ * A base64 X25519 public key: exactly 32 bytes and not a low-order point (audit L1; the all-zero key among them), or
+ * `invalid-argument`.
+ */
 export function parseEncryptionKey(value: unknown, field = 'encryptionKey'): Buffer {
   const key = decodeBase64(value, field, ENCRYPTION_KEY_BYTES);
   if (key.length !== ENCRYPTION_KEY_BYTES) {
     throw new HttpsError('invalid-argument', `${field} must be a 32-byte X25519 key`);
+  }
+  if (isLowOrderX25519(key)) {
+    throw new HttpsError('invalid-argument', `${field} is not a usable X25519 key`);
   }
   return key;
 }

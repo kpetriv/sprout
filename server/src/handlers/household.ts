@@ -1,6 +1,12 @@
-import { DocumentSnapshot, FieldValue, Timestamp } from 'firebase-admin/firestore';
+import { DocumentSnapshot, FieldPath, FieldValue, Timestamp, type DocumentReference } from 'firebase-admin/firestore';
 import { HttpsError, type CallableRequest } from '../https.js';
-import { DOCUMENT_COLLECTIONS, MAX_EXPORT_BYTES, RECENT_SIGN_IN_MS } from '../config.js';
+import {
+  DOCUMENT_COLLECTIONS,
+  EXPORT_PAGE_SIZE,
+  MAX_EXPORT_BYTES,
+  MAX_EXPORT_MESSAGES,
+  RECENT_SIGN_IN_MS,
+} from '../config.js';
 import { parseDeviceKey, sha256Hex } from '../crypto.js';
 import { requireDeviceProof } from '../deviceProof.js';
 import { auth, db } from '../firebase.js';
@@ -120,21 +126,46 @@ export interface ExportBundle {
  * portability, PRIVACY.md; D-M3-7). Chat is exported as stored, end-to-end encrypted: message envelopes with their
  * ciphertext and blob chunk headers without their bytes (D-M4-6); a plaintext export is a device's job (M7). Signed by an ACTIVE parent device over
  * `"sprout/export-household/v2" || 0x00 || hid || 0x00 || sha256(raw ID token) || 0x00 || {}` (crypto.ts
- * `callablePayload`). Refused with `resource-exhausted` above 4 MB
- * (config.ts `MAX_EXPORT_BYTES`), below the host's 4.5 MB response limit.
+ * `callablePayload`). Refused with `resource-exhausted` above 4 MB (config.ts `MAX_EXPORT_BYTES`), below the host's
+ * 4.5 MB response limit, or above `MAX_EXPORT_MESSAGES` messages (read in pages, D-M4-17).
  */
+/**
+ * The household's messages ordered by (lamport, id), read [EXPORT_PAGE_SIZE] at a time (audit L5). Stops reading and
+ * answers `resource-exhausted` as soon as more than [MAX_EXPORT_MESSAGES] exist, so a long history is never loaded
+ * whole into one instance.
+ */
+async function exportedMessages(hid: string, ref: DocumentReference): Promise<DocumentSnapshot[]> {
+  const rows: DocumentSnapshot[] = [];
+  let last: DocumentSnapshot | undefined;
+  for (;;) {
+    let query = ref.collection('messages').orderBy('lamport').orderBy(FieldPath.documentId()).limit(EXPORT_PAGE_SIZE);
+    if (last) query = query.startAfter(last);
+    const page = await query.get();
+    rows.push(...page.docs);
+    if (rows.length > MAX_EXPORT_MESSAGES) {
+      log.warn('household.export.tooManyMessages', { hid, limit: MAX_EXPORT_MESSAGES });
+      throw new HttpsError(
+        'resource-exhausted',
+        `The chat history has more than ${MAX_EXPORT_MESSAGES} messages and cannot be exported in one response`,
+      );
+    }
+    if (page.size < EXPORT_PAGE_SIZE) return rows;
+    last = page.docs[page.docs.length - 1];
+  }
+}
+
 export async function exportHousehold(request: CallableRequest): Promise<ExportBundle> {
   const caller = await parent(request, 'exportHousehold');
   await requireDeviceProof(caller, dataOf(request), 'exportHousehold', {});
   const ref = db.doc(`households/${caller.hid}`);
   const names = Object.keys(DOCUMENT_COLLECTIONS);
-  const [household, members, devices, parentKeys, events, messages, blobs, ...documents] = await Promise.all([
+  const messages = await exportedMessages(caller.hid, ref);
+  const [household, members, devices, parentKeys, events, blobs, ...documents] = await Promise.all([
     ref.get(),
     ref.collection('members').get(),
     ref.collection('devices').get(),
     ref.collection('parentKeys').get(),
     ref.collection('events').orderBy('lamport').get(),
-    ref.collection('messages').orderBy('lamport').get(),
     // Only the header fields: the encrypted bytes (`data`, up to 700 KB each) never leave the database.
     ref.collection('blobs').select(...BLOB_HEADER_FIELDS).get(),
     ...names.map((name) => ref.collection(name).get()),
@@ -151,7 +182,7 @@ export async function exportHousehold(request: CallableRequest): Promise<ExportB
     parentKeys: parentKeys.docs.map(row),
     collections,
     events: events.docs.map(row),
-    messages: messages.docs.map(row),
+    messages: messages.map(row),
     blobs: blobs.docs.map(row),
   };
   const bytes = Buffer.byteLength(JSON.stringify(bundle), 'utf8');
@@ -164,7 +195,7 @@ export async function exportHousehold(request: CallableRequest): Promise<ExportB
     hid: caller.hid,
     events: events.size,
     documents: documentCount,
-    messages: messages.size,
+    messages: messages.length,
     blobs: blobs.size,
     bytes,
   });

@@ -16,8 +16,11 @@ import kotlinx.serialization.json.put
 object TestData {
     val HID = HouseholdId("h1")
     const val UID = "parent-uid"
-    val DEVICE = "a".repeat(64)
-    val OTHER_DEVICE = "b".repeat(64)
+
+    /** Device ids are the SHA-256 of the device key (`StoredShapes.deviceOf` checks it): keys AQID and BAUG. */
+    const val DEVICE = "039058c6f2c0cb492c533b0a4d14ef77cc0f78abccced5287d84a1a2011cfb81"
+    const val DEVICE_KEY = "AQID"
+    const val OTHER_DEVICE = "787c798e39a5bc1910355bae6d0cd87a36b2e10fd0202a83e3bb6b005da83472"
 
     fun hash(seed: Int): String = seed.toString(16).padStart(64, '0')
 

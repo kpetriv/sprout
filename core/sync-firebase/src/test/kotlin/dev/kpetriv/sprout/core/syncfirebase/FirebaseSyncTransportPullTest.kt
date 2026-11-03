@@ -37,6 +37,8 @@ class FirebaseSyncTransportPullTest {
             override suspend fun currentHouseholdId() = hid
 
             override suspend fun currentUserId() = UserId(TestData.UID)
+
+            override suspend fun currentRole() = Role.PARENT
         },
         foreground = foreground,
         authProbe = { refreshed },
@@ -51,11 +53,12 @@ class FirebaseSyncTransportPullTest {
         status: String,
         kidId: String? = null,
         revokedAtLamport: Long? = null,
+        publicKey: String = TestData.DEVICE_KEY,
     ): Map<String, Any?> = buildMap {
         put("uid", uid)
         put("role", role)
         kidId?.let { put("kidId", it) }
-        put("publicKey", "AQID")
+        put("publicKey", publicKey)
         put("attestation", "TEE")
         put("status", status)
         put("registeredAt", ServerTime(1, 0))
@@ -118,8 +121,9 @@ class FirebaseSyncTransportPullTest {
 
         val next = transport().pull(SyncCursor.START).next.perCollection
 
+        // Events and documents are committed in separate batches (a batch never mixes kinds), one server time each.
         assertEquals("2023-11-14T22:13:20Z|evt-1", next["events"])
-        assertEquals("2023-11-14T22:13:20Z|doc-1", next["chores"])
+        assertEquals("2023-11-14T22:13:21Z|doc-1", next["chores"])
         assertNull(next["rewards"], "collections without documents keep no cursor")
     }
 
@@ -134,17 +138,27 @@ class FirebaseSyncTransportPullTest {
 
     @Test
     fun `devices map to the registry and are returned again only when they change`() = runTest {
-        val parent = "a".repeat(64)
-        val kid = "b".repeat(64)
-        val revoked = "c".repeat(64)
-        val pending = "d".repeat(64)
+        // Ids are the SHA-256 of the keys AQID, BAUG, BwgJ and CgsM.
+        val parent = TestData.DEVICE
+        val kid = TestData.OTHER_DEVICE
+        val revoked = "66a6757151f8ee55db127716c7e3dce0be8074b64e20eda542e5c1e46ca9c41e"
+        val pending = "9909ec831e2cf6d0c73fb5480f31945a80987a13faee005704166cb53a26ceca"
         firestore.seed("households/h1/devices/$parent", device("p-uid", "PARENT", "ACTIVE"))
-        firestore.seed("households/h1/devices/$kid", device("k-uid", "KID", "ACTIVE", kidId = "kid-a"))
-        firestore.seed("households/h1/devices/$revoked", device("k-uid", "KID", "REVOKED", "kid-a", 12))
-        firestore.seed("households/h1/devices/$pending", device("p-uid", "PARENT", "PENDING"))
+        firestore.seed(
+            "households/h1/devices/$kid",
+            device("k-uid", "KID", "ACTIVE", kidId = "kid-a", publicKey = "BAUG"),
+        )
+        firestore.seed(
+            "households/h1/devices/$revoked",
+            device("k-uid", "KID", "REVOKED", "kid-a", 12, publicKey = "BwgJ"),
+        )
+        firestore.seed("households/h1/devices/$pending", device("p-uid", "PARENT", "PENDING", publicKey = "CgsM"))
         firestore.seed("households/h1/devices/${"e".repeat(64)}", device("x", "ADMIN", "ACTIVE"))
+        // A row that names one device and carries another device's key is never read (audit H1).
+        firestore.seed("households/h1/devices/${"f".repeat(64)}", device("p-uid", "PARENT", "ACTIVE"))
 
         val first = transport().pull(SyncCursor.START)
+        assertEquals(2, first.malformed)
 
         val byId = first.devices.associateBy { it.deviceId.value }
         assertEquals(setOf(parent, kid, revoked, pending), byId.keys)
@@ -158,7 +172,7 @@ class FirebaseSyncTransportPullTest {
         val unchanged = transport().pull(first.next)
         assertTrue(unchanged.devices.isEmpty())
 
-        firestore.seed("households/h1/devices/$kid", device("k-uid", "KID", "REVOKED", "kid-a", 3))
+        firestore.seed("households/h1/devices/$kid", device("k-uid", "KID", "REVOKED", "kid-a", 3, publicKey = "BAUG"))
         val changed = transport().pull(unchanged.next)
         assertEquals(DeviceStatus.Revoked(3), changed.devices.associateBy { it.deviceId.value }.getValue(kid).status)
     }

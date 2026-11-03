@@ -147,7 +147,9 @@ internal object StoredShapes {
 
     /**
      * A `devices/{deviceId}` document of household [hid] as a registry entry, or null when any field is missing or
-     * malformed. A malformed or half-present encryption key is left out (the device has none for receivers).
+     * malformed, or when the document id is not the lower-case hex SHA-256 of `publicKey` (the SPKI DER), which is
+     * what a device id is (audit H1: a row that names one device and carries another's key is never read). A
+     * malformed or half-present encryption key is left out (the device has none for receivers).
      */
     @Suppress("ReturnCount")
     fun deviceOf(document: FacadeDocument, hid: HouseholdId): RegisteredDevice? {
@@ -159,6 +161,7 @@ internal object StoredShapes {
         val kidId = data.id("kidId")?.let(::KidId)
         if (role == Role.KID && kidId == null) return null
         val publicKey = (data["publicKey"] as? String)?.let(::decodeBase64OrNull) ?: return null
+        if (sha256Hex(publicKey) != deviceId.value) return null
         val status = statusOf(data) ?: return null
         val attestation = (data["attestation"] as? String)
             ?.let { name -> AttestationLevel.entries.firstOrNull { it.name == name } }
@@ -193,6 +196,10 @@ internal object StoredShapes {
         if (revokedAt != null && revokedAt !is Long) return null
         return RegisteredParentKey(fingerprint, publicKey, uid, deviceId, validFrom, revokedAt)
     }
+
+    /** Lower-case hex SHA-256 of [bytes]. */
+    fun sha256Hex(bytes: ByteArray): String =
+        MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { byte -> "%02x".format(byte) }
 
     private fun Map<String, Any?>.id(key: String): String? = (this[key] as? String)?.takeIf(ID_PATTERN::matches)
 

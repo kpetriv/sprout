@@ -7,7 +7,6 @@ import dev.kpetriv.sprout.core.model.UserId
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.map
-import kotlinx.serialization.json.JsonObject
 import java.util.concurrent.atomic.AtomicInteger
 
 /**
@@ -28,14 +27,9 @@ class FakeSyncTransport(private val backend: FakeBackend, val deviceId: DeviceId
 
     val fetchCount: Int get() = fetches.get()
 
-    override suspend fun push(
-        events: List<JsonObject>,
-        documents: List<DocumentEnvelope>,
-        messages: List<JsonObject>,
-        blobChunks: List<BlobChunkJson>,
-    ): PushResult {
+    override suspend fun push(items: List<PushItem>): PushResult {
         pushes.incrementAndGet()
-        return backend.push(caller, events, documents, messages, blobChunks)
+        return backend.push(caller, items)
     }
 
     override suspend fun pull(cursor: SyncCursor): PullPage {

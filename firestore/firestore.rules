@@ -19,7 +19,8 @@ rules_version = '2';
 // - Chat (M4 §2, §3): messages and blob chunks are create-only, authored by an ACTIVE device of the caller; a KID
 //   member writes only into its own kid's thread and reads only that thread (messages: threadId == kidId; blobs:
 //   kidId == its kid). Message ciphertext and blob data are Firestore bytes, so their size is checked exactly
-//   (8,192 and 716,800 bytes). Thread keys (threadKeys) are signed documents that only a PARENT member writes.
+//   (8,192 and 716,800 bytes). Thread keys (threadKeys) are signed documents that only a PARENT member writes, one
+//   per (thread, epoch, creator device). Blob chunks count against a daily per-household budget (quotas).
 // - Top-level collections (linkCodes, challenges, deletionRecords, rateLimits, userHouseholds) and anything not
 //   matched below are closed to clients: there is no rule granting access, so the default deny applies.
 //
@@ -33,8 +34,11 @@ rules_version = '2';
 // Evaluation budget: a request may evaluate at most 1,000 expressions. The write rules therefore read the caller's
 // member row and the author device once and pass them down (m, d) instead of calling get() helpers repeatedly; a
 // write that runs over the budget is denied, so a new check on a hot path needs a test with a worst-case payload.
-// The heaviest write is a thread key with 16 wraps (checked one by one), about 90 % of the budget; its test
-// ("stays within the rules evaluation budget for the largest thread key") writes and re-wraps one.
+// The heaviest write is a thread key with 16 wraps (checked one by one); its test ("stays within the rules
+// evaluation budget for the largest thread key") writes and re-wraps one. The emulator applies the budget to each
+// written document, also inside a batch (test/batches.test.ts commits 3 maximal events and 2 maximal documents, and a
+// 16-wrap thread key with an event, in one batch each); the transport still sizes batches as if a batch shared one
+// budget (core/sync-firebase FirebaseSyncTransport.BATCH_BUDGET), since production cannot be tested locally.
 service cloud.firestore {
   match /databases/{database}/documents {
 
@@ -273,11 +277,43 @@ service cloud.firestore {
         allow update, delete: if false;
       }
 
+      // Today's UTC date as yyyymmdd (the id of the blob quota counter).
+      function today() {
+        return string(request.time.year() * 10000 + request.time.month() * 100 + request.time.day());
+      }
+
+      function quotaPath(day) {
+        return /databases/$(database)/documents/households/$(hid)/quotas/$(day);
+      }
+
+      // Daily blob budget (audit H2): quotas/{yyyymmdd} = { chunks, last } counts the blob chunks the household
+      // stored on that UTC day. Every chunk is written in a batch with a merge that raises chunks by exactly one and
+      // sets last to the chunk's document id; the chunk's own rule requires that (countedInQuota) and the counter's rule
+      // requires the named chunk to be created by the same batch, so one counter step is one new chunk, and a batch
+      // carries at most one chunk (last names only one). At most 60 per day; App Check enforcement (console, M8) is the
+      // other half, keeping scripted clients out. Members read the counter (the transport checks it on a refusal).
+      match /quotas/{day} {
+        function validQuota(q, before) {
+          return q.keys().hasOnly(['chunks', 'last'])
+            && day == today()
+            && q.chunks is int && q.chunks == before + 1 && q.chunks <= 60
+            && q.last is string && q.last.matches('^[A-Za-z0-9._-]{1,140}$')
+            && !exists(/databases/$(database)/documents/households/$(hid)/blobs/$(q.last))
+            && existsAfter(/databases/$(database)/documents/households/$(hid)/blobs/$(q.last));
+        }
+
+        allow read: if isMember();
+        allow create: if isMember() && validQuota(request.resource.data, 0);
+        allow update: if isMember() && validQuota(request.resource.data, resource.data.chunks);
+        allow delete: if false;
+      }
+
       // Encrypted blob chunks (core/domain-ledger BlobChunkHeader plus data, M4 §2): create-only, document id
       // "<blobId>.<chunk>". Exactly one of threadId (a chat blob; equal to kidId) and submissionId (a chore photo).
       // data is Firestore bytes (1 to 716,800), at most 2 chunks. A PARENT member writes for any kid (kid mode on a
-      // parent phone included), a KID member only for its own kid. Fetched by id only (no list); a KID member reads
-      // only its own kid's blobs.
+      // parent phone included), a KID member only for its own kid; the kid must exist (kids/{kidId}). Each chunk is
+      // counted in the daily quota in the same batch. Fetched by id only (no list); a KID member reads only its own
+      // kid's blobs.
       match /blobs/{blobDocId} {
         function validBlob(n, m) {
           return n.keys().hasAll(['schemaVersion', 'householdId', 'blobId', 'kidId', 'authorUid', 'authorDeviceId',
@@ -305,7 +341,16 @@ service cloud.firestore {
             && n.epoch is int && n.epoch >= 0
             && boundedString(n.signature, 200)
             && n.data is bytes && n.data.size() > 0 && n.data.size() <= 716800
-            && serverStamp(n);
+            && serverStamp(n)
+            && exists(/databases/$(database)/documents/households/$(hid)/kids/$(n.kidId))
+            && countedInQuota(blobDocId);
+        }
+
+        // The same batch raises today's counter by one for this very chunk (quotas below), and stays within the
+        // household's daily budget of 60 chunks (audit H2).
+        function countedInQuota(id) {
+          let q = getAfter(quotaPath(today())).data;
+          return q.last == id && q.chunks <= 60;
         }
 
         allow get: if isMember()
@@ -511,9 +556,22 @@ service cloud.firestore {
             && p.get('dueOn', null) == op.get('dueOn', null);
         }
 
+        // Thread keys (audit M2): one document per (thread, epoch, creator), docId
+        // "<threadId>.<epoch>.<createdByDeviceId>", created by the author device itself, never a tombstone, a sane
+        // lamport (at most 2^50), and only ever rewritten by the same device (o: stored envelope, null on create).
+        function threadKeyEnvelope(n, o) {
+          let p = n.payload;
+          return n.deleted == false
+            && p.createdByDeviceId == n.authorDeviceId
+            && docId == p.threadId + '.' + string(p.epoch) + '.' + p.createdByDeviceId
+            && n.lamport <= 1125899906842624
+            && (o == null || o.authorDeviceId == n.authorDeviceId);
+        }
+
         // n: written envelope; m: caller's member row; o: stored envelope on update, null on create.
         function mayWrite(n, m, o) {
           return validDocument(n, m)
+            && (coll != 'threadKeys' || threadKeyEnvelope(n, o))
             && (o == null || winsConflict(n, o, m))
             && (m.role == 'PARENT' || (m.role == 'KID' && kidMayWrite(n, m.kidId, o)));
         }
