@@ -13,6 +13,8 @@ import dev.kpetriv.sprout.core.model.KidId
 import dev.kpetriv.sprout.core.model.Role
 import dev.kpetriv.sprout.core.model.UserId
 import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonObjectBuilder
 import kotlinx.serialization.json.JsonPrimitive
@@ -32,7 +34,9 @@ import kotlinx.serialization.json.put
  *   reused across kids), and each kid's audit view gets its own row.
  *
  * Details hold ids, dates, currency codes, roles, hashes and violation fields only, never free text. `order` is the
- * anomaly's position in the kid's projected list, so reads return the same order the domain produced.
+ * anomaly's position in the kid's projected list, so reads return the same order the domain produced. A conflicting
+ * duplicate's applied copy (chosen by registry roles) is stored in `appliedCopyJson`, so the cached anomaly says
+ * exactly which copy the projection applied.
  */
 internal object AnomalyMapper {
     private const val ORDER = "order"
@@ -92,6 +96,10 @@ internal object AnomalyMapper {
                 amountMinor = null,
                 detailsJson = details(order) { put("copies", JsonArray(anomaly.copies.map(::encodeCopy))) },
                 detectedAtEpochMs = detectedAtEpochMs,
+                appliedCopyJson = LedgerJson.json.encodeToString(
+                    JsonElement.serializer(),
+                    anomaly.applied?.let(::encodeCopy) ?: JsonNull,
+                ),
             )
         }
 
@@ -135,10 +143,17 @@ internal object AnomalyMapper {
                 violations = details.getValue("violations").jsonArray.map { ViolationCodec.decode(it.jsonObject) },
             )
 
-            AnomalyKind.CONFLICTING_DUPLICATE -> LedgerAnomaly.ConflictingDuplicate(
-                eventId = eventId,
-                copies = details.getValue("copies").jsonArray.map { decodeCopy(it.jsonObject) },
-            )
+            AnomalyKind.CONFLICTING_DUPLICATE -> {
+                val copies = details.getValue("copies").jsonArray.map { decodeCopy(it.jsonObject) }
+                when (val applied = row.appliedCopyJson?.let(LedgerJson.json::parseToJsonElement)) {
+                    // Cached before schema version 3: the applied copy was not recorded.
+                    null -> LedgerAnomaly.ConflictingDuplicate(eventId, copies)
+
+                    JsonNull -> LedgerAnomaly.ConflictingDuplicate(eventId, copies, applied = null)
+
+                    else -> LedgerAnomaly.ConflictingDuplicate(eventId, copies, decodeCopy(applied.jsonObject))
+                }
+            }
         }
     }
 

@@ -39,7 +39,7 @@ import kotlin.test.assertTrue
  */
 @RunWith(RobolectricTestRunner::class)
 class PendingActionsDrainTest {
-    private val household = TestHousehold()
+    private val household = testHousehold()
     private val saturday = CalendarDate(2026, 10, 31)
     private var prompts = 0
 

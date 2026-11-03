@@ -1,5 +1,7 @@
 package dev.kpetriv.sprout.core.database.entity
 
+import androidx.room.ColumnInfo
+import androidx.room.Embedded
 import androidx.room.Entity
 import androidx.room.Index
 import androidx.room.PrimaryKey
@@ -11,7 +13,8 @@ import dev.kpetriv.sprout.core.model.YearMonth
 
 /**
  * A kid profile, exactly the fields of [Kid] (data minimisation: first name, avatar, birth month, tier). No
- * other personal data is stored.
+ * other personal data is stored. A synced document (schema version 3): [lamport] and [stamp] describe the row's
+ * current state; rows written before version 3 have lamport 0 and no stamp.
  */
 @Entity(tableName = "kids", indices = [Index(value = ["householdId"])])
 data class KidEntity(
@@ -22,6 +25,8 @@ data class KidEntity(
     val birthYearMonth: YearMonth,
     val uiTier: KidUiTier,
     val archived: Boolean,
+    @ColumnInfo(defaultValue = "0") val lamport: Long = 0,
+    @Embedded val stamp: DocumentStamp = DocumentStamp(),
 ) {
     fun toDomain(): Kid = Kid(
         id = kidId,

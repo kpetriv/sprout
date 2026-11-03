@@ -9,11 +9,14 @@ import dev.kpetriv.sprout.core.model.KidId
 import dev.kpetriv.sprout.core.model.KidUiTier
 import dev.kpetriv.sprout.core.model.RewardKind
 import dev.kpetriv.sprout.core.model.YearMonth
+import dev.kpetriv.sprout.core.sync.DocTypes
 import dev.kpetriv.sprout.core.time.HouseholdCalendar
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.runTest
 import org.junit.After
+import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -29,22 +32,37 @@ import kotlin.test.assertTrue
 class KidAndAccountRepositoryTest {
     private val clock = testClock()
     private val database = inMemoryDatabase()
-    private val authors = LocalOnlyAuthorProvider(DeviceSigner(InMemoryDeviceKeyStore(clock), Dispatchers.Unconfined))
+    private val signer = DeviceSigner(InMemoryDeviceKeyStore(clock), Dispatchers.Unconfined)
+    private val sessions = RoomSessionStore(database, clock)
+    private val authors = SessionBackedAuthorProvider(sessions)
     private val photos = testPhotoStore(database, authors, clock)
-    private val kids = RoomKidRepository(database, authors, clock, photos)
-    private val accounts = RoomAccountRepository(database, authors, clock)
+    private val kids = RoomKidRepository(database, authors, clock, photos, signer)
+    private val accounts = RoomAccountRepository(database, authors, clock, signer)
     private val gbp = Currency.Fiat("GBP")
     private val targets = HouseholdSeedTargets(
         kids = kids,
         accounts = accounts,
-        chores = RoomChoreRepository(database, authors, clock, NothingPaid, photos),
-        rewards = RoomRewardRepository(database, authors, clock),
-        allowances = RoomAllowanceRepository(database, authors, clock),
-        goals = RoomSavingsGoalRepository(database, authors, clock),
-        policies = RoomHouseholdPolicyRepository(database, authors, { gbp }, clock),
+        chores = RoomChoreRepository(database, authors, clock, NothingPaid, photos, signer),
+        rewards = RoomRewardRepository(database, authors, clock, signer),
+        allowances = RoomAllowanceRepository(database, authors, clock, signer),
+        goals = RoomSavingsGoalRepository(database, authors, clock, signer),
+        policies = RoomHouseholdPolicyRepository(database, authors, { gbp }, clock, signer),
     )
-    private val bootstrap =
-        HouseholdBootstrap(database, targets, authors, { gbp }, clock, HouseholdCalendar(clock) { ZoneOffset.UTC })
+    private val bootstrap = HouseholdBootstrap(
+        database,
+        targets,
+        sessions,
+        signer,
+        { gbp },
+        clock,
+        HouseholdCalendar(clock) { ZoneOffset.UTC },
+    )
+
+    @Before
+    fun trialSession() = runBlocking {
+        sessions.ensureLocalTrialSession(signer.deviceId())
+        Unit
+    }
 
     @After
     fun close() = database.close()
@@ -60,7 +78,7 @@ class KidAndAccountRepositoryTest {
         // The fixed test clock is 2026-11-02.
         assertEquals(listOf(6, 9, 13), seeded.map { it.ageOn(YearMonth(2026, 11)) })
         seeded.forEach { kid ->
-            assertEquals(LocalOnlyAuthorProvider.LOCAL_HOUSEHOLD, kid.householdId)
+            assertEquals(LocalTrial.HOUSEHOLD, kid.householdId)
             val owned = accounts.accountsFor(kid.id).first().map { it.currency to it.kind }.toSet()
             assertEquals(
                 setOf(gbp to AccountKind.MAIN, gbp to AccountKind.SAVINGS, Currency.Minutes to AccountKind.MAIN),
@@ -87,9 +105,12 @@ class KidAndAccountRepositoryTest {
         assertEquals(listOf(leo.id), targets.allowances.observeSchedules().first().map { it.kidId })
         assertEquals(1, targets.goals.observeGoals(zoe.id).first().size)
         assertEquals(gbp, targets.policies.get()?.fiatCurrency)
-        // Chores, rewards, the allowance and the goal are synced documents.
+        // Kids, accounts, the policy, chores, rewards, the allowance and the goal are synced documents.
         assertEquals(
             mapOf(
+                DocTypes.KID to 3,
+                DocTypes.ACCOUNT to 9,
+                DocTypes.HOUSEHOLD_POLICY to 1,
                 DocTypes.CHORE to 6,
                 DocTypes.REWARD to 3,
                 DocTypes.ALLOWANCE_SCHEDULE to 1,

@@ -29,6 +29,13 @@ object KeyAliases {
     const val DEVICE_SIGNING = "sprout.device.signing.v1"
 
     /**
+     * EC P-256 device signing key created at household registration (M3) with an attestation challenge from the
+     * backend ([DeviceKeyStore.regenerateForRegistration]). Once it exists it replaces [DEVICE_SIGNING], which is
+     * deleted. Same key properties as v1.
+     */
+    const val DEVICE_SIGNING_V2 = "sprout.device.signing.v2"
+
+    /**
      * EC P-256 parent authentication key (ADR-0004): every signature needs its own strong-biometric
      * `BiometricPrompt` bound through a `CryptoObject`; device credential is not accepted.
      */

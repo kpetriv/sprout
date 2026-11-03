@@ -33,7 +33,7 @@ import kotlin.test.assertTrue
 
 @RunWith(RobolectricTestRunner::class)
 class PhotoStoreTest {
-    private val household = TestHousehold()
+    private val household = testHousehold()
     private val directory = File(RuntimeEnvironment.getApplication().noBackupFilesDir, "photos-${UUID.randomUUID()}")
     private val secrets = WrappedSecretStore(
         InMemoryKeyWrapper(),
@@ -111,7 +111,7 @@ class PhotoStoreTest {
     fun aSubmittedPhotoIsAttachedToItsSubmission() = runTest {
         val chore = Chore(
             ChoreId("dishes"),
-            LocalOnlyAuthorProvider.LOCAL_HOUSEHOLD,
+            LocalTrial.HOUSEHOLD,
             kid,
             "Dishes",
             reward = ChoreReward(money = Money(10)),

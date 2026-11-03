@@ -35,10 +35,10 @@ import kotlin.test.assertTrue
 /** R1: a screen-time purchase and its time credit are stored together or not at all, and owed grants get repaired. */
 @RunWith(RobolectricTestRunner::class)
 class AtomicPurchaseTest {
-    private val household = TestHousehold()
+    private val household = testHousehold()
     private val screen = Reward(
         RewardId("screen"),
-        LocalOnlyAuthorProvider.LOCAL_HOUSEHOLD,
+        LocalTrial.HOUSEHOLD,
         "30 minutes",
         RewardKind.SCREEN_TIME,
         Money(100),
@@ -81,7 +81,7 @@ class AtomicPurchaseTest {
             household.clock,
             check,
             HouseholdPolicySource(household.database, JceEcdsaVerifier()),
-            RewardTableCatalogue(household.database),
+            RewardTableCatalogue(household.database, household.signatureCheck),
         )
         return RoomLedgerWriter(household.database, repository, household.signer, household.authors, household.clock)
     }

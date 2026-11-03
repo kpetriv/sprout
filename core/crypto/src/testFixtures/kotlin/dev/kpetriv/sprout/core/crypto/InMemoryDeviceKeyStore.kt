@@ -5,16 +5,43 @@ import kotlin.time.Instant
 
 /**
  * Software [DeviceKeyStore] with an in-memory P-256 key. Test fixture only; production binds
- * [AndroidKeystoreDeviceKeyStore].
+ * [AndroidKeystoreDeviceKeyStore]. [regenerateForRegistration] swaps in a fresh software key and returns an empty
+ * attestation chain (software keys cannot be attested).
  */
 class InMemoryDeviceKeyStore(private val clock: Clock) : DeviceKeyStore {
-    private val key: SigningKeyHandle by lazy { generateSoftwareSigningKey() }
-    private val createdAt: Instant by lazy { clock.now() }
+    @Volatile
+    private var key: SigningKeyHandle? = null
+    private var createdAt: Instant? = null
 
-    override suspend fun deviceSigningKey(): SigningKeyHandle = key
+    /** How many times [regenerateForRegistration] ran. */
+    @Volatile
+    var registrations: Int = 0
+        private set
 
-    override fun publicKey(): PublicKeyBytes = key.publicKey
+    override suspend fun deviceSigningKey(): SigningKeyHandle = current()
 
-    override fun keyProperties(): DeviceKeyProperties =
-        DeviceKeyProperties(isHardwareBacked = false, isStrongBox = false, createdAt = createdAt)
+    override fun publicKey(): PublicKeyBytes = current().publicKey
+
+    override fun keyProperties(): DeviceKeyProperties {
+        current()
+        return DeviceKeyProperties(isHardwareBacked = false, isStrongBox = false, createdAt = createdAt)
+    }
+
+    override suspend fun regenerateForRegistration(challenge: ByteArray): DeviceRegistrationMaterial {
+        require(challenge.isNotEmpty()) { "the attestation challenge must not be empty" }
+        val fresh = synchronized(this) {
+            generateSoftwareSigningKey().also {
+                key = it
+                createdAt = clock.now()
+                registrations++
+            }
+        }
+        return DeviceRegistrationMaterial(fresh.publicKey, emptyList())
+    }
+
+    @Synchronized
+    private fun current(): SigningKeyHandle = key ?: generateSoftwareSigningKey().also {
+        key = it
+        createdAt = clock.now()
+    }
 }

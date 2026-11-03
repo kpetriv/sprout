@@ -1,12 +1,13 @@
 package dev.kpetriv.sprout.core.database
 
+import dev.kpetriv.sprout.core.crypto.DeviceSigner
 import dev.kpetriv.sprout.core.database.entity.AuditAction
-import dev.kpetriv.sprout.core.database.entity.DocumentJson
 import dev.kpetriv.sprout.core.database.entity.RewardEntity
 import dev.kpetriv.sprout.core.domainhousehold.Reward
 import dev.kpetriv.sprout.core.domainledger.EventAuthor
 import dev.kpetriv.sprout.core.model.KidId
 import dev.kpetriv.sprout.core.model.RewardId
+import dev.kpetriv.sprout.core.sync.DocTypes
 import dev.kpetriv.sprout.core.time.Clock
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
@@ -32,12 +33,13 @@ interface RewardRepository {
 
 /** [RewardRepository] on Room: each write, its outbox `DOCUMENT` row and its audit row in one transaction. */
 class RoomRewardRepository @Inject constructor(
-    private val database: SproutDatabase,
+    database: SproutDatabase,
     private val authors: SessionAuthorProvider,
-    private val clock: Clock,
+    clock: Clock,
+    signer: DeviceSigner,
 ) : RewardRepository {
     private val rewards = database.rewardDao()
-    private val writes = DocumentWrites(database, clock)
+    private val writes = DocumentWrites(database, clock, signer)
 
     override fun observeRewards(kidId: KidId?, includeInactive: Boolean): Flow<List<Reward>> =
         rewards.observeAll().map { rows ->
@@ -46,41 +48,38 @@ class RoomRewardRepository @Inject constructor(
             }
         }
 
-    override suspend fun get(id: RewardId): Reward? = rewards.get(id)?.toDomain()
+    override suspend fun get(id: RewardId): Reward? = rewards.get(id)?.takeUnless { it.stamp.deleted }?.toDomain()
 
     override suspend fun upsert(reward: Reward) {
         val author = authors.currentAuthor()
-        writes.transaction {
-            val lamport = writes.nextLamport(author.deviceId)
-            rewards.upsert(RewardEntity.from(reward, lamport))
-            record(author, reward, lamport)
-        }
+        writes.transaction { write(author, reward) }
     }
 
     override suspend fun setActive(id: RewardId, active: Boolean): Boolean {
         val author = authors.currentAuthor()
         return writes.transaction {
-            val reward = rewards.get(id)?.toDomain() ?: return@transaction false
-            if (reward.active != active) {
-                val lamport = writes.nextLamport(author.deviceId)
-                rewards.setActive(id, active, lamport)
-                record(author, reward.copy(active = active), lamport)
-            }
+            val reward = get(id) ?: return@transaction false
+            if (reward.active != active) write(author, reward.copy(active = active))
             true
         }
     }
 
-    private suspend fun record(author: EventAuthor, reward: Reward, lamport: Long) = writes.record(
-        author,
-        DocTypes.REWARD,
-        reward.id.value,
-        lamport,
-        DocumentJson.json.encodeToJsonElement(Reward.serializer(), reward),
-        AuditAction.REWARD_UPSERTED,
-    ) {
-        put("kind", reward.kind.name)
-        put("costMinor", reward.cost.minorUnits)
-        put("currency", Converters.currencyToString(reward.currency))
-        put("active", reward.active)
+    private suspend fun write(author: EventAuthor, reward: Reward) {
+        val lamport = writes.nextLamport(author.deviceId)
+        val row = RewardEntity.from(reward, lamport)
+        val stamp = writes.record(
+            author,
+            DocTypes.REWARD,
+            reward.id.value,
+            lamport,
+            DocumentPayloads.encode(Reward.serializer(), row.toDomain()),
+            AuditAction.REWARD_UPSERTED,
+        ) {
+            put("kind", reward.kind.name)
+            put("costMinor", reward.cost.minorUnits)
+            put("currency", Converters.currencyToString(reward.currency))
+            put("active", reward.active)
+        }
+        rewards.upsert(row.copy(stamp = stamp))
     }
 }

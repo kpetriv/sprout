@@ -38,6 +38,7 @@ enum class EventOrigin {
  * @property parentSignature copy of the envelope's parent signature (schema version 2, ADR-0004); null for unsigned
  *   events and every row written by schema version 1 of this database.
  * @property receivedAtEpochMs when this device stored the row (local wall clock; display and diagnostics only).
+ * @property ingestedAtEpochMs for a REMOTE row (schema version 3): when ingest stored it; null for local rows.
  */
 @Entity(
     tableName = "ledger_events",
@@ -70,4 +71,5 @@ data class LedgerEventEntity(
     @ColumnInfo(defaultValue = "0") val quarantined: Boolean = false,
     val quarantineReason: String? = null,
     val parentSignature: String? = null,
+    val ingestedAtEpochMs: Long? = null,
 )

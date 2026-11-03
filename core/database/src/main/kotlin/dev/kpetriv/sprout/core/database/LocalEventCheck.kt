@@ -24,7 +24,7 @@ internal interface LocalEventCheck {
 
 /**
  * The production [LocalEventCheck]: the author device id must be this device's key fingerprint (hex SHA-256 of the
- * public key, as [LocalOnlyAuthorProvider] writes it) and the signature must verify with [verifier] against that
+ * public key, the session's device id) and the signature must verify with [verifier] against that
  * key over the event's domain-separated signed payload (ADR-0004 section 5).
  */
 internal class DeviceKeyEventCheck(private val signer: DeviceSigner, private val verifier: Verifier) :

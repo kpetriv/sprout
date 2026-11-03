@@ -14,6 +14,7 @@ import dev.kpetriv.sprout.core.domainledger.Fixtures
 import dev.kpetriv.sprout.core.domainledger.LedgerEvent
 import dev.kpetriv.sprout.core.domainledger.Money
 import dev.kpetriv.sprout.core.model.KidUiTier
+import dev.kpetriv.sprout.core.model.RewardId
 import dev.kpetriv.sprout.core.model.YearMonth
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.runTest
@@ -23,6 +24,8 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 
 /**
@@ -89,6 +92,87 @@ class MigrationTest {
             assertEquals(Money(250), database.balanceDao().forKid(Fixtures.kid).single().amountMinor)
             assertEquals(1, database.deviceStateDao().get()?.lamport)
             assertNull(database.householdPolicyDao().get())
+        } finally {
+            database.close()
+        }
+    }
+
+    @Test
+    fun migration2To3StampsTheTrialRowsAndDropsUnsignedDocumentRows() = runTest {
+        helper.createDatabase(TEST_DB, 2).use { db ->
+            insertVersion1Rows(db, chore)
+            db.insertRow(
+                "rewards",
+                "rewardId" to "treat",
+                "householdId" to "local",
+                "title" to "Treat",
+                "kind" to "TREAT",
+                "cost" to 100L,
+                "currency" to "GBP",
+                "minutesGranted" to null,
+                "active" to 1,
+                "forKidsJson" to "[]",
+                "lamport" to 2L,
+            )
+            db.insertRow(
+                "outbox",
+                "kind" to OutboxKind.DOCUMENT.name,
+                "refId" to "reward/treat",
+                "payload" to "{}",
+                "createdAtEpochMs" to receivedAt,
+                "docType" to "reward",
+                "docId" to "treat",
+                "lamport" to 2L,
+            )
+        }
+
+        helper.runMigrationsAndValidate(TEST_DB, 3, true, Migrations.MIGRATION_2_3).use { db ->
+            NEW_TABLES_3.forEach { table ->
+                db.query("SELECT COUNT(*) FROM $table").use { cursor ->
+                    cursor.moveToFirst()
+                    assertEquals(0, cursor.getInt(0), table)
+                }
+            }
+        }
+
+        val database = Room.databaseBuilder(RuntimeEnvironment.getApplication(), SproutDatabase::class.java, TEST_DB)
+            .addMigrations(*Migrations.ALL)
+            .build()
+        try {
+            val device = chore.envelope.authorDeviceId
+            val reward = assertNotNull(database.rewardDao().get(RewardId("treat")))
+            assertEquals(LocalTrial.PARENT, reward.stamp.authorUid)
+            assertEquals(device, reward.stamp.authorDeviceId)
+            assertNull(reward.stamp.signature)
+            assertFalse(reward.stamp.deleted)
+            val kid = assertNotNull(database.kidDao().get(Fixtures.kid))
+            assertEquals(0, kid.lamport)
+            assertEquals(device, kid.stamp.authorDeviceId)
+            assertEquals(device, database.accountDao().all().single().stamp.authorDeviceId)
+            // The unsigned version 2 document row is gone; the ledger event row stays queued.
+            assertEquals(listOf(OutboxKind.LEDGER_EVENT), database.outboxDao().all().map { it.kind })
+            assertNull(database.ledgerEventDao().all().single().ingestedAtEpochMs)
+            assertNull(database.sessionDao().get())
+        } finally {
+            database.close()
+        }
+    }
+
+    @Test
+    fun migration1To3KeepsTheM1Rows() = runTest {
+        helper.createDatabase(TEST_DB, 1).use { db -> insertVersion1Rows(db, chore) }
+
+        helper.runMigrationsAndValidate(TEST_DB, 3, true, Migrations.MIGRATION_1_2, Migrations.MIGRATION_2_3).close()
+
+        val database = Room.databaseBuilder(RuntimeEnvironment.getApplication(), SproutDatabase::class.java, TEST_DB)
+            .addMigrations(*Migrations.ALL)
+            .build()
+        try {
+            assertEquals(chore, LedgerEventMapper.toDomain(database.ledgerEventDao().all().single()))
+            assertEquals(Money(250), database.balanceDao().forKid(Fixtures.kid).single().amountMinor)
+            assertEquals("Mia", database.kidDao().observeActive().first().single().firstName)
+            assertEquals(OutboxKind.LEDGER_EVENT, database.outboxDao().all().single().kind)
+            assertEquals(1, database.deviceStateDao().get()?.lamport)
         } finally {
             database.close()
         }
@@ -202,5 +286,6 @@ class MigrationTest {
             "photos",
             "household_policy",
         )
+        val NEW_TABLES_3 = listOf("devices", "parent_keys", "ledger_inbox", "document_inbox", "sync_cursor", "session")
     }
 }

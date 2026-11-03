@@ -1,12 +1,16 @@
 package dev.kpetriv.sprout.core.database.entity
 
+import androidx.room.ColumnInfo
+import androidx.room.Embedded
 import androidx.room.Entity
 import androidx.room.PrimaryKey
 import dev.kpetriv.sprout.core.domainledger.Currency
 
 /**
- * The household's local ledger policy; a single row with [id] [SINGLETON_ID]. Device-local in M2 (the household
- * registers its policy and parent keys with the device registry in M3).
+ * This device's view of the household policy; a single row with [id] [SINGLETON_ID]. The synced part (fiat currency,
+ * `requireParentSignature`) is the `household_policy` document ([lamport], [stamp]); the parent key fields are this
+ * device's own registration, used to verify parent signatures on **local** appends (M3 §2). Remote events are
+ * verified against the registry (`parent_keys`) instead.
  *
  * @property requireParentSignature parent-only events need a verified parent signature (ADR-0004). True once a
  *   parent key is registered; false on a device without a strong biometric (D-M2-1).
@@ -14,6 +18,8 @@ import dev.kpetriv.sprout.core.domainledger.Currency
  *   which the parent key was registered, so earlier unsigned parent events stay valid.
  * @property parentPublicKey the parent authentication key, X.509 SubjectPublicKeyInfo DER (public, not secret).
  * @property fiatCurrency the household's money currency.
+ * @property lamport the household policy document's lamport (schema version 3); 0 for rows written before.
+ * @property stamp author and signature of the household policy document (schema version 3).
  */
 @Entity(tableName = "household_policy")
 data class HouseholdPolicyEntity(
@@ -23,12 +29,15 @@ data class HouseholdPolicyEntity(
     val parentPublicKey: ByteArray?,
     val fiatCurrency: Currency,
     val createdAtEpochMs: Long,
+    @ColumnInfo(defaultValue = "0") val lamport: Long = 0,
+    @Embedded val stamp: DocumentStamp = DocumentStamp(),
 ) {
     override fun equals(other: Any?): Boolean = other is HouseholdPolicyEntity && id == other.id &&
         requireParentSignature == other.requireParentSignature &&
         parentSignatureFromLamport == other.parentSignatureFromLamport &&
         (parentPublicKey?.contentEquals(other.parentPublicKey) ?: (other.parentPublicKey == null)) &&
-        fiatCurrency == other.fiatCurrency && createdAtEpochMs == other.createdAtEpochMs
+        fiatCurrency == other.fiatCurrency && createdAtEpochMs == other.createdAtEpochMs && lamport == other.lamport &&
+        stamp == other.stamp
 
     override fun hashCode(): Int = id
 

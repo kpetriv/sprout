@@ -25,6 +25,7 @@ import dev.kpetriv.sprout.core.model.InterestPolicy
 import dev.kpetriv.sprout.core.model.KidId
 import dev.kpetriv.sprout.core.model.PhotoRef
 import dev.kpetriv.sprout.core.model.SubmissionStatus
+import dev.kpetriv.sprout.core.sync.DocTypes
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
@@ -55,7 +56,7 @@ import kotlin.time.Duration.Companion.days
  */
 @RunWith(RobolectricTestRunner::class)
 class ReviewFixesTest {
-    private val household = TestHousehold()
+    private val household = testHousehold()
     private val monday = CalendarDate(2026, 11, 2)
 
     @After
@@ -63,7 +64,7 @@ class ReviewFixesTest {
 
     private fun chore(kid: KidId, schedule: ChoreSchedule = ChoreSchedule.Weekly(DayOfWeek.MONDAY)) = Chore(
         ChoreId("tidy"),
-        LocalOnlyAuthorProvider.LOCAL_HOUSEHOLD,
+        LocalTrial.HOUSEHOLD,
         kid,
         "Tidy your room",
         reward = ChoreReward(money = Money(50), minutes = Money(15)),

@@ -1,5 +1,6 @@
 package dev.kpetriv.sprout.core.database.entity
 
+import androidx.room.Embedded
 import androidx.room.Entity
 import androidx.room.Index
 import androidx.room.PrimaryKey
@@ -20,6 +21,7 @@ import kotlin.time.Instant
  *
  * @property note kid-written free text; never logged or audited.
  * @property rejectionReason parent-written free text; never logged or audited.
+ * @property stamp author, signature and tombstone flag of the row's current state (schema version 3).
  */
 @Entity(
     tableName = "chore_submissions",
@@ -43,6 +45,7 @@ data class ChoreSubmissionEntity(
     val decidedBy: UserId?,
     val rejectionReason: String?,
     val lamport: Long,
+    @Embedded val stamp: DocumentStamp = DocumentStamp(),
 ) {
     fun toDomain(): ChoreSubmission = ChoreSubmission(
         id = submissionId,

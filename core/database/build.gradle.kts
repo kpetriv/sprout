@@ -13,6 +13,11 @@ android {
         getByName("test").assets.directories.add("$projectDir/schemas")
     }
     testOptions.unitTests.isIncludeAndroidResources = true
+
+    // TestHousehold and its helpers: shared with other modules' tests that need one or two wired households.
+    testFixtures {
+        enable = true
+    }
 }
 
 room {
@@ -25,7 +30,10 @@ dependencies {
     // Chores, rewards, allowance, savings and their planners (M2); repositories expose these models.
     api(projects.core.domainHousehold)
     api(projects.core.model)
-    implementation(projects.core.crypto)
+    // Sync ports (OutboxSource, RemoteApplier), DocumentEnvelope, DocTypes and the document verifier/resolver.
+    api(projects.core.sync)
+    // DeviceSigner and DeviceKeyStore appear in public constructors (repositories, test fixtures).
+    api(projects.core.crypto)
     // The IO dispatcher qualifier for the photo store's file work.
     implementation(projects.core.common)
 
@@ -34,7 +42,14 @@ dependencies {
     // Encrypts the database file at rest; see DatabaseFactory.encrypted.
     implementation(libs.sqlcipher.android)
 
+    testFixturesApi(testFixtures(projects.core.crypto))
+    testFixturesApi(testFixtures(projects.core.time))
+    testFixturesImplementation(libs.androidx.room.runtime)
+    testFixturesImplementation(libs.kotlinx.coroutines.core)
+
     testImplementation(testFixtures(projects.core.domainLedger))
+    // FakeBackend, FakeSyncTransport and SoftwareDeviceKey for the two-device convergence tests.
+    testImplementation(testFixtures(projects.core.sync))
     // In-memory device key store, key wrapper and blob storage (never shipped in main).
     testImplementation(testFixtures(projects.core.crypto))
     testImplementation(testFixtures(projects.core.time))

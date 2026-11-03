@@ -18,7 +18,6 @@ import dev.kpetriv.sprout.core.database.entity.SavingsGoalEntity
 import dev.kpetriv.sprout.core.domainledger.EventId
 import dev.kpetriv.sprout.core.model.CalendarDate
 import dev.kpetriv.sprout.core.model.ChoreId
-import dev.kpetriv.sprout.core.model.ChoreState
 import dev.kpetriv.sprout.core.model.GoalId
 import dev.kpetriv.sprout.core.model.HouseholdId
 import dev.kpetriv.sprout.core.model.KidId
@@ -33,20 +32,19 @@ interface ChoreDao {
     @Upsert
     suspend fun upsert(chore: ChoreEntity)
 
+    /** The row, tombstones included (sync needs them); repositories hide tombstones. */
     @Query("SELECT * FROM chores WHERE choreId = :choreId")
     suspend fun get(choreId: ChoreId): ChoreEntity?
 
-    /** Chores of every kid (null [kidId]) or one kid; archived ones only with [includeArchived]. */
+    /** Chores of every kid (null [kidId]) or one kid; archived ones only with [includeArchived]. No tombstones. */
     @Query(
         """
-        SELECT * FROM chores WHERE (:kidId IS NULL OR kidId = :kidId) AND (:includeArchived OR state != 'ARCHIVED')
+        SELECT * FROM chores WHERE deleted = 0 AND (:kidId IS NULL OR kidId = :kidId)
+        AND (:includeArchived OR state != 'ARCHIVED')
         ORDER BY createdAtEpochMs, choreId
         """,
     )
     fun observe(kidId: KidId?, includeArchived: Boolean): Flow<List<ChoreEntity>>
-
-    @Query("UPDATE chores SET state = :state, lamport = :lamport WHERE choreId = :choreId")
-    suspend fun setState(choreId: ChoreId, state: ChoreState, lamport: Long): Int
 }
 
 @Dao
@@ -54,15 +52,30 @@ interface ChoreSubmissionDao {
     @Upsert
     suspend fun upsert(submission: ChoreSubmissionEntity)
 
+    /** The row, tombstones included; repositories hide tombstones. */
     @Query("SELECT * FROM chore_submissions WHERE submissionId = :submissionId")
     suspend fun get(submissionId: SubmissionId): ChoreSubmissionEntity?
 
-    @Query("SELECT * FROM chore_submissions WHERE kidId = :kidId ORDER BY dueOn DESC, submittedAtEpochMs DESC")
+    @Query(
+        """
+        SELECT * FROM chore_submissions WHERE kidId = :kidId AND deleted = 0
+        ORDER BY dueOn DESC, submittedAtEpochMs DESC
+        """,
+    )
     fun observeForKid(kidId: KidId): Flow<List<ChoreSubmissionEntity>>
 
     /** Submissions with [status] (of every kid), oldest first: the parent's approvals inbox for SUBMITTED. */
-    @Query("SELECT * FROM chore_submissions WHERE status = :status ORDER BY submittedAtEpochMs, submissionId")
+    @Query(
+        """
+        SELECT * FROM chore_submissions WHERE status = :status AND deleted = 0
+        ORDER BY submittedAtEpochMs, submissionId
+        """,
+    )
     fun observeWithStatus(status: SubmissionStatus): Flow<List<ChoreSubmissionEntity>>
+
+    /** The submission of [choreId] due on [dueOn], tombstones included, whatever its id. */
+    @Query("SELECT * FROM chore_submissions WHERE choreId = :choreId AND dueOn = :dueOn")
+    suspend fun forOccurrence(choreId: ChoreId, dueOn: CalendarDate): ChoreSubmissionEntity?
 
     /** Every submission of [choreId]. */
     @Query("SELECT * FROM chore_submissions WHERE choreId = :choreId")
@@ -74,14 +87,12 @@ interface RewardDao {
     @Upsert
     suspend fun upsert(reward: RewardEntity)
 
+    /** The row, tombstones included; repositories and the catalogue hide tombstones. */
     @Query("SELECT * FROM rewards WHERE rewardId = :rewardId")
     suspend fun get(rewardId: RewardId): RewardEntity?
 
-    @Query("SELECT * FROM rewards ORDER BY cost, rewardId")
+    @Query("SELECT * FROM rewards WHERE deleted = 0 ORDER BY cost, rewardId")
     fun observeAll(): Flow<List<RewardEntity>>
-
-    @Query("UPDATE rewards SET active = :active, lamport = :lamport WHERE rewardId = :rewardId")
-    suspend fun setActive(rewardId: RewardId, active: Boolean, lamport: Long): Int
 }
 
 @Dao
@@ -89,13 +100,19 @@ interface AllowanceScheduleDao {
     @Upsert
     suspend fun upsert(schedule: AllowanceScheduleEntity)
 
+    /** The row, tombstones included; repositories hide tombstones. */
     @Query("SELECT * FROM allowance_schedules WHERE scheduleId = :scheduleId")
     suspend fun get(scheduleId: ScheduleId): AllowanceScheduleEntity?
 
-    @Query("SELECT * FROM allowance_schedules WHERE (:kidId IS NULL OR kidId = :kidId) ORDER BY startsOn, scheduleId")
+    @Query(
+        """
+        SELECT * FROM allowance_schedules WHERE deleted = 0 AND (:kidId IS NULL OR kidId = :kidId)
+        ORDER BY startsOn, scheduleId
+        """,
+    )
     fun observe(kidId: KidId?): Flow<List<AllowanceScheduleEntity>>
 
-    @Query("SELECT * FROM allowance_schedules WHERE kidId = :kidId ORDER BY startsOn, scheduleId")
+    @Query("SELECT * FROM allowance_schedules WHERE kidId = :kidId AND deleted = 0 ORDER BY startsOn, scheduleId")
     suspend fun forKid(kidId: KidId): List<AllowanceScheduleEntity>
 
     @Query("UPDATE allowance_schedules SET lastPaidOn = :lastPaidOn WHERE scheduleId = :scheduleId")
@@ -107,14 +124,12 @@ interface SavingsGoalDao {
     @Upsert
     suspend fun upsert(goal: SavingsGoalEntity)
 
+    /** The row, tombstones included; repositories hide tombstones. */
     @Query("SELECT * FROM savings_goals WHERE goalId = :goalId")
     suspend fun get(goalId: GoalId): SavingsGoalEntity?
 
-    @Query("SELECT * FROM savings_goals WHERE kidId = :kidId ORDER BY createdOn, goalId")
+    @Query("SELECT * FROM savings_goals WHERE kidId = :kidId AND deleted = 0 ORDER BY createdOn, goalId")
     fun observeForKid(kidId: KidId): Flow<List<SavingsGoalEntity>>
-
-    @Query("DELETE FROM savings_goals WHERE goalId = :goalId")
-    suspend fun delete(goalId: GoalId): Int
 }
 
 @Dao
@@ -122,10 +137,11 @@ interface InterestPolicyDao {
     @Upsert
     suspend fun upsert(policy: InterestPolicyEntity)
 
+    /** The row, tombstones included; the repository hides tombstones. */
     @Query("SELECT * FROM interest_policy WHERE householdId = :householdId")
     suspend fun get(householdId: HouseholdId): InterestPolicyEntity?
 
-    @Query("SELECT * FROM interest_policy WHERE householdId = :householdId")
+    @Query("SELECT * FROM interest_policy WHERE householdId = :householdId AND deleted = 0")
     fun observe(householdId: HouseholdId): Flow<InterestPolicyEntity?>
 }
 

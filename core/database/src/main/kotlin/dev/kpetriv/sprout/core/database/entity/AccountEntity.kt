@@ -1,5 +1,7 @@
 package dev.kpetriv.sprout.core.database.entity
 
+import androidx.room.ColumnInfo
+import androidx.room.Embedded
 import androidx.room.Entity
 import androidx.room.Index
 import androidx.room.PrimaryKey
@@ -15,7 +17,9 @@ import dev.kpetriv.sprout.core.model.KidId
  *
  * @property lastAccruedOn device-local interest bookkeeping for a SAVINGS account (schema version 2): the latest
  *   accrual day already planned (`InterestPlanner`'s `lastAccruedOn`). Null until the first planning run, which
- *   starts interest from that day.
+ *   starts interest from that day. Device-local, never synced.
+ * @property lamport the account document's lamport (schema version 3); 0 for rows written before.
+ * @property stamp author and signature of the account document (schema version 3).
  */
 @Entity(
     tableName = "accounts",
@@ -28,6 +32,8 @@ data class AccountEntity(
     val kind: AccountKind,
     val createdAtEpochMs: Long,
     val lastAccruedOn: CalendarDate? = null,
+    @ColumnInfo(defaultValue = "0") val lamport: Long = 0,
+    @Embedded val stamp: DocumentStamp = DocumentStamp(),
 ) {
     fun toDomain(): Account = Account(id = accountId, kidId = kidId, currency = currency, kind = kind)
 

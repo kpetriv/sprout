@@ -15,8 +15,9 @@ data class StoredCopy(val hash: String, val quarantined: Boolean)
 
 /** Append-only access to `ledger_events`. There is deliberately no delete; the only update is [quarantine]. */
 @Dao
+@Suppress("TooManyFunctions") // Inserts, chain heads, verified and quarantined reads.
 interface LedgerEventDao {
-    /** Fails on a duplicate `(eventId, hash)`: callers check [hashesOf] first, inside the same transaction. */
+    /** Fails on a duplicate `(eventId, hash)`: callers check [copiesOf] first, inside the same transaction. */
     @Insert(onConflict = OnConflictStrategy.ABORT)
     suspend fun insert(event: LedgerEventEntity)
 
@@ -68,6 +69,10 @@ interface LedgerEventDao {
 
     @Query("SELECT COUNT(*) FROM ledger_events")
     suspend fun count(): Int
+
+    /** Quarantined rows, newest first, for the parent's "Rejected events" card. */
+    @Query("SELECT * FROM ledger_events WHERE quarantined = 1 ORDER BY receivedAtEpochMs DESC, eventId")
+    fun observeQuarantined(): Flow<List<LedgerEventEntity>>
 
     /** Every row, quarantined ones included; for tests and the audit view. */
     @Query("SELECT * FROM ledger_events ORDER BY rowid")

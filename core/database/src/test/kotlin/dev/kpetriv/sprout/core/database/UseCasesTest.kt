@@ -46,7 +46,7 @@ import kotlin.test.assertTrue
 
 @RunWith(RobolectricTestRunner::class)
 class UseCasesTest {
-    private val household = TestHousehold()
+    private val household = testHousehold()
     private val today = CalendarDate(2026, 11, 2)
 
     @After
@@ -66,7 +66,7 @@ class UseCasesTest {
     private suspend fun choreWithSubmission(kid: KidId): dev.kpetriv.sprout.core.model.ChoreSubmission {
         val chore = Chore(
             ChoreId("tidy"),
-            LocalOnlyAuthorProvider.LOCAL_HOUSEHOLD,
+            LocalTrial.HOUSEHOLD,
             kid,
             "Tidy your room",
             reward = ChoreReward(money = Money(50), minutes = Money(15)),
@@ -140,7 +140,7 @@ class UseCasesTest {
         fund(kid.id, 500)
         val screen = Reward(
             RewardId("screen"),
-            LocalOnlyAuthorProvider.LOCAL_HOUSEHOLD,
+            LocalTrial.HOUSEHOLD,
             "30 minutes",
             RewardKind.SCREEN_TIME,
             Money(100),
@@ -162,7 +162,8 @@ class UseCasesTest {
         assertEquals(purchased.timeCreditId, credit.eventId)
         // Both are the kid's own events, unsigned by the parent.
         assertEquals(listOf(Role.KID, Role.KID), listOf(purchase, credit).map { it.envelope.authorRole })
-        assertEquals(kid.id.value, purchase.envelope.authorUid.value)
+        // Kid mode on a parent device: the parent's uid and device with role KID (D-M3-12).
+        assertEquals(LocalTrial.PARENT, purchase.envelope.authorUid)
         assertEquals(null, credit.envelope.parentSignature)
         assertEquals(1, household.parentAuthorizer.signaturesIssued) // only the funding adjustment
     }
@@ -176,7 +177,7 @@ class UseCasesTest {
         val treat =
             Reward(
                 RewardId("ice-cream"),
-                LocalOnlyAuthorProvider.LOCAL_HOUSEHOLD,
+                LocalTrial.HOUSEHOLD,
                 "Ice cream",
                 RewardKind.TREAT,
                 Money(150),

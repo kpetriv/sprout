@@ -17,6 +17,7 @@ import dev.kpetriv.sprout.core.model.KidId
 import dev.kpetriv.sprout.core.model.RewardId
 import dev.kpetriv.sprout.core.model.RewardKind
 import dev.kpetriv.sprout.core.model.ScheduleId
+import dev.kpetriv.sprout.core.sync.DocTypes
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.runTest
 import org.junit.After
@@ -32,7 +33,7 @@ import kotlin.test.assertTrue
 
 @RunWith(RobolectricTestRunner::class)
 class HouseholdRepositoriesTest {
-    private val household = TestHousehold()
+    private val household = testHousehold()
     private val database = household.database
     private val kid = KidId("kid-leo")
     private val other = KidId("kid-zoe")
@@ -49,7 +50,7 @@ class HouseholdRepositoriesTest {
         val rewards = household.rewards
         val screen = Reward(
             RewardId("screen"),
-            LocalOnlyAuthorProvider.LOCAL_HOUSEHOLD,
+            LocalTrial.HOUSEHOLD,
             "Screen time",
             RewardKind.SCREEN_TIME,
             Money(100),
@@ -58,7 +59,7 @@ class HouseholdRepositoriesTest {
         )
         val zoeOnly = Reward(
             RewardId("zoo"),
-            LocalOnlyAuthorProvider.LOCAL_HOUSEHOLD,
+            LocalTrial.HOUSEHOLD,
             "Zoo",
             RewardKind.OUTING,
             Money(1000),
@@ -132,7 +133,7 @@ class HouseholdRepositoriesTest {
     @Test
     fun interestPolicyDefaultsToOffAndKeepsPerAccountBookkeeping() = runTest {
         val interest = household.interest
-        val home = LocalOnlyAuthorProvider.LOCAL_HOUSEHOLD
+        val home = LocalTrial.HOUSEHOLD
         assertEquals(InterestPolicy(home), interest.get(home))
         assertFalse(interest.observe(home).first().isEnabled)
 
@@ -156,26 +157,28 @@ class HouseholdRepositoriesTest {
         assertTrue(created.parentSignaturesOff)
         assertEquals(created, policies.ensure(household.gbp))
 
-        // Two documents use lamports 1 and 2, so the next write gets 3.
+        // The policy document and two goals use lamports 1 to 3, so the next write gets 4.
         household.goals.upsert(SavingsGoal(GoalId("a"), kid, "A", Money(1), today))
         household.goals.upsert(SavingsGoal(GoalId("b"), kid, "B", Money(1), today))
         val key = byteArrayOf(1, 2, 3)
         val registered = policies.registerParentKey(key)
         assertTrue(registered.requireParentSignature)
-        assertEquals(3L, registered.parentSignatureFromLamport)
+        assertEquals(4L, registered.parentSignatureFromLamport)
         assertContentEquals(key, registered.parentPublicKey)
         assertEquals(household.gbp, registered.fiatCurrency)
-        assertEquals(registered.toLedgerPolicy().parentSignatureRequiredFromLamport, 3L)
+        assertEquals(registered.toLedgerPolicy().parentSignatureRequiredFromLamport, 4L)
 
         // A replacement key keeps the original cut-off.
         household.goals.upsert(SavingsGoal(GoalId("c"), kid, "C", Money(1), today))
         val replaced = policies.registerParentKey(byteArrayOf(4, 5))
-        assertEquals(3L, replaced.parentSignatureFromLamport)
+        assertEquals(4L, replaced.parentSignatureFromLamport)
         assertEquals(replaced, policies.observe().first())
         val audit = database.auditLogDao().all().filter { it.action == AuditAction.PARENT_KEY_REGISTERED }
         assertEquals(2, audit.size)
-        // The household policy is device-local in M2: no outbox row.
-        assertTrue(database.outboxDao().all().none { it.docType == "household_policy" })
+        // M3: the policy is a synced document and each key a parent_key document named by its fingerprint.
+        assertEquals(1, documents(DocTypes.HOUSEHOLD_POLICY).size)
+        assertEquals(2, documents(DocTypes.PARENT_KEY).size)
+        assertEquals(2, database.parentKeyDao().all().size)
     }
 
     @Test

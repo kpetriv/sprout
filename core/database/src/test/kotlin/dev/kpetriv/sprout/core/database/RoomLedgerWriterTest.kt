@@ -41,7 +41,7 @@ class RoomLedgerWriterTest {
     private val database = inMemoryDatabase()
     private val keyStore = InMemoryDeviceKeyStore(clock)
     private val signer = DeviceSigner(keyStore, Dispatchers.Unconfined)
-    private val authors = LocalOnlyAuthorProvider(signer)
+    private val authors = TrialAuthorProvider(signer)
     private val repository = RoomLedgerRepository(database, clock, signer, JceEcdsaVerifier())
 
     private val kidId = KidId("kid-a")
@@ -82,7 +82,7 @@ class RoomLedgerWriterTest {
         events.forEach { event ->
             assertEquals(expectedDevice, event.envelope.authorDeviceId.value)
             assertEquals(Role.PARENT, event.envelope.authorRole)
-            assertEquals(LocalOnlyAuthorProvider.LOCAL_HOUSEHOLD, event.envelope.householdId)
+            assertEquals(LocalTrial.HOUSEHOLD, event.envelope.householdId)
             val signature = assertNotNull(event.signatureBytes())
             assertTrue(verifier.verify(keyStore.publicKey(), event.signedPayload(), signature))
         }

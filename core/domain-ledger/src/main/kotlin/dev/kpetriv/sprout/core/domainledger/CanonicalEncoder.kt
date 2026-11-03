@@ -62,8 +62,23 @@ object CanonicalEncoder {
     fun encodeToString(json: JsonObject): String {
         val envelope = requireNotNull(json["envelope"] as? JsonObject) { "A ledger event needs an envelope object" }
         val stripped = JsonObject(json + ("envelope" to JsonObject(envelope - EXCLUDED_ENVELOPE_KEYS)))
-        return buildString { write(stripped) }
+        return encodeTreeToString(stripped)
     }
+
+    /**
+     * The canonical bytes of an arbitrary JSON object [tree] under rules 3 to 5 (sorted keys at every depth, compact,
+     * minimal string escaping, integers only, strict UTF-8). Nothing is removed: unlike [encode] there is no
+     * `envelope` and no key is stripped, so callers drop whatever their signature must not cover (a document
+     * envelope's `signature`) before calling. Used for synced documents (D-M3-16).
+     *
+     * @throws IllegalArgumentException if [tree] holds a non-integer number.
+     * @throws CharacterCodingException if a string or key holds an unpaired surrogate.
+     */
+    fun encodeTree(tree: JsonObject): ByteArray =
+        encodeTreeToString(tree).encodeToByteArray(throwOnInvalidSequence = true)
+
+    /** [encodeTree] as a string, for tests and debugging. Not validated as UTF-8. */
+    fun encodeTreeToString(tree: JsonObject): String = buildString { write(tree) }
 
     private fun StringBuilder.write(element: JsonElement) {
         when (element) {

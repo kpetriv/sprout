@@ -103,23 +103,14 @@ data class DocumentEnvelope(
  * canonicalising, every other field (including ones this client does not know) is covered.
  */
 fun documentSignedPayloadOf(tree: JsonObject): ByteArray =
-    DOCUMENT_SIGNATURE_PREFIX + canonicalDocumentString(tree).encodeToByteArray(throwOnInvalidSequence = true)
+    DOCUMENT_SIGNATURE_PREFIX + CanonicalEncoder.encodeTree(JsonObject(tree - SIGNATURE_KEY))
 
 /**
- * The canonical form of an envelope tree without its signature, as a string (for golden tests and debugging).
- *
- * [CanonicalEncoder] only takes ledger-event documents (it requires and strips an `envelope` object), so the tree is
- * wrapped as `{"d": tree, "envelope": {}}`; with keys sorted that encodes as `{"d":` + canonical(tree) +
- * `,"envelope":{}}`, and the middle is exactly the canonical form of the tree under the same rules.
+ * The canonical form of an envelope tree without its signature, as a string (for golden tests and debugging):
+ * [CanonicalEncoder.encodeTreeToString] of the tree minus `signature` (D-M3-16).
  */
-internal fun canonicalDocumentString(tree: JsonObject): String {
-    val wrapped = JsonObject(
-        mapOf(WRAP_KEY to JsonObject(tree - SIGNATURE_KEY), "envelope" to JsonObject(emptyMap())),
-    )
-    val encoded = CanonicalEncoder.encodeToString(wrapped)
-    check(encoded.startsWith(WRAP_PREFIX) && encoded.endsWith(WRAP_SUFFIX)) { "unexpected canonical wrapper" }
-    return encoded.substring(WRAP_PREFIX.length, encoded.length - WRAP_SUFFIX.length)
-}
+internal fun canonicalDocumentString(tree: JsonObject): String =
+    CanonicalEncoder.encodeTreeToString(JsonObject(tree - SIGNATURE_KEY))
 
 private fun decodeBase64OrNull(encoded: String): ByteArray? = try {
     Base64.Default.decode(encoded)
@@ -128,9 +119,6 @@ private fun decodeBase64OrNull(encoded: String): ByteArray? = try {
 }
 
 private const val SIGNATURE_KEY = "signature"
-private const val WRAP_KEY = "d"
-private const val WRAP_PREFIX = "{\"d\":"
-private const val WRAP_SUFFIX = ",\"envelope\":{}}"
 
 /** Storage and wire form of [DocumentEnvelope]s. Not canonical: signatures cover [documentSignedPayloadOf]. */
 object DocumentJsonCodec {

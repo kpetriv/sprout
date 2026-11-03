@@ -1,5 +1,6 @@
 package dev.kpetriv.sprout.core.database.entity
 
+import androidx.room.Embedded
 import androidx.room.Entity
 import androidx.room.PrimaryKey
 import dev.kpetriv.sprout.core.domainhousehold.Reward
@@ -16,6 +17,7 @@ import kotlinx.serialization.builtins.ListSerializer
  * against this row (cost, currency, minutes) before they are stored.
  *
  * @property forKidsJson JSON array of the kid ids that see the reward; `[]` means every kid.
+ * @property stamp author, signature and tombstone flag of the row's current state (schema version 3).
  */
 @Entity(tableName = "rewards")
 data class RewardEntity(
@@ -29,6 +31,7 @@ data class RewardEntity(
     val active: Boolean,
     val forKidsJson: String,
     val lamport: Long,
+    @Embedded val stamp: DocumentStamp = DocumentStamp(),
 ) {
     fun toDomain(): Reward = Reward(
         id = rewardId,

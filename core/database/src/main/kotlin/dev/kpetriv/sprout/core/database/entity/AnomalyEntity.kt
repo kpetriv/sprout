@@ -24,6 +24,8 @@ enum class AnomalyKind {
  * @property eventId the event that triggered it (the first cause, for overdrafts).
  * @property amountMinor shortfall (overdraft) or uncredited excess (daily cap); null otherwise.
  * @property detailsJson ids, hashes, roles and violation fields only; never free text or personal data.
+ * @property appliedCopyJson for a conflicting duplicate (schema version 3): the copy the projection applied, as JSON,
+ *   or the JSON literal `null` when it applied none. A SQL NULL (rows cached before version 3) means unknown.
  */
 @Entity(tableName = "anomalies", indices = [Index(value = ["kidId"])])
 data class AnomalyEntity(
@@ -35,4 +37,5 @@ data class AnomalyEntity(
     val amountMinor: Money?,
     val detailsJson: String,
     val detectedAtEpochMs: Long,
+    val appliedCopyJson: String? = null,
 )

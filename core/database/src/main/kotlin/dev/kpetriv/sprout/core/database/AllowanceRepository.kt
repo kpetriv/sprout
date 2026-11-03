@@ -1,12 +1,13 @@
 package dev.kpetriv.sprout.core.database
 
+import dev.kpetriv.sprout.core.crypto.DeviceSigner
 import dev.kpetriv.sprout.core.database.entity.AllowanceScheduleEntity
 import dev.kpetriv.sprout.core.database.entity.AuditAction
-import dev.kpetriv.sprout.core.database.entity.DocumentJson
 import dev.kpetriv.sprout.core.domainhousehold.AllowanceSchedule
 import dev.kpetriv.sprout.core.model.CalendarDate
 import dev.kpetriv.sprout.core.model.KidId
 import dev.kpetriv.sprout.core.model.ScheduleId
+import dev.kpetriv.sprout.core.sync.DocTypes
 import dev.kpetriv.sprout.core.time.Clock
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
@@ -35,30 +36,32 @@ interface AllowanceRepository {
 
 /** [AllowanceRepository] on Room: each schedule write, its outbox `DOCUMENT` row and its audit row together. */
 class RoomAllowanceRepository @Inject constructor(
-    private val database: SproutDatabase,
+    database: SproutDatabase,
     private val authors: SessionAuthorProvider,
-    private val clock: Clock,
+    clock: Clock,
+    signer: DeviceSigner,
 ) : AllowanceRepository {
     private val schedules = database.allowanceScheduleDao()
-    private val writes = DocumentWrites(database, clock)
+    private val writes = DocumentWrites(database, clock, signer)
 
     override fun observeSchedules(kidId: KidId?): Flow<List<AllowanceSchedule>> =
         schedules.observe(kidId).map { rows -> rows.map(AllowanceScheduleEntity::toDomain) }
 
-    override suspend fun get(id: ScheduleId): AllowanceSchedule? = schedules.get(id)?.toDomain()
+    override suspend fun get(id: ScheduleId): AllowanceSchedule? =
+        schedules.get(id)?.takeUnless { it.stamp.deleted }?.toDomain()
 
     override suspend fun upsert(schedule: AllowanceSchedule) {
         val author = authors.currentAuthor()
         writes.transaction {
             val lamport = writes.nextLamport(author.deviceId)
             val lastPaidOn = schedules.get(schedule.id)?.lastPaidOn
-            schedules.upsert(AllowanceScheduleEntity.from(schedule, lastPaidOn, lamport))
-            writes.record(
+            val row = AllowanceScheduleEntity.from(schedule, lastPaidOn, lamport)
+            val stamp = writes.record(
                 author,
                 DocTypes.ALLOWANCE_SCHEDULE,
                 schedule.id.value,
                 lamport,
-                DocumentJson.json.encodeToJsonElement(AllowanceSchedule.serializer(), schedule),
+                DocumentPayloads.encode(AllowanceSchedule.serializer(), row.toDomain()),
                 AuditAction.ALLOWANCE_UPSERTED,
             ) {
                 put("kidId", schedule.kidId.value)
@@ -67,6 +70,7 @@ class RoomAllowanceRepository @Inject constructor(
                 put("currency", Converters.currencyToString(schedule.currency))
                 put("active", schedule.active)
             }
+            schedules.upsert(row.copy(stamp = stamp))
         }
     }
 

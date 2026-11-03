@@ -33,13 +33,18 @@ internal object LedgerEventMapper {
         data class Failed(val reason: String) : Read
     }
 
+    /**
+     * The row for [event]. [tree] is the document stored as `payloadJson`: the event's own encoding for local events,
+     * and the pulled tree as it arrived for remote ones (fields this client does not know stay covered by the hash
+     * and signatures, see [LedgerJson]).
+     */
     fun toEntity(
         event: LedgerEvent,
         origin: EventOrigin,
         receivedAtEpochMs: Long,
         quarantineReason: String? = null,
+        tree: JsonObject = LedgerJson.encodeToJsonObject(event),
     ): LedgerEventEntity {
-        val tree = LedgerJson.encodeToJsonObject(event)
         val envelope = event.envelope
         return LedgerEventEntity(
             eventId = envelope.eventId,
@@ -51,7 +56,7 @@ internal object LedgerEventMapper {
             authorRole = envelope.authorRole,
             lamport = envelope.lamport,
             createdAtEpochMs = envelope.createdAt.toEpochMilliseconds(),
-            type = tree.getValue(TYPE_KEY).jsonPrimitive.content,
+            type = LedgerJson.encodeToJsonObject(event).getValue(TYPE_KEY).jsonPrimitive.content,
             currency = event.currency,
             schemaVersion = envelope.schemaVersion,
             prevHash = envelope.prevHash,

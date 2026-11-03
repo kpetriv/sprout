@@ -1,9 +1,9 @@
 package dev.kpetriv.sprout.core.database
 
+import dev.kpetriv.sprout.core.crypto.DeviceSigner
 import dev.kpetriv.sprout.core.database.entity.AuditAction
 import dev.kpetriv.sprout.core.database.entity.ChoreEntity
 import dev.kpetriv.sprout.core.database.entity.ChoreSubmissionEntity
-import dev.kpetriv.sprout.core.database.entity.DocumentJson
 import dev.kpetriv.sprout.core.domainhousehold.Chore
 import dev.kpetriv.sprout.core.domainhousehold.ChoreSubmissions
 import dev.kpetriv.sprout.core.domainledger.EventAuthor
@@ -17,6 +17,7 @@ import dev.kpetriv.sprout.core.model.KidId
 import dev.kpetriv.sprout.core.model.PhotoRef
 import dev.kpetriv.sprout.core.model.SubmissionId
 import dev.kpetriv.sprout.core.model.SubmissionStatus
+import dev.kpetriv.sprout.core.sync.DocTypes
 import dev.kpetriv.sprout.core.time.Clock
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
@@ -123,12 +124,14 @@ interface ChoreRepository {
  * [ChoreRepository] on Room: each write, its outbox `DOCUMENT` row and its audit row in one transaction. Photos are
  * deleted through [PhotoStore] after the transaction that made them unnecessary.
  */
+@Suppress("LongParameterList") // Storage, author, clock, ledger, photos and the document signer.
 class RoomChoreRepository internal constructor(
     private val database: SproutDatabase,
     private val authors: SessionAuthorProvider,
     private val clock: Clock,
     private val rewardLedger: ChoreRewardLedger,
     private val photoStore: PhotoStore,
+    signer: DeviceSigner,
 ) : ChoreRepository {
     @Inject
     constructor(
@@ -137,36 +140,29 @@ class RoomChoreRepository internal constructor(
         clock: Clock,
         ledger: RoomLedgerRepository,
         photoStore: PhotoStore,
-    ) : this(database, authors, clock, ChoreRewardLedger(ledger::choreRewardsFor), photoStore)
+        signer: DeviceSigner,
+    ) : this(database, authors, clock, ChoreRewardLedger(ledger::choreRewardsFor), photoStore, signer)
 
     private val chores = database.choreDao()
     private val submissions = database.choreSubmissionDao()
     private val photos = database.photoDao()
-    private val writes = DocumentWrites(database, clock)
+    private val writes = DocumentWrites(database, clock, signer)
 
     override fun observeChores(kidId: KidId?, includeArchived: Boolean): Flow<List<Chore>> =
         chores.observe(kidId, includeArchived).map { rows -> rows.map(ChoreEntity::toDomain) }
 
-    override suspend fun get(id: ChoreId): Chore? = chores.get(id)?.toDomain()
+    override suspend fun get(id: ChoreId): Chore? = chores.get(id)?.takeUnless { it.stamp.deleted }?.toDomain()
 
     override suspend fun upsert(chore: Chore) {
         val author = authors.currentAuthor()
-        writes.transaction {
-            val lamport = writes.nextLamport(author.deviceId)
-            chores.upsert(ChoreEntity.from(chore, lamport))
-            recordChore(author, chore, lamport, AuditAction.CHORE_UPSERTED)
-        }
+        writes.transaction { writeChore(author, chore, AuditAction.CHORE_UPSERTED) }
     }
 
     override suspend fun setState(id: ChoreId, state: ChoreState): Boolean {
         val author = authors.currentAuthor()
         val found = writes.transaction {
-            val chore = chores.get(id)?.toDomain() ?: return@transaction false
-            if (chore.state != state) {
-                val lamport = writes.nextLamport(author.deviceId)
-                chores.setState(id, state, lamport)
-                recordChore(author, chore.copy(state = state), lamport, AuditAction.CHORE_STATE_CHANGED)
-            }
+            val chore = chores.get(id)?.takeUnless { it.stamp.deleted }?.toDomain() ?: return@transaction false
+            if (chore.state != state) writeChore(author, chore.copy(state = state), AuditAction.CHORE_STATE_CHANGED)
             true
         }
         if (found && state == ChoreState.ARCHIVED) {
@@ -180,7 +176,8 @@ class RoomChoreRepository internal constructor(
         SubmissionFilter.PendingForParent -> submissions.observeWithStatus(SubmissionStatus.SUBMITTED)
     }.map { rows -> rows.map(ChoreSubmissionEntity::toDomain) }
 
-    override suspend fun getSubmission(id: SubmissionId): ChoreSubmission? = submissions.get(id)?.toDomain()
+    override suspend fun getSubmission(id: SubmissionId): ChoreSubmission? =
+        submissions.get(id)?.takeUnless { it.stamp.deleted }?.toDomain()
 
     override suspend fun submit(
         choreId: ChoreId,
@@ -190,9 +187,9 @@ class RoomChoreRepository internal constructor(
     ): ChoreSubmission {
         val author = authors.currentAuthor()
         return writes.transaction {
-            val chore = requireNotNull(chores.get(choreId)?.toDomain()) { "unknown chore" }
+            val chore = requireNotNull(get(choreId)) { "unknown chore" }
             val submitted = ChoreSubmissions.submit(chore, dueOn, clock.now(), note?.takeIf { it.isNotBlank() }, photo)
-            val existing = submissions.get(submitted.id)?.toDomain()
+            val existing = getSubmission(submitted.id)
             if (existing != null && existing.status != SubmissionStatus.SUBMITTED) return@transaction existing
             if (photo != null) {
                 val stored = photos.get(photo.fileName)
@@ -208,12 +205,12 @@ class RoomChoreRepository internal constructor(
     override suspend fun decide(id: SubmissionId, decision: SubmissionDecision, reason: String?): DecisionResult {
         val author = authors.currentAuthor()
         if (decision == SubmissionDecision.REJECT) {
-            val current = requireNotNull(submissions.get(id)?.toDomain()) { "unknown submission" }
+            val current = requireNotNull(getSubmission(id)) { "unknown submission" }
             val paidBy = rewardLedger.rewardsFor(current.kidId, current.choreId.value, current.dueOn)
             if (paidBy.isNotEmpty()) return DecisionResult.AlreadyPaid(current, paidBy)
         }
         val decided = writes.transaction {
-            val current = requireNotNull(submissions.get(id)?.toDomain()) { "unknown submission" }
+            val current = requireNotNull(getSubmission(id)) { "unknown submission" }
             val decided = when (decision) {
                 SubmissionDecision.APPROVE -> ChoreSubmissions.approve(current, clock.now(), author.uid)
 
@@ -237,13 +234,14 @@ class RoomChoreRepository internal constructor(
         action: AuditAction,
     ): ChoreSubmission {
         val lamport = writes.nextLamport(author.deviceId)
-        submissions.upsert(ChoreSubmissionEntity.from(submission, lamport))
-        writes.record(
+        val row = ChoreSubmissionEntity.from(submission, lamport)
+        val stored = row.toDomain()
+        val stamp = writes.record(
             author,
             DocTypes.CHORE_SUBMISSION,
             submission.id.value,
             lamport,
-            DocumentJson.json.encodeToJsonElement(ChoreSubmission.serializer(), submission),
+            DocumentPayloads.encode(ChoreSubmission.serializer(), stored),
             action,
         ) {
             put("choreId", submission.choreId.value)
@@ -252,16 +250,19 @@ class RoomChoreRepository internal constructor(
             put("status", submission.status.name)
             put("hasPhoto", submission.photoRef != null)
         }
-        return submission
+        submissions.upsert(row.copy(stamp = stamp))
+        return stored
     }
 
-    private suspend fun recordChore(author: EventAuthor, chore: Chore, lamport: Long, action: AuditAction) =
-        writes.record(
+    private suspend fun writeChore(author: EventAuthor, chore: Chore, action: AuditAction) {
+        val lamport = writes.nextLamport(author.deviceId)
+        val row = ChoreEntity.from(chore, lamport)
+        val stamp = writes.record(
             author,
             DocTypes.CHORE,
             chore.id.value,
             lamport,
-            DocumentJson.json.encodeToJsonElement(Chore.serializer(), chore),
+            DocumentPayloads.encode(Chore.serializer(), row.toDomain()),
             action,
         ) {
             put("kidId", chore.kidId.value)
@@ -269,4 +270,6 @@ class RoomChoreRepository internal constructor(
             chore.reward.money?.let { put("rewardMoneyMinor", it.minorUnits) }
             chore.reward.minutes?.let { put("rewardMinutes", it.minorUnits) }
         }
+        chores.upsert(row.copy(stamp = stamp))
+    }
 }
