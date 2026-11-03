@@ -17,6 +17,13 @@ class InMemoryOutboxSource : OutboxSource {
     fun enqueueEvent(json: JsonObject): Long = (nextSeq++).also { rows[it] = Row(OutboxItem.event(it, json)) }
 
     @Synchronized
+    fun enqueueMessage(json: JsonObject): Long = (nextSeq++).also { rows[it] = Row(OutboxItem.message(it, json)) }
+
+    @Synchronized
+    fun enqueueBlobChunk(chunk: BlobChunkJson): Long =
+        (nextSeq++).also { rows[it] = Row(OutboxItem.blobChunk(it, chunk)) }
+
+    @Synchronized
     fun enqueueDocument(envelope: DocumentEnvelope): Long {
         val id = PushItemId.ofDocument(envelope)
         rows.entries.removeAll { it.value.item.pushId == id }
@@ -44,7 +51,7 @@ class InMemoryOutboxSource : OutboxSource {
         synchronized(this) {
             val item = rows[seq]?.item ?: return
             rows[seq] = Row(
-                item = OutboxItem(item.seq, item.kind, item.eventJson, item.document, item.attempts + 1),
+                item = item.withAttempts(item.attempts + 1),
                 nextAttemptAtEpochMs = nextAttemptAtEpochMs,
                 lastError = error.code,
             )

@@ -14,7 +14,12 @@ rules_version = '2';
 //   document whatever its lamport; two live chore submissions compare status rank first (APPROVED > REJECTED >
 //   SUBMITTED); everything else is last-writer-wins on (lamport, authorDeviceId). Deletion is a tombstone document,
 //   never a Firestore delete.
-// - parentKeys are written by Cloud Functions only (registerParentKey, revokeDevice).
+// - parentKeys are written by Cloud Functions only (registerParentKey, revokeDevice). Device rows, including their
+//   encryption key (encryptionKey, encryptionKeySignature: M4 §1.1), are written by the server only.
+// - Chat (M4 §2, §3): messages and blob chunks are create-only, authored by an ACTIVE device of the caller; a KID
+//   member writes only into its own kid's thread and reads only that thread (messages: threadId == kidId; blobs:
+//   kidId == its kid). Message ciphertext and blob data are Firestore bytes, so their size is checked exactly
+//   (8,192 and 716,800 bytes). Thread keys (threadKeys) are signed documents that only a PARENT member writes.
 // - Top-level collections (linkCodes, challenges, deletionRecords, rateLimits, userHouseholds) and anything not
 //   matched below are closed to clients: there is no rule granting access, so the default deny applies.
 //
@@ -28,6 +33,8 @@ rules_version = '2';
 // Evaluation budget: a request may evaluate at most 1,000 expressions. The write rules therefore read the caller's
 // member row and the author device once and pass them down (m, d) instead of calling get() helpers repeatedly; a
 // write that runs over the budget is denied, so a new check on a hot path needs a test with a worst-case payload.
+// The heaviest write is a thread key with 16 wraps (checked one by one), about 90 % of the budget; its test
+// ("stays within the rules evaluation budget for the largest thread key") writes and re-wraps one.
 service cloud.firestore {
   match /databases/{database}/documents {
 
@@ -97,7 +104,8 @@ service cloud.firestore {
         'rewards': 'reward',
         'allowanceSchedules': 'allowance_schedule',
         'savingsGoals': 'savings_goal',
-        'interestPolicy': 'interest_policy'
+        'interestPolicy': 'interest_policy',
+        'threadKeys': 'thread_key'
       };
     }
 
@@ -218,6 +226,96 @@ service cloud.firestore {
         allow update, delete: if false;
       }
 
+      // Chat messages (core/domain-ledger MessageEnvelope, M4 §1.3): create-only, document id messageId. The author is
+      // an ACTIVE device of the caller. As for events, a KID-role message may come from any member (kid mode on a
+      // parent phone, D-M3-12), a PARENT-role one only from a PARENT member; a KID member writes only KID-role
+      // messages into its own kid's thread. ciphertext is Firestore bytes (1 to 8,192), blobId is set exactly for VOICE and PHOTO. A PARENT
+      // member reads every thread, a KID member only its own (a query must filter on threadId to be allowed).
+      match /messages/{messageId} {
+        // n: the message; m: the caller's member row.
+        function validMessage(n, m) {
+          return n.keys().hasAll(['schemaVersion', 'householdId', 'threadId', 'messageId', 'authorUid',
+                                  'authorDeviceId', 'authorRole', 'seq', 'lamport', 'createdAt', 'epoch', 'kind',
+                                  'ciphertext', 'signature', 'serverReceivedAt'])
+            && n.keys().hasOnly(['schemaVersion', 'householdId', 'threadId', 'messageId', 'authorUid',
+                                 'authorDeviceId', 'authorRole', 'seq', 'lamport', 'createdAt', 'epoch', 'kind',
+                                 'ciphertext', 'blobId', 'signature', 'serverReceivedAt'])
+            && n.schemaVersion == 1
+            && n.householdId == hid
+            && boundedString(n.threadId, 128)
+            && n.messageId == messageId
+            && boundedString(n.messageId, 128)
+            && n.authorUid == request.auth.uid
+            && deviceIsActiveForCaller(n.authorDeviceId, m)
+            && (n.authorRole == 'KID' || (n.authorRole == 'PARENT' && m.role == 'PARENT'))
+            && (m.role == 'PARENT' || (n.authorRole == 'KID' && n.threadId == m.kidId))
+            && n.seq is int && n.seq >= 1
+            && n.lamport is int && n.lamport >= 0
+            && n.createdAt is int
+            && n.epoch is int && n.epoch >= 0
+            && n.kind in ['TEXT', 'PRESET', 'VOICE', 'PHOTO']
+            && n.ciphertext is bytes && n.ciphertext.size() > 0 && n.ciphertext.size() <= 8192
+            && (n.kind in ['VOICE', 'PHOTO']
+                ? boundedString(n.get('blobId', null), 128)
+                : n.get('blobId', null) == null)
+            && boundedString(n.signature, 200)
+            && serverStamp(n);
+        }
+
+        function mayReadThread(threadId, m) {
+          return m.role == 'PARENT' || threadId == m.kidId;
+        }
+
+        // A get of a missing message reveals nothing (the transport reads a refused write back).
+        allow get: if isMember() && (resource == null || mayReadThread(resource.data.threadId, member().data));
+        allow list: if isMember() && mayReadThread(resource.data.threadId, member().data);
+        allow create: if signedIn() && validMessage(request.resource.data, member().data);
+        allow update, delete: if false;
+      }
+
+      // Encrypted blob chunks (core/domain-ledger BlobChunkHeader plus data, M4 §2): create-only, document id
+      // "<blobId>.<chunk>". Exactly one of threadId (a chat blob; equal to kidId) and submissionId (a chore photo).
+      // data is Firestore bytes (1 to 716,800), at most 2 chunks. A PARENT member writes for any kid (kid mode on a
+      // parent phone included), a KID member only for its own kid. Fetched by id only (no list); a KID member reads
+      // only its own kid's blobs.
+      match /blobs/{blobDocId} {
+        function validBlob(n, m) {
+          return n.keys().hasAll(['schemaVersion', 'householdId', 'blobId', 'kidId', 'authorUid', 'authorDeviceId',
+                                  'lamport', 'chunk', 'chunks', 'sha256', 'epoch', 'signature', 'data',
+                                  'serverReceivedAt'])
+            && n.keys().hasOnly(['schemaVersion', 'householdId', 'blobId', 'threadId', 'kidId', 'submissionId',
+                                 'authorUid', 'authorDeviceId', 'lamport', 'chunk', 'chunks', 'sha256', 'epoch',
+                                 'signature', 'data', 'serverReceivedAt'])
+            && n.schemaVersion == 1
+            && n.householdId == hid
+            && boundedString(n.blobId, 128)
+            && n.chunk is int && n.chunk >= 0 && n.chunk <= 1
+            && n.chunks is int && n.chunks >= 1 && n.chunks <= 2
+            && n.chunk < n.chunks
+            && blobDocId == n.blobId + '.' + string(n.chunk)
+            && boundedString(n.kidId, 128)
+            && ((n.get('threadId', null) == null) != (n.get('submissionId', null) == null))
+            && (n.get('threadId', null) == null || n.threadId == n.kidId)
+            && (n.get('submissionId', null) == null || boundedString(n.submissionId, 128))
+            && n.authorUid == request.auth.uid
+            && deviceIsActiveForCaller(n.authorDeviceId, m)
+            && (m.role == 'PARENT' || n.kidId == m.kidId)
+            && n.lamport is int && n.lamport >= 0
+            && isHex64(n.sha256)
+            && n.epoch is int && n.epoch >= 0
+            && boundedString(n.signature, 200)
+            && n.data is bytes && n.data.size() > 0 && n.data.size() <= 716800
+            && serverStamp(n);
+        }
+
+        allow get: if isMember()
+                   && (resource == null || member().data.role == 'PARENT'
+                       || resource.data.kidId == member().data.kidId);
+        allow list: if false;
+        allow create: if signedIn() && validBlob(request.resource.data, member().data);
+        allow update, delete: if false;
+      }
+
       // Signed documents (core/sync DocumentEnvelope), one collection per docType.
       match /{coll}/{docId} {
         function isDocCollection() {
@@ -267,8 +365,9 @@ service cloud.firestore {
             && optString(p, 'decidedAt', 64) && optString(p, 'decidedBy', 128)
             && optString(p, 'rejectionReason', 500)
             && (p.get('photoRef', null) == null
-                || (p.photoRef is map && p.photoRef.keys().hasOnly(['fileName', 'sha256'])
-                    && optString(p.photoRef, 'fileName', 128) && optString(p.photoRef, 'sha256', 64)));
+                || (p.photoRef is map && p.photoRef.keys().hasOnly(['fileName', 'sha256', 'blobId'])
+                    && optString(p.photoRef, 'fileName', 128) && optString(p.photoRef, 'sha256', 64)
+                    && optString(p.photoRef, 'blobId', 64)));
         }
 
         function rewardPayload(p) {
@@ -298,9 +397,42 @@ service cloud.firestore {
             && optString(p, 'householdId', 128) && optInt(p, 'annualRateBasisPoints') && optInt(p, 'accrualDay');
         }
 
+        // core/domain-ledger ThreadKeyDocument: every key required; the thread key wrapped for 1 to 16 member
+        // devices (keys: device ids), each wrap exactly {wrapped: base64 of at most 128 characters}. Rules have no
+        // loops, so the wraps are checked one index at a time (wrapAt) up to the maximum of 16.
+        function threadKeyPayload(p) {
+          let wraps = p.wraps;
+          return p.keys().size() == 4
+            && p.keys().hasOnly(['threadId', 'epoch', 'createdByDeviceId', 'wraps'])
+            && boundedString(p.threadId, 128)
+            && p.epoch is int && p.epoch >= 0
+            && isHex64(p.createdByDeviceId)
+            && wraps is map && wraps.size() >= 1 && wraps.size() <= 16
+            && wraps.keys().join(',').matches('^[0-9a-f]{64}(,[0-9a-f]{64}){0,15}$')
+            && wrapsAreValid(wraps.values());
+        }
+
+        function wrapsAreValid(values) {
+          let l = values;
+          let n = l.size();
+          return (n <= 0 || validWrap(l[0])) && (n <= 1 || validWrap(l[1])) && (n <= 2 || validWrap(l[2]))
+            && (n <= 3 || validWrap(l[3])) && (n <= 4 || validWrap(l[4])) && (n <= 5 || validWrap(l[5]))
+            && (n <= 6 || validWrap(l[6])) && (n <= 7 || validWrap(l[7])) && (n <= 8 || validWrap(l[8]))
+            && (n <= 9 || validWrap(l[9])) && (n <= 10 || validWrap(l[10])) && (n <= 11 || validWrap(l[11]))
+            && (n <= 12 || validWrap(l[12])) && (n <= 13 || validWrap(l[13])) && (n <= 14 || validWrap(l[14]))
+            && (n <= 15 || validWrap(l[15]));
+        }
+
+        // {wrapped: 1 to 128 base64 characters} and nothing else. A missing key fails the access and a non-string
+        // fails matches(), both denying; one regex keeps the 16 unrolled checks inside the evaluation budget.
+        function validWrap(w) {
+          return w.size() == 1 && w.wrapped.matches('^[A-Za-z0-9+/=]{1,128}$');
+        }
+
         function validPayload(p) {
           return p is map && (
-            coll == 'choreSubmissions' ? submissionPayload(p)
+            coll == 'threadKeys' ? threadKeyPayload(p)
+            : coll == 'choreSubmissions' ? submissionPayload(p)
             : coll == 'chores' ? chorePayload(p)
             : coll == 'rewards' ? rewardPayload(p)
             : coll == 'kids' ? kidPayload(p)

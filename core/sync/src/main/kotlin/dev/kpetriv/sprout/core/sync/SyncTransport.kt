@@ -2,6 +2,7 @@ package dev.kpetriv.sprout.core.sync
 
 import dev.kpetriv.sprout.core.domainledger.RegisteredDevice
 import dev.kpetriv.sprout.core.domainledger.RegisteredParentKey
+import dev.kpetriv.sprout.core.model.BlobId
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.serialization.Serializable
@@ -15,21 +16,41 @@ import kotlinx.serialization.json.JsonPrimitive
  * Failures are reported by throwing [SyncException] (never another exception type, never free text): a whole call
  * that fails throws, and per-item outcomes of a push come back in [PushResult].
  *
- * [push], [pull] and [changes] have fail-closed defaults (nothing sent, nothing received) only so the
- * core/sync-firebase stub keeps compiling until it implements them in M3 §5; every real transport overrides them.
+ * [push], [pull], [fetchBlob] and [changes] have fail-closed defaults (nothing sent, nothing received) only so a
+ * partial transport keeps compiling; every real transport overrides them.
  */
 interface SyncTransport {
     /**
-     * Sends ledger events (their `LedgerJson` trees) and signed documents. Idempotent: an event already on the
-     * server under the same `(eventId, hash)`, or a document the server's copy already beats, is accepted.
+     * Sends ledger events (their `LedgerJson` trees), signed documents, chat messages (their `MessageJson` trees,
+     * core/domain-ledger `MessageEnvelope`) and blob chunks ([BlobChunkJson]). Idempotent: an event already on the
+     * server under the same `(eventId, hash)`, a document the server's copy already beats, or a message or blob chunk
+     * already stored with the same content, is accepted.
+     *
+     * Blob chunks are written before messages, so a message never reaches the server ahead of a blob it refers to
+     * that travels in the same call (the outbox queues a blob before its message; the engine keeps that order).
      */
-    suspend fun push(events: List<JsonObject>, documents: List<DocumentEnvelope>): PushResult =
-        throw SyncException(SyncError.Transient())
+    suspend fun push(
+        events: List<JsonObject>,
+        documents: List<DocumentEnvelope>,
+        messages: List<JsonObject> = emptyList(),
+        blobChunks: List<BlobChunkJson> = emptyList(),
+    ): PushResult = throw SyncException(SyncError.Transient())
 
-    /** One page of the registry, documents and events written after [cursor]. */
+    /**
+     * One page of the registry, documents, events and messages written after [cursor]. Messages are read-scoped: a KID
+     * device receives only its own kid's thread. Blob chunks are never pulled: see [fetchBlob].
+     */
     suspend fun pull(cursor: SyncCursor): PullPage = throw SyncException(SyncError.Transient())
 
-    /** Emits while connected whenever another device writes something this device should pull. */
+    /**
+     * Every stored chunk of blob [blobId], in chunk order, read on demand (M4 §2). An empty list means nothing is
+     * stored under that id (not uploaded yet); a missing later chunk is left out, so callers check `chunks` and the
+     * whole-blob `sha256` before decrypting. A failure is a [SyncException] inside the [Result].
+     */
+    suspend fun fetchBlob(blobId: BlobId): Result<List<BlobChunkJson>> =
+        Result.failure(SyncException(SyncError.Transient()))
+
+    /** Emits while connected whenever another device writes something this device should pull (messages included). */
     fun changes(): Flow<RemoteChange> = emptyFlow()
 
     /** Whether the transport can currently reach its backend. */
@@ -38,7 +59,8 @@ interface SyncTransport {
 
 /**
  * Identity of one pushed item, derived from its content so both sides of [SyncTransport.push] compute it the same
- * way: `event/<eventId>:<hash>` (the outbox key of a ledger event) or `document/<docType>/<docId>`.
+ * way: `event/<eventId>:<hash>` (the outbox key of a ledger event), `document/<docType>/<docId>`,
+ * `message/<messageId>` or `blob/<blobId>.<chunk>`.
  */
 @JvmInline
 value class PushItemId(val value: String) {
@@ -53,6 +75,15 @@ value class PushItemId(val value: String) {
 
         fun ofDocument(document: DocumentEnvelope): PushItemId =
             PushItemId("document/${document.docType}/${document.docId}")
+
+        /** `message/<messageId>` of a `MessageJson` tree (empty id when it has none). */
+        fun ofMessage(message: JsonObject): PushItemId {
+            val messageId = (message["messageId"] as? JsonPrimitive)?.takeIf { it.isString }?.content.orEmpty()
+            return PushItemId("message/$messageId")
+        }
+
+        /** `blob/<blobId>.<chunk>`: the chunk's document id. */
+        fun ofBlobChunk(chunk: BlobChunkJson): PushItemId = PushItemId("blob/${chunk.docId}")
     }
 }
 
@@ -60,8 +91,8 @@ value class PushItemId(val value: String) {
 data class PushResult(val accepted: List<PushItemId>, val rejected: List<Pair<PushItemId, SyncError>>)
 
 /**
- * One page of a pull: registry entries, documents and events added or changed after the requested cursor. Pull
- * again from [next] while [hasMore].
+ * One page of a pull: registry entries, documents, events and chat messages (`MessageJson` trees, cursor key
+ * `messages`) added or changed after the requested cursor. Pull again from [next] while [hasMore].
  */
 class PullPage(
     val devices: List<RegisteredDevice>,
@@ -70,6 +101,7 @@ class PullPage(
     val events: List<JsonObject>,
     val next: SyncCursor,
     val hasMore: Boolean,
+    val messages: List<JsonObject> = emptyList(),
 )
 
 /**

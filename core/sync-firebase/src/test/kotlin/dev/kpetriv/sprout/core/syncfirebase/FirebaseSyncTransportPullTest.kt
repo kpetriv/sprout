@@ -262,13 +262,13 @@ class FirebaseSyncTransportPullTest {
             assertEquals(0, firestore.listeners.getValue("households/h1/events" to true).subscriptionCount.value)
             expectNoEvents()
         }
-        assertEquals(12, firestore.listeners.size)
+        assertEquals(14, firestore.listeners.size)
     }
 
     @Test
     fun `a failing listener ends the flow with a sync error`() = runTest {
         val failing = object : FirestoreFacade by firestore {
-            override fun listen(path: String, latestOnly: Boolean) =
+            override fun listen(path: String, latestOnly: Boolean, where: FieldEquals?) =
                 kotlinx.coroutines.flow.flow<Unit> { throw FirestoreFailure(FirestoreCode.PERMISSION_DENIED) }
         }
         val transport = FirebaseSyncTransport(failing, { HID }, foreground, { refreshed }, 10, 10, 5_000)

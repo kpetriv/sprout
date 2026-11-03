@@ -81,7 +81,11 @@ export const DOCUMENT_COLLECTIONS: Readonly<Record<string, string>> = {
   allowanceSchedules: 'allowance_schedule',
   savingsGoals: 'savings_goal',
   interestPolicy: 'interest_policy',
+  threadKeys: 'thread_key',
 };
+
+/** The chat collections under households/{hid} (M4 §2, §3): create-only, carrying `authorDeviceId` and `lamport`. */
+export const CHAT_COLLECTIONS = ['messages', 'blobs'] as const;
 
 /**
  * The HMAC-SHA256 key for link-code ids (`linkCodes/{hmac(code)}`): the `LINK_CODE_HMAC_KEY` environment variable, a

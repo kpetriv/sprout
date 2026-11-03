@@ -41,6 +41,7 @@ import dev.kpetriv.sprout.core.model.KidId
 import dev.kpetriv.sprout.core.model.RewardId
 import dev.kpetriv.sprout.core.model.ScheduleId
 import dev.kpetriv.sprout.core.model.SubmissionId
+import dev.kpetriv.sprout.core.model.ThreadId
 import dev.kpetriv.sprout.core.model.UserId
 import dev.kpetriv.sprout.core.sync.ConflictResolver
 import dev.kpetriv.sprout.core.sync.DocTypes
@@ -49,6 +50,7 @@ import dev.kpetriv.sprout.core.sync.DocumentEnvelope
 import dev.kpetriv.sprout.core.sync.DocumentJsonCodec
 import dev.kpetriv.sprout.core.sync.DocumentRejection
 import dev.kpetriv.sprout.core.sync.EventApplyReport
+import dev.kpetriv.sprout.core.sync.MessageApplyReport
 import dev.kpetriv.sprout.core.sync.RemoteApplier
 import dev.kpetriv.sprout.core.sync.RemoteDocumentVerifier
 import dev.kpetriv.sprout.core.sync.StoredDocument
@@ -91,11 +93,18 @@ class RoomRemoteApplier internal constructor(
     private val clock: Clock,
     private val check: SignatureCheck,
     private val maxLamportJump: Long,
+    private val crypto: ChatCrypto,
 ) : RemoteApplier {
     @Inject
-    constructor(database: SproutDatabase, ledger: RoomLedgerRepository, clock: Clock, check: SignatureCheck) :
-        this(database, ledger, clock, check, LedgerPolicy.DEFAULT_MAX_LAMPORT_JUMP)
+    constructor(
+        database: SproutDatabase,
+        ledger: RoomLedgerRepository,
+        clock: Clock,
+        check: SignatureCheck,
+        crypto: ChatCrypto,
+    ) : this(database, ledger, clock, check, LedgerPolicy.DEFAULT_MAX_LAMPORT_JUMP, crypto)
 
+    private val chat = ChatApplier(database, clock, check, maxLamportJump, crypto)
     private val registry = RoomDeviceRegistry(database)
     private val deviceClock = DeviceClock.of(database)
     private val audit = database.auditLogDao()
@@ -112,12 +121,14 @@ class RoomRemoteApplier internal constructor(
                     database.parentKeyDao().upsert(entity)
                 }
             }
+            // A creator's encryption key may have just arrived: open the wraps that were waiting for it.
+            if (devices.isNotEmpty()) LazyKeyPair(crypto).use { chat.retryMissingKeys(it) }
         }
     }
 
     private suspend fun applyDevice(device: RegisteredDevice, session: SessionEntity?, now: Long) {
         val existing = database.deviceDao().get(device.deviceId)
-        val entity = device.toEntity(existing?.registeredAtEpochMs ?: now)
+        val entity = device.toEntity(existing?.registeredAtEpochMs ?: now, session?.householdId)
         database.deviceDao().upsert(entity)
         val action = when {
             existing == null -> AuditAction.DEVICE_REGISTERED
@@ -164,27 +175,40 @@ class RoomRemoteApplier internal constructor(
         val now = clock.now().toEpochMilliseconds()
         var localMax = deviceClock.current()
         var report = DocumentApplyReport()
-        for (envelope in documents) {
-            report += when (val verified = verifier.verify(envelope, localMax)) {
-                // The author device is unknown or pending (D-M3-31): keep it and verify it again later.
-                is VerifiedDocument.Held -> {
-                    holdDocument(envelope, verified.reason, now, fromInbox)
-                    DocumentApplyReport(held = if (fromInbox) 0 else 1)
-                }
-
-                is VerifiedDocument.Rejected -> refused(envelope, verified.reason, now, fromInbox)
-
-                is VerifiedDocument.Ok -> {
-                    // The verifier bounded the lamport by localMax + maxLamportJump.
-                    localMax = maxOf(localMax, envelope.lamport)
-                    database.observeDeviceLamport(localMax)
-                    val outcome = apply(envelope, session)
-                    settleInbox(envelope, outcome, fromInbox)
-                    outcome(envelope, outcome, now)
-                }
+        LazyKeyPair(crypto).use { keys ->
+            for (envelope in documents) {
+                report += applyOne(envelope, verifier, localMax, session, keys, now, fromInbox)
+                localMax = maxOf(localMax, deviceClock.current())
             }
         }
         return report
+    }
+
+    @Suppress("LongParameterList") // One verified document and the batch's state.
+    private suspend fun applyOne(
+        envelope: DocumentEnvelope,
+        verifier: RemoteDocumentVerifier,
+        localMax: Long,
+        session: Session,
+        keys: LazyKeyPair,
+        now: Long,
+        fromInbox: Boolean,
+    ): DocumentApplyReport = when (val verified = verifier.verify(envelope, localMax)) {
+        // The author device is unknown or pending (D-M3-31): keep it and verify it again later.
+        is VerifiedDocument.Held -> {
+            holdDocument(envelope, verified.reason, now, fromInbox)
+            DocumentApplyReport(held = if (fromInbox) 0 else 1)
+        }
+
+        is VerifiedDocument.Rejected -> refused(envelope, verified.reason, now, fromInbox)
+
+        is VerifiedDocument.Ok -> {
+            // The verifier bounded the lamport by localMax + maxLamportJump.
+            database.observeDeviceLamport(maxOf(localMax, envelope.lamport))
+            val outcome = apply(envelope, session, keys)
+            settleInbox(envelope, outcome, fromInbox)
+            outcome(envelope, outcome, now)
+        }
     }
 
     /**
@@ -328,9 +352,10 @@ class RoomRemoteApplier internal constructor(
      * Resolves and writes one verified document. Parent keys are registered only by the server (`registerParentKey`,
      * D-M3-34) and reach this device through the registry pull, never as documents.
      */
-    private suspend fun apply(envelope: DocumentEnvelope, session: Session): Outcome {
+    private suspend fun apply(envelope: DocumentEnvelope, session: Session, keys: LazyKeyPair): Outcome {
         val fallbackAuthor = session.deviceId
         return when (envelope.docType) {
+            DocTypes.THREAD_KEY -> applyThreadKey(envelope, session, keys)
             DocTypes.KID -> applyKid(envelope, fallbackAuthor)
             DocTypes.ACCOUNT -> applyAccount(envelope, fallbackAuthor)
             DocTypes.HOUSEHOLD_POLICY -> applyHouseholdPolicy(envelope, fallbackAuthor)
@@ -343,6 +368,13 @@ class RoomRemoteApplier internal constructor(
             else -> Outcome.MALFORMED
         }
     }
+
+    private suspend fun applyThreadKey(envelope: DocumentEnvelope, session: Session, keys: LazyKeyPair): Outcome =
+        when (chat.applyThreadKey(envelope, session, keys)) {
+            ChatApplier.KeyOutcome.APPLIED -> Outcome.APPLIED
+            ChatApplier.KeyOutcome.IGNORED -> Outcome.IGNORED
+            ChatApplier.KeyOutcome.MALFORMED -> Outcome.MALFORMED
+        }
 
     /**
      * The shared resolve-and-write step: [decoded] is the payload (null when it does not decode), [local] the stored
@@ -526,12 +558,20 @@ class RoomRemoteApplier internal constructor(
 
     override suspend fun applyEvents(events: List<JsonObject>): EventApplyReport = ledger.ingest(events)
 
+    /** Verifies and stores pulled chat messages; see [ChatApplier]. */
+    override suspend fun applyMessages(messages: List<JsonObject>): MessageApplyReport = chat.applyMessages(messages)
+
+    override suspend fun expectedSeq(deviceId: DeviceId, threadId: ThreadId): Long =
+        chat.expectedSeq(deviceId, threadId)
+
     /**
-     * Retries held documents first (an account or kid they bring may be what a held event waits for), then held
-     * events ([RoomLedgerRepository.retryHeld]). The report is the events'; documents only show in the audit log.
+     * Retries held documents first (an account, kid or thread key they bring may be what a held event or message
+     * waits for), then held messages ([ChatApplier.retryHeld]), then held events ([RoomLedgerRepository.retryHeld]).
+     * The report is the events'; documents and messages only show in the audit log and their tables.
      */
     override suspend fun retryHeld(): EventApplyReport {
         retryHeldDocuments()
+        chat.retryHeld()
         return ledger.retryHeld()
     }
 

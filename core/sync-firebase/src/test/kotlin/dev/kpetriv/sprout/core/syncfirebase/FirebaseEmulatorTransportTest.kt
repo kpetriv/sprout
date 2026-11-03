@@ -2,8 +2,21 @@ package dev.kpetriv.sprout.core.syncfirebase
 
 import android.content.Context
 import android.os.Looper
+import dev.kpetriv.sprout.core.domainledger.EncryptionKeyBindingPayload
+import dev.kpetriv.sprout.core.domainledger.chat.BlobJson
+import dev.kpetriv.sprout.core.domainledger.chat.ChatLimits
+import dev.kpetriv.sprout.core.domainledger.chat.MessageEnvelope
+import dev.kpetriv.sprout.core.domainledger.chat.MessageJson
+import dev.kpetriv.sprout.core.domainledger.chat.MessageKind
+import dev.kpetriv.sprout.core.model.BlobId
 import dev.kpetriv.sprout.core.model.DeviceId
 import dev.kpetriv.sprout.core.model.HouseholdId
+import dev.kpetriv.sprout.core.model.KidId
+import dev.kpetriv.sprout.core.model.MessageId
+import dev.kpetriv.sprout.core.model.Role
+import dev.kpetriv.sprout.core.model.ThreadId
+import dev.kpetriv.sprout.core.model.UserId
+import dev.kpetriv.sprout.core.sync.BlobChunkJson
 import dev.kpetriv.sprout.core.sync.DocTypes
 import dev.kpetriv.sprout.core.sync.RemoteChange
 import dev.kpetriv.sprout.core.sync.SyncCursor
@@ -19,6 +32,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import org.junit.After
@@ -33,6 +47,7 @@ import java.net.HttpURLConnection
 import java.net.URI
 import java.time.Instant
 import java.util.concurrent.CopyOnWriteArrayList
+import kotlin.io.encoding.Base64
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
@@ -93,7 +108,15 @@ class FirebaseEmulatorTransportTest {
 
         val transport = FirebaseSyncTransport(
             firestore = SdkFirestoreFacade(bootstrap, context),
-            household = { HouseholdId(HID) },
+            // As the app's session scope: the account and device are known, so a refused batch (Firestore limits the
+            // documents a batch's rules may read) is retried item by item instead of being treated as unconfirmed.
+            household = object : HouseholdScope {
+                override suspend fun currentHouseholdId() = HouseholdId(HID)
+
+                override suspend fun currentUserId() = UserId(uid)
+
+                override suspend fun currentDeviceId() = DeviceId(DEVICE)
+            },
             foreground = MutableStateFlow(true),
             authProbe = session,
             pageSize = 2,
@@ -103,8 +126,71 @@ class FirebaseEmulatorTransportTest {
         assertTrue(blocking { transport.isAvailable() })
 
         val pushed = pushEverything(transport, uid)
-        assertPullsBack(transport, pushed)
+        val chat = pushChat(transport, uid)
+        assertPullsBack(transport, pushed, chat)
         assertChangesSeeRemoteWrite(transport)
+    }
+
+    /**
+     * Pushes a photo message and its two blob chunks through the rules (bytes fields, create-only, size limits) and
+     * reads the blob back by id. Returns the message as pushed.
+     */
+    private fun pushChat(transport: FirebaseSyncTransport, uid: String): JsonObject {
+        val hid = HouseholdId(HID)
+        val header = { chunk: Int, size: Int ->
+            dev.kpetriv.sprout.core.domainledger.chat.BlobChunkHeader(
+                householdId = hid,
+                blobId = BlobId("blob-1"),
+                threadId = ThreadId("kid-a"),
+                kidId = KidId("kid-a"),
+                authorUid = UserId(uid),
+                authorDeviceId = DeviceId(DEVICE),
+                lamport = 5,
+                chunk = chunk,
+                chunks = 2,
+                sha256 = "ab".repeat(32),
+                epoch = 0,
+                signature = "MEUCIQ-blob-sig",
+            ).let { BlobChunkJson(BlobJson.toJsonObject(it), ByteArray(size) { i -> i.toByte() }) }
+        }
+        val chunks = listOf(header(0, ChatLimits.MAX_BLOB_CHUNK_BYTES), header(1, 10))
+        val message = MessageJson.toJsonObject(
+            MessageEnvelope(
+                householdId = hid,
+                threadId = ThreadId("kid-a"),
+                messageId = MessageId("msg-1"),
+                authorUid = UserId(uid),
+                authorDeviceId = DeviceId(DEVICE),
+                authorRole = Role.PARENT,
+                seq = 1,
+                lamport = 6,
+                createdAt = kotlin.time.Instant.fromEpochMilliseconds(1_762_000_000_123),
+                epoch = 0,
+                kind = MessageKind.PHOTO,
+                ciphertext = Base64.Default.encode(ByteArray(ChatLimits.MAX_MESSAGE_CIPHERTEXT_BYTES)),
+                blobId = BlobId("blob-1"),
+                signature = "MEUCIQ-msg-sig",
+            ),
+        )
+        val pushed = blocking { transport.push(emptyList(), emptyList(), listOf(message), chunks) }
+        assertEquals(3, pushed.accepted.size, "rejected: ${pushed.rejected}")
+        // Create-only: the same items again are read back and accepted; a changed copy is refused.
+        val again = blocking { transport.push(emptyList(), emptyList(), listOf(message), chunks) }
+        assertEquals(3, again.accepted.size, "rejected: ${again.rejected}")
+        val oversize = JsonObject(
+            message + mapOf(
+                "messageId" to JsonPrimitive("msg-2"),
+                "ciphertext" to JsonPrimitive(
+                    Base64.Default.encode(ByteArray(ChatLimits.MAX_MESSAGE_CIPHERTEXT_BYTES + 1)),
+                ),
+            ),
+        )
+        val refused = blocking { transport.push(emptyList(), emptyList(), listOf(oversize), emptyList()) }
+        assertEquals(listOf("permission-denied"), refused.rejected.map { it.second.code })
+
+        assertEquals(chunks, blocking { transport.fetchBlob(BlobId("blob-1")) }.getOrThrow())
+        assertEquals(emptyList(), blocking { transport.fetchBlob(BlobId("nothing")) }.getOrThrow())
+        return message
     }
 
     /**
@@ -162,6 +248,9 @@ class FirebaseEmulatorTransportTest {
         }
         assertEquals(DeviceStatusAnswer(DeviceStatusValue.UNKNOWN, householdGone = false), unknown)
 
+        blocking { session.signInWithEmailPassword("parent@example.test", "emulator-only-password").getOrThrow() }
+        assertRegistersEncryptionKey(session, functions, created, sign)
+
         // Deleted (a fresh sign-in, as the server requires): the device learns the household is gone.
         blocking { session.signInWithEmailPassword("parent@example.test", "emulator-only-password").getOrThrow() }
         val deleteHash = blocking { session.currentIdTokenHash() }
@@ -174,6 +263,24 @@ class FirebaseEmulatorTransportTest {
         }
         assertTrue(deleted.isSuccess, "delete: ${deleted.exceptionOrNull()}")
         assertEquals(DeviceStatusAnswer(DeviceStatusValue.UNKNOWN, householdGone = true), status().getOrThrow())
+    }
+
+    /** registerEncryptionKey: the binding and a proof bound to the token the SDK sends; idempotent. */
+    private fun assertRegistersEncryptionKey(
+        session: FirebaseAuthSession,
+        functions: HouseholdFunctions,
+        created: CreatedHousehold,
+        sign: (ByteArray) -> ByteArray,
+    ) {
+        val encryptionKey = ByteArray(EncryptionKeyBindingPayload.KEY_SIZE) { 3 }
+        val binding = sign(EncryptionKeyBindingPayload.of(created.hid, created.deviceId, encryptionKey))
+        val registerKey = {
+            val hash = blocking { session.currentIdTokenHash() }
+            val proof = sign(DeviceProof.registerEncryptionKeyPayload(created.hid, hash, encryptionKey))
+            blocking { functions.registerEncryptionKey(encryptionKey, binding, created.deviceId, proof) }
+        }
+        assertEquals(RegisteredEncryptionKey(created.deviceId, created = true), registerKey().getOrThrow())
+        assertEquals(RegisteredEncryptionKey(created.deviceId, created = false), registerKey().getOrThrow())
     }
 
     /**
@@ -238,8 +345,9 @@ class FirebaseEmulatorTransportTest {
     }
 
     /** Pulls two per page from the start and checks everything came back unchanged. */
-    private fun assertPullsBack(transport: FirebaseSyncTransport, events: List<JsonObject>) {
+    private fun assertPullsBack(transport: FirebaseSyncTransport, events: List<JsonObject>, message: JsonObject) {
         val pulledEvents = mutableListOf<JsonObject>()
+        val pulledMessages = mutableListOf<JsonObject>()
         val pulledDocuments = mutableListOf<String>()
         val pulledKeys = mutableListOf<String>()
         var cursor = SyncCursor.START
@@ -247,6 +355,7 @@ class FirebaseEmulatorTransportTest {
         do {
             val page = blocking { transport.pull(cursor) }
             pulledEvents += page.events
+            pulledMessages += page.messages
             pulledDocuments += page.documents.map { it.docId }
             pulledKeys += page.parentKeys.map { it.fingerprint }
             if (pages == 0) assertEquals(listOf(DEVICE), page.devices.map { it.deviceId.value })
@@ -254,6 +363,7 @@ class FirebaseEmulatorTransportTest {
             pages++
         } while (page.hasMore && pages < MAX_PAGES)
         assertEquals(events, pulledEvents, "events come back as the tree that was hashed")
+        assertEquals(listOf(message), pulledMessages, "messages come back as the tree that was signed")
         assertEquals(setOf("chore-1", "reward-1"), pulledDocuments.toSet())
         assertEquals(listOf(FINGERPRINT), pulledKeys)
         assertTrue(pages >= 2, "four events at two per page need a second page")

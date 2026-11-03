@@ -13,16 +13,17 @@ import javax.inject.Inject
 /**
  * Erases this device's household data when the household is gone (`SyncError.HouseholdGone`, deletion, or this
  * device was revoked, or this phone signed out; M3 §6): clears the session and every pull cursor, closes the database,
- * deletes the database files (and their WAL
- * siblings), the encrypted photo directory and every wrapped `SecretStore` blob (database key, photo key, PIN lockout
- * state). The Keystore keys stay: the device signing key keeps this device's identity, and the wrapping key is
- * useless without the blobs.
+ * deletes the database files (and their WAL siblings; with them every chat message, thread key and read mark), the
+ * encrypted photo directory, the encrypted blob cache (M4) and every wrapped `SecretStore` blob
+ * ([LocalDataFiles.SECRET_NAMES]: database key, photo and blob cache keys, the chat X25519 private key
+ * `chat.x25519.v1`, PIN lockout state). The Keystore keys stay: the device signing key keeps this device's identity,
+ * and the wrapping key is useless without the blobs.
  *
  * The database instance is closed afterwards, so the caller must restart the process (which lands on onboarding,
  * since there is no session). Deleting is best effort per file: a file that cannot be deleted does not stop the
  * others, and a database that cannot be cleared or closed does not stop the files. The result says whether the wipe
- * is complete: true only when no database file, no photo directory and no `SecretStore` blob is left, so the caller
- * can keep the removal and try again (audit L4).
+ * is complete: true only when no database file, no photo or blob directory and no `SecretStore` blob is left, so the
+ * caller can keep the removal and try again (audit L4).
  */
 class WipeLocalDataUseCase @Inject constructor(
     private val database: SproutDatabase,
@@ -41,9 +42,11 @@ class WipeLocalDataUseCase @Inject constructor(
         return withContext(dispatcher) {
             files.databaseFiles.forEach { it.delete() }
             files.photoDirectory.deleteRecursively()
+            files.blobDirectory.deleteRecursively()
             files.secretsDirectory.listFiles()?.forEach { it.deleteRecursively() }
             files.databaseFiles.none { it.exists() } &&
                 !files.photoDirectory.exists() &&
+                !files.blobDirectory.exists() &&
                 files.secretsDirectory.listFiles().isNullOrEmpty()
         }
     }

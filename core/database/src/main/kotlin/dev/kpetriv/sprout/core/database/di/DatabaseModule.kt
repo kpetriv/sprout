@@ -13,6 +13,7 @@ import dev.kpetriv.sprout.core.crypto.Aead
 import dev.kpetriv.sprout.core.crypto.SecretStore
 import dev.kpetriv.sprout.core.database.AccountRepository
 import dev.kpetriv.sprout.core.database.AllowanceRepository
+import dev.kpetriv.sprout.core.database.BlobCache
 import dev.kpetriv.sprout.core.database.ChoreRepository
 import dev.kpetriv.sprout.core.database.DatabaseFactory
 import dev.kpetriv.sprout.core.database.EncryptedPhotoStore
@@ -146,7 +147,21 @@ internal abstract class DatabaseModule {
             databaseFile = context.getDatabasePath(DatabaseFactory.DATABASE_NAME),
             photoDirectory = File(context.noBackupFilesDir, EncryptedPhotoStore.DIRECTORY_NAME),
             secretsDirectory = File(context.noBackupFilesDir, LocalDataFiles.SECRETS_DIRECTORY_NAME),
+            blobDirectory = File(context.noBackupFilesDir, BlobCache.DIRECTORY_NAME),
         )
+
+        /** The encrypted blob cache in `noBackupFilesDir/blobs` (M4 §2), bounded at 50 MB. */
+        @Provides
+        @Singleton
+        @Suppress("LongParameterList") // Every collaborator of the cache comes from the graph.
+        fun blobCache(
+            files: LocalDataFiles,
+            database: SproutDatabase,
+            aead: Aead,
+            secretStore: SecretStore,
+            clock: Clock,
+            @Dispatcher(SproutDispatchers.IO) dispatcher: CoroutineDispatcher,
+        ): BlobCache = BlobCache(database, files.blobDirectory, aead, secretStore, clock, dispatcher)
 
         /** Photos live encrypted in `noBackupFilesDir/photos`, outside cloud backups (D-M2-3). */
         @Provides

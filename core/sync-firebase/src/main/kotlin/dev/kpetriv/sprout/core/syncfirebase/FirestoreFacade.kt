@@ -9,8 +9,9 @@ import java.time.Instant
  * the real implementation.
  *
  * Paths are slash-separated document or collection paths (`households/h1/events/e1`). Document data are plain values
- * ([PlainValues]): `Map<String, Any?>`, `List`, `String`, `Long`, `Double`, `Boolean`, null and [ServerTime]; on
- * writes, [ServerTimestamp] stands for `FieldValue.serverTimestamp()`. Every failure is a [FirestoreFailure].
+ * ([PlainValues]): `Map<String, Any?>`, `List`, `String`, `Long`, `Double`, `Boolean`, null, [ServerTime] and
+ * [FacadeBytes] (a Firestore `bytes` field); on writes, [ServerTimestamp] stands for `FieldValue.serverTimestamp()`.
+ * Every failure is a [FirestoreFailure].
  */
 interface FirestoreFacade {
     /** Applies [writes] (full-document sets) atomically in one batch. */
@@ -25,15 +26,23 @@ interface FirestoreFacade {
     /**
      * Up to [limit] documents of the collection at [path] ordered by ([SERVER_RECEIVED_AT], document id), starting
      * after [after] (from the start when null), read from the server. Documents without the field are not returned.
+     * With [where], only documents whose field equals the value (a KID device's read scope: the rules refuse a query
+     * they cannot prove stays inside it).
      */
-    suspend fun queryByServerTime(path: String, after: QueryPosition?, limit: Int): List<FacadeDocument>
+    suspend fun queryByServerTime(
+        path: String,
+        after: QueryPosition?,
+        limit: Int,
+        where: FieldEquals? = null,
+    ): List<FacadeDocument>
 
     /**
      * Emits whenever the server reports a change in the collection at [path] that did not come from this client's
      * pending writes (including once for the first snapshot). With [latestOnly] only the most recently stamped
      * document ([SERVER_RECEIVED_AT] descending, limit 1) is watched, so a large collection is not read in full.
+     * [where] restricts the watched documents as in [queryByServerTime].
      */
-    fun listen(path: String, latestOnly: Boolean): Flow<Unit>
+    fun listen(path: String, latestOnly: Boolean, where: FieldEquals? = null): Flow<Unit>
 
     companion object {
         /** The server time a client write was received, stamped with `FieldValue.serverTimestamp()`. */
@@ -43,6 +52,27 @@ interface FirestoreFacade {
 
 /** One full-document set of [data] at [path]. */
 data class SetWrite(val path: String, val data: Map<String, Any?>)
+
+/** A query filter `field == value` (a string field). */
+data class FieldEquals(val field: String, val value: String)
+
+/**
+ * A Firestore `bytes` value (message ciphertext, blob chunk data). Copied in and out; equal when the bytes are equal.
+ * [toString] shows the size only.
+ */
+class FacadeBytes(bytes: ByteArray) {
+    private val value: ByteArray = bytes.copyOf()
+
+    fun toByteArray(): ByteArray = value.copyOf()
+
+    val size: Int get() = value.size
+
+    override fun equals(other: Any?): Boolean = other is FacadeBytes && value.contentEquals(other.value)
+
+    override fun hashCode(): Int = value.contentHashCode()
+
+    override fun toString(): String = "FacadeBytes(size=${value.size})"
+}
 
 /** Placeholder for `FieldValue.serverTimestamp()` in [SetWrite.data]. */
 data object ServerTimestamp

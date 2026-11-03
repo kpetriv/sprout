@@ -5,8 +5,13 @@ import dev.kpetriv.sprout.core.domainledger.LedgerPolicy
 import dev.kpetriv.sprout.core.domainledger.RegisteredDevice
 import dev.kpetriv.sprout.core.domainledger.RegisteredParentKey
 import dev.kpetriv.sprout.core.domainledger.SignatureCheck
+import dev.kpetriv.sprout.core.domainledger.chat.MessageEnvelope
+import dev.kpetriv.sprout.core.domainledger.chat.MessageJson
+import dev.kpetriv.sprout.core.domainledger.chat.MessageVerifier
+import dev.kpetriv.sprout.core.domainledger.chat.VerifiedMessage
 import dev.kpetriv.sprout.core.model.DeviceId
 import dev.kpetriv.sprout.core.model.HouseholdId
+import dev.kpetriv.sprout.core.model.ThreadId
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.longOrNull
@@ -16,8 +21,12 @@ import kotlinx.serialization.json.longOrNull
  * the real [RemoteDocumentVerifier] and [ConflictResolver]; events are only recorded (deduplicated by
  * `(eventId, hash)`), since ledger verification and ingest belong to core/domain-ledger and core/database.
  *
- * [calls] records the order of applier calls (`registry`, `documents`, `events`, `retryHeld`, `saveCursor`) so tests
- * can assert the engine's sequence. Documents the verifier holds (unknown or pending author) are kept and re-verified
+ * Messages go through the real `MessageVerifier` (registry, signature, thread, `seq` continuity) and are stored as
+ * envelopes (ciphertext only: nothing is decrypted here); messages held for a `seq` gap or an unknown author are
+ * retried after every apply and by [retryHeld].
+ *
+ * [calls] records the order of applier calls (`registry`, `documents`, `events`, `messages`, `retryHeld`,
+ * `saveCursor`) so tests can assert the engine's sequence. Documents the verifier holds (unknown or pending author) are kept and re-verified
  * by [retryHeld]. Local writes go through [writeLocal], which takes the next lamport.
  */
 class RecordingApplier(
@@ -32,6 +41,10 @@ class RecordingApplier(
     private val events = LinkedHashMap<String, JsonObject>()
     private val rejections = mutableListOf<Pair<DocumentEnvelope, DocumentRejection>>()
     private val heldDocuments = LinkedHashMap<String, DocumentEnvelope>()
+    private val messages = LinkedHashMap<String, MessageEnvelope>()
+    private val heldMessages = LinkedHashMap<String, JsonObject>()
+    private val nextSeqs = mutableMapOf<Pair<DeviceId, ThreadId>, Long>()
+    private val messageVerifier = MessageVerifier(this, check, maxLamportJump, householdId)
     private val callLog = mutableListOf<String>()
     private var savedCursor = SyncCursor.START
     private var lamport = 0L
@@ -52,6 +65,20 @@ class RecordingApplier(
 
     /** Documents the verifier held (unknown or pending author), keyed `docType/docId`; retried by [retryHeld]. */
     fun heldDocuments(): List<DocumentEnvelope> = synchronized(this) { heldDocuments.values.toList() }
+
+    /** Applied messages in arrival order. */
+    fun messages(): List<MessageEnvelope> = synchronized(this) { messages.values.toList() }
+
+    /** Messages held for a `seq` gap or an unknown author, in arrival order. */
+    fun heldMessages(): List<JsonObject> = synchronized(this) { heldMessages.values.toList() }
+
+    /** Records a local message (the device's own write) as applied. */
+    fun recordLocalMessage(envelope: MessageEnvelope) = synchronized(this) {
+        observe(envelope.lamport)
+        messages.putIfAbsent(envelope.messageId.value, envelope)
+        val key = envelope.authorDeviceId to envelope.threadId
+        nextSeqs[key] = maxOf(nextSeqs[key] ?: 1, envelope.seq + 1)
+    }
 
     /** Documents the verifier refused, with the reason. */
     fun rejections(): List<Pair<DocumentEnvelope, DocumentRejection>> = synchronized(this) { rejections.toList() }
@@ -130,13 +157,70 @@ class RecordingApplier(
         EventApplyReport(applied = applied, duplicates = duplicates)
     }
 
-    /** Re-verifies held documents (the registry may have caught up); events are never held here. */
+    override suspend fun applyMessages(messages: List<JsonObject>): MessageApplyReport {
+        synchronized(this) { callLog += "messages" }
+        val report = verifyMessages(messages) + retryHeldMessages()
+        val keys = messages.map { (it["messageId"] as? JsonPrimitive)?.content.orEmpty() }.toSet()
+        return report.copy(held = synchronized(this) { heldMessages.keys.count { it in keys } })
+    }
+
+    override suspend fun expectedSeq(deviceId: DeviceId, threadId: ThreadId): Long =
+        synchronized(this) { nextSeqs[deviceId to threadId] ?: 1 }
+
+    private suspend fun verifyMessages(messages: List<JsonObject>): MessageApplyReport {
+        var report = MessageApplyReport()
+        for (json in messages) {
+            val key = (json["messageId"] as? JsonPrimitive)?.content.orEmpty()
+            report += when (val verified = messageVerifier.verify(json, localMaxLamport(), ::expectedSeq)) {
+                is VerifiedMessage.Ok -> synchronized(this) {
+                    heldMessages.remove(key)
+                    recordLocalMessage(verified.envelope)
+                    MessageApplyReport(applied = 1)
+                }
+
+                is VerifiedMessage.Duplicate -> synchronized(this) {
+                    heldMessages.remove(key)
+                    MessageApplyReport(duplicates = 1)
+                }
+
+                is VerifiedMessage.Held -> synchronized(this) {
+                    heldMessages[key] = json
+                    MessageApplyReport(held = 1)
+                }
+
+                is VerifiedMessage.Quarantined -> synchronized(this) {
+                    heldMessages.remove(key)
+                    MessageApplyReport(quarantined = 1)
+                }
+            }
+        }
+        return report
+    }
+
+    /**
+     * Retries held messages until a pass applies nothing more (a gap filled by one message may release the next).
+     * Messages released here count as applied; those still held are not counted again.
+     */
+    private suspend fun retryHeldMessages(): MessageApplyReport {
+        var released = MessageApplyReport()
+        while (true) {
+            val held = synchronized(this) { heldMessages.values.sortedBy { MessageJson.decodeOrNull(it)?.seq } }
+            if (held.isEmpty()) break
+            val pass = verifyMessages(held)
+            released += pass.copy(held = 0)
+            if (pass.applied == 0) break
+        }
+        return released
+    }
+
+    /** Re-verifies held documents and messages (the registry may have caught up); events are never held here. */
     override suspend fun retryHeld(): EventApplyReport {
         val held = synchronized(this) {
             callLog += "retryHeld"
             heldDocuments.values.toList()
         }
         if (held.isNotEmpty()) verifyAndStore(held)
+        retryHeldMessages()
         return EventApplyReport()
     }
 

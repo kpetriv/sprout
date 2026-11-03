@@ -137,6 +137,32 @@ export async function parent(request: CallableRequest, callable: UserCallable): 
   return { ...caller, hid: caller.hid };
 }
 
+export interface MemberCaller extends Caller {
+  readonly hid: string;
+  readonly role: 'PARENT' | 'KID';
+}
+
+/**
+ * A member of a household, parent or kid (the encryption key registration, which kid devices make too): `hid` and
+ * `role` claims confirmed against `households/{hid}/members/{uid}` (same role), and, as for [parent], a session signed
+ * in before the member's `tokensValidAfter` refused with `unauthenticated`. A kid's claimed `kidId` must also be its
+ * member row's.
+ */
+export async function member(request: CallableRequest, callable: UserCallable): Promise<MemberCaller> {
+  const caller = await signedIn(request, callable);
+  const role = caller.role;
+  if ((role !== 'PARENT' && role !== 'KID') || caller.hid === undefined) {
+    throw new HttpsError('permission-denied', 'Members only');
+  }
+  const row = await db.doc(`households/${caller.hid}/members/${caller.uid}`).get();
+  if (!row.exists || row.get('role') !== role) throw new HttpsError('permission-denied', 'Members only');
+  const validAfter: unknown = row.get('tokensValidAfter');
+  if (typeof validAfter === 'number' && caller.authTime < validAfter) {
+    throw new HttpsError('unauthenticated', 'Sign in again');
+  }
+  return { ...caller, hid: caller.hid, role };
+}
+
 /** The request data as an object, or `invalid-argument`. */
 export function dataOf(request: CallableRequest): Record<string, unknown> {
   const data: unknown = request.data;

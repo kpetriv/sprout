@@ -48,6 +48,14 @@ interface OutboxDao {
     @Query("SELECT COUNT(*) FROM outbox")
     suspend fun count(): Int
 
+    /** The queued rows of [kind], in order (chat send states). */
+    @Query("SELECT * FROM outbox WHERE kind = :kind ORDER BY seq")
+    fun observeKind(kind: OutboxKind): Flow<List<OutboxEntity>>
+
+    /** Makes the row of [kind]/[refId] due at once (a user's "retry"). */
+    @Query("UPDATE outbox SET nextAttemptAtEpochMs = 0 WHERE kind = :kind AND refId = :refId")
+    suspend fun retryNow(kind: OutboxKind, refId: String): Int
+
     /** The `seq` of every queued row of [kind], in order. */
     @Query("SELECT seq FROM outbox WHERE kind = :kind ORDER BY seq")
     fun observeSeqs(kind: OutboxKind): Flow<List<Long>>

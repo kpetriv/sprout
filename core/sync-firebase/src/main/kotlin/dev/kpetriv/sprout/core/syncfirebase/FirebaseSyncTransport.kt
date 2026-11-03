@@ -1,6 +1,9 @@
 package dev.kpetriv.sprout.core.syncfirebase
 
+import dev.kpetriv.sprout.core.model.BlobId
 import dev.kpetriv.sprout.core.model.HouseholdId
+import dev.kpetriv.sprout.core.model.KidId
+import dev.kpetriv.sprout.core.sync.BlobChunkJson
 import dev.kpetriv.sprout.core.sync.ConflictResolver
 import dev.kpetriv.sprout.core.sync.DocTypes
 import dev.kpetriv.sprout.core.sync.DocumentEnvelope
@@ -42,6 +45,12 @@ import javax.inject.Singleton
  * D-M3-34) and the rules refuse client writes, so there is no `parent_key` document type and one is
  * `Permanent("unknown-doc-type")` unsent.
  *
+ * **Chat** (M4 §3): messages (`messages/{messageId}`, ciphertext as bytes) and blob chunks (`blobs/{blobId}.{chunk}`,
+ * data as bytes) are create-only. Within one push the order is events, documents, blob chunks, messages, so a blob is
+ * on the server before a message that refers to it; each blob chunk (up to 700 KB) is committed on its own to stay
+ * well below Firestore's request size limit. A refused message or chunk is read back: an identical stored copy makes
+ * it accepted, anything else is `Permanent("permission-denied")`.
+ *
  * **Household gone** needs positive evidence ([membership]), because a bare `PERMISSION_DENIED` also follows a
  * revoked session (sign in again), a rules deploy or a clock skew: the account is gone ([AuthState.UserGone] from a
  * forced ID-token refresh), the `hid` claim is gone after that refresh, or this device's own `devices/{deviceId}` entry
@@ -49,11 +58,14 @@ import javax.inject.Singleton
  * (permanent); an unreadable household without such evidence is [SyncError.Transient].
  *
  * **Pull** reads the registry in full (devices and parent keys are small and change in place, so their cursor is a
- * digest of the collection), then each document collection in [DocTypes.applyOrder], then events, each by
- * `(serverReceivedAt, document id)` after its cursor, [pageSize] per collection. Parent keys come back as registry
- * entries only.
+ * digest of the collection), then each document collection in [DocTypes.applyOrder], then events, then messages,
+ * each by `(serverReceivedAt, document id)` after its cursor, [pageSize] per collection. Parent keys come back as
+ * registry entries only. A KID session reads only its own kid's messages (`where threadId == kidId`, the read scope
+ * the rules enforce; the kid comes from [HouseholdScope.currentKidId], else this device's registry entry). Blob chunks
+ * are never pulled: [fetchBlob] reads one blob's chunks by id.
  *
- * **Changes** come from snapshot listeners, open only while [foreground] is true.
+ * **Changes** come from snapshot listeners (messages included, scoped like the pull), open only while [foreground]
+ * is true.
  */
 @Singleton
 @Suppress("TooManyFunctions") // Push, pull, changes and the membership check.
@@ -93,6 +105,10 @@ internal constructor(
         class Document(id: PushItemId, path: String, data: Map<String, Any?>, val envelope: DocumentEnvelope) :
             PendingWrite(id, path, data)
 
+        /** A create-only chat write (a message or a blob chunk): refused rewrites are compared with the stored copy. */
+        class CreateOnly(id: PushItemId, path: String, data: Map<String, Any?>, val alone: Boolean) :
+            PendingWrite(id, path, data)
+
         fun write(): SetWrite = SetWrite(path, data)
     }
 
@@ -103,18 +119,45 @@ internal constructor(
         data class Rejected(val error: SyncError, val stop: Boolean = false) : ItemOutcome
     }
 
-    override suspend fun push(events: List<JsonObject>, documents: List<DocumentEnvelope>): PushResult {
+    override suspend fun push(
+        events: List<JsonObject>,
+        documents: List<DocumentEnvelope>,
+        messages: List<JsonObject>,
+        blobChunks: List<BlobChunkJson>,
+    ): PushResult {
         val hid = requireHousehold()
         val accepted = mutableListOf<PushItemId>()
         val rejected = mutableListOf<Pair<PushItemId, SyncError>>()
         val pending = buildList {
             events.forEach { event -> eventWrite(hid, event).fold({ add(it) }, { rejected += it }) }
             documents.forEach { document -> documentWrite(hid, document).fold({ add(it) }, { rejected += it }) }
+            blobChunks.forEach { chunk -> blobChunkWrite(hid, chunk).fold({ add(it) }, { rejected += it }) }
+            messages.forEach { message -> messageWrite(hid, message).fold({ add(it) }, { rejected += it }) }
         }
-        for (chunk in pending.chunked(batchSize)) {
+        for (chunk in batches(pending)) {
             if (!pushChunk(hid, chunk, accepted, rejected)) break
         }
         return PushResult(accepted, rejected)
+    }
+
+    /** [pending] in order, cut into batches of at most [batchSize]; a blob chunk always goes in a batch of its own. */
+    private fun batches(pending: List<PendingWrite>): List<List<PendingWrite>> {
+        val batches = mutableListOf<List<PendingWrite>>()
+        var current = mutableListOf<PendingWrite>()
+        for (item in pending) {
+            val alone = item is PendingWrite.CreateOnly && item.alone
+            if (current.isNotEmpty() && (alone || current.size == batchSize)) {
+                batches += current
+                current = mutableListOf()
+            }
+            current += item
+            if (alone) {
+                batches += current
+                current = mutableListOf()
+            }
+        }
+        if (current.isNotEmpty()) batches += current
+        return batches
     }
 
     /** Commits one batch; false when the push must stop (the remaining batches stay unprocessed). */
@@ -182,11 +225,15 @@ internal constructor(
             FirestoreCode.PERMISSION_DENIED -> when (item) {
                 is PendingWrite.Event -> resolveRefusedEvent(hid, item)
                 is PendingWrite.Document -> resolveRefusedDocument(item)
+                is PendingWrite.CreateOnly -> resolveRefusedCreate(item)
             }
 
             // Not produced by sets today; an event that "already exists" is the idempotent case.
-            FirestoreCode.ALREADY_EXISTS, FirestoreCode.FAILED_PRECONDITION ->
-                if (item is PendingWrite.Event) ItemOutcome.Accepted else ItemOutcome.Rejected(permanentOf(code))
+            FirestoreCode.ALREADY_EXISTS, FirestoreCode.FAILED_PRECONDITION -> when (item) {
+                is PendingWrite.Event -> ItemOutcome.Accepted
+                is PendingWrite.CreateOnly -> resolveRefusedCreate(item)
+                is PendingWrite.Document -> ItemOutcome.Rejected(permanentOf(code))
+            }
 
             FirestoreCode.INVALID_ARGUMENT -> ItemOutcome.Rejected(permanentOf(code))
 
@@ -224,6 +271,14 @@ internal constructor(
         val serverWins = server != null &&
             ConflictResolver.resolve(StoredDocument.of(server), item.envelope) == ConflictResolver.Decision.Ignore
         return if (serverWins) ItemOutcome.Accepted else ItemOutcome.Rejected(PERMISSION_DENIED)
+    }
+
+    /** A refused create-only write is accepted only when the stored copy is the same (an earlier push landed). */
+    private suspend fun resolveRefusedCreate(item: PendingWrite.CreateOnly): ItemOutcome {
+        val stored = readOrOutcome(item.path) { return it }
+        val same = stored != null &&
+            stored.data - FirestoreFacade.SERVER_RECEIVED_AT == item.data - FirestoreFacade.SERVER_RECEIVED_AT
+        return if (same) ItemOutcome.Accepted else ItemOutcome.Rejected(PERMISSION_DENIED)
     }
 
     /** Reads [path]; a failure becomes the item's outcome through [onFailure] (which returns from the caller). */
@@ -267,6 +322,38 @@ internal constructor(
         )
     }
 
+    @Suppress("ReturnCount")
+    private fun messageWrite(hid: HouseholdId, message: JsonObject): Either {
+        val id = PushItemId.ofMessage(message)
+        val stored = StoredShapes.messageFields(message) ?: return Either.Rejected(id to SyncError.Permanent(MALFORMED))
+        when {
+            message.string("householdId") != hid.value ->
+                return Either.Rejected(id to SyncError.Permanent(WRONG_HOUSEHOLD))
+
+            message.string("signature") == null -> return Either.Rejected(id to SyncError.Permanent(UNSIGNED))
+        }
+        val data = stored.fields + (FirestoreFacade.SERVER_RECEIVED_AT to ServerTimestamp)
+        return Either.Write(
+            PendingWrite.CreateOnly(id, FirestoreLayout.message(hid, stored.messageId), data, alone = false),
+        )
+    }
+
+    @Suppress("ReturnCount")
+    private fun blobChunkWrite(hid: HouseholdId, chunk: BlobChunkJson): Either {
+        val id = PushItemId.ofBlobChunk(chunk)
+        val stored = StoredShapes.blobChunkFields(chunk)
+            ?: return Either.Rejected(id to SyncError.Permanent(MALFORMED))
+        when {
+            chunk.header.string("householdId") != hid.value ->
+                return Either.Rejected(id to SyncError.Permanent(WRONG_HOUSEHOLD))
+
+            chunk.header.string("signature") == null -> return Either.Rejected(id to SyncError.Permanent(UNSIGNED))
+        }
+        val data = stored.fields + (FirestoreFacade.SERVER_RECEIVED_AT to ServerTimestamp)
+        val path = FirestoreLayout.blobChunk(hid, stored.blobId, stored.chunk)
+        return Either.Write(PendingWrite.CreateOnly(id, path, data, alone = true))
+    }
+
     private sealed interface Either {
         class Write(val write: PendingWrite) : Either
 
@@ -300,7 +387,7 @@ internal constructor(
         val devices = if (devicesDigest == cursor.perCollection[FirestoreLayout.DEVICES]) {
             emptyList()
         } else {
-            deviceDocs.mapNotNull(StoredShapes::deviceOf)
+            deviceDocs.mapNotNull { StoredShapes.deviceOf(it, hid) }
         }
         next[FirestoreLayout.DEVICES] = devicesDigest
 
@@ -325,25 +412,73 @@ internal constructor(
         hasMore = hasMore || eventPage.size >= pageSize
         val events = eventPage.mapNotNull { StoredShapes.nestEvent(it.data) }
 
-        return PullPage(devices, parentKeys, documents, events, SyncCursor(next), hasMore)
+        val messagePage = page(hid, FirestoreLayout.MESSAGES, cursor, next, messageScope(hid, deviceDocs))
+        hasMore = hasMore || messagePage.size >= pageSize
+        val messages = messagePage.map { StoredShapes.messageOf(it.data) }
+
+        return PullPage(devices, parentKeys, documents, events, SyncCursor(next), hasMore, messages)
     }
 
+    @Suppress("LongParameterList")
     private suspend fun page(
         hid: HouseholdId,
         collection: String,
         cursor: SyncCursor,
         next: MutableMap<String, String>,
+        where: FieldEquals? = null,
     ): List<FacadeDocument> {
         val after = cursor.perCollection[collection]?.let(CursorCodec::decode)
-        val page = call { queryByServerTime(FirestoreLayout.collection(hid, collection), after, pageSize) }
+        val page = call { queryByServerTime(FirestoreLayout.collection(hid, collection), after, pageSize, where) }
         page.lastOrNull()?.let { last ->
             last.serverReceivedAt?.let { next[collection] = CursorCodec.encode(QueryPosition(it, last.id)) }
         }
         return page
     }
 
+    /**
+     * The `messages` read scope of this session: `threadId == kidId` for a KID session, null (everything) for a
+     * parent. The kid comes from [HouseholdScope.currentKidId], else this device's own registry entry ([deviceDocs]
+     * when already read, otherwise one read of it).
+     */
+    private suspend fun messageScope(hid: HouseholdId, deviceDocs: List<FacadeDocument>? = null): FieldEquals? {
+        val kidId = household.currentKidId() ?: ownKidId(hid, deviceDocs)
+        return kidId?.let { FieldEquals(THREAD_ID, it.value) }
+    }
+
+    @Suppress("ReturnCount")
+    private suspend fun ownKidId(hid: HouseholdId, deviceDocs: List<FacadeDocument>?): KidId? {
+        val deviceId = household.currentDeviceId() ?: return null
+        val own = deviceDocs?.firstOrNull { it.id == deviceId.value }
+            ?: call { get(FirestoreLayout.document(hid, FirestoreLayout.DEVICES, deviceId.value)) }
+            ?: return null
+        return StoredShapes.deviceOf(own, hid)?.takeIf { it.role == dev.kpetriv.sprout.core.model.Role.KID }?.kidId
+    }
+
+    // ---- blobs ----
+
+    // SyncException carries the code only, never the SDK failure (codes only, no free text).
+    @Suppress("SwallowedException", "ReturnCount")
+    override suspend fun fetchBlob(blobId: BlobId): Result<List<BlobChunkJson>> {
+        val hid = household.currentHouseholdId()
+            ?: return Result.failure(SyncException(SyncError.Unauthenticated))
+        return try {
+            val first = call { get(FirestoreLayout.blobChunk(hid, blobId.value, 0)) }
+                ?: return Result.success(emptyList())
+            val chunks = mutableListOf(first)
+            val count = first.data["chunks"] as? Long ?: 1
+            for (index in 1 until count.coerceIn(1, MAX_BLOB_CHUNKS.toLong()).toInt()) {
+                call { get(FirestoreLayout.blobChunk(hid, blobId.value, index)) }?.let { chunks += it }
+            }
+            Result.success(chunks.mapNotNull { StoredShapes.blobChunkOf(it.data) })
+        } catch (failure: FirestoreFailure) {
+            Result.failure(SyncException(readErrorOf(hid, failure.code)))
+        }
+    }
+
     // ---- changes ----
 
+    // SyncException carries the code only, never the SDK failure (codes only, no free text).
+    @Suppress("SwallowedException")
     @OptIn(ExperimentalCoroutinesApi::class)
     override fun changes(): Flow<RemoteChange> = foreground.distinctUntilChanged().flatMapLatest { inForeground ->
         if (!inForeground) {
@@ -351,14 +486,21 @@ internal constructor(
         } else {
             flow {
                 val hid = household.currentHouseholdId() ?: return@flow
-                emitAll(listeners(hid))
+                val scope = try {
+                    messageScope(hid)
+                } catch (failure: FirestoreFailure) {
+                    throw SyncException(syncErrorOf(failure.code))
+                }
+                emitAll(listeners(hid, scope))
             }
         }
     }
 
-    private fun listeners(hid: HouseholdId): Flow<RemoteChange> = watched
+    private fun listeners(hid: HouseholdId, messageScope: FieldEquals?): Flow<RemoteChange> = watched
         .map { (collection, latestOnly) ->
-            firestore.listen(FirestoreLayout.collection(hid, collection), latestOnly).map { RemoteChange(collection) }
+            val where = messageScope.takeIf { collection == FirestoreLayout.MESSAGES }
+            firestore.listen(FirestoreLayout.collection(hid, collection), latestOnly, where)
+                .map { RemoteChange(collection) }
         }
         .merge()
         .catch { failure ->
@@ -479,6 +621,13 @@ internal constructor(
         const val UNSIGNED: String = "unsigned"
 
         private const val REVOKED = "REVOKED"
+        private const val THREAD_ID = "threadId"
+
+        /** Most chunks of one blob (core/domain-ledger `ChatLimits.MAX_BLOB_CHUNKS`). */
+        private const val MAX_BLOB_CHUNKS = 2
+
+        private fun JsonObject.string(key: String): String? =
+            (this[key] as? JsonPrimitive)?.takeIf { it.isString }?.content
 
         private val PERMISSION_DENIED = SyncError.Permanent("permission-denied")
 
@@ -494,7 +643,8 @@ internal constructor(
         private val watched: List<Pair<String, Boolean>> =
             listOf(FirestoreLayout.DEVICES to false, FirestoreLayout.PARENT_KEYS to false) +
                 FirestoreLayout.documentCollections.map { (_, collection) -> collection to true } +
-                (FirestoreLayout.EVENTS to true)
+                (FirestoreLayout.EVENTS to true) +
+                (FirestoreLayout.MESSAGES to true)
 
         private const val RESOURCE_EXHAUSTED_RETRY_MS = 60_000L
 

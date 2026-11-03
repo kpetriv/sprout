@@ -1,15 +1,18 @@
 package dev.kpetriv.sprout.core.syncfirebase
 
 import dev.kpetriv.sprout.core.domainledger.AttestationLevel
+import dev.kpetriv.sprout.core.domainledger.BoundEncryptionKey
 import dev.kpetriv.sprout.core.domainledger.DeviceOwner
 import dev.kpetriv.sprout.core.domainledger.DeviceStatus
 import dev.kpetriv.sprout.core.domainledger.RegisteredDevice
 import dev.kpetriv.sprout.core.domainledger.RegisteredParentKey
 import dev.kpetriv.sprout.core.model.DeviceId
+import dev.kpetriv.sprout.core.model.HouseholdId
 import dev.kpetriv.sprout.core.model.ID_PATTERN
 import dev.kpetriv.sprout.core.model.KidId
 import dev.kpetriv.sprout.core.model.Role
 import dev.kpetriv.sprout.core.model.UserId
+import dev.kpetriv.sprout.core.sync.BlobChunkJson
 import dev.kpetriv.sprout.core.sync.DocumentEnvelope
 import dev.kpetriv.sprout.core.sync.DocumentJsonCodec
 import kotlinx.serialization.json.JsonElement
@@ -28,8 +31,16 @@ import kotlin.io.encoding.Base64
  * - **Parent keys** (`parentKeys/{fingerprint}`): written by the server only (`registerParentKey`, D-M3-34):
  *   `{ publicKey, uid, deviceId, validFromLamport, registeredAt, attestation }`, `revokedAtLamport` once revoked;
  *   read into [RegisteredParentKey].
- * - **Devices**: written by Cloud Functions only; read into [RegisteredDevice].
+ * - **Devices**: written by the server only; read into [RegisteredDevice], with the device's encryption key
+ *   (`encryptionKey`, `encryptionKeySignature`, base64; M4 §1.1) as an unverified [BoundEncryptionKey] when both are
+ *   present (receivers verify the binding themselves).
+ * - **Messages** (`messages/{messageId}`): the `MessageJson` fields at the top level plus `serverReceivedAt`, with
+ *   `ciphertext` stored as Firestore bytes (so the rules can check its decoded size); read back as base64, which gives
+ *   the tree the author signed.
+ * - **Blob chunks** (`blobs/{blobId}.{chunk}`): the `BlobJson` header fields at the top level, `data` as Firestore
+ *   bytes, plus `serverReceivedAt`.
  */
+@Suppress("TooManyFunctions") // One reader and one writer per stored shape.
 internal object StoredShapes {
     /** The fields of the ledger `Envelope` (core/domain-ledger), schema 1 and 2. */
     val EVENT_ENVELOPE_KEYS: Set<String> = setOf(
@@ -50,6 +61,11 @@ internal object StoredShapes {
     )
 
     private const val ENVELOPE = "envelope"
+    private const val MESSAGE_ID = "messageId"
+    private const val CIPHERTEXT = "ciphertext"
+    private const val DATA = "data"
+    private const val ENCRYPTION_KEY = "encryptionKey"
+    private const val ENCRYPTION_KEY_SIGNATURE = "encryptionKeySignature"
     private val HEX_SHA256 = Regex("[0-9a-f]{64}")
 
     /** An event ready to store: its id, hash and flattened tree. */
@@ -92,9 +108,49 @@ internal object StoredShapes {
     fun documentOf(stored: Map<String, Any?>): DocumentEnvelope? =
         DocumentJsonCodec.decodeOrNull(PlainValues.toJsonObject(stored - FirestoreFacade.SERVER_RECEIVED_AT))
 
-    /** A `devices/{deviceId}` document as a registry entry, or null when any field is missing or malformed. */
+    /** A message ready to store: its id and stored fields (`ciphertext` as bytes, no server stamp). */
+    class StoredMessage(val messageId: String, val fields: Map<String, Any?>)
+
+    /**
+     * The stored form of a `MessageJson` tree, or null when it cannot be stored: no valid `messageId`, or a
+     * `ciphertext` that is not a base64 string. Everything else is the rules' and the receivers' to judge.
+     */
     @Suppress("ReturnCount")
-    fun deviceOf(document: FacadeDocument): RegisteredDevice? {
+    fun messageFields(message: JsonObject): StoredMessage? {
+        val messageId = message.string(MESSAGE_ID)?.takeIf(ID_PATTERN::matches) ?: return null
+        val ciphertext = message.string(CIPHERTEXT)?.let(::decodeBase64OrNull) ?: return null
+        return StoredMessage(messageId, PlainValues.toPlainMap(message) + (CIPHERTEXT to FacadeBytes(ciphertext)))
+    }
+
+    /** The `MessageJson` tree of a stored message (without `serverReceivedAt`; `ciphertext` as base64). */
+    fun messageOf(stored: Map<String, Any?>): JsonObject =
+        PlainValues.toJsonObject(stored - FirestoreFacade.SERVER_RECEIVED_AT)
+
+    /** A blob chunk ready to store: its document id (`"<blobId>.<chunk>"`) and fields (`data` as bytes). */
+    class StoredBlobChunk(val blobId: String, val chunk: Int, val fields: Map<String, Any?>)
+
+    /** The stored form of [chunk], or null when its header has no valid `blobId` and integer `chunk`. */
+    @Suppress("ReturnCount")
+    fun blobChunkFields(chunk: BlobChunkJson): StoredBlobChunk? {
+        val blobId = chunk.blobId?.takeIf(ID_PATTERN::matches) ?: return null
+        val index = chunk.chunk?.takeIf { ID_PATTERN.matches(chunk.docId) } ?: return null
+        val fields = PlainValues.toPlainMap(chunk.header) + (DATA to FacadeBytes(chunk.data))
+        return StoredBlobChunk(blobId, index, fields)
+    }
+
+    /** A stored blob chunk, or null when it has no `data` bytes. */
+    fun blobChunkOf(stored: Map<String, Any?>): BlobChunkJson? {
+        val data = stored[DATA] as? FacadeBytes ?: return null
+        val header = PlainValues.toJsonObject(stored - DATA - FirestoreFacade.SERVER_RECEIVED_AT)
+        return BlobChunkJson(header, data.toByteArray())
+    }
+
+    /**
+     * A `devices/{deviceId}` document of household [hid] as a registry entry, or null when any field is missing or
+     * malformed. A malformed or half-present encryption key is left out (the device has none for receivers).
+     */
+    @Suppress("ReturnCount")
+    fun deviceOf(document: FacadeDocument, hid: HouseholdId): RegisteredDevice? {
         val data = document.data
         val deviceId = document.id.takeIf(ID_PATTERN::matches)?.let(::DeviceId) ?: return null
         val uid = data.id("uid")?.let(::UserId) ?: return null
@@ -108,7 +164,12 @@ internal object StoredShapes {
             ?.let { name -> AttestationLevel.entries.firstOrNull { it.name == name } }
             ?: AttestationLevel.NONE
         val owner = DeviceOwner(uid, role, kidId.takeIf { role == Role.KID })
-        return RegisteredDevice(deviceId, owner, publicKey, status, attestation)
+        val encryptionKey = BoundEncryptionKey.fromBase64(
+            hid,
+            data[ENCRYPTION_KEY] as? String,
+            data[ENCRYPTION_KEY_SIGNATURE] as? String,
+        )
+        return RegisteredDevice(deviceId, owner, publicKey, status, attestation, encryptionKey)
     }
 
     /** A REVOKED device without a `revokedAtLamport` is revoked from 0: none of its writes is accepted. */

@@ -191,7 +191,7 @@ describe('documents: conflict semantics match core/sync ConflictResolver', () =>
   it('stays within the rules evaluation budget for the largest kid update', async () => {
     const full = {
       note: 'n'.repeat(500),
-      photoRef: { fileName: 'f'.repeat(128), sha256: 'a'.repeat(64) },
+      photoRef: { fileName: 'f'.repeat(128), sha256: 'a'.repeat(64), blobId: 'b'.repeat(64) },
       choreId: 'c'.repeat(128),
       dueOn: '2026-11-03',
     };
@@ -204,6 +204,14 @@ describe('documents: conflict semantics match core/sync ConflictResolver', () =>
           decidedBy: 'p'.repeat(128), rejectionReason: 'r'.repeat(500) },
       })),
     );
+  });
+
+  it('a submission photoRef may name its uploaded blob (blobId, at most 64 characters) and nothing else', async () => {
+    const ref = (photoRef: Record<string, unknown>) => submission({ lamport: 1 }, { photoRef });
+    await assertSucceeds(put(asKid(env), 'choreSubmissions', ref({ fileName: 'p.jpg', sha256: 'a'.repeat(64), blobId: 'b'.repeat(64) })));
+    await assertFails(put(asKid(env), 'choreSubmissions', ref({ fileName: 'p.jpg', blobId: 'b'.repeat(65) })));
+    await assertFails(put(asKid(env), 'choreSubmissions', ref({ fileName: 'p.jpg', blobId: 7 })));
+    await assertFails(put(asKid(env), 'choreSubmissions', ref({ fileName: 'p.jpg', url: 'https://example.test' })));
   });
 
   it('a kid cannot change the identity (choreId, dueOn) of their stored submission', async () => {
@@ -310,7 +318,7 @@ describe('documents: kid role gates', () => {
   });
 
   for (const coll of ['rewards', 'chores', 'allowanceSchedules', 'kids', 'accounts', 'householdPolicy',
-    'savingsGoals', 'interestPolicy']) {
+    'savingsGoals', 'interestPolicy', 'threadKeys']) {
     it(`a kid cannot write ${coll}`, async () => {
       await assertFails(
         put(asKid(env), coll, document(coll, { authorUid: 'kid-uid', authorDeviceId: KID_DEVICE, lamport: 99 })),

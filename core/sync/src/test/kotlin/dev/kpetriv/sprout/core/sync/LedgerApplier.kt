@@ -17,6 +17,7 @@ import dev.kpetriv.sprout.core.domainledger.StreamHead
 import dev.kpetriv.sprout.core.domainledger.VerifiedRemote
 import dev.kpetriv.sprout.core.model.DeviceId
 import dev.kpetriv.sprout.core.model.HouseholdId
+import dev.kpetriv.sprout.core.model.ThreadId
 import kotlinx.serialization.json.JsonObject
 
 /**
@@ -73,6 +74,12 @@ internal class LedgerApplier(
         this.documents.applyDocuments(documents)
 
     override suspend fun applyEvents(events: List<JsonObject>): EventApplyReport = ingest(events)
+
+    override suspend fun applyMessages(messages: List<JsonObject>): MessageApplyReport =
+        documents.applyMessages(messages)
+
+    override suspend fun expectedSeq(deviceId: DeviceId, threadId: ThreadId): Long =
+        documents.expectedSeq(deviceId, threadId)
 
     override suspend fun retryHeld(): EventApplyReport {
         documents.retryHeld()

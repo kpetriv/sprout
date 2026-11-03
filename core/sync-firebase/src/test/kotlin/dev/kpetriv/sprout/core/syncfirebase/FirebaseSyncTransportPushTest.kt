@@ -112,7 +112,7 @@ class FirebaseSyncTransportPushTest {
         assertEquals(
             setOf(
                 "kids", "accounts", "householdPolicy", "chores", "choreSubmissions", "rewards", "allowanceSchedules",
-                "savingsGoals", "interestPolicy",
+                "savingsGoals", "interestPolicy", "threadKeys",
             ),
             firestore.docs.keys.map { it.split('/')[2] }.toSet(),
         )

@@ -65,6 +65,27 @@ enum class AuditAction {
     LOCAL_HOUSEHOLD_PURGED,
     SESSION_STARTED,
     SESSION_CLEARED,
+
+    /** This device queued a chat message (M4): message id, thread, seq, kind; never content. */
+    MESSAGE_SENT,
+
+    /** A pulled chat message was refused for good: ids and the reason only. */
+    MESSAGE_QUARANTINED,
+
+    /**
+     * Held messages of an author waited longer than the gap timeout for an earlier `seq` that never came (for example
+     * one that was quarantined), so the gap was skipped: author, thread and the skipped seq range.
+     */
+    MESSAGE_GAP_SKIPPED,
+
+    /** This device published a thread key document (rotation or re-wrap): thread, epoch, recipients count. */
+    THREAD_KEY_PUBLISHED,
+
+    /** A verified thread key document wraps for this device but its wrap does not open: thread, epoch, creator. */
+    THREAD_KEY_UNWRAP_FAILED,
+
+    /** This device queued an encrypted blob for upload: blob id, chunk count, thread or submission. */
+    BLOB_QUEUED,
 }
 
 /**

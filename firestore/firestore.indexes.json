@@ -81,6 +81,46 @@
       ]
     },
     {
+      "collectionGroup": "threadKeys",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "authorDeviceId", "order": "ASCENDING" },
+        { "fieldPath": "lamport", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "messages",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "authorDeviceId", "order": "ASCENDING" },
+        { "fieldPath": "lamport", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "blobs",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "authorDeviceId", "order": "ASCENDING" },
+        { "fieldPath": "lamport", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "messages",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "threadId", "order": "ASCENDING" },
+        { "fieldPath": "serverReceivedAt", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "messages",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "threadId", "order": "ASCENDING" },
+        { "fieldPath": "serverReceivedAt", "order": "DESCENDING" }
+      ]
+    },
+    {
       "collectionGroup": "linkCodes",
       "queryScope": "COLLECTION",
       "fields": [

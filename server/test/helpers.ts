@@ -1,4 +1,4 @@
-import { generateKeyPairSync, sign, type KeyObject } from 'node:crypto';
+import { generateKeyPairSync, randomBytes, sign, type KeyObject } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
 import type { DecodedAppCheckToken } from 'firebase-admin/app-check';
 import { expect } from 'vitest';
@@ -6,7 +6,9 @@ import type { AppCheckVerifier, CallableDefinition } from '../src/callable.js';
 import {
   callablePayload,
   deviceStatusPayload,
+  encryptionKeyBindingPayload,
   idTokenHash,
+  registerEncryptionKeyPayload,
   registerParentKeyPayload,
   sha256Hex,
   type SignedCallable,
@@ -293,6 +295,31 @@ export function approvalSignature(approver: TestDevice, hid: string, deviceId: s
 /** The registering device's signature over a parent key's SPKI, bound to the call's ID token. */
 export function parentKeySignature(device: TestDevice, hid: string, publicKey: Buffer): Proof {
   return new Proof((hash) => signWith(device, registerParentKeyPayload(hid, hash, publicKey)));
+}
+
+/** A random 32-byte X25519-sized public key (the server only checks its length and binding). */
+export function newEncryptionKey(): Buffer {
+  return randomBytes(32);
+}
+
+/** [device]'s binding of encryption key [key] to [deviceId] (default: itself) in [hid], base64. */
+export function encryptionKeyBinding(device: TestDevice, hid: string, key: Buffer, deviceId = device.deviceId): string {
+  return signWith(device, encryptionKeyBindingPayload(hid, deviceId, key));
+}
+
+/** The registering device's registerEncryptionKey proof over [key], bound to the call's ID token. */
+export function encryptionKeyProof(device: TestDevice, hid: string, key: Buffer): Proof {
+  return new Proof((hash) => signWith(device, registerEncryptionKeyPayload(hid, hash, key)));
+}
+
+/** registerEncryptionKey arguments: [key] bound and proven by [device] in [hid]. */
+export function encryptionKeyArgs(device: TestDevice, hid: string, key: Buffer): Record<string, unknown> {
+  return {
+    publicKey: key.toString('base64'),
+    bindingSignature: encryptionKeyBinding(device, hid, key),
+    deviceId: device.deviceId,
+    signature: encryptionKeyProof(device, hid, key),
+  };
 }
 
 /** The device's deviceStatus signature (not bound to any token). */

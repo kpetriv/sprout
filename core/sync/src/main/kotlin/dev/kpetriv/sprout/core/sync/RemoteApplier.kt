@@ -2,6 +2,8 @@ package dev.kpetriv.sprout.core.sync
 
 import dev.kpetriv.sprout.core.domainledger.RegisteredDevice
 import dev.kpetriv.sprout.core.domainledger.RegisteredParentKey
+import dev.kpetriv.sprout.core.model.DeviceId
+import dev.kpetriv.sprout.core.model.ThreadId
 import kotlinx.serialization.json.JsonObject
 
 /**
@@ -20,6 +22,20 @@ interface RemoteApplier {
      * missing predecessor or an author device not yet known or approved.
      */
     suspend fun applyEvents(events: List<JsonObject>): EventApplyReport
+
+    /**
+     * Verifies and stores chat messages (`MessageJson` trees; core/domain-ledger `MessageVerifier`): applied (stored,
+     * decrypted when the epoch key is known, otherwise kept locked), duplicates, quarantined, or held for a `seq` gap
+     * or an author device not yet known. Called after [applyDocuments] of the same page, so `thread_key` documents
+     * ([DocTypes.THREAD_KEY]) pulled with them are already applied.
+     */
+    suspend fun applyMessages(messages: List<JsonObject>): MessageApplyReport
+
+    /**
+     * The `seq` the next message of [deviceId] in [threadId] must carry to apply now (1 when none was applied): the
+     * `expectedSeq` of `MessageVerifier`.
+     */
+    suspend fun expectedSeq(deviceId: DeviceId, threadId: ThreadId): Long
 
     /**
      * Retries held events (a gap that may now be filled, an author device the registry now knows) and, where the
@@ -64,6 +80,21 @@ data class EventApplyReport(
     val held: Int = 0,
 ) {
     operator fun plus(other: EventApplyReport): EventApplyReport = EventApplyReport(
+        applied = applied + other.applied,
+        duplicates = duplicates + other.duplicates,
+        quarantined = quarantined + other.quarantined,
+        held = held + other.held,
+    )
+}
+
+/** What [RemoteApplier.applyMessages] did with a batch of pulled messages. */
+data class MessageApplyReport(
+    val applied: Int = 0,
+    val duplicates: Int = 0,
+    val quarantined: Int = 0,
+    val held: Int = 0,
+) {
+    operator fun plus(other: MessageApplyReport): MessageApplyReport = MessageApplyReport(
         applied = applied + other.applied,
         duplicates = duplicates + other.duplicates,
         quarantined = quarantined + other.quarantined,

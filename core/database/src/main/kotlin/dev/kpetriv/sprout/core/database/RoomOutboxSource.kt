@@ -6,7 +6,10 @@ import dev.kpetriv.sprout.core.database.entity.AuditLogEntity
 import dev.kpetriv.sprout.core.database.entity.OutboxEntity
 import dev.kpetriv.sprout.core.database.entity.OutboxKind
 import dev.kpetriv.sprout.core.domainledger.LedgerJson
+import dev.kpetriv.sprout.core.domainledger.chat.BlobJson
+import dev.kpetriv.sprout.core.domainledger.chat.MessageJson
 import dev.kpetriv.sprout.core.model.DeviceId
+import dev.kpetriv.sprout.core.sync.BlobChunkJson
 import dev.kpetriv.sprout.core.sync.DocumentJsonCodec
 import dev.kpetriv.sprout.core.sync.OutboxItem
 import dev.kpetriv.sprout.core.sync.OutboxSource
@@ -32,8 +35,10 @@ import kotlin.time.Instant
  * queued after it and push order stays write order (a device's events form a hash chain).
  *
  * A `LEDGER_EVENT` row becomes [OutboxItem.event] with its `LedgerJson` tree; a `DOCUMENT` row [OutboxItem.document]
- * with its signed envelope. A row whose payload no longer decodes can never be sent: it is deleted and audited
- * `SYNC_REJECTED` (code [UNDECODABLE]) instead of blocking the queue. [ack] deletes; [fail] counts the attempt and
+ * with its signed envelope; a `MESSAGE` row [OutboxItem.message] with its signed `MessageJson` tree; a `BLOB_CHUNK` row
+ * [OutboxItem.blobChunk] with its signed header and bytes (queued before the message that names the blob). A row
+ * whose payload no longer decodes can never be sent: it is deleted and audited `SYNC_REJECTED` (code [UNDECODABLE])
+ * instead of blocking the queue. [ack] deletes; [fail] counts the attempt and
  * stores only the error's code.
  */
 class RoomOutboxSource @Inject constructor(private val database: SproutDatabase, private val clock: Clock) :
@@ -101,6 +106,20 @@ class RoomOutboxSource @Inject constructor(private val database: SproutDatabase,
         OutboxKind.DOCUMENT -> DocumentJsonCodec.decodeOrNull(row.payload)
             ?.takeIf { it.signature != null }
             ?.let { OutboxItem.document(row.seq, it, row.attempts) }
+
+        OutboxKind.MESSAGE -> MessageJson.decodeOrNull(row.payload)
+            ?.takeIf { it.signature != null }
+            ?.let { OutboxItem.message(row.seq, MessageJson.toJsonObject(it), row.attempts) }
+
+        OutboxKind.BLOB_CHUNK -> {
+            val header = parseObjectOrNull(row.payload)
+            val data = row.data
+            if (header != null && data != null && BlobJson.decodeOrNull(header)?.signature != null) {
+                OutboxItem.blobChunk(row.seq, BlobChunkJson(header, data), row.attempts)
+            } else {
+                null
+            }
+        }
     }
 
     private suspend fun drop(row: OutboxEntity) {

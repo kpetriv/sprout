@@ -8,6 +8,8 @@ import dev.kpetriv.sprout.core.database.dao.AllowanceScheduleDao
 import dev.kpetriv.sprout.core.database.dao.AnomalyDao
 import dev.kpetriv.sprout.core.database.dao.AuditLogDao
 import dev.kpetriv.sprout.core.database.dao.BalanceDao
+import dev.kpetriv.sprout.core.database.dao.BlobDao
+import dev.kpetriv.sprout.core.database.dao.ChatHouseholdDao
 import dev.kpetriv.sprout.core.database.dao.ChoreDao
 import dev.kpetriv.sprout.core.database.dao.ChoreSubmissionDao
 import dev.kpetriv.sprout.core.database.dao.DeviceDao
@@ -18,6 +20,7 @@ import dev.kpetriv.sprout.core.database.dao.InterestPolicyDao
 import dev.kpetriv.sprout.core.database.dao.KidDao
 import dev.kpetriv.sprout.core.database.dao.LedgerEventDao
 import dev.kpetriv.sprout.core.database.dao.LedgerInboxDao
+import dev.kpetriv.sprout.core.database.dao.MessageDao
 import dev.kpetriv.sprout.core.database.dao.OutboxDao
 import dev.kpetriv.sprout.core.database.dao.ParentKeyDao
 import dev.kpetriv.sprout.core.database.dao.PendingParentActionDao
@@ -27,11 +30,13 @@ import dev.kpetriv.sprout.core.database.dao.RewardDao
 import dev.kpetriv.sprout.core.database.dao.SavingsGoalDao
 import dev.kpetriv.sprout.core.database.dao.SessionDao
 import dev.kpetriv.sprout.core.database.dao.SyncCursorDao
+import dev.kpetriv.sprout.core.database.dao.ThreadKeyDao
 import dev.kpetriv.sprout.core.database.entity.AccountEntity
 import dev.kpetriv.sprout.core.database.entity.AllowanceScheduleEntity
 import dev.kpetriv.sprout.core.database.entity.AnomalyEntity
 import dev.kpetriv.sprout.core.database.entity.AuditLogEntity
 import dev.kpetriv.sprout.core.database.entity.BalanceEntity
+import dev.kpetriv.sprout.core.database.entity.BlobEntity
 import dev.kpetriv.sprout.core.database.entity.ChoreEntity
 import dev.kpetriv.sprout.core.database.entity.ChoreSubmissionEntity
 import dev.kpetriv.sprout.core.database.entity.DeviceEntity
@@ -42,14 +47,18 @@ import dev.kpetriv.sprout.core.database.entity.InterestPolicyEntity
 import dev.kpetriv.sprout.core.database.entity.KidEntity
 import dev.kpetriv.sprout.core.database.entity.LedgerEventEntity
 import dev.kpetriv.sprout.core.database.entity.LedgerInboxEntity
+import dev.kpetriv.sprout.core.database.entity.MessageEntity
+import dev.kpetriv.sprout.core.database.entity.MessageSeqEntity
 import dev.kpetriv.sprout.core.database.entity.OutboxEntity
 import dev.kpetriv.sprout.core.database.entity.ParentKeyEntity
 import dev.kpetriv.sprout.core.database.entity.PendingParentActionEntity
 import dev.kpetriv.sprout.core.database.entity.PhotoEntity
+import dev.kpetriv.sprout.core.database.entity.ReadMarkEntity
 import dev.kpetriv.sprout.core.database.entity.RewardEntity
 import dev.kpetriv.sprout.core.database.entity.SavingsGoalEntity
 import dev.kpetriv.sprout.core.database.entity.SessionEntity
 import dev.kpetriv.sprout.core.database.entity.SyncCursorEntity
+import dev.kpetriv.sprout.core.database.entity.ThreadKeyEntity
 
 /**
  * Sprout's local database. Encrypted with SQLCipher in production (see [DatabaseFactory]). The schema is exported
@@ -80,6 +89,11 @@ import dev.kpetriv.sprout.core.database.entity.SyncCursorEntity
         DocumentInboxEntity::class,
         SyncCursorEntity::class,
         SessionEntity::class,
+        MessageEntity::class,
+        MessageSeqEntity::class,
+        ThreadKeyEntity::class,
+        BlobEntity::class,
+        ReadMarkEntity::class,
     ],
     version = SproutDatabase.VERSION,
     exportSchema = true,
@@ -135,6 +149,14 @@ abstract class SproutDatabase : RoomDatabase() {
 
     abstract fun purgeDao(): PurgeDao
 
+    abstract fun messageDao(): MessageDao
+
+    abstract fun threadKeyDao(): ThreadKeyDao
+
+    abstract fun blobDao(): BlobDao
+
+    abstract fun chatHouseholdDao(): ChatHouseholdDao
+
     companion object {
         /**
          * 2 (M2): chores, submissions, rewards, allowance, savings, interest, pending parent actions, photos and the
@@ -149,7 +171,11 @@ abstract class SproutDatabase : RoomDatabase() {
          * (D-M3-31). See [Migrations.MIGRATION_3_4].
          *
          * 5 (M3 fix pass 2): `sync_cursor` keyed by household. See [Migrations.MIGRATION_4_5].
+         *
+         * 6 (M4): chat (`messages`, `message_seq`, `thread_keys`, `read_marks`), the blob cache index (`blobs`),
+         * `photos.blobId`, the registry mirror's encryption key columns and `outbox.data`. See
+         * [Migrations.MIGRATION_5_6].
          */
-        const val VERSION: Int = 5
+        const val VERSION: Int = 6
     }
 }

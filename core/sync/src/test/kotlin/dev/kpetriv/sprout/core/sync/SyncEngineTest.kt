@@ -503,6 +503,124 @@ class SyncEngineTest {
         assertEquals(listOf("first sync done", "exclusive", "next sync done"), steps)
     }
 
+    // ---- chat lanes (M4 §3) ----
+
+    @Test
+    fun messagesAreAppliedAfterTheDocumentsOfTheirPage() = runTest {
+        val threadKey = parent.signed(DocTypes.THREAD_KEY, "kid-1.0", lamport = 1)
+        transport.pages += PullPage(
+            devices = listOf(parent.registered),
+            parentKeys = emptyList(),
+            documents = listOf(threadKey),
+            events = listOf(parent.event("e1", lamport = 2)),
+            next = SyncCursor(mapOf("messages" to "1")),
+            hasMore = false,
+            messages = listOf(parent.message("m1", seq = 1, lamport = 3), parent.message("m2", seq = 2, lamport = 4)),
+        )
+
+        val report = engine.syncOnce()
+
+        assertEquals(listOf("pull", "registry", "documents", "events", "messages", "saveCursor", "retryHeld"), log)
+        assertEquals(MessageApplyReport(applied = 2), report.pulled.messages)
+        assertEquals(listOf("m1", "m2"), recording.messages().map { it.messageId.value })
+        assertEquals(SyncCursor(mapOf("messages" to "1")), recording.cursor())
+    }
+
+    @Test
+    fun quarantinedMessagesCountAndHeldOnesAreReported() = runTest {
+        val stranger = TestIdentity("kid-device", "kid-uid", Role.KID, KID_1)
+        transport.pages += PullPage(
+            devices = listOf(parent.registered),
+            parentKeys = emptyList(),
+            documents = emptyList(),
+            events = emptyList(),
+            next = SyncCursor.START,
+            hasMore = false,
+            // A gap (seq 2 without 1) is held; an unsigned copy quarantined.
+            messages = listOf(
+                parent.message("m2", seq = 2),
+                parent.message("m9", seq = 1).with("signature", "AAAA"),
+                stranger.message("k1"),
+            ),
+        )
+
+        val report = engine.syncOnce()
+
+        assertEquals(MessageApplyReport(quarantined = 1, held = 2), report.pulled.messages)
+        assertEquals(1, report.quarantined)
+    }
+
+    @Test
+    fun blobChunksAndMessagesArePushedInOneBatchBlobFirst() = runTest {
+        val chunk = parent.blobChunk("b1", thread = KID_1)
+        val message = parent.message("m1", kind = dev.kpetriv.sprout.core.domainledger.chat.MessageKind.PHOTO)
+        outbox.enqueueBlobChunk(chunk)
+        outbox.enqueueMessage(message)
+        outbox.enqueueEvent(parent.event("e1", 1))
+
+        val report = engine.syncOnce()
+
+        assertEquals(
+            listOf(PushItemId.ofEvent(parent.event("e1", 1)), PushItemId("blob/b1.0"), PushItemId("message/m1")),
+            transport.pushedBatches.single(),
+        )
+        assertEquals(3, report.pushed)
+        assertTrue(outbox.rows().isEmpty())
+    }
+
+    @Test
+    fun permanentMessageRejectionIsKeptAndBlocksTheOutbox() = runTest {
+        val first = outbox.enqueueMessage(parent.message("m1"))
+        val id = PushItemId("message/m1")
+        transport.outcomes[id] = SyncError.Permanent("permission-denied")
+
+        val report = engine.syncOnce()
+
+        assertEquals(SyncError.Permanent("permission-denied"), report.error)
+        assertEquals(listOf(PushRejection(first, id, "permission-denied", blocking = true)), report.rejections)
+        val row = outbox.row(first)!!
+        assertEquals(clock.nowMs + SyncEngine.EVENT_REJECTION_RETRY_MS, row.nextAttemptAtEpochMs)
+    }
+
+    @Test
+    fun permanentBlobChunkRejectionIsAcked() = runTest {
+        val seq = outbox.enqueueBlobChunk(parent.blobChunk("b1"))
+        val id = PushItemId("blob/b1.0")
+        transport.outcomes[id] = SyncError.Permanent("permission-denied")
+
+        val report = engine.syncOnce()
+
+        assertNull(report.error)
+        assertEquals(listOf(PushRejection(seq, id, "permission-denied")), report.rejections)
+        assertTrue(outbox.rows().isEmpty())
+    }
+
+    @Test
+    fun anOutboxItemCarriesExactlyTheFieldOfItsKind() {
+        val message = parent.message("m1")
+        val chunk = parent.blobChunk("b1")
+
+        assertEquals(PushItemId("message/m1"), OutboxItem.message(1, message).pushId)
+        assertEquals(PushItemId("blob/b1.0"), OutboxItem.blobChunk(2, chunk).pushId)
+        assertEquals(3, OutboxItem.blobChunk(2, chunk).withAttempts(3).attempts)
+        kotlin.test.assertFailsWith<IllegalArgumentException> {
+            OutboxItem(1, OutboxItem.Kind.MESSAGE, null, null, 0, blobChunk = chunk)
+        }
+        kotlin.test.assertFailsWith<IllegalArgumentException> {
+            OutboxItem(1, OutboxItem.Kind.BLOB_CHUNK, null, null, 0, messageJson = message, blobChunk = chunk)
+        }
+    }
+
+    @Test
+    fun aBlobChunkCopiesItsBytesAndHidesThemFromToString() {
+        val bytes = byteArrayOf(1, 2, 3)
+        val chunk = BlobChunkJson(parent.blobChunk("b1").header, bytes)
+        bytes[0] = 9
+
+        assertEquals(1, chunk.data[0].toInt())
+        assertEquals("BlobChunkJson(docId=b1.0, size=3)", chunk.toString())
+    }
+
     private fun TestScope.settle() {
         advanceTimeBy(10_000)
         runCurrent()

@@ -61,7 +61,51 @@ object Migrations {
         }
     }
 
-    val ALL: Array<Migration> = arrayOf(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
+    /**
+     * Version 5 to 6 (M4 chat and time bank). Purely additive: the chat tables (`messages`, `message_seq`,
+     * `thread_keys`, `read_marks`) and the blob cache index (`blobs`) start empty; `photos.blobId`, the registry
+     * mirror's `encryptionKey`, `encryptionKeySignature` and `encryptionKeyHouseholdId`, and `outbox.data` are null
+     * for every existing row (no photo was uploaded, no device registered a key before M4; the next registry pull
+     * fills the keys in).
+     */
+    val MIGRATION_5_6: Migration = object : Migration(5, 6) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            VERSION_6_STATEMENTS.forEach(db::execSQL)
+        }
+    }
+
+    val ALL: Array<Migration> = arrayOf(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6)
+
+    private val VERSION_6_STATEMENTS: List<String> = listOf(
+        "ALTER TABLE `outbox` ADD COLUMN `data` BLOB",
+        "ALTER TABLE `photos` ADD COLUMN `blobId` TEXT",
+        "ALTER TABLE `devices` ADD COLUMN `encryptionKey` BLOB",
+        "ALTER TABLE `devices` ADD COLUMN `encryptionKeySignature` BLOB",
+        "ALTER TABLE `devices` ADD COLUMN `encryptionKeyHouseholdId` TEXT",
+        "CREATE TABLE IF NOT EXISTS `messages` (`messageId` TEXT NOT NULL, `householdId` TEXT NOT NULL, " +
+            "`threadId` TEXT NOT NULL, `authorUid` TEXT NOT NULL, `authorDeviceId` TEXT NOT NULL, " +
+            "`authorRole` TEXT NOT NULL, `seq` INTEGER NOT NULL, `lamport` INTEGER NOT NULL, " +
+            "`createdAtEpochMs` INTEGER NOT NULL, `epoch` INTEGER NOT NULL, `kind` TEXT NOT NULL, " +
+            "`ciphertext` TEXT NOT NULL, `blobId` TEXT, `signature` TEXT, `schemaVersion` INTEGER NOT NULL, " +
+            "`plaintext` BLOB, `status` TEXT NOT NULL, `reason` TEXT, `receivedAtEpochMs` INTEGER NOT NULL, " +
+            "PRIMARY KEY(`messageId`))",
+        "CREATE INDEX IF NOT EXISTS `index_messages_threadId_lamport` ON `messages` (`threadId`, `lamport`)",
+        "CREATE INDEX IF NOT EXISTS `index_messages_authorDeviceId_threadId_seq` " +
+            "ON `messages` (`authorDeviceId`, `threadId`, `seq`)",
+        "CREATE INDEX IF NOT EXISTS `index_messages_status` ON `messages` (`status`)",
+        "CREATE TABLE IF NOT EXISTS `message_seq` (`threadId` TEXT NOT NULL, `authorDeviceId` TEXT NOT NULL, " +
+            "`nextSeq` INTEGER NOT NULL, PRIMARY KEY(`threadId`, `authorDeviceId`))",
+        "CREATE TABLE IF NOT EXISTS `thread_keys` (`threadId` TEXT NOT NULL, `epoch` INTEGER NOT NULL, " +
+            "`createdByDeviceId` TEXT NOT NULL, `key` BLOB, `sourceDocId` TEXT NOT NULL, " +
+            "`wrapSetJson` TEXT NOT NULL, `lamport` INTEGER NOT NULL, `authorUid` TEXT NOT NULL, `signature` TEXT, " +
+            "`receivedAtEpochMs` INTEGER NOT NULL, PRIMARY KEY(`threadId`, `epoch`, `createdByDeviceId`))",
+        "CREATE TABLE IF NOT EXISTS `blobs` (`blobId` TEXT NOT NULL, `fileName` TEXT NOT NULL, " +
+            "`sha256` TEXT NOT NULL, `size` INTEGER NOT NULL, `contextJson` TEXT NOT NULL, " +
+            "`lastUsedEpochMs` INTEGER NOT NULL, PRIMARY KEY(`blobId`))",
+        "CREATE INDEX IF NOT EXISTS `index_blobs_lastUsedEpochMs` ON `blobs` (`lastUsedEpochMs`)",
+        "CREATE TABLE IF NOT EXISTS `read_marks` (`threadId` TEXT NOT NULL, `lastReadAtEpochMs` INTEGER NOT NULL, " +
+            "PRIMARY KEY(`threadId`))",
+    )
 
     private val VERSION_5_STATEMENTS = listOf(
         "CREATE TABLE IF NOT EXISTS `sync_cursor_v5` (`householdId` TEXT NOT NULL, `collection` TEXT NOT NULL, " +

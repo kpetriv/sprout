@@ -181,8 +181,10 @@ class RemoteDocumentVerifierTest {
             val expected = if (type == DocTypes.CHORE_SUBMISSION) Role.KID else Role.PARENT
             assertEquals(expected, DocTypes.writerRole(type))
         }
-        // Nine client-written types; parent keys are server registry entries, not documents (D-M3-34).
-        assertEquals(9, DocTypes.all.toSet().size)
+        // Ten client-written types (thread_key since M4); parent keys are server registry entries, not documents
+        // (D-M3-34).
+        assertEquals(10, DocTypes.all.toSet().size)
+        assertEquals(Role.PARENT, DocTypes.writerRole(DocTypes.THREAD_KEY))
         assertFalse(DocTypes.isKnown("parent_key"))
         assertFailsWith<IllegalArgumentException> { DocTypes.writerRole("nope") }
     }

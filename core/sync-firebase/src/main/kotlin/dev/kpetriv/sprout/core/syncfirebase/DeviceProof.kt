@@ -29,9 +29,13 @@ import java.security.MessageDigest
  *   than the signing device's id and `signature` ([payload]).
  * - `registerParentKey`: `"sprout/register-parent-key/v2" || 0x00 || hid || 0x00 || sha256(rawIdToken) || 0x00 ||
  *   SPKI DER of the parent key` ([registerParentKeyPayload]).
+ * - `registerEncryptionKey`: `"sprout/register-encryption-key/v2" || 0x00 || hid || 0x00 || sha256(rawIdToken) ||
+ *   0x00 || the raw 32-byte X25519 public key` ([registerEncryptionKeyPayload]), signed by the registering device
+ *   itself (a parent or a kid device).
  * - `deviceStatus` (no ID token): `"sprout/device-status/v1" || 0x00 || hid || 0x00 || deviceId`
  *   ([deviceStatusPayload]).
  */
+@Suppress("TooManyFunctions") // One payload builder per signed callable.
 object DeviceProof {
     /** The signed callables and the domain each signature is bound to (`SIGNED_CALLABLES`). */
     val SIGNED_CALLABLES: Map<String, String> = mapOf(
@@ -44,6 +48,9 @@ object DeviceProof {
 
     /** Domain of the `registerParentKey` signature (`REGISTER_PARENT_KEY_DOMAIN`). */
     const val REGISTER_PARENT_KEY_DOMAIN: String = "sprout/register-parent-key/v2"
+
+    /** Domain of the `registerEncryptionKey` signature (`REGISTER_ENCRYPTION_KEY_DOMAIN`). */
+    const val REGISTER_ENCRYPTION_KEY_DOMAIN: String = "sprout/register-encryption-key/v2"
 
     /** Domain of the `deviceStatus` signature (`DEVICE_STATUS_DOMAIN`). */
     const val DEVICE_STATUS_DOMAIN: String = "sprout/device-status/v1"
@@ -73,6 +80,15 @@ object DeviceProof {
     /** The bytes to sign for `registerParentKey` of [publicKey] (X.509 SPKI DER) in household [hid]. */
     fun registerParentKeyPayload(hid: HouseholdId, idTokenHash: ByteArray, publicKey: ByteArray): ByteArray =
         REGISTER_PARENT_KEY_DOMAIN.encodeToByteArray() + SEPARATOR + hid.value.encodeToByteArray() + SEPARATOR +
+            checkedHash(idTokenHash) + SEPARATOR + publicKey
+
+    /**
+     * The bytes a device signs to register its encryption key [publicKey] (the raw 32-byte X25519 key, not base64) in
+     * household [hid]. Not to be confused with the key's binding (core/domain-ledger `EncryptionKeyBindingPayload`),
+     * which is signed by the same device key and travels with it as `bindingSignature`.
+     */
+    fun registerEncryptionKeyPayload(hid: HouseholdId, idTokenHash: ByteArray, publicKey: ByteArray): ByteArray =
+        REGISTER_ENCRYPTION_KEY_DOMAIN.encodeToByteArray() + SEPARATOR + hid.value.encodeToByteArray() + SEPARATOR +
             checkedHash(idTokenHash) + SEPARATOR + publicKey
 
     /** [payload] for `approveDevice(deviceId)`, signed by the approver; the signed arguments are `{ deviceId }`. */

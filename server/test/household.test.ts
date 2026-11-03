@@ -101,7 +101,7 @@ describe('exportHousehold', () => {
 
     const bundle = await call(fns.exportHousehold, req(h.parent, withProof(h, 'exportHousehold')));
     expect(Object.keys(bundle).sort()).toEqual(
-      ['collections', 'devices', 'events', 'exportedAt', 'household', 'members', 'parentKeys'].sort(),
+      ['blobs', 'collections', 'devices', 'events', 'exportedAt', 'household', 'members', 'messages', 'parentKeys'].sort(),
     );
     expect(Object.keys(bundle.collections).sort()).toEqual(Object.keys(DOCUMENT_COLLECTIONS).sort());
     expect(bundle.household).toMatchObject({ id: h.hid, fiatCurrency: 'EUR', createdBy: h.parent.uid });

@@ -177,6 +177,56 @@ export function registerParentKeyPayload(hid: string, tokenHash: Buffer, publicK
   ]);
 }
 
+export const REGISTER_ENCRYPTION_KEY_DOMAIN = 'sprout/register-encryption-key/v2';
+
+/**
+ * The bytes a device signs to register its encryption key (registerEncryptionKey, M4 §1.1):
+ * `"sprout/register-encryption-key/v2" || 0x00 || hid || 0x00 || sha256(rawIdToken) || 0x00 || the raw 32-byte X25519
+ * public key`. Signed by the registering device itself, parent or kid.
+ */
+export function registerEncryptionKeyPayload(hid: string, tokenHash: Buffer, publicKey: Buffer): Buffer {
+  return Buffer.concat([
+    Buffer.from(REGISTER_ENCRYPTION_KEY_DOMAIN, 'utf8'),
+    SEPARATOR,
+    Buffer.from(hid, 'utf8'),
+    SEPARATOR,
+    tokenHash,
+    SEPARATOR,
+    publicKey,
+  ]);
+}
+
+export const ENCRYPTION_KEY_BINDING_DOMAIN = 'sprout/device-encryption-key/v1';
+
+/** Length of a raw X25519 public key (RFC 7748). */
+export const ENCRYPTION_KEY_BYTES = 32;
+
+/**
+ * The bytes a device key signs to bind an X25519 encryption key to its device (core/domain-ledger
+ * `EncryptionKeyBindingPayload`, M4 §1.1): `"sprout/device-encryption-key/v1" || 0x00 || hid || 0x00 || deviceId ||
+ * 0x00 || the raw 32-byte key`. Not bound to a token: receivers verify the same bytes from the registry.
+ */
+export function encryptionKeyBindingPayload(hid: string, deviceId: string, publicKey: Buffer): Buffer {
+  return Buffer.concat([
+    Buffer.from(ENCRYPTION_KEY_BINDING_DOMAIN, 'utf8'),
+    SEPARATOR,
+    Buffer.from(hid, 'utf8'),
+    SEPARATOR,
+    Buffer.from(deviceId, 'utf8'),
+    SEPARATOR,
+    publicKey,
+  ]);
+}
+
+/** A base64 X25519 public key: exactly 32 bytes, or `invalid-argument`. */
+export function parseEncryptionKey(value: unknown, field = 'encryptionKey'): Buffer {
+  const key = decodeBase64(value, field, ENCRYPTION_KEY_BYTES);
+  if (key.length !== ENCRYPTION_KEY_BYTES) {
+    throw new HttpsError('invalid-argument', `${field} must be a 32-byte X25519 key`);
+  }
+  return key;
+}
+
 export const DEVICE_STATUS_DOMAIN = 'sprout/device-status/v1';
 
 /**

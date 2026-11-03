@@ -27,9 +27,15 @@ internal class ScriptedTransport(private val log: MutableList<String> = mutableL
         return pages.removeFirstOrNull() ?: emptyPage(cursor)
     }
 
-    override suspend fun push(events: List<JsonObject>, documents: List<DocumentEnvelope>): PushResult {
+    override suspend fun push(
+        events: List<JsonObject>,
+        documents: List<DocumentEnvelope>,
+        messages: List<JsonObject>,
+        blobChunks: List<BlobChunkJson>,
+    ): PushResult {
         log += "push"
-        val ids = events.map(PushItemId::ofEvent) + documents.map(PushItemId::ofDocument)
+        val ids = events.map(PushItemId::ofEvent) + documents.map(PushItemId::ofDocument) +
+            blobChunks.map(PushItemId::ofBlobChunk) + messages.map(PushItemId::ofMessage)
         pushedBatches += ids
         pushError?.let { throw SyncException(it) }
         val accepted = mutableListOf<PushItemId>()
@@ -71,6 +77,11 @@ internal class LoggingApplier(private val inner: RemoteApplier, private val log:
     override suspend fun applyEvents(events: List<JsonObject>): EventApplyReport {
         log += "events"
         return inner.applyEvents(events)
+    }
+
+    override suspend fun applyMessages(messages: List<JsonObject>): MessageApplyReport {
+        log += "messages"
+        return inner.applyMessages(messages)
     }
 
     override suspend fun retryHeld(): EventApplyReport {

@@ -1,6 +1,6 @@
 import type { DocumentReference, Query, Transaction } from 'firebase-admin/firestore';
 import { HttpsError } from './https.js';
-import { DOCUMENT_COLLECTIONS } from './config.js';
+import { CHAT_COLLECTIONS, DOCUMENT_COLLECTIONS } from './config.js';
 import { log } from './log.js';
 
 /**
@@ -25,13 +25,14 @@ export function nextLamport(max: number): number {
   return next;
 }
 
-/** The event collection and every document collection of [household]. */
+/** The event collection, every document collection and the chat collections (messages, blobs) of [household]. */
 function lamportCollections(household: DocumentReference) {
-  return ['events', ...Object.keys(DOCUMENT_COLLECTIONS)].map((name) => household.collection(name));
+  return ['events', ...Object.keys(DOCUMENT_COLLECTIONS), ...CHAT_COLLECTIONS].map((name) => household.collection(name));
 }
 
 /**
- * The highest lamport over the household's events and documents, optionally only those written by [deviceId]
+ * The highest lamport over the household's events, documents, messages and blob chunks, optionally only those
+ * written by [deviceId]
  * (`authorDeviceId`), read inside [tx] with one `orderBy lamport desc limit 1` query per collection; 0 when there are
  * none. The per-device queries need the (authorDeviceId, lamport desc) composite indexes in firestore.indexes.json.
  */

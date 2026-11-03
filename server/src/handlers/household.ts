@@ -5,16 +5,41 @@ import { parseDeviceKey, sha256Hex } from '../crypto.js';
 import { requireDeviceProof } from '../deviceProof.js';
 import { auth, db } from '../firebase.js';
 import { dataOf, parent, signedIn } from '../guards.js';
+import { verifiedEncryptionKey, encryptionKeyClaimOf } from '../encryptionKeys.js';
 import { log } from '../log.js';
 import { attestDevice } from '../registration.js';
 import { deviceDocument } from './registry.js';
 
 const CURRENCY = /^[A-Z]{3}$/;
 
+/** The stored fields of a blob chunk except `data` (core/domain-ledger BlobChunkHeader plus the server stamp). */
+const BLOB_HEADER_FIELDS = [
+  'schemaVersion',
+  'householdId',
+  'blobId',
+  'threadId',
+  'kidId',
+  'submissionId',
+  'authorUid',
+  'authorDeviceId',
+  'lamport',
+  'chunk',
+  'chunks',
+  'sha256',
+  'epoch',
+  'signature',
+  'serverReceivedAt',
+];
+
 /**
- * createHousehold({ fiatCurrency, devicePublicKey, attestationChain? }) → { hid, deviceId }. The caller becomes the
- * household's first parent and the calling device its first ACTIVE device. The batch also creates
- * `userHouseholds/{uid}`, so two concurrent calls from one uid cannot both create a household (D-M3-20).
+ * createHousehold({ fiatCurrency, devicePublicKey, attestationChain?, encryptionKey?, encryptionKeySignature? }) →
+ * { hid, deviceId }. The caller becomes the household's first parent and the calling device its first ACTIVE device.
+ * The batch also creates `userHouseholds/{uid}`, so two concurrent calls from one uid cannot both create a household
+ * (D-M3-20).
+ *
+ * The optional encryption key (M4 §1.1) is stored on the device row only if its binding verifies against the
+ * submitted device key for the new household id; otherwise `permission-denied` and nothing is created. The id is
+ * assigned here, so a client normally registers its key afterwards (registerEncryptionKey).
  */
 export async function createHousehold(request: CallableRequest): Promise<{ hid: string; deviceId: string }> {
   const caller = await signedIn(request, 'createHousehold');
@@ -29,10 +54,12 @@ export async function createHousehold(request: CallableRequest): Promise<{ hid: 
     throw new HttpsError('invalid-argument', 'fiatCurrency must be an ISO 4217 code');
   }
   const key = parseDeviceKey(data.devicePublicKey);
-  const attestation = await attestDevice(caller.uid, data.attestationChain, key);
-
+  const keyClaim = encryptionKeyClaimOf(data);
   const household = db.collection('households').doc();
   const hid = household.id;
+  const encryptionKey = keyClaim && verifiedEncryptionKey(keyClaim, hid, key.deviceId, key.key);
+  const attestation = await attestDevice(caller.uid, data.attestationChain, key);
+
   const batch = db.batch();
   batch.create(household, { createdBy: caller.uid, createdAt: FieldValue.serverTimestamp(), fiatCurrency });
   batch.create(db.doc(`userHouseholds/${caller.uid}`), { hid });
@@ -42,7 +69,7 @@ export async function createHousehold(request: CallableRequest): Promise<{ hid: 
   });
   batch.create(
     household.collection('devices').doc(key.deviceId),
-    deviceDocument(caller.uid, 'PARENT', key, attestation, 'ACTIVE'),
+    deviceDocument(caller.uid, 'PARENT', key, attestation, 'ACTIVE', undefined, encryptionKey),
   );
   try {
     await batch.commit();
@@ -52,13 +79,17 @@ export async function createHousehold(request: CallableRequest): Promise<{ hid: 
     throw e;
   }
   await auth.setCustomUserClaims(caller.uid, { hid, role: 'PARENT' });
-  log.info('household.created', { hid, deviceId: key.deviceId, attestation });
+  log.info('household.created', { hid, deviceId: key.deviceId, attestation, encryptionKey: encryptionKey !== undefined });
   return { hid, deviceId: key.deviceId };
 }
 
-/** Firestore values as JSON: timestamps become ISO-8601 strings; everything else is already plain. */
+/**
+ * Firestore values as JSON: timestamps become ISO-8601 strings, bytes (message ciphertext) standard base64; everything
+ * else is already plain.
+ */
 function plain(value: unknown): unknown {
   if (value instanceof Timestamp) return value.toDate().toISOString();
+  if (value instanceof Uint8Array) return Buffer.from(value).toString('base64');
   if (Array.isArray(value)) return value.map(plain);
   if (value !== null && typeof value === 'object') {
     return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, plain(v)]));
@@ -78,11 +109,16 @@ export interface ExportBundle {
   parentKeys: Record<string, unknown>[];
   collections: Record<string, Record<string, unknown>[]>;
   events: Record<string, unknown>[];
+  /** Chat messages as stored: envelopes with their ciphertext (base64), never a plaintext (D-M4-6). */
+  messages: Record<string, unknown>[];
+  /** Blob chunk metadata (headers) without `data`, the encrypted bytes (D-M4-6). */
+  blobs: Record<string, unknown>[];
 }
 
 /**
  * exportHousehold({ callerDeviceId, signature }) → the household's data as one JSON bundle (right of access and
- * portability, PRIVACY.md; D-M3-7). Signed by an ACTIVE parent device over
+ * portability, PRIVACY.md; D-M3-7). Chat is exported as stored, end-to-end encrypted: message envelopes with their
+ * ciphertext and blob chunk headers without their bytes (D-M4-6); a plaintext export is a device's job (M7). Signed by an ACTIVE parent device over
  * `"sprout/export-household/v2" || 0x00 || hid || 0x00 || sha256(raw ID token) || 0x00 || {}` (crypto.ts
  * `callablePayload`). Refused with `resource-exhausted` above 4 MB
  * (config.ts `MAX_EXPORT_BYTES`), below the host's 4.5 MB response limit.
@@ -92,12 +128,15 @@ export async function exportHousehold(request: CallableRequest): Promise<ExportB
   await requireDeviceProof(caller, dataOf(request), 'exportHousehold', {});
   const ref = db.doc(`households/${caller.hid}`);
   const names = Object.keys(DOCUMENT_COLLECTIONS);
-  const [household, members, devices, parentKeys, events, ...documents] = await Promise.all([
+  const [household, members, devices, parentKeys, events, messages, blobs, ...documents] = await Promise.all([
     ref.get(),
     ref.collection('members').get(),
     ref.collection('devices').get(),
     ref.collection('parentKeys').get(),
     ref.collection('events').orderBy('lamport').get(),
+    ref.collection('messages').orderBy('lamport').get(),
+    // Only the header fields: the encrypted bytes (`data`, up to 700 KB each) never leave the database.
+    ref.collection('blobs').select(...BLOB_HEADER_FIELDS).get(),
     ...names.map((name) => ref.collection(name).get()),
   ]);
   const collections: Record<string, Record<string, unknown>[]> = {};
@@ -112,6 +151,8 @@ export async function exportHousehold(request: CallableRequest): Promise<ExportB
     parentKeys: parentKeys.docs.map(row),
     collections,
     events: events.docs.map(row),
+    messages: messages.docs.map(row),
+    blobs: blobs.docs.map(row),
   };
   const bytes = Buffer.byteLength(JSON.stringify(bundle), 'utf8');
   const documentCount = documents.reduce((n, snap) => n + snap.size, 0);
@@ -119,7 +160,14 @@ export async function exportHousehold(request: CallableRequest): Promise<ExportB
     log.warn('household.export.tooLarge', { hid: caller.hid, bytes });
     throw new HttpsError('resource-exhausted', 'The household is too large to export in one response');
   }
-  log.info('household.exported', { hid: caller.hid, events: events.size, documents: documentCount, bytes });
+  log.info('household.exported', {
+    hid: caller.hid,
+    events: events.size,
+    documents: documentCount,
+    messages: messages.size,
+    blobs: blobs.size,
+    bytes,
+  });
   return bundle;
 }
 
