@@ -45,6 +45,21 @@ jobs:
       # verifyRoborazziDebug compares the screenshot tests against the goldens in src/test/screenshots with the small
       # tolerance of D-M2-11 and fails on a real diff. It shares the invocation with `test`, so each module's
       # testDebugUnitTest runs once, in verify mode. Runs even when the static checks failed, for complete feedback.
+      # TEMPORARY diagnostic for the CI-only Hilt MissingBinding failure: shows which KSP outputs exist on the runner.
+      - name: Diagnose KSP outputs
+        if: always()
+        run: |
+          echo "== generated ksp java files per module/variant"
+          find . -path '*/build/generated/ksp/*' -name '*.java' -not -path './build-logic/*' | sed -E 's#/build/generated/ksp/([^/]+)/java/.*#  \1#' | sort | uniq -c
+          echo "== core/crypto ksp debug tree"
+          find core/crypto/build/generated/ksp -maxdepth 3 | sort
+          echo "== core/database ksp release tree"
+          find core/database/build/generated/ksp -maxdepth 3 | sort
+          echo "== kspCaches"
+          find core/crypto/build/kspCaches -maxdepth 2 2>/dev/null | sort
+          echo "== aggregated deps in library jars"
+          for j in $(find . -path '*/build/intermediates/*classes*' -name 'classes.jar' -not -path './build-logic/*' | grep -E 'core/(crypto|database)|feature/lock' | sort); do echo "-- $j"; unzip -l "$j" | grep hilt_aggregated_deps || echo "   (none)"; done
+
       - name: Unit and screenshot tests
         id: gate
         if: ${{ !cancelled() && (steps.static.outcome == 'success' || steps.static.outcome == 'failure') }}
