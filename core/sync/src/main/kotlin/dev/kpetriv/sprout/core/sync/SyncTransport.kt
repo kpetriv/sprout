@@ -2,6 +2,7 @@ package dev.kpetriv.sprout.core.sync
 
 import dev.kpetriv.sprout.core.domainledger.RegisteredDevice
 import dev.kpetriv.sprout.core.domainledger.RegisteredParentKey
+import dev.kpetriv.sprout.core.model.BlobId
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.serialization.Serializable
@@ -15,21 +16,59 @@ import kotlinx.serialization.json.JsonPrimitive
  * Failures are reported by throwing [SyncException] (never another exception type, never free text): a whole call
  * that fails throws, and per-item outcomes of a push come back in [PushResult].
  *
- * [push], [pull] and [changes] have fail-closed defaults (nothing sent, nothing received) only so the
- * core/sync-firebase stub keeps compiling until it implements them in M3 §5; every real transport overrides them.
+ * [push], [pull], [fetchBlob] and [changes] have fail-closed defaults (nothing sent, nothing received) only so a
+ * partial transport keeps compiling; every real transport overrides them.
  */
 interface SyncTransport {
     /**
-     * Sends ledger events (their `LedgerJson` trees) and signed documents. Idempotent: an event already on the
-     * server under the same `(eventId, hash)`, or a document the server's copy already beats, is accepted.
+     * Sends [items] (ledger events as `LedgerJson` trees, signed documents, chat messages as `MessageJson` trees of
+     * core/domain-ledger `MessageEnvelope`, blob chunks as [BlobChunkJson]) **in list order** within each outbox lane
+     * ([OutboxItem.Lane], D-M4-22), which is outbox `seq` order: a transport never reorders the items of one lane, so
+     * a blob chunk queued before the message that names its blob reaches the server first (M4 §3, review M2).
+     * Idempotent: an event already on the server under the same `(eventId, hash)`, a document the server's copy
+     * already beats, or a message or blob chunk already stored with the same content, is accepted.
+     *
+     * **Head of line, per lane.** Once an item whose kind [blocks on refusal][OutboxItem.Kind.blocksOnRefusal] (an
+     * event, a message, a blob chunk) is refused with [SyncError.Permanent], or an item is refused with
+     * [SyncError.Transient] (a blob chunk the server refused: over the daily budget, or counted against another day),
+     * every later item **of its lane** is left unprocessed: it appears in neither list of the [PushResult], and the
+     * engine leaves it queued behind the refused one ([SyncEngine]). Items of the other lane go on. A refused document
+     * does not stop anything. A failure that is not about one item (the network, the session) ends the call and leaves
+     * the rest of both lanes unprocessed.
      */
-    suspend fun push(events: List<JsonObject>, documents: List<DocumentEnvelope>): PushResult =
-        throw SyncException(SyncError.Transient())
+    suspend fun push(items: List<PushItem>): PushResult = throw SyncException(SyncError.Transient())
 
-    /** One page of the registry, documents and events written after [cursor]. */
+    /**
+     * [push] of the given kinds as one ordered list: events, then documents, then blob chunks, then messages. For
+     * callers that hold no outbox order (tests, one-off pushes); the engine always uses the ordered [push].
+     */
+    suspend fun push(
+        events: List<JsonObject>,
+        documents: List<DocumentEnvelope>,
+        messages: List<JsonObject> = emptyList(),
+        blobChunks: List<BlobChunkJson> = emptyList(),
+    ): PushResult = push(
+        events.map(PushItem::Event) + documents.map(PushItem::Document) + blobChunks.map(PushItem::BlobChunk) +
+            messages.map(PushItem::Message),
+    )
+
+    /**
+     * One page of the registry, documents, events and messages written after [cursor]. Messages are read-scoped: a KID
+     * device receives only its own kid's thread. Blob chunks are never pulled: see [fetchBlob].
+     */
     suspend fun pull(cursor: SyncCursor): PullPage = throw SyncException(SyncError.Transient())
 
-    /** Emits while connected whenever another device writes something this device should pull. */
+    /**
+     * Every stored chunk of blob [blobId], in chunk order, read on demand (M4 §2). An empty list means nothing is
+     * stored under that id (not uploaded yet). When chunk 0 is stored but fewer than its `chunks` count are (the
+     * uploader is still pushing the rest), the result is a failure with [BlobIncompleteException], a transient
+     * [SyncException]: callers retry later rather than treating the blob as broken. Callers still check the
+     * whole-blob `sha256` before decrypting. Any other failure is a [SyncException] inside the [Result].
+     */
+    suspend fun fetchBlob(blobId: BlobId): Result<List<BlobChunkJson>> =
+        Result.failure(SyncException(SyncError.Transient()))
+
+    /** Emits while connected whenever another device writes something this device should pull (messages included). */
     fun changes(): Flow<RemoteChange> = emptyFlow()
 
     /** Whether the transport can currently reach its backend. */
@@ -38,7 +77,8 @@ interface SyncTransport {
 
 /**
  * Identity of one pushed item, derived from its content so both sides of [SyncTransport.push] compute it the same
- * way: `event/<eventId>:<hash>` (the outbox key of a ledger event) or `document/<docType>/<docId>`.
+ * way: `event/<eventId>:<hash>` (the outbox key of a ledger event), `document/<docType>/<docId>`,
+ * `message/<messageId>` or `blob/<blobId>.<chunk>`.
  */
 @JvmInline
 value class PushItemId(val value: String) {
@@ -53,15 +93,60 @@ value class PushItemId(val value: String) {
 
         fun ofDocument(document: DocumentEnvelope): PushItemId =
             PushItemId("document/${document.docType}/${document.docId}")
+
+        /** `message/<messageId>` of a `MessageJson` tree (empty id when it has none). */
+        fun ofMessage(message: JsonObject): PushItemId {
+            val messageId = (message["messageId"] as? JsonPrimitive)?.takeIf { it.isString }?.content.orEmpty()
+            return PushItemId("message/$messageId")
+        }
+
+        /** `blob/<blobId>.<chunk>`: the chunk's document id. */
+        fun ofBlobChunk(chunk: BlobChunkJson): PushItemId = PushItemId("blob/${chunk.docId}")
     }
 }
 
-/** Per-item outcome of a push. An item in neither list was not processed and is retried like a transient error. */
+/**
+ * One outbox item handed to [SyncTransport.push], in outbox order. [id] is its [PushItemId] and [kind] its outbox
+ * kind ([OutboxItem.Kind.blocksOnRefusal] says whether a permanent refusal stops the push).
+ */
+sealed interface PushItem {
+    val id: PushItemId
+    val kind: OutboxItem.Kind
+
+    /** A ledger event's `LedgerJson` tree. */
+    data class Event(val json: JsonObject) : PushItem {
+        override val id: PushItemId get() = PushItemId.ofEvent(json)
+        override val kind: OutboxItem.Kind get() = OutboxItem.Kind.EVENT
+    }
+
+    /** A signed document. */
+    data class Document(val envelope: DocumentEnvelope) : PushItem {
+        override val id: PushItemId get() = PushItemId.ofDocument(envelope)
+        override val kind: OutboxItem.Kind get() = OutboxItem.Kind.DOCUMENT
+    }
+
+    /** A chat message's `MessageJson` tree. */
+    data class Message(val json: JsonObject) : PushItem {
+        override val id: PushItemId get() = PushItemId.ofMessage(json)
+        override val kind: OutboxItem.Kind get() = OutboxItem.Kind.MESSAGE
+    }
+
+    /** One blob chunk, header and bytes. */
+    data class BlobChunk(val chunk: BlobChunkJson) : PushItem {
+        override val id: PushItemId get() = PushItemId.ofBlobChunk(chunk)
+        override val kind: OutboxItem.Kind get() = OutboxItem.Kind.BLOB_CHUNK
+    }
+}
+
+/**
+ * Per-item outcome of a push. An item in neither list was not processed: the engine retries it like a transient
+ * error, or, behind an item refused for good whose kind blocks the outbox, leaves it untouched ([SyncEngine]).
+ */
 data class PushResult(val accepted: List<PushItemId>, val rejected: List<Pair<PushItemId, SyncError>>)
 
 /**
- * One page of a pull: registry entries, documents and events added or changed after the requested cursor. Pull
- * again from [next] while [hasMore].
+ * One page of a pull: registry entries, documents, events and chat messages (`MessageJson` trees, cursor key
+ * `messages`) added or changed after the requested cursor. Pull again from [next] while [hasMore].
  */
 class PullPage(
     val devices: List<RegisteredDevice>,
@@ -70,6 +155,13 @@ class PullPage(
     val events: List<JsonObject>,
     val next: SyncCursor,
     val hasMore: Boolean,
+    val messages: List<JsonObject> = emptyList(),
+    /**
+     * Stored rows of this page the transport could not read into the lists above and dropped: a registry row that
+     * does not parse or whose id is not its key's fingerprint, a document or an event that does not decode (or a
+     * document stored under another type's collection or another id). Counted for the sync report only.
+     */
+    val malformed: Int = 0,
 )
 
 /**
@@ -111,4 +203,10 @@ val SyncError.code: String
     }
 
 /** How a [SyncTransport] reports a failed call. The message is the error's code, never user data. */
-class SyncException(val error: SyncError) : Exception(error.code)
+open class SyncException(val error: SyncError) : Exception(error.code)
+
+/**
+ * [SyncTransport.fetchBlob] found chunk 0 of a blob but only [stored] of its [expected] chunks: the uploader has not
+ * pushed the rest yet. A [SyncError.Transient] failure, so callers retry later instead of reporting the blob invalid.
+ */
+class BlobIncompleteException(val stored: Int, val expected: Int) : SyncException(SyncError.Transient())

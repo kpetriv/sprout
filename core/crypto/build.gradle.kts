@@ -14,6 +14,8 @@ android {
 
 dependencies {
     api(projects.core.time)
+    // Chat glue (M4): ThreadKeyring, MessageCipher, EncryptionKeyBinding work on the pure wire formats defined there.
+    api(projects.core.domainLedger)
     implementation(projects.core.common)
     api(libs.kotlinx.coroutines.core)
     // Argon2id for the parent PIN on device. JNI only, so JVM tests use the PBKDF2 hasher instead.
@@ -25,6 +27,8 @@ dependencies {
     // BiometricManager.canAuthenticate(BIOMETRIC_STRONG) for ParentAuthAvailability. Its appcompat dependency stays:
     // BiometricPrompt's fingerprint dialog (API 28) uses it, and feature/lock needs BiometricPrompt anyway.
     implementation(libs.androidx.biometric)
+    // X25519 fallback (com.google.crypto.tink.subtle.X25519) where JCE XDH is unavailable (API < 33), D-M4-1.
+    implementation(libs.tink.android)
 
     testImplementation(libs.kotlinx.coroutines.test)
     testImplementation(testFixtures(projects.core.time))

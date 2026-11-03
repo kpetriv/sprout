@@ -29,4 +29,11 @@ interface AuditLogDao {
     /** Every row of [action], oldest first. */
     @Query("SELECT * FROM audit_log WHERE action = :action ORDER BY id")
     fun observeAction(action: AuditAction): Flow<List<AuditLogEntity>>
+
+    @Query("SELECT * FROM audit_log WHERE action = :action ORDER BY id")
+    suspend fun withAction(action: AuditAction): List<AuditLogEntity>
+
+    /** Rows of [action] on [target] written at or after [since] (epoch ms). */
+    @Query("SELECT COUNT(*) FROM audit_log WHERE action = :action AND target = :target AND atEpochMs >= :since")
+    suspend fun countSince(action: AuditAction, target: String, since: Long): Int
 }

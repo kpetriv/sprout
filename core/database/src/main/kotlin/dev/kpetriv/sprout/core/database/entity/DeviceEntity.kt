@@ -1,9 +1,11 @@
 package dev.kpetriv.sprout.core.database.entity
 
+import androidx.room.ColumnInfo
 import androidx.room.Entity
 import androidx.room.PrimaryKey
 import dev.kpetriv.sprout.core.domainledger.AttestationLevel
 import dev.kpetriv.sprout.core.model.DeviceId
+import dev.kpetriv.sprout.core.model.HouseholdId
 import dev.kpetriv.sprout.core.model.KidId
 import dev.kpetriv.sprout.core.model.Role
 import dev.kpetriv.sprout.core.model.UserId
@@ -25,6 +27,12 @@ enum class RegistrationStatus {
  * @property revokedAtLamport set when [status] is REVOKED: the device's writes below it stay valid.
  * @property registeredAtEpochMs when this device first saw the entry (local wall clock; display only).
  * @property lamport the registry entry's lamport when the transport supplies one; 0 otherwise.
+ * @property encryptionKey the device's raw X25519 chat key (32 bytes) as the registry lists it (M4 §1.1), with
+ *   [encryptionKeySignature], the device-key signature binding it to [encryptionKeyHouseholdId] and this device. Only
+ *   stored when it is bound to the session's household; receivers verify the binding on every read
+ *   (`RegisteredDevice.verifiedEncryptionKey`) and ignore a key whose binding fails.
+ * @property encryptionKeyConflict the registry later listed a different encryption key than [encryptionKey] (audit
+ *   H1, D-M4-16): the first key stays pinned and the device is excluded from every thread.
  */
 @Entity(tableName = "devices")
 data class DeviceEntity(
@@ -38,11 +46,20 @@ data class DeviceEntity(
     val attestation: AttestationLevel,
     val registeredAtEpochMs: Long,
     val lamport: Long,
+    val encryptionKey: ByteArray? = null,
+    val encryptionKeySignature: ByteArray? = null,
+    val encryptionKeyHouseholdId: HouseholdId? = null,
+    @ColumnInfo(defaultValue = "0") val encryptionKeyConflict: Boolean = false,
 ) {
+    @Suppress("CyclomaticComplexMethod") // One comparison per column.
     override fun equals(other: Any?): Boolean = other is DeviceEntity && deviceId == other.deviceId &&
         uid == other.uid && role == other.role && kidId == other.kidId && publicKey.contentEquals(other.publicKey) &&
         status == other.status && revokedAtLamport == other.revokedAtLamport && attestation == other.attestation &&
-        registeredAtEpochMs == other.registeredAtEpochMs && lamport == other.lamport
+        registeredAtEpochMs == other.registeredAtEpochMs && lamport == other.lamport &&
+        sameBytes(encryptionKey, other.encryptionKey) &&
+        sameBytes(encryptionKeySignature, other.encryptionKeySignature) &&
+        encryptionKeyHouseholdId == other.encryptionKeyHouseholdId &&
+        encryptionKeyConflict == other.encryptionKeyConflict
 
     override fun hashCode(): Int = deviceId.hashCode()
 
@@ -74,3 +91,6 @@ data class ParentKeyEntity(
 
     override fun hashCode(): Int = fingerprint.hashCode()
 }
+
+private fun sameBytes(a: ByteArray?, b: ByteArray?): Boolean =
+    if (a == null) b == null else b != null && a.contentEquals(b)

@@ -41,6 +41,7 @@ import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import java.security.MessageDigest
 import javax.inject.Inject
 import kotlin.time.Instant
 
@@ -55,8 +56,8 @@ sealed interface PhotoUi {
     data object Unavailable : PhotoUi
 
     /**
-     * The submission came from the kid's own phone: its photo reference synced but the photo stays on that phone
-     * until uploads exist (M4, D-M3-9).
+     * The submission came from the kid's own phone and its photo is not uploaded (yet): the reference synced, the
+     * photo is still only on that phone (D-M3-9; M4 uploads it as a blob once the kid's thread key is there).
      */
     data object OnKidDevice : PhotoUi
 }
@@ -185,7 +186,11 @@ sealed interface ApprovalsEvent {
  * Approving goes through [SubmissionApprover] (`ApproveSubmissionUseCase`), which asks for one parent authorisation
  * per reward currency still unpaid; each one is a [ParentAuthorizationRequester.request] with a reason naming the
  * kid, the amount and the chore. Rewards already in the ledger are reported, not paid again. Photos are decrypted
- * through [PhotoStore] once per photo and decoded with [PhotoDecoder].
+ * through [PhotoStore] once per submission photo (taken on this phone) or, for a photo the kid's phone uploaded
+ * ([PhotoRef.blobId], M4 §2), fetched through [RemotePhotoLoader] bound to the submission on screen (its kid, its id
+ * and the reference's SHA-256, audit A2-M1: a blob uploaded for another submission never shows as this one's proof)
+ * and checked against that SHA-256 again; then decoded with [PhotoDecoder]. A photo that is neither here nor uploaded
+ * shows [PhotoUi.OnKidDevice].
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 @HiltViewModel
@@ -200,9 +205,13 @@ class ApprovalsViewModel @Inject internal constructor(
     private val reasons: ApprovalReasonText,
     private val decoder: PhotoDecoder,
     private val fiat: FiatCurrencyProvider,
+    private val remotePhotos: RemotePhotoLoader,
 ) : ViewModel() {
     private val local = MutableStateFlow(Local())
-    private val photos = MutableStateFlow<Map<PhotoRef, PhotoUi>>(emptyMap())
+    private val photos = MutableStateFlow<Map<PhotoKey, PhotoUi>>(emptyMap())
+
+    /** Photos being loaded now (touched on the main thread only), so a retry never starts a second load. */
+    private val loading = mutableSetOf<PhotoKey>()
     private val retries = MutableStateFlow(0)
 
     /** Pending submissions, chores and kids as last read. */
@@ -253,7 +262,7 @@ class ApprovalsViewModel @Inject internal constructor(
         }
     }
 
-    private fun ready(data: Snapshot, photoMap: Map<PhotoRef, PhotoUi>, localState: Local): ApprovalsUiState.Ready {
+    private fun ready(data: Snapshot, photoMap: Map<PhotoKey, PhotoUi>, localState: Local): ApprovalsUiState.Ready {
         val currency = fiat.fiatCurrency()
         val submissions = data.submissions.sortedByDescending { it.submittedAt }.mapNotNull { submission ->
             val chore = data.chores[submission.choreId] ?: return@mapNotNull null
@@ -265,7 +274,7 @@ class ApprovalsViewModel @Inject internal constructor(
                 submittedAt = submission.submittedAt,
                 note = submission.note?.takeIf { it.isNotBlank() },
                 reward = RewardUi.of(chore.reward, currency),
-                photo = submission.photoRef?.let { photoMap[it] ?: PhotoUi.Loading },
+                photo = PhotoKey.of(submission)?.let { photoMap[it] ?: PhotoUi.Loading },
             )
         }
         val proposals = data.chores.values.filter { it.state == ChoreState.PROPOSED }
@@ -289,21 +298,64 @@ class ApprovalsViewModel @Inject internal constructor(
         )
     }
 
+    /**
+     * Loads every submission photo not loaded yet. An uploaded photo that could not be fetched or opened
+     * ([PhotoUi.OnKidDevice] with a blob id) is tried again whenever the pending submissions are read again (a sync
+     * that changes them) and on [ApprovalsEvent.Retry]: its chunks travel in the outbox's chat lane (D-M4-22), so
+     * the submission that names it can arrive first and the blob is not found yet.
+     */
     private fun loadPhotos(submissions: List<ChoreSubmission>) {
-        val missing = submissions.mapNotNull { it.photoRef }.filter { it !in photos.value }
-        if (missing.isEmpty()) return
-        photos.update { map -> map + missing.associateWith { PhotoUi.Loading } }
-        missing.forEach { ref ->
-            viewModelScope.launch {
-                if (attempt { localPhotos.isStoredHere(ref) }.getOrNull() == false) {
-                    photos.update { map -> map + (ref to PhotoUi.OnKidDevice) }
-                    return@launch
-                }
-                val image = attempt { photoStore.load(ref) }.getOrNull()?.let { bytes ->
-                    attempt { decoder.decode(bytes) }.getOrNull()
-                }
-                photos.update { map -> map + (ref to (image?.let(PhotoUi::Loaded) ?: PhotoUi.Unavailable)) }
+        val missing = submissions.mapNotNull(PhotoKey::of).filter { key ->
+            key !in loading && when (photos.value[key]) {
+                null -> true
+                PhotoUi.OnKidDevice -> key.ref.blobId != null
+                else -> false
             }
+        }
+        if (missing.isEmpty()) return
+        photos.update { map -> map + missing.associateWith { map[it] ?: PhotoUi.Loading } }
+        loading += missing
+        missing.forEach { key ->
+            viewModelScope.launch {
+                try {
+                    loadPhoto(key)
+                } finally {
+                    loading -= key
+                }
+            }
+        }
+    }
+
+    private suspend fun loadPhoto(key: PhotoKey) {
+        val ref = key.ref
+        val local = attempt { localPhotos.isStoredHere(ref) }.getOrNull() != false
+        val blobId = ref.blobId
+        val bytes = when {
+            local -> attempt { photoStore.load(ref) }.getOrNull()
+
+            blobId == null -> null
+
+            else -> remotePhotos.load(blobId, key.kidId, key.submissionId, ref.sha256).getOrNull()
+                ?.takeIf { it.sha256Hex() == ref.sha256 }
+        }
+        val image = bytes?.let { attempt { decoder.decode(it) }.getOrNull() }
+        val photo = when {
+            image != null -> PhotoUi.Loaded(image)
+
+            // Not uploaded, or an upload that cannot be fetched or opened yet (offline, not pushed yet, key still on
+            // its way; retried later), or a blob that is not this submission's (audit A2-M1).
+            !local -> PhotoUi.OnKidDevice
+
+            else -> PhotoUi.Unavailable
+        }
+        photos.update { map -> map + (key to photo) }
+    }
+
+    /** A submission's photo: loaded once per submission, so a reference two submissions share is checked twice. */
+    private data class PhotoKey(val submissionId: SubmissionId, val kidId: KidId, val ref: PhotoRef) {
+        companion object {
+            fun of(submission: ChoreSubmission): PhotoKey? =
+                submission.photoRef?.let { PhotoKey(submission.id, submission.kidId, it) }
         }
     }
 
@@ -471,3 +523,7 @@ class ApprovalsViewModel @Inject internal constructor(
         const val UNKNOWN_KID = "?"
     }
 }
+
+/** Lower-case hex SHA-256 of these bytes, to check a downloaded photo against its [PhotoRef.sha256]. */
+private fun ByteArray.sha256Hex(): String =
+    MessageDigest.getInstance("SHA-256").digest(this).joinToString("") { "%02x".format(it) }

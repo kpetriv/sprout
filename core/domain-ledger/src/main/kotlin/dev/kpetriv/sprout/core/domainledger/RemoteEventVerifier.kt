@@ -279,4 +279,18 @@ enum class QuarantineReason {
      * is refused ([IngestPlan.forked]), including one this device had already applied.
      */
     FORKED_CHAIN,
+
+    /**
+     * Chat (M4 §1.3, `chat.MessageVerifier`): a KID device wrote a message into a thread other than its own kid's.
+     */
+    WRONG_THREAD,
+
+    /**
+     * Chat: the message's `seq` is ahead of the next one expected from its author device in its thread. A
+     * `chat.VerifiedMessage.Held` reason, never a quarantine: the missing messages may still arrive.
+     */
+    SEQ_GAP,
+
+    /** Chat: the message names another household than the one this device belongs to. */
+    WRONG_HOUSEHOLD,
 }

@@ -13,6 +13,8 @@ import dev.kpetriv.sprout.core.model.SubmissionId
  *
  * @property sha256 lower-case hex SHA-256 of the plaintext, checked on every load.
  * @property submissionId the submission the photo is attached to, once submitted.
+ * @property blobId the encrypted blob the photo was uploaded as (M4 §2, D-M4-5), once queued for upload; null while
+ *   it exists only on this device.
  */
 @Entity(tableName = "photos", indices = [Index(value = ["kidId"]), Index(value = ["submissionId"])])
 data class PhotoEntity(
@@ -21,6 +23,7 @@ data class PhotoEntity(
     val kidId: KidId,
     val submissionId: SubmissionId?,
     val createdAtEpochMs: Long,
+    val blobId: String? = null,
 ) {
     fun toRef(): PhotoRef = PhotoRef(fileName, sha256)
 }

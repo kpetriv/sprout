@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+  <!-- Seedling voice notes (hold to record, at most 30 s). Asked for on the first press of the record button. -->
+  <uses-permission android:name="android.permission.RECORD_AUDIO" />
+  <!-- RECORD_AUDIO would otherwise imply a required microphone; chat works without one (no voice notes). -->
+  <uses-feature
+    android:name="android.hardware.microphone"
+    android:required="false" />
+
+</manifest>

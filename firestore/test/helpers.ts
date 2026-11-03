@@ -5,7 +5,7 @@ import {
   type RulesTestContext,
   type RulesTestEnvironment,
 } from '@firebase/rules-unit-testing';
-import { doc, serverTimestamp, setDoc, Timestamp, type Firestore } from 'firebase/firestore';
+import { Bytes, doc, serverTimestamp, setDoc, Timestamp, type Firestore } from 'firebase/firestore';
 
 export const PROJECT_ID = 'demo-sprout';
 export const HID = 'household-1';
@@ -65,6 +65,7 @@ export async function seed(env: RulesTestEnvironment): Promise<void> {
     await setDoc(doc(db, `households/${HID}/devices/${PENDING_DEVICE}`), device(PARENT_UID, 'PARENT', 'PENDING'));
     await setDoc(doc(db, `households/${HID}/devices/${REVOKED_DEVICE}`), device(PARENT_UID, 'PARENT', 'REVOKED'));
     await setDoc(doc(db, `households/${HID}/kids/${KID_ID}`), document('kids', { docId: KID_ID }));
+    await setDoc(doc(db, `households/${HID}/kids/${KID2_ID}`), document('kids', { docId: KID2_ID }));
 
     await setDoc(doc(db, `households/${OTHER_HID}`), { createdBy: OTHER_PARENT_UID, createdAt: now, fiatCurrency: 'GBP' });
     await setDoc(doc(db, `households/${OTHER_HID}/members/${OTHER_PARENT_UID}`), { role: 'PARENT', addedAt: now });
@@ -144,7 +145,11 @@ export const COLLECTIONS: Record<string, string> = {
   allowanceSchedules: 'allowance_schedule',
   savingsGoals: 'savings_goal',
   interestPolicy: 'interest_policy',
+  threadKeys: 'thread_key',
 };
+
+/** A base64 wrap of a 32-byte thread key as core/crypto ThreadKeyring writes it (84 characters). */
+export const WRAPPED = 'A'.repeat(84);
 
 /** A well-formed payload of each docType, as the Kotlin models serialise it (defaults written, nulls kept). */
 export function payloadFor(coll: string, docId: string): Record<string, unknown> {
@@ -174,6 +179,9 @@ export function payloadFor(coll: string, docId: string): Record<string, unknown>
       return { id: docId, kidId: KID_ID, title: 'Bike', target: 10_000, createdOn: '2026-11-01', achievedOn: null };
     case 'interestPolicy':
       return { householdId: HID, annualRateBasisPoints: 200, accrualDay: 1 };
+    case 'threadKeys':
+      return { threadId: KID_ID, epoch: 0, createdByDeviceId: PARENT_DEVICE,
+        wraps: { [PARENT_DEVICE]: { wrapped: WRAPPED }, [KID_DEVICE]: { wrapped: WRAPPED } } };
     default:
       throw new Error(`no payload for ${coll}`);
   }
@@ -210,7 +218,69 @@ export function submission(overrides: Record<string, unknown> = {}, payload: Rec
   });
 }
 
+/** Bytes of [size] (a Firestore `bytes` value through the client SDK). */
+export function bytesOf(size: number): Bytes {
+  return Bytes.fromUint8Array(new Uint8Array(size).fill(7));
+}
+
+/** A chat message as the transport stores it (core/domain-ledger MessageJson, ciphertext as bytes). */
+export function message(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    schemaVersion: 1,
+    householdId: HID,
+    threadId: KID_ID,
+    messageId: 'msg-1',
+    authorUid: PARENT_UID,
+    authorDeviceId: PARENT_DEVICE,
+    authorRole: 'PARENT',
+    seq: 1,
+    lamport: 3,
+    createdAt: 1_762_000_000_123,
+    epoch: 0,
+    kind: 'TEXT',
+    ciphertext: bytesOf(64),
+    blobId: null,
+    signature: 'MEUCIQ-signature',
+    serverReceivedAt: serverTimestamp(),
+    ...overrides,
+  };
+}
+
+/** A message from the kid's own device in its own thread. */
+export function kidMessage(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return message({ messageId: 'msg-kid-1', authorUid: KID_UID, authorDeviceId: KID_DEVICE, authorRole: 'KID',
+    ...overrides });
+}
+
+/** One chunk of a chat blob as the transport stores it (core/domain-ledger BlobJson header plus data bytes). */
+export function blobChunk(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    schemaVersion: 1,
+    householdId: HID,
+    blobId: 'blob-1',
+    threadId: KID_ID,
+    kidId: KID_ID,
+    submissionId: null,
+    authorUid: PARENT_UID,
+    authorDeviceId: PARENT_DEVICE,
+    lamport: 2,
+    chunk: 0,
+    chunks: 1,
+    sha256: HASH,
+    epoch: 0,
+    signature: 'MEUCIQ-signature',
+    data: bytesOf(100),
+    serverReceivedAt: serverTimestamp(),
+    ...overrides,
+  };
+}
+
 export { serverTimestamp };
+
+/** Today's UTC date as yyyymmdd: the id of the blob quota counter the rules accept (quotas/{day}). */
+export function todayUtc(now: Date = new Date()): string {
+  return now.toISOString().slice(0, 10).replaceAll('-', '');
+}
 
 /** Drops keys whose value is undefined (the client SDK refuses undefined values). */
 export function clean(data: Record<string, unknown>): Record<string, unknown> {

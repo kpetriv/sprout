@@ -23,6 +23,7 @@ export const LIMITS = {
   beginDeviceRegistration: { uid: { max: 10, windowMs: HOUR }, ip: { max: 30, windowMs: HOUR } },
   registerParentDevice: { uid: { max: 5, windowMs: HOUR }, ip: { max: 20, windowMs: HOUR } },
   registerParentKey: { uid: { max: 5, windowMs: HOUR }, ip: { max: 20, windowMs: HOUR } },
+  registerEncryptionKey: { uid: { max: 5, windowMs: HOUR }, ip: { max: 20, windowMs: HOUR } },
   approveDevice: { uid: { max: 20, windowMs: HOUR }, ip: { max: 60, windowMs: HOUR } },
   createLinkCode: { uid: { max: 20, windowMs: HOUR }, ip: { max: 60, windowMs: HOUR } },
   redeemLinkCode: {

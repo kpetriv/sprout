@@ -1,8 +1,15 @@
 import type { DocumentSnapshot } from 'firebase-admin/firestore';
 import { HttpsError } from './https.js';
-import { callablePayload, decodeBase64, parseDeviceKey, verifyEcdsaSha256, type SignedCallable } from './crypto.js';
+import {
+  callablePayload,
+  decodeBase64,
+  parseDeviceKey,
+  verifyEcdsaSha256,
+  type DeviceKey,
+  type SignedCallable,
+} from './crypto.js';
 import { db } from './firebase.js';
-import { requireDeviceId, type ParentCaller } from './guards.js';
+import { requireDeviceId, type Caller, type ParentCaller } from './guards.js';
 
 /** The device proof of a privileged request (T7/T8): which device signed it, and the DER signature. */
 export interface DeviceProof {
@@ -36,6 +43,27 @@ export function verifyDeviceProof(device: DocumentSnapshot, caller: ParentCaller
   if (!verifyEcdsaSha256(key.key, payload, signature)) {
     throw new HttpsError('permission-denied', 'Device signature does not verify');
   }
+}
+
+/**
+ * Requires [device] (the snapshot of `devices/{deviceId}`) to be an ACTIVE device of the caller, parent or kid, and
+ * [signature] to verify over [payload] with its registered key; returns that key. `permission-denied` otherwise. For
+ * requests a device makes about itself (registerEncryptionKey).
+ */
+export function verifyOwnDeviceProof(
+  device: DocumentSnapshot,
+  caller: Caller,
+  payload: Buffer,
+  signature: Buffer,
+): DeviceKey {
+  if (!device.exists || device.get('uid') !== caller.uid || device.get('status') !== 'ACTIVE') {
+    throw new HttpsError('permission-denied', 'The calling device is not an active device of the caller');
+  }
+  const key = parseDeviceKey(device.get('publicKey'), 'device key');
+  if (!verifyEcdsaSha256(key.key, payload, signature)) {
+    throw new HttpsError('permission-denied', 'Device signature does not verify');
+  }
+  return key;
 }
 
 /**

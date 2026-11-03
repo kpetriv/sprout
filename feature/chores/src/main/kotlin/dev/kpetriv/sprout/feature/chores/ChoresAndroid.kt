@@ -10,7 +10,9 @@ import dev.kpetriv.sprout.core.common.SproutDispatchers
 import dev.kpetriv.sprout.core.database.LocalDataFiles
 import dev.kpetriv.sprout.core.domainledger.Currency
 import dev.kpetriv.sprout.core.domainledger.Money
+import dev.kpetriv.sprout.core.model.KidId
 import dev.kpetriv.sprout.core.model.PhotoRef
+import dev.kpetriv.sprout.core.model.SubmissionId
 import dev.kpetriv.sprout.core.ui.MoneyFormatter
 import dev.kpetriv.sprout.core.ui.MoneyLabels
 import kotlinx.coroutines.CoroutineDispatcher
@@ -51,6 +53,18 @@ internal class ResourceApprovalReasonText @Inject constructor(@ApplicationContex
             choreTitle,
         )
     }
+}
+
+/**
+ * Fetches a chore photo the kid's phone uploaded as an end-to-end encrypted blob (M4 §2, [PhotoRef.blobId]): the
+ * app binds it to the same blob loader as chat (local cache, then the transport; verified and decrypted). The blob
+ * must be the one uploaded for submission [submissionId] of kid [kidId] (its signed header and AAD name them) and its
+ * plaintext must hash to [sha256] (the submission's `photoRef.sha256`), audit A2-M1: a blob of another submission is
+ * refused even when a submission names it. A failure is a failed [Result]; the approvals inbox then shows the "photo
+ * on the kid's device" fallback.
+ */
+fun interface RemotePhotoLoader {
+    suspend fun load(blobId: String, kidId: KidId, submissionId: SubmissionId, sha256: String): Result<ByteArray>
 }
 
 /**

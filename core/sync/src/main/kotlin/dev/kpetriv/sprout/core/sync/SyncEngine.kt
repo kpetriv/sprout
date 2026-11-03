@@ -26,21 +26,33 @@ import kotlinx.coroutines.sync.withLock
  * A [syncOnce] pulls first, then pushes, so a remote account or document a local write refers to is known before
  * anything is sent:
  * 1. pull pages until the transport says there is no more; per page: registry, then documents (in
- *    [DocTypes.applyOrder]), then events, then [RemoteApplier.saveCursor] with the page's cursor;
+ *    [DocTypes.applyOrder]; `thread_key` documents among them), then events, then chat messages (after the documents,
+ *    so the thread keys that decrypt them are applied first), then [RemoteApplier.saveCursor] with the page's cursor;
  * 2. [RemoteApplier.retryHeld] for events whose gap the pull may have filled;
- * 3. push the outbox in `seq` order in batches of at most [PUSH_BATCH_SIZE]. A batch never carries two items with
- *    the same [PushItemId] (it is cut before the second one, which goes in the next batch), so every per-item result
- *    maps back to exactly one outbox `seq`. Then, per item:
+ * 3. push the outbox in batches of at most [PUSH_BATCH_SIZE], handed to the transport as one ordered list
+ *    ([SyncTransport.push]). The outbox is **two lanes** (D-M4-22, [OutboxItem.Lane]): the ledger lane (events,
+ *    documents) and the chat lane (messages, blob chunks). A batch holds the due items of the lanes still running,
+ *    merged in `seq` order; the transport keeps that order within each lane, so a blob chunk reaches the server before
+ *    the message that names it. A batch never carries two items with the same [PushItemId] (it is cut before the
+ *    second one, which goes in the next batch), so every per-item result maps back to exactly one outbox `seq`. Then,
+ *    per item:
  *    - accepted: acked;
- *    - a **document** refused with [SyncError.Permanent]: acked too (retrying cannot help) and listed in
+ *    - a **document** refused with [SyncError.Permanent]: dropped with its `SYNC_REJECTED` audit row in one
+ *      transaction ([OutboxSource.ackRejected], audit A2-L3; retrying cannot help) and listed in
  *      [SyncReport.rejections];
- *    - a **ledger event** refused with [SyncError.Permanent]: **not** acked, because dropping it would break the
- *      device's hash chain for every receiver. It is marked failed with its next attempt [EVENT_REJECTION_RETRY_MS]
- *      later, listed in [SyncReport.rejections] with [PushRejection.blocking] set, and the push stops: everything
- *      queued behind it waits (head-of-line), so the parent sees one blocking item rather than a silent gap;
- *    - [SyncError.Transient]: the attempt is recorded with a [backoff] time and the push stops;
- *    - [SyncError.Unauthenticated]: the push stops **without** recording an attempt, so the backoff does not grow
- *      while the user is signed out and the outbox resumes as soon as the session is back.
+ *    - a **ledger event**, a **chat message** or a **blob chunk** refused with [SyncError.Permanent]
+ *      ([OutboxItem.Kind.blocksOnRefusal]): **not** acked, because dropping it would break the device's hash chain
+ *      (events), its per-thread `seq` (messages: receivers would hold every later message of the thread for the gap),
+ *      or send the message that names the blob without it. It is marked failed with its next attempt
+ *      [EVENT_REJECTION_RETRY_MS] later, listed in [SyncReport.rejections] with [PushRejection.blocking] set, and
+ *      **its lane** stops: everything queued behind it in that lane waits (head-of-line), so the parent sees one
+ *      blocking item rather than a silent gap. The transport does not process the later items of that lane in the
+ *      same call; the engine leaves those untouched (no attempt counted). The other lane goes on;
+ *    - [SyncError.Transient] (a blob over the daily budget, a network failure): the attempt is recorded with a
+ *      [backoff] time and its lane stops, the later items of the lane untouched; the other lane goes on;
+ *    - [SyncError.Unauthenticated]: the whole push stops **without** recording an attempt, so the backoff does not
+ *      grow while the user is signed out and the outbox resumes as soon as the session is back.
+ *    A transport call that fails as a whole ([SyncException]) stops both lanes.
  *
  * A pull failure ends the sync before anything is pushed. [SyncError.HouseholdGone] from either side ends it with
  * [SyncReport.householdGone] set, and the caller wipes local data (M3 §6). Syncs never overlap: [syncOnce] holds a
@@ -169,6 +181,7 @@ class SyncEngine(
                 pulled.documents += applier.applyDocuments(page.documents.sortedBy { DocTypes.applyOrder(it.docType) })
             }
             if (page.events.isNotEmpty()) pulled.events += applier.applyEvents(page.events)
+            if (page.messages.isNotEmpty()) pulled.messages += applier.applyMessages(page.messages)
             applier.saveCursor(page.next)
             pulled.add(page)
             cursor = page.next
@@ -176,17 +189,25 @@ class SyncEngine(
         }
     }
 
-    /** Pushes due items until the outbox is drained; returns the error that stopped it, or null. */
+    /**
+     * Pushes due items until both lanes are drained or stopped; returns the error that ended the whole push (the
+     * transport call failed, the session or the household is gone), else the error that stopped the first lane to
+     * stop, or null.
+     */
     private suspend fun pushAll(pushed: PushAccumulator): SyncError? {
-        var stop: SyncError? = null
+        val stopped = LinkedHashMap<OutboxItem.Lane, SyncError>()
         var more = true
-        while (stop == null && more) {
-            val due = outbox.due(clock.nowEpochMs(), PUSH_BATCH_SIZE)
+        while (more) {
+            val lanes = OutboxItem.Lane.ALL - stopped.keys
+            if (lanes.isEmpty()) break
+            val due = outbox.due(clock.nowEpochMs(), PUSH_BATCH_SIZE, lanes)
             val batch = untilRepeatedId(due)
-            if (batch.isNotEmpty()) stop = pushBatch(batch, pushed)
+            if (batch.isNotEmpty()) {
+                pushBatch(batch, pushed, stopped)?.let { return it }
+            }
             more = due.size == PUSH_BATCH_SIZE || batch.size < due.size
         }
-        return stop
+        return stopped.values.firstOrNull()
     }
 
     /**
@@ -198,62 +219,94 @@ class SyncEngine(
         return due.takeWhile { seen.add(it.pushId) }
     }
 
-    private suspend fun pushBatch(batch: List<OutboxItem>, pushed: PushAccumulator): SyncError? {
+    /** Pushes one batch; returns an error that ends the whole push, and records the lanes it stopped in [stopped]. */
+    private suspend fun pushBatch(
+        batch: List<OutboxItem>,
+        pushed: PushAccumulator,
+        stopped: MutableMap<OutboxItem.Lane, SyncError>,
+    ): SyncError? {
         val result = try {
-            transport.push(
-                events = batch.mapNotNull { it.eventJson },
-                documents = batch.mapNotNull { it.document },
-            )
+            transport.push(batch.map(OutboxItem::toPushItem))
         } catch (failure: SyncException) {
             if (failure.error is SyncError.Transient || failure.error is SyncError.Permanent) {
                 batch.forEach { fail(it, failure.error) }
             }
             return failure.error
         }
-        return settle(batch, result, pushed)
+        return settle(batch, result, pushed, stopped)
     }
 
     /**
-     * Acks or fails every item of [batch]; returns the error that ends the push, if any. Results are matched to
-     * items by [PushItemId], unique within a batch ([untilRepeatedId]), so each outbox `seq` gets its own outcome.
+     * Acks or fails every item of [batch]; returns the error that ends the whole push, if any, and records in
+     * [stopped] each lane an item stopped (a blocking refusal, a transient failure). Results are matched to items by
+     * [PushItemId], unique within a batch ([untilRepeatedId]), so each outbox `seq` gets its own outcome. Items the
+     * transport did not process behind a lane's stop are left as they are: they wait behind it.
      */
-    private suspend fun settle(batch: List<OutboxItem>, result: PushResult, pushed: PushAccumulator): SyncError? {
+    private suspend fun settle(
+        batch: List<OutboxItem>,
+        result: PushResult,
+        pushed: PushAccumulator,
+        stopped: MutableMap<OutboxItem.Lane, SyncError>,
+    ): SyncError? {
         val accepted = result.accepted.toSet()
         val rejected = result.rejected.toMap()
-        var stop: SyncError? = null
+        var global: SyncError? = null
+        val stoppedHere = HashSet<OutboxItem.Lane>()
+        fun stop(item: OutboxItem, error: SyncError) {
+            stoppedHere += item.kind.lane
+            stopped.putIfAbsent(item.kind.lane, error)
+        }
         for (item in batch) {
             when (val error = rejected[item.pushId]) {
-                null -> if (item.pushId in accepted) {
-                    outbox.ack(item.seq)
-                    pushed.accepted++
-                } else {
-                    // Not processed by the server: retry it like a transient failure.
-                    val missing = SyncError.Transient()
-                    fail(item, missing)
-                    stop = stop ?: missing
-                }
+                null -> settleUnrejected(item, item.pushId in accepted, item.kind.lane in stoppedHere, pushed)
+                    ?.let { stop(item, it) }
 
-                is SyncError.Permanent -> if (item.kind == OutboxItem.Kind.EVENT) {
-                    outbox.fail(item.seq, error, clock.nowEpochMs() + EVENT_REJECTION_RETRY_MS)
-                    pushed.rejections += PushRejection(item.seq, item.pushId, error.code, blocking = true)
-                    stop = stop ?: error
-                } else {
-                    outbox.ack(item.seq)
-                    pushed.rejections += PushRejection(item.seq, item.pushId, error.code)
+                is SyncError.Permanent -> {
+                    val blocking = item.kind.blocksOnRefusal
+                    val rejection = PushRejection(item.seq, item.pushId, error.code, blocking = blocking)
+                    pushed.rejections += rejection
+                    if (rejection.blocking) {
+                        outbox.fail(item.seq, error, clock.nowEpochMs() + EVENT_REJECTION_RETRY_MS)
+                        stop(item, error)
+                    } else {
+                        outbox.ackRejected(item.seq, rejection)
+                    }
                 }
 
                 SyncError.HouseholdGone -> return error
 
                 is SyncError.Transient -> {
                     fail(item, error)
-                    stop = stop ?: error
+                    stop(item, error)
                 }
 
-                // Not an attempt: the backoff must not grow while signed out.
-                SyncError.Unauthenticated -> stop = stop ?: error
+                // Not an attempt: the backoff must not grow while signed out. The session is gone for both lanes.
+                SyncError.Unauthenticated -> global = global ?: error
             }
         }
-        return stop
+        return global
+    }
+
+    /**
+     * An item the transport did not refuse: acked when [accepted]; left untouched behind its lane's stop in this batch
+     * ([laneStopped]: not attempted, so no attempt is counted); otherwise not processed by the server, so retried like
+     * a transient failure (the returned error, which stops its lane).
+     */
+    private suspend fun settleUnrejected(
+        item: OutboxItem,
+        accepted: Boolean,
+        laneStopped: Boolean,
+        pushed: PushAccumulator,
+    ): SyncError? = when {
+        accepted -> {
+            outbox.ack(item.seq)
+            pushed.accepted++
+            null
+        }
+
+        laneStopped -> null
+
+        else -> SyncError.Transient().also { fail(item, it) }
     }
 
     private suspend fun fail(item: OutboxItem, error: SyncError) {
@@ -267,18 +320,22 @@ class SyncEngine(
         var parentKeys = 0
         var documents = DocumentApplyReport()
         var events = EventApplyReport()
+        var messages = MessageApplyReport()
+
+        var malformed = 0
 
         fun add(page: PullPage) {
             pages++
             devices += page.devices.size
             parentKeys += page.parentKeys.size
+            malformed += page.malformed
         }
 
         fun report(error: SyncError?, pushed: PushAccumulator = PushAccumulator(), held: Int = 0) = SyncReport(
-            pulled = PullCounts(pages, devices, parentKeys, documents, events),
+            pulled = PullCounts(pages, devices, parentKeys, documents, events, messages, malformed),
             pushed = pushed.accepted,
             rejections = pushed.rejections.toList(),
-            quarantined = events.quarantined + documents.rejectedTotal,
+            quarantined = events.quarantined + documents.rejectedTotal + messages.quarantined,
             held = held,
             householdGone = error == SyncError.HouseholdGone,
             error = error,
@@ -293,7 +350,10 @@ class SyncEngine(
     companion object {
         const val PUSH_BATCH_SIZE: Int = 100
 
-        /** When a ledger event the server refused for good is offered again (a rules fix, an approval). */
+        /**
+         * When a ledger event, chat message or blob chunk the server refused for good is offered again (a rules fix,
+         * an approval).
+         */
         const val EVENT_REJECTION_RETRY_MS: Long = 3_600_000
         const val DEFAULT_DEBOUNCE_MS: Long = 500
         const val DEFAULT_MAX_PAGES: Int = 1_000
@@ -311,11 +371,13 @@ data class SyncReport(
     /** Outbox items the server accepted. */
     val pushed: Int = 0,
     /**
-     * Outbox items the server refused for good, to be audited as `SYNC_REJECTED` by the caller: documents are acked;
-     * ledger events are kept and [blocking][PushRejection.blocking] (see [SyncEngine]).
+     * Outbox items the server refused for good, to be audited as `SYNC_REJECTED` by the caller: documents are dropped
+     * (an outbox with an audit log has already written their row, [OutboxSource.ackRejected]; the caller's write must
+     * be idempotent); ledger events, messages and blob chunks are kept and [blocking][PushRejection.blocking], each
+     * holding back its lane (see [SyncEngine]).
      */
     val rejections: List<PushRejection> = emptyList(),
-    /** Pulled events quarantined plus pulled documents rejected. */
+    /** Pulled events and messages quarantined plus pulled documents rejected. */
     val quarantined: Int = 0,
     /** Events still held for a missing predecessor after [RemoteApplier.retryHeld]. */
     val held: Int = 0,
@@ -327,20 +389,26 @@ data class SyncReport(
     val rejected: Int get() = rejections.size
 }
 
-/** Totals over the pulled pages; [events] includes what [RemoteApplier.retryHeld] applied. */
+/**
+ * Totals over the pulled pages; [events] includes what [RemoteApplier.retryHeld] applied, [messages] is what
+ * [RemoteApplier.applyMessages] reported (its `held` counts messages held during this sync).
+ */
 data class PullCounts(
     val pages: Int = 0,
     val devices: Int = 0,
     val parentKeys: Int = 0,
     val documents: DocumentApplyReport = DocumentApplyReport(),
     val events: EventApplyReport = EventApplyReport(),
+    val messages: MessageApplyReport = MessageApplyReport(),
+    /** Stored rows the transport dropped as unreadable ([PullPage.malformed]), e.g. a forged registry row. */
+    val malformed: Int = 0,
 )
 
 /**
  * One outbox item the server refused for good: its `seq`, push id and the server's code (no free text).
  *
- * @property blocking the item is a ledger event and stays in the outbox, holding back everything queued after it
- *   until it is accepted (retried every [SyncEngine.EVENT_REJECTION_RETRY_MS]) or a parent deals with it. False for
- *   documents, which are acked.
+ * @property blocking the item is a ledger event, a chat message or a blob chunk and stays in the outbox, holding back
+ *   everything queued after it in its lane ([OutboxItem.Lane]) until it is accepted (retried every
+ *   [SyncEngine.EVENT_REJECTION_RETRY_MS]) or a parent deals with it. False for documents, which are dropped.
  */
 data class PushRejection(val seq: Long, val id: PushItemId, val code: String, val blocking: Boolean = false)

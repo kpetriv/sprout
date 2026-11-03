@@ -65,6 +65,58 @@ enum class AuditAction {
     LOCAL_HOUSEHOLD_PURGED,
     SESSION_STARTED,
     SESSION_CLEARED,
+
+    /** This device queued a chat message (M4): message id, thread, seq, kind; never content. */
+    MESSAGE_SENT,
+
+    /** A pulled chat message was refused for good: ids and the reason only. */
+    MESSAGE_QUARANTINED,
+
+    /**
+     * Held messages of an author waited longer than the gap timeout for an earlier `seq` that never came (for example
+     * one that was quarantined), so the gap was skipped: author, thread and the skipped seq range.
+     */
+    MESSAGE_GAP_SKIPPED,
+
+    /** This device published a thread key document (rotation or re-wrap): thread, epoch, recipients count. */
+    THREAD_KEY_PUBLISHED,
+
+    /** A verified thread key document wraps for this device but its wrap does not open: thread, epoch, creator. */
+    THREAD_KEY_UNWRAP_FAILED,
+
+    /** This device queued an encrypted blob for upload: blob id, chunk count, thread or submission. */
+    BLOB_QUEUED,
+
+    /**
+     * The registry listed a known device with a different key than the one first seen (audit H1, D-M4-16): the first
+     * key is kept and the device is excluded from every thread. Device id and which key ("publicKey" or
+     * "encryptionKey") only.
+     */
+    DEVICE_KEY_CHANGED,
+
+    /** The registry listed a REVOKED device as ACTIVE or PENDING again; it stays revoked here (D-M4-16). */
+    DEVICE_REVOCATION_KEPT,
+
+    /** A registry row whose device id is not the SHA-256 of its public key was dropped (D-M4-16). */
+    DEVICE_REJECTED,
+
+    /**
+     * Two different authenticated messages of one author device claim the same `seq` in a thread (audit L3): the
+     * second message id and the thread, seq and first message id. The first one stays.
+     */
+    MESSAGE_EQUIVOCATION,
+
+    /**
+     * This device removed one of its own messages that the server refused for good, with its outbox rows (D-M4-19):
+     * message id and thread. Its `seq` stays used, so receivers see a gap that they skip after the gap timeout.
+     */
+    MESSAGE_DISCARDED,
+
+    /**
+     * A thread key document this device published was refused by the server, so its new key was dropped before
+     * anything was sent with it (review H2): thread, epoch.
+     */
+    THREAD_KEY_WITHDRAWN,
 }
 
 /**

@@ -90,10 +90,20 @@ enum class RejectionReason {
     PARENT_SIGNATURE_INVALID,
     OUT_OF_ORDER,
     CONFLICTING_HISTORY,
+
+    /** A chat message that names another kid's thread (M4 `WRONG_THREAD`). */
+    WRONG_THREAD,
+
+    /** Held: an earlier message from the same phone has not arrived yet (M4 `SEQ_GAP`, D-M4-12). */
+    WAITING_FOR_EARLIER,
+
+    /** Signed for another household (M4 `WRONG_HOUSEHOLD`). */
+    WRONG_HOUSEHOLD,
     OTHER,
     ;
 
     companion object {
+        @Suppress("CyclomaticComplexMethod") // A flat lookup: one branch per verifier code.
         fun of(code: String): RejectionReason = when (code) {
             "UNDECODABLE", "SCHEMA_UNSUPPORTED" -> UNREADABLE
             "HASH_MISMATCH" -> ALTERED
@@ -105,8 +115,11 @@ enum class RejectionReason {
             "BAD_DEVICE_SIGNATURE" -> BAD_SIGNATURE
             "PARENT_SIGNATURE_MISSING" -> PARENT_SIGNATURE_MISSING
             "PARENT_SIGNATURE_INVALID" -> PARENT_SIGNATURE_INVALID
-            "LAMPORT_TOO_FAR_AHEAD" -> OUT_OF_ORDER
+            "LAMPORT_TOO_FAR_AHEAD", "OUT_OF_ORDER" -> OUT_OF_ORDER
             "FORKED_CHAIN" -> CONFLICTING_HISTORY
+            "WRONG_THREAD" -> WRONG_THREAD
+            "SEQ_GAP" -> WAITING_FOR_EARLIER
+            "WRONG_HOUSEHOLD" -> WRONG_HOUSEHOLD
             else -> OTHER
         }
     }

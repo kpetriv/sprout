@@ -11,7 +11,10 @@ import dev.kpetriv.sprout.core.sync.DocTypes
  *   devices/{deviceId}         registry, written by Cloud Functions
  *   parentKeys/{fingerprint}   registry, written by the server only (registerParentKey, D-M3-34)
  *   events/{eventId}           ledger events, create-only; a conflicting copy goes to events/{eventId}__{hash}
- *   kids/{docId}, accounts/…   one collection per document type (see [collectionOf])
+ *   kids/{docId}, accounts/…   one collection per document type (see [collectionOf]); thread keys in threadKeys
+ *   messages/{messageId}       chat messages (M4 §1.3), create-only, KID members read their own thread only
+ *   blobs/{blobId}.{chunk}     encrypted blob chunks (M4 §2), create-only, fetched by id, never pulled
+ *   quotas/{yyyymmdd}          the household's blob chunk counter for one UTC day ({chunks, last}), audit H2
  * ```
  */
 object FirestoreLayout {
@@ -19,6 +22,10 @@ object FirestoreLayout {
     const val DEVICES: String = "devices"
     const val PARENT_KEYS: String = "parentKeys"
     const val EVENTS: String = "events"
+    const val MESSAGES: String = "messages"
+    const val BLOBS: String = "blobs"
+    const val THREAD_KEYS: String = "threadKeys"
+    const val QUOTAS: String = "quotas"
 
     /** Separator between `eventId` and `hash` in the id of a conflicting event copy. */
     const val CONFLICT_SEPARATOR: String = "__"
@@ -33,6 +40,7 @@ object FirestoreLayout {
         DocTypes.ALLOWANCE_SCHEDULE to "allowanceSchedules",
         DocTypes.SAVINGS_GOAL to "savingsGoals",
         DocTypes.INTEREST_POLICY to "interestPolicy",
+        DocTypes.THREAD_KEY to THREAD_KEYS,
     )
 
     init {
@@ -60,4 +68,12 @@ object FirestoreLayout {
 
     fun conflictingEvent(hid: HouseholdId, eventId: String, hash: String): String =
         document(hid, EVENTS, "$eventId$CONFLICT_SEPARATOR$hash")
+
+    fun message(hid: HouseholdId, messageId: String): String = document(hid, MESSAGES, messageId)
+
+    /** `quotas/{yyyymmdd}`: the blob chunk counter of one UTC day. */
+    fun quota(hid: HouseholdId, day: String): String = document(hid, QUOTAS, day)
+
+    /** `blobs/{blobId}.{chunk}`. */
+    fun blobChunk(hid: HouseholdId, blobId: String, chunk: Int): String = document(hid, BLOBS, "$blobId.$chunk")
 }

@@ -16,6 +16,7 @@ import { clientIp, dataOf, parent, requireAppCheck, requireDeviceId, requireId, 
 import { log } from '../log.js';
 import { hit, LIMITS, noIpLimit } from '../rateLimit.js';
 import { attestDevice, issueChallenge } from '../registration.js';
+import { encryptionKeyClaimOf, verifiedEncryptionKey } from '../encryptionKeys.js';
 import { deviceDocument } from './registry.js';
 
 /**
@@ -31,9 +32,11 @@ export async function beginDeviceRegistration(request: CallableRequest): Promise
 }
 
 /**
- * registerParentDevice({ devicePublicKey, attestationChain? }) → { deviceId, fingerprint }: a second device of a parent
- * (same account) is registered PENDING until an ACTIVE parent device approves it (T8). Registering the same key again
- * while it is pending is idempotent.
+ * registerParentDevice({ devicePublicKey, attestationChain?, encryptionKey?, encryptionKeySignature? }) →
+ * { deviceId, fingerprint }: a second device of a parent (same account) is registered PENDING until an ACTIVE parent
+ * device approves it (T8). Registering the same key again while it is pending is idempotent. The optional encryption
+ * key (M4 §1.1) must be bound by the submitted device key to the caller's household and this device id
+ * (`permission-denied` otherwise); a pending retry adds it when the row has none yet.
  */
 export async function registerParentDevice(
   request: CallableRequest,
@@ -41,17 +44,30 @@ export async function registerParentDevice(
   const caller = await parent(request, 'registerParentDevice');
   const data = dataOf(request);
   const key = parseDeviceKey(data.devicePublicKey);
+  const keyClaim = encryptionKeyClaimOf(data);
+  const encryptionKey = keyClaim && verifiedEncryptionKey(keyClaim, caller.hid, key.deviceId, key.key);
   const attestation = await attestDevice(caller.uid, data.attestationChain, key);
   const ref = db.doc(`households/${caller.hid}/devices/${key.deviceId}`);
   await db.runTransaction(async (tx) => {
     const existing = await tx.get(ref);
     if (existing.exists) {
-      if (existing.get('uid') === caller.uid && existing.get('status') === 'PENDING') return;
+      if (existing.get('uid') === caller.uid && existing.get('status') === 'PENDING') {
+        if (encryptionKey !== undefined && existing.get('encryptionKey') === undefined) {
+          tx.update(ref, { ...encryptionKey });
+        }
+        return;
+      }
       throw new HttpsError('already-exists', 'Device already registered');
     }
-    tx.create(ref, deviceDocument(caller.uid, 'PARENT', key, attestation, 'PENDING'));
+    tx.create(ref, deviceDocument(caller.uid, 'PARENT', key, attestation, 'PENDING', undefined, encryptionKey));
   });
-  log.info('device.registered', { hid: caller.hid, deviceId: key.deviceId, status: 'PENDING', attestation });
+  log.info('device.registered', {
+    hid: caller.hid,
+    deviceId: key.deviceId,
+    status: 'PENDING',
+    attestation,
+    encryptionKey: encryptionKey !== undefined,
+  });
   return { deviceId: key.deviceId, fingerprint: displayFingerprint(key.deviceId) };
 }
 

@@ -14,6 +14,7 @@ import dev.kpetriv.sprout.core.syncfirebase.HouseholdFunctions
 import dev.kpetriv.sprout.core.syncfirebase.IdTokenHashSource
 import dev.kpetriv.sprout.core.syncfirebase.LinkCode
 import dev.kpetriv.sprout.core.syncfirebase.ParentKeyRegistration
+import dev.kpetriv.sprout.core.syncfirebase.RegisteredEncryptionKey
 import dev.kpetriv.sprout.core.syncfirebase.RevokedDevice
 import dev.kpetriv.sprout.feature.lock.ParentKeyChallengeSource
 import kotlinx.coroutines.sync.Mutex
@@ -99,6 +100,21 @@ class HouseholdAdminFunctions @Inject constructor(
             deviceId = session.deviceId,
             signature,
         ).onSuccess { policies.recordServerRegisteredKey(it.fingerprint, it.validFromLamport) }
+    }
+
+    /**
+     * Registers this device's X25519 encryption key (M4 §1.1, D-M4-2; parent and kid devices alike): [publicKey] the
+     * raw 32 bytes and [bindingSignature] this device key's signature over `EncryptionKeyBindingPayload` of the
+     * session's household and device. The proof binds the call to the ID token. The same key again is a success with
+     * `created = false`; a different key already registered for this device is [FunctionsError.FailedPrecondition]
+     * (D-M4-14).
+     */
+    suspend fun registerEncryptionKey(
+        publicKey: ByteArray,
+        bindingSignature: ByteArray,
+    ): Result<RegisteredEncryptionKey> = withProof { session, tokenHash ->
+        val signature = signer.sign(DeviceProof.registerEncryptionKeyPayload(session.householdId, tokenHash, publicKey))
+        functions.registerEncryptionKey(publicKey, bindingSignature, session.deviceId, signature)
     }
 
     /**

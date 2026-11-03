@@ -175,6 +175,15 @@ class ModeViewModel @Inject constructor(
         appModeOf(session, onboardingNow, kidId?.let(::KidId), shell, signals::digestOf)
     }.stateIn(viewModelScope, SharingStarted.Eagerly, AppMode.Loading)
 
+    /**
+     * Whether chat is offered: only for a real household's session (the trial household has no backend, so no
+     * thread keys and no one to talk to).
+     */
+    val chatAvailable: StateFlow<Boolean> = sessions.observe()
+        .map { it != null && !it.isLocalTrial }
+        .catch { emit(false) }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, false)
+
     fun onEvent(event: ModeEvent) {
         when (event) {
             is ModeEvent.EnterKidMode -> {

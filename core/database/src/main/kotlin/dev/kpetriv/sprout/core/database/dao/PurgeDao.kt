@@ -73,4 +73,16 @@ interface PurgeDao {
 
     @Query("DELETE FROM session WHERE householdId = :householdId")
     suspend fun deleteSession(householdId: HouseholdId): Int
+
+    @Query("DELETE FROM messages WHERE householdId = :householdId OR threadId IN (:threads)")
+    suspend fun deleteMessages(householdId: HouseholdId, threads: List<String>): Int
+
+    @Query("DELETE FROM message_seq WHERE threadId IN (:threads)")
+    suspend fun deleteMessageSeqs(threads: List<String>): Int
+
+    @Query("DELETE FROM thread_keys WHERE threadId IN (:threads)")
+    suspend fun deleteThreadKeys(threads: List<String>): Int
+
+    @Query("DELETE FROM read_marks WHERE threadId IN (:threads)")
+    suspend fun deleteReadMarks(threads: List<String>): Int
 }

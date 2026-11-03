@@ -1,7 +1,13 @@
 package dev.kpetriv.sprout.core.database
 
+import dev.kpetriv.sprout.core.crypto.EncryptionKeyStore
 import dev.kpetriv.sprout.core.database.entity.AuditAction
+import dev.kpetriv.sprout.core.database.entity.MessageEntity
+import dev.kpetriv.sprout.core.database.entity.MessageSeqEntity
+import dev.kpetriv.sprout.core.database.entity.MessageStatus
+import dev.kpetriv.sprout.core.database.entity.ReadMarkEntity
 import dev.kpetriv.sprout.core.database.entity.RegistrationStatus
+import dev.kpetriv.sprout.core.database.entity.ThreadKeyEntity
 import dev.kpetriv.sprout.core.database.usecase.WipeLocalDataUseCase
 import dev.kpetriv.sprout.core.domainhousehold.Chore
 import dev.kpetriv.sprout.core.domainhousehold.ChoreReward
@@ -9,7 +15,12 @@ import dev.kpetriv.sprout.core.domainhousehold.PendingParentAction
 import dev.kpetriv.sprout.core.domainhousehold.Reward
 import dev.kpetriv.sprout.core.domainhousehold.SavingsGoal
 import dev.kpetriv.sprout.core.domainledger.GamePlayed
+import dev.kpetriv.sprout.core.domainledger.JvmSha256Hasher
 import dev.kpetriv.sprout.core.domainledger.Money
+import dev.kpetriv.sprout.core.domainledger.chat.BlobContext
+import dev.kpetriv.sprout.core.domainledger.chat.MessageKind
+import dev.kpetriv.sprout.core.domainledger.toHex
+import dev.kpetriv.sprout.core.model.BlobId
 import dev.kpetriv.sprout.core.model.CalendarDate
 import dev.kpetriv.sprout.core.model.ChoreId
 import dev.kpetriv.sprout.core.model.ChoreSchedule
@@ -18,6 +29,7 @@ import dev.kpetriv.sprout.core.model.RewardId
 import dev.kpetriv.sprout.core.model.RewardKind
 import dev.kpetriv.sprout.core.model.Role
 import dev.kpetriv.sprout.core.model.ScheduleId
+import dev.kpetriv.sprout.core.model.ThreadId
 import dev.kpetriv.sprout.core.model.UserId
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.test.runTest
@@ -135,6 +147,82 @@ class PurgeAndWipeTest {
         val purged = audit.single { it.action == AuditAction.LOCAL_HOUSEHOLD_PURGED }
         assertEquals(real.uid, purged.actorUid)
         assertTrue("\"kids\":1" in purged.detailsJson)
+    }
+
+    @Test
+    fun purgeAlsoDeletesTheTrialHouseholdsChatRowsAndBlobs() = runTest {
+        val (kid, _) = household.addKid()
+        val thread = kid.id.value
+        val messages = household.database.messageDao()
+        messages.upsert(
+            MessageEntity(
+                "m-1", LocalTrial.HOUSEHOLD, thread, LocalTrial.PARENT, household.deviceId, Role.PARENT, 1, 1, 0, 0,
+                MessageKind.TEXT, "AA==", null, null, 1, byteArrayOf(1), MessageStatus.SENT_LOCAL, null, 0,
+            ),
+        )
+        messages.upsertSeq(MessageSeqEntity(thread, household.deviceId, 2))
+        messages.upsertReadMark(ReadMarkEntity(thread, 0))
+        household.database.threadKeyDao().upsert(
+            ThreadKeyEntity(
+                thread, 0, household.deviceId, ByteArray(32), "$thread.0", "{}", 1, LocalTrial.PARENT, null, 0,
+            ),
+        )
+        val context =
+            BlobContext(LocalTrial.HOUSEHOLD, BlobId("b-1"), ThreadId(thread), kid.id, null, household.deviceId, 0)
+        household.blobCache.put(context, JvmSha256Hasher.sha256(byteArrayOf(9)).toHex(), byteArrayOf(9))
+        assertTrue(household.blobDirectory.listFiles().orEmpty().isNotEmpty())
+
+        val report = household.purge()
+
+        for (table in listOf("messages", "message_seq", "thread_keys", "read_marks", "blobs")) {
+            assertEquals(0, count(table), table)
+            assertEquals(1, report.counts.getValue(table), table)
+        }
+        assertTrue(household.blobDirectory.listFiles().orEmpty().isEmpty(), "blob files are deleted")
+    }
+
+    @Test
+    fun wipeDeletesTheBlobCacheAndTheChatKey() = runTest {
+        val context = RuntimeEnvironment.getApplication()
+        val name = "wipe-chat-${UUID.randomUUID()}.db"
+        val database = fileDatabase(name)
+        val sessions = RoomSessionStore(database, household.clock)
+        val photos = File(context.noBackupFilesDir, "photos-${UUID.randomUUID()}")
+        val blobs = File(context.noBackupFilesDir, "blobs-${UUID.randomUUID()}").apply { mkdirs() }
+        File(blobs, "b-1.blob").writeBytes(byteArrayOf(1))
+        val secrets = File(context.noBackupFilesDir, "secrets-${UUID.randomUUID()}").apply { mkdirs() }
+        LocalDataFiles.SECRET_NAMES.forEach { File(secrets, "$it.bin").writeBytes(byteArrayOf(1)) }
+        assertTrue(EncryptionKeyStore.SECRET_NAME in LocalDataFiles.SECRET_NAMES)
+        assertTrue(BlobCache.BLOB_KEY_SECRET in LocalDataFiles.SECRET_NAMES)
+        val files = LocalDataFiles(context.getDatabasePath(name), photos, secrets, blobs)
+
+        assertTrue(WipeLocalDataUseCase(database, sessions, files, Dispatchers.Unconfined)())
+
+        assertFalse(blobs.exists())
+        assertFalse(File(secrets, "${EncryptionKeyStore.SECRET_NAME}.bin").exists())
+        assertTrue(secrets.listFiles().orEmpty().isEmpty())
+    }
+
+    @Test
+    fun wipeClearsTheCacheDirectoryWithItsVoiceNoteTempFiles() = runTest {
+        val context = RuntimeEnvironment.getApplication()
+        val name = "wipe-cache-${UUID.randomUUID()}.db"
+        val database = fileDatabase(name)
+        val sessions = RoomSessionStore(database, household.clock)
+        val photos = File(context.noBackupFilesDir, "photos-${UUID.randomUUID()}")
+        val secrets = File(context.noBackupFilesDir, "secrets-${UUID.randomUUID()}").apply { mkdirs() }
+        val cache = File(context.cacheDir, "cache-${UUID.randomUUID()}").apply { mkdirs() }
+        val clip = File(cache, "play123.m4a").apply { writeBytes(byteArrayOf(1)) }
+        val nested = File(cache, "capture").apply { mkdirs() }
+        File(nested, "a.jpg").writeBytes(byteArrayOf(2))
+        val files = LocalDataFiles(context.getDatabasePath(name), photos, secrets)
+
+        assertTrue(WipeLocalDataUseCase(database, sessions, files, Dispatchers.Unconfined, cache)())
+
+        assertFalse(clip.exists())
+        assertFalse(nested.exists())
+        assertTrue(cache.isDirectory, "the directory itself stays")
+        cache.delete()
     }
 
     @Test

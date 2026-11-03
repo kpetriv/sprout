@@ -5,6 +5,7 @@ import dev.kpetriv.sprout.core.crypto.Verifier
 import dev.kpetriv.sprout.core.database.entity.DeviceEntity
 import dev.kpetriv.sprout.core.database.entity.ParentKeyEntity
 import dev.kpetriv.sprout.core.database.entity.RegistrationStatus
+import dev.kpetriv.sprout.core.domainledger.BoundEncryptionKey
 import dev.kpetriv.sprout.core.domainledger.DeviceOwner
 import dev.kpetriv.sprout.core.domainledger.DeviceRegistry
 import dev.kpetriv.sprout.core.domainledger.DeviceStatus
@@ -12,6 +13,7 @@ import dev.kpetriv.sprout.core.domainledger.RegisteredDevice
 import dev.kpetriv.sprout.core.domainledger.RegisteredParentKey
 import dev.kpetriv.sprout.core.domainledger.SignatureCheck
 import dev.kpetriv.sprout.core.model.DeviceId
+import dev.kpetriv.sprout.core.model.HouseholdId
 import dev.kpetriv.sprout.core.model.Role
 import javax.inject.Inject
 
@@ -33,6 +35,16 @@ class RoomDeviceRegistry @Inject constructor(private val database: SproutDatabas
      * household (every event was written on this device).
      */
     suspend fun roleLookup(): RoleLookup = RoleLookup(database.deviceDao().all().associate { it.deviceId to it.role })
+
+    /**
+     * Every device of the registry mirror (any status), with its encryption key when the registry listed one bound to
+     * [householdId] (M4 §1.1): the input of `ThreadMembers.resolve`. The mirror only ever holds the session's
+     * household, so this is empty for any other household (and without a session).
+     */
+    suspend fun devicesOf(householdId: HouseholdId): List<RegisteredDevice> {
+        if (database.sessionDao().get()?.householdId != householdId) return emptyList()
+        return database.deviceDao().all().map { it.toRegistered() }
+    }
 }
 
 /**
@@ -71,24 +83,41 @@ internal fun DeviceEntity.toRegistered(): RegisteredDevice = RegisteredDevice(
         RegistrationStatus.REVOKED -> DeviceStatus.Revoked(revokedAtLamport ?: 0)
     },
     attestation = attestation,
+    encryptionKey = encryptionKeyHouseholdId?.let { household ->
+        val key = encryptionKey
+        val signature = encryptionKeySignature
+        if (key != null && signature != null) BoundEncryptionKey(household, key, signature) else null
+    },
+    encryptionKeyConflict = encryptionKeyConflict,
 )
 
-internal fun RegisteredDevice.toEntity(registeredAtEpochMs: Long): DeviceEntity = DeviceEntity(
-    deviceId = deviceId,
-    uid = uid,
-    role = role,
-    kidId = kidId,
-    publicKey = publicKey.copyOf(),
-    status = when (status) {
-        DeviceStatus.Pending -> RegistrationStatus.PENDING
-        DeviceStatus.Active -> RegistrationStatus.ACTIVE
-        is DeviceStatus.Revoked -> RegistrationStatus.REVOKED
-    },
-    revokedAtLamport = (status as? DeviceStatus.Revoked)?.atLamport,
-    attestation = attestation,
-    registeredAtEpochMs = registeredAtEpochMs,
-    lamport = 0,
-)
+/**
+ * The mirror row of this registry entry. Its encryption key is kept only when it is bound to [household] (the
+ * session's): a key bound to another household could otherwise still verify, since the binding names its own
+ * household. Whether the binding verifies is checked on every read, not here.
+ */
+internal fun RegisteredDevice.toEntity(registeredAtEpochMs: Long, household: HouseholdId? = null): DeviceEntity {
+    val bound = encryptionKey?.takeIf { household != null && it.householdId == household }
+    return DeviceEntity(
+        deviceId = deviceId,
+        uid = uid,
+        role = role,
+        kidId = kidId,
+        publicKey = publicKey.copyOf(),
+        status = when (status) {
+            DeviceStatus.Pending -> RegistrationStatus.PENDING
+            DeviceStatus.Active -> RegistrationStatus.ACTIVE
+            is DeviceStatus.Revoked -> RegistrationStatus.REVOKED
+        },
+        revokedAtLamport = (status as? DeviceStatus.Revoked)?.atLamport,
+        attestation = attestation,
+        registeredAtEpochMs = registeredAtEpochMs,
+        lamport = 0,
+        encryptionKey = bound?.publicKey,
+        encryptionKeySignature = bound?.signature,
+        encryptionKeyHouseholdId = bound?.householdId,
+    )
+}
 
 internal fun ParentKeyEntity.toRegistered(): RegisteredParentKey =
     RegisteredParentKey(fingerprint, publicKey.copyOf(), uid, deviceId, validFromLamport, revokedAtLamport)

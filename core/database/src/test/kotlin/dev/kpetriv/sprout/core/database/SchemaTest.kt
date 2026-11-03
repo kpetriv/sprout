@@ -65,6 +65,11 @@ class SchemaTest {
                 "document_inbox",
                 "sync_cursor",
                 "session",
+                "messages",
+                "message_seq",
+                "thread_keys",
+                "blobs",
+                "read_marks",
             ),
             entities().map { it.getValue("tableName").jsonPrimitive.content }.toSet(),
         )
@@ -90,7 +95,7 @@ class SchemaTest {
         assertTrue(listOf("choreId", "dueOn") to true in indices("chore_submissions"))
         assertTrue(listOf("key") to true in indices("pending_parent_actions"))
         assertEquals(
-            setOf("fileName", "sha256", "kidId", "submissionId", "createdAtEpochMs"),
+            setOf("fileName", "sha256", "kidId", "submissionId", "createdAtEpochMs", "blobId"),
             columns("photos"),
         )
         assertEquals(
@@ -118,7 +123,28 @@ class SchemaTest {
         assertTrue(setOf("quarantineReason", "ingestedAtEpochMs").all { it in columns("ledger_events") })
         assertTrue("appliedCopyJson" in columns("anomalies"))
         assertTrue("parentSignature" in columns("ledger_events"))
-        assertTrue(setOf("docType", "docId", "lamport").all { it in columns("outbox") })
+        assertTrue(setOf("docType", "docId", "lamport", "data").all { it in columns("outbox") })
+    }
+
+    @Test
+    fun chatTablesHaveTheirKeysAndIndices() {
+        assertTrue(listOf("threadId", "lamport") to false in indices("messages"))
+        assertTrue(listOf("authorDeviceId", "threadId", "seq") to false in indices("messages"))
+        assertTrue(setOf("plaintext", "status", "reason", "receivedAtEpochMs").all { it in columns("messages") })
+        assertEquals(
+            setOf("threadId", "authorDeviceId", "nextSeq", "lastLamport", "lastDisplayedAtEpochMs", "skippedRanges"),
+            columns("message_seq"),
+        )
+        assertTrue(setOf("displayedAtEpochMs", "late").all { it in columns("messages") })
+        assertTrue(setOf("confirmed", "olderKeys").all { it in columns("thread_keys") })
+        assertTrue("encryptionKeyConflict" in columns("devices"))
+        val threadKeyColumns = columns("thread_keys")
+        val keyColumns = setOf("key", "wrapSetJson", "sourceDocId", "createdByDeviceId")
+        assertTrue(keyColumns.all { it in threadKeyColumns })
+        assertTrue(setOf("fileName", "sha256", "size", "lastUsedEpochMs").all { it in columns("blobs") })
+        val deviceColumns = columns("devices")
+        val keyBinding = setOf("encryptionKey", "encryptionKeySignature", "encryptionKeyHouseholdId")
+        assertTrue(keyBinding.all { it in deviceColumns })
     }
 
     @Test

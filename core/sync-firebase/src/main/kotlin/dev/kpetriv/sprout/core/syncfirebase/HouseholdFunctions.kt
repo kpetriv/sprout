@@ -26,10 +26,26 @@ import kotlin.io.encoding.Base64
 @Singleton
 class HouseholdFunctions @Inject constructor(private val invoker: CallableInvoker) {
 
-    /** Creates a household with the caller as its first parent and this device ACTIVE; then refresh the claims. */
-    suspend fun createHousehold(fiatCurrency: String, key: DeviceKeyRegistration): Result<CreatedHousehold> = call(
+    /**
+     * Creates a household with the caller as its first parent and this device ACTIVE; then refresh the claims.
+     *
+     * [encryptionKey] is optional: its binding names the household id, which the server only assigns here, so a
+     * device normally registers its encryption key with [registerEncryptionKey] once it knows the id. One whose
+     * binding does not verify for the new household is refused (`permission-denied`) and nothing is created.
+     */
+    suspend fun createHousehold(
+        fiatCurrency: String,
+        key: DeviceKeyRegistration,
+        encryptionKey: EncryptionKeyUpload? = null,
+    ): Result<CreatedHousehold> = call(
         CREATE_HOUSEHOLD,
-        CreateHouseholdRequest(fiatCurrency, key.publicKeyBase64(), key.attestationChainBase64()),
+        CreateHouseholdRequest(
+            fiatCurrency,
+            key.publicKeyBase64(),
+            key.attestationChainBase64(),
+            encryptionKey?.publicKeyBase64(),
+            encryptionKey?.signatureBase64(),
+        ),
         CreateHouseholdRequest.serializer(),
         CreatedHousehold.serializer(),
     )
@@ -41,10 +57,21 @@ class HouseholdFunctions @Inject constructor(private val invoker: CallableInvoke
                 decodeBase64(response.challenge) ?: throw FunctionsException(FunctionsError.MalformedResponse)
             }
 
-    /** Registers this device PENDING for a parent who already has a household (second phone, T8). */
-    suspend fun registerParentDevice(key: DeviceKeyRegistration): Result<PendingDevice> = call(
+    /**
+     * Registers this device PENDING for a parent who already has a household (second phone, T8), optionally with its
+     * [encryptionKey] (bound to the caller's household; verified against the submitted device key).
+     */
+    suspend fun registerParentDevice(
+        key: DeviceKeyRegistration,
+        encryptionKey: EncryptionKeyUpload? = null,
+    ): Result<PendingDevice> = call(
         REGISTER_PARENT_DEVICE,
-        RegisterDeviceRequest(key.publicKeyBase64(), key.attestationChainBase64()),
+        RegisterDeviceRequest(
+            key.publicKeyBase64(),
+            key.attestationChainBase64(),
+            encryptionKey?.publicKeyBase64(),
+            encryptionKey?.signatureBase64(),
+        ),
         RegisterDeviceRequest.serializer(),
         PendingDevice.serializer(),
     )
@@ -72,12 +99,51 @@ class HouseholdFunctions @Inject constructor(private val invoker: CallableInvoke
         LinkCode.serializer(),
     )
 
-    /** Redeems a link code from an anonymous kid session; then refresh the claims. */
-    suspend fun redeemLinkCode(code: String, key: DeviceKeyRegistration): Result<RedeemedLink> = call(
+    /**
+     * Redeems a link code from an anonymous kid session; then refresh the claims. [encryptionKey] is optional and,
+     * as for [createHousehold], only verifies if its binding names the household the code belongs to; otherwise
+     * register it with [registerEncryptionKey] after joining.
+     */
+    suspend fun redeemLinkCode(
+        code: String,
+        key: DeviceKeyRegistration,
+        encryptionKey: EncryptionKeyUpload? = null,
+    ): Result<RedeemedLink> = call(
         REDEEM_LINK_CODE,
-        RedeemLinkCodeRequest(code, key.publicKeyBase64(), key.attestationChainBase64()),
+        RedeemLinkCodeRequest(
+            code,
+            key.publicKeyBase64(),
+            key.attestationChainBase64(),
+            encryptionKey?.publicKeyBase64(),
+            encryptionKey?.signatureBase64(),
+        ),
         RedeemLinkCodeRequest.serializer(),
         RedeemedLink.serializer(),
+    )
+
+    /**
+     * Registers this device's X25519 encryption key (M4 §1.1, D-M4-2), from a parent or a kid device that is ACTIVE.
+     * [publicKey] is the raw 32-byte key, [bindingSignature] the device key's signature over core/domain-ledger
+     * `EncryptionKeyBindingPayload.of(hid, deviceId, publicKey)`, [deviceId] this device and [proofSignature] its
+     * signature over [DeviceProof.registerEncryptionKeyPayload]. Registering the same key again answers
+     * `created = false`; a different key on the device is `failed-precondition` (a changed key needs a new device
+     * registration).
+     */
+    suspend fun registerEncryptionKey(
+        publicKey: ByteArray,
+        bindingSignature: ByteArray,
+        deviceId: DeviceId,
+        proofSignature: ByteArray,
+    ): Result<RegisteredEncryptionKey> = call(
+        REGISTER_ENCRYPTION_KEY,
+        RegisterEncryptionKeyRequest(
+            Base64.Default.encode(publicKey),
+            Base64.Default.encode(bindingSignature),
+            deviceId,
+            Base64.Default.encode(proofSignature),
+        ),
+        RegisterEncryptionKeyRequest.serializer(),
+        RegisteredEncryptionKey.serializer(),
     )
 
     /**
@@ -210,6 +276,7 @@ class HouseholdFunctions @Inject constructor(private val invoker: CallableInvoke
         const val CREATE_LINK_CODE: String = "createLinkCode"
         const val REDEEM_LINK_CODE: String = "redeemLinkCode"
         const val REGISTER_PARENT_KEY: String = "registerParentKey"
+        const val REGISTER_ENCRYPTION_KEY: String = "registerEncryptionKey"
         const val REVOKE_DEVICE: String = "revokeDevice"
         const val EXPORT_HOUSEHOLD: String = "exportHousehold"
         const val DELETE_HOUSEHOLD: String = "deleteHousehold"

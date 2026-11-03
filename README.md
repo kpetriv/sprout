@@ -72,7 +72,7 @@ The reasoning behind this layout is in [ADR-0001](docs/adr/0001-architecture.md)
 
 - **Tamper-evident ledger.** Every ledger event is signed by the authoring device and chained to that author's previous event by hash. Receivers verify signature and chain before applying; failures are quarantined and shown in the parent audit view. See [ADR-0002](docs/adr/0002-ledger-as-events.md).
 - **Parent authorisation.** The parent area sits behind a PIN, and every money event a parent authors (chore rewards, allowance, interest, adjustments) is also signed with a parent key that only a strong biometric can use (on devices that have one), one fingerprint prompt per event, each naming the kid, the amount and what it pays for. The key is created only after the parent enters the PIN, so knowing the phone's screen lock is not enough to award credits. Scheduled allowance and interest wait for the parent to tap "Sign now". See [ADR-0004](docs/adr/0004-parent-authorisation-and-device-identity.md) and [ADR-0005](docs/adr/0005-scheduled-payments-and-money-flow-atomicity.md).
-- **End-to-end encrypted chat and photos.** Per-thread AES-256-GCM keys derived from X25519 agreement between parent and kid devices. Firestore and Storage hold ciphertext and routing metadata only. Keys rotate when a device is removed.
+- **End-to-end encrypted chat and photos.** One random AES-256-GCM key per kid thread and epoch, wrapped for each household device with X25519 + HKDF; every device's encryption key is bound to its registered device key, and a parent device rotates the thread key when a device is removed. Messages, voice notes and photos (chat and chore photos) reach Firestore as signed ciphertext; there is no Cloud Storage. See [ADR-0008](docs/adr/0008-chat-encryption-and-thread-keys.md).
 - **Keystore-backed keys.** Each device holds a P-256 key pair in Android Keystore (StrongBox where available). Kid devices get their own Firebase identity; they never see parent credentials.
 - **Server-side enforcement.** Firestore rules check household membership, author identity, role, an active registered device, the conflict order, and ledger immutability. Identity changes (households, device registration and approval, link codes, parent keys, revocation, export, deletion) go through the Sprout server, which verifies key attestation, device-signed requests and App Check, and rate-limits every call. See [ADR-0006](docs/adr/0006-sync-protocol-and-document-envelope.md) and [ADR-0007](docs/adr/0007-identity-linking-and-device-registry.md).
 - **Encrypted at rest.** Room runs on SQLCipher with a Keystore-wrapped passphrase. The parent PIN is hashed with Argon2id (PBKDF2 fallback) and protected by exponential lockout. Parent and chat screens use `FLAG_SECURE`.
@@ -124,7 +124,7 @@ Each milestone ends with green CI and a tagged build.
 | M1 Ledger core and crypto | Event-sourced ledger with hash chain, Keystore keys and signing, SQLCipher Room, outbox, audit log, wallet (3 tiers) | Done |
 | M2 Chores, rewards, tiers | Parent CRUD, kid today and shop (3 tiers), submit/approve, allowance, savings and interest, PIN/biometric lock with fingerprint-signed money events | Done |
 | M3 Sync and identity | Sync engine, Firebase transport, App Check, Credential Manager, the Sprout server (Spark plan), Firestore rules and emulator tests, device registry with key attestation, controls matrix, runbook | Done |
-| M4 Chat and time bank | E2EE threads, key rotation, Seedling presets and voice notes, time bank with foreground notification | Planned |
+| M4 Chat and time bank | E2EE threads, key rotation, Seedling presets and voice notes, chore photo upload, time bank with an ongoing notification | In review |
 | M5 Games | Three games, tier difficulty, daily cap, signed scoring events | Planned |
 | M6 AI | Gemini Nano integration, fallbacks, kindness check, suggestions, weekly summary | Planned |
 | M7 Showcase polish | Glance widget, adaptive layouts, Baseline Profiles, full screenshot coverage, accessibility, retention, export/delete | Planned |
@@ -140,12 +140,14 @@ Each milestone ends with green CI and a tagged build.
   - [ADR-0005 Scheduled payments and money-flow atomicity](docs/adr/0005-scheduled-payments-and-money-flow-atomicity.md)
   - [ADR-0006 Sync protocol and document envelope](docs/adr/0006-sync-protocol-and-document-envelope.md)
   - [ADR-0007 Identity, linking and the device registry](docs/adr/0007-identity-linking-and-device-registry.md)
+  - [ADR-0008 Chat encryption and thread keys](docs/adr/0008-chat-encryption-and-thread-keys.md)
 - [Threat model](docs/THREAT_MODEL.md)
 - [Controls matrix (SOC 2 criteria)](docs/CONTROLS.md)
 - [Incident runbook](docs/RUNBOOK.md)
 - [Firebase backend and the Sprout server](docs/FIREBASE.md)
 - [Privacy policy draft](docs/PRIVACY.md)
 - [M3 milestone spec and as-built notes](docs/milestones/M3.md)
+- [M4 milestone spec and as-built notes](docs/milestones/M4.md)
 
 ## Engineering practices
 

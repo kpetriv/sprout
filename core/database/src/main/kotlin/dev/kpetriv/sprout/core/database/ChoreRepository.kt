@@ -9,6 +9,7 @@ import dev.kpetriv.sprout.core.domainhousehold.ChoreSubmissions
 import dev.kpetriv.sprout.core.domainledger.EventAuthor
 import dev.kpetriv.sprout.core.domainledger.EventId
 import dev.kpetriv.sprout.core.domainledger.PeriodClaim
+import dev.kpetriv.sprout.core.model.BlobId
 import dev.kpetriv.sprout.core.model.CalendarDate
 import dev.kpetriv.sprout.core.model.ChoreId
 import dev.kpetriv.sprout.core.model.ChoreState
@@ -118,13 +119,25 @@ interface ChoreRepository {
      * an unknown submission.
      */
     suspend fun decide(id: SubmissionId, decision: SubmissionDecision, reason: String? = null): DecisionResult
+
+    /**
+     * Records that [photo], the photo of submission [id], was uploaded as the end-to-end encrypted blob [blobId]
+     * (M4 §2, D-M4-5): the submission is written again, signed by this device, with `photoRef.blobId` set, so the
+     * parent's devices can fetch the photo on their next pull. Nothing changes (null) unless the submission is still
+     * awaiting review, its photo is still [photo] (the kid may have replaced it) and it has no blob id yet.
+     *
+     * The default refuses: only the Room repository syncs photos.
+     */
+    suspend fun attachPhotoBlob(id: SubmissionId, photo: PhotoRef, blobId: BlobId): ChoreSubmission? =
+        throw UnsupportedOperationException("this repository does not upload photos")
 }
 
 /**
  * [ChoreRepository] on Room: each write, its outbox `DOCUMENT` row and its audit row in one transaction. Photos are
  * deleted through [PhotoStore] after the transaction that made them unnecessary.
  */
-@Suppress("LongParameterList") // Storage, author, clock, ledger, photos and the document signer.
+// Storage, author, clock, ledger, photos and the document signer; one function per repository operation.
+@Suppress("LongParameterList", "TooManyFunctions")
 class RoomChoreRepository internal constructor(
     private val database: SproutDatabase,
     private val authors: SessionAuthorProvider,
@@ -222,6 +235,36 @@ class RoomChoreRepository internal constructor(
         deletePhotosOf(id)
         return DecisionResult.Decided(decided)
     }
+
+    override suspend fun attachPhotoBlob(id: SubmissionId, photo: PhotoRef, blobId: BlobId): ChoreSubmission? {
+        val author = authors.currentAuthor()
+        return writes.transaction { attachPhotoBlobInTransaction(author, id, photo, blobId) }
+    }
+
+    /**
+     * [attachPhotoBlob] inside the caller's transaction under the device clock lock (the chore photo upload queues
+     * the blob and attaches it in one transaction, review M4).
+     */
+    internal suspend fun attachPhotoBlobInTransaction(
+        author: EventAuthor,
+        id: SubmissionId,
+        photo: PhotoRef,
+        blobId: BlobId,
+    ): ChoreSubmission? {
+        val current = getSubmission(id)
+        val ref = current?.photoRef
+        val matches = ref != null && ref.blobId == null && ref.fileName == photo.fileName &&
+            ref.sha256 == photo.sha256
+        return if (current == null || current.status != SubmissionStatus.SUBMITTED || !matches) {
+            null
+        } else {
+            val uploaded = current.copy(photoRef = requireNotNull(ref).copy(blobId = blobId.value))
+            writeSubmission(author, uploaded, AuditAction.SUBMISSION_SUBMITTED)
+        }
+    }
+
+    /** A Room transaction under the device clock lock, for writes that combine several repositories. */
+    internal suspend fun <R> transaction(block: suspend () -> R): R = writes.transaction(block)
 
     /** Deletes every photo attached to [submissionId] (the current one and any it replaced). */
     private suspend fun deletePhotosOf(submissionId: SubmissionId) {

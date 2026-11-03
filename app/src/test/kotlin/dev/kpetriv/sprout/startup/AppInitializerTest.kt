@@ -82,6 +82,35 @@ class AppInitializerTest {
         }
 
     @Test
+    fun `the M4 upkeep runs after the ledger check and before sync, and its failure never fails startup`() =
+        scope.runTest {
+            fun withChat(chat: suspend () -> Unit) = AppInitializer(
+                scope = scope,
+                seedDemoHousehold = null,
+                quarantineLedger = { steps += "check" },
+                planner = planner,
+                scheduler = scheduler,
+                reconcileSession = { parentSession() },
+                startSync = { steps += "sync" },
+                chatStartup = chat,
+            )
+            withChat { steps += "chat" }.apply {
+                start()
+                advanceUntilIdle()
+                assertEquals(StartupState.Ready, state.value)
+            }
+            assertEquals(listOf("check", "chat", "schedule", "sync"), steps)
+
+            steps.clear()
+            withChat { throw GeneralSecurityException("encryption key store unavailable") }.apply {
+                start()
+                advanceUntilIdle()
+                assertEquals(StartupState.Ready, state.value)
+            }
+            assertEquals(listOf("check", "schedule", "sync"), steps)
+        }
+
+    @Test
     fun `the trial session is not seeded again and still plans at start`() = scope.runTest {
         withSession(trialSession()).apply {
             start()
@@ -246,5 +275,28 @@ class AppInitializerTest {
         advanceUntilIdle()
         assertEquals(StartupState.Ready, initializer.state.value)
         assertEquals(listOf("check", "plan", "schedule"), steps)
+    }
+
+    @Test
+    fun `voice temp files are swept first at every start, and a failing sweep does not fail startup`() = scope.runTest {
+        var sweeps = 0
+        val initializer = AppInitializer(
+            scope,
+            null,
+            { steps += "check" },
+            planner,
+            scheduler,
+            reconcileSession = { trialSession() },
+            sweepVoiceTempFiles = {
+                sweeps += 1
+                steps += "sweep"
+                throw SecurityException("cache unavailable")
+            },
+        )
+        initializer.start()
+        advanceUntilIdle()
+        assertEquals(StartupState.Ready, initializer.state.value)
+        assertEquals(1, sweeps)
+        assertEquals(listOf("sweep", "check", "plan", "schedule"), steps)
     }
 }

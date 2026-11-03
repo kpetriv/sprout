@@ -28,6 +28,18 @@ import kotlin.time.Instant
  */
 data class SyncStatus(val lastSyncedAt: Instant? = null, val lastFailed: Boolean = false)
 
+/**
+ * The M4 upkeep after a successful sync (`ChatMaintenance.afterSync`: encryption key, thread keys, time bank,
+ * photos).
+ */
+fun interface SyncUpkeep {
+    suspend fun afterSync()
+
+    companion object {
+        val None: SyncUpkeep = SyncUpkeep { }
+    }
+}
+
 /** Records `SYNC_REJECTED` audit rows for refused outbox items (`RoomOutboxSource.auditRejections`). */
 fun interface RejectionAuditor {
     suspend fun audit(rejections: List<PushRejection>)
@@ -43,7 +55,9 @@ fun interface RejectionAuditor {
  * - an unauthenticated sync asks the "Sign in again" gate to check the credentials ([CredentialCheck.verify]);
  * - the first successful sync of an ACTIVE PARENT session is recorded ([ShellPreferences.recordFirstPull]; the daily
  *   planner waits for it) and plans allowance and interest up to today once per process (planning before the first
- *   pull could queue payments another parent device already made).
+ *   pull could queue payments another parent device already made);
+ * - every successful sync runs the [SyncUpkeep] (M4: the encryption key registration, a parent's thread key upkeep,
+ *   the time bank reconcile and the chore photo upload).
  *
  * Runs under the engine's sync mutex: nothing here syncs. Failures are dropped unlogged.
  */
@@ -57,6 +71,7 @@ class SyncReportProcessor @Inject constructor(
     private val removals: HouseholdRemovals,
     private val credentials: CredentialCheck,
     private val clock: Clock,
+    private val upkeep: SyncUpkeep = SyncUpkeep.None,
 ) : SyncReportHandler {
     private val mutableStatus = MutableStateFlow(SyncStatus())
     private val planned: MutableSet<HouseholdId> = ConcurrentHashMap.newKeySet()
@@ -73,8 +88,13 @@ class SyncReportProcessor @Inject constructor(
         }
         when {
             report.householdGone -> removals.remove(RemovalReason.HOUSEHOLD_GONE)
+
             report.error == SyncError.Unauthenticated -> credentials.verify()
-            report.error == null -> guarded { afterSuccess() }
+
+            report.error == null -> {
+                guarded { afterSuccess() }
+                guarded { upkeep.afterSync() }
+            }
         }
     }
 

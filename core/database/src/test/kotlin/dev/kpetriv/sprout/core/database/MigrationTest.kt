@@ -291,6 +291,91 @@ class MigrationTest {
     }
 
     @Test
+    fun migration5To6AddsTheChatTablesAndKeepsTheRows() = runTest {
+        helper.createDatabase(TEST_DB, 5).use { db ->
+            db.insertRow(
+                "photos",
+                "fileName" to "a.photo",
+                "sha256" to "0".repeat(64),
+                "kidId" to "kid-1",
+                "submissionId" to "sub-1",
+                "createdAtEpochMs" to receivedAt,
+            )
+            db.insertRow(
+                "devices",
+                "deviceId" to "d".repeat(64),
+                "uid" to "parent-uid",
+                "role" to "PARENT",
+                "kidId" to null,
+                "publicKey" to byteArrayOf(1, 2, 3),
+                "status" to "ACTIVE",
+                "revokedAtLamport" to null,
+                "attestation" to "NONE",
+                "registeredAtEpochMs" to receivedAt,
+                "lamport" to 0L,
+            )
+            db.insertRow(
+                "outbox",
+                "kind" to OutboxKind.DOCUMENT.name,
+                "refId" to "kid/kid-1",
+                "payload" to "{}",
+                "createdAtEpochMs" to receivedAt,
+            )
+            insertSubmissionWithPhoto(db)
+        }
+
+        helper.runMigrationsAndValidate(TEST_DB, 6, true, Migrations.MIGRATION_5_6).use { db ->
+            assertSubmissionWithoutBlob(db)
+            db.query("SELECT fileName, blobId FROM photos").use { cursor ->
+                cursor.moveToFirst()
+                assertEquals("a.photo", cursor.getString(0))
+                assertTrue(cursor.isNull(1), "not uploaded yet")
+            }
+            db.query("SELECT encryptionKey, encryptionKeySignature, encryptionKeyHouseholdId FROM devices").use {
+                it.moveToFirst()
+                assertEquals(listOf(true, true, true), (0..2).map(it::isNull), "the next registry pull fills them")
+            }
+            assertFixPass2Columns(db)
+            db.query("SELECT refId, data FROM outbox").use { cursor ->
+                cursor.moveToFirst()
+                assertEquals("kid/kid-1", cursor.getString(0))
+                assertTrue(cursor.isNull(1))
+            }
+            CHAT_TABLES.forEach { table ->
+                db.query("SELECT COUNT(*) FROM $table").use { cursor ->
+                    cursor.moveToFirst()
+                    assertEquals(0, cursor.getInt(0), table)
+                }
+            }
+        }
+    }
+
+    /** The M4 fix pass 2 columns: no device starts excluded; ordering, late messages, key confirmation exist. */
+    private fun assertFixPass2Columns(db: SupportSQLiteDatabase) {
+        db.query("SELECT encryptionKeyConflict FROM devices").use {
+            it.moveToFirst()
+            assertEquals(0, it.getInt(0), "no device starts excluded")
+        }
+        listOf(
+            "SELECT displayedAtEpochMs, late FROM messages",
+            "SELECT lastLamport, lastDisplayedAtEpochMs, skippedRanges FROM message_seq",
+            "SELECT confirmed, olderKeys FROM thread_keys",
+        ).forEach { query -> db.query(query).close() }
+    }
+
+    @Test
+    fun migration1To6KeepsTheM1Rows() = runTest {
+        helper.createDatabase(TEST_DB, 1).use { db -> insertVersion1Rows(db, chore) }
+
+        helper.runMigrationsAndValidate(TEST_DB, 6, true, *Migrations.ALL).use { db ->
+            db.query("SELECT hash FROM ledger_events").use { cursor ->
+                cursor.moveToFirst()
+                assertEquals(chore.envelope.hash, cursor.getString(0))
+            }
+        }
+    }
+
+    @Test
     fun roomOpensTheHelperCreatedDatabase() {
         helper.createDatabase(TEST_DB, SproutDatabase.VERSION).close()
         val database = Room.databaseBuilder(RuntimeEnvironment.getApplication(), SproutDatabase::class.java, TEST_DB)
@@ -371,6 +456,27 @@ class MigrationTest {
         db.insertRow("device_state", "id" to 0, "deviceId" to row.authorDeviceId.value, "lamport" to 1L)
     }
 
+    /** A version 5 submission with a photo that was never uploaded (no blob id column yet). */
+    private fun insertSubmissionWithPhoto(db: SupportSQLiteDatabase) = db.insertRow(
+        "chore_submissions",
+        "submissionId" to "sub-1",
+        "choreId" to "chore-1",
+        "dueOn" to "2026-11-02",
+        "kidId" to "kid-1",
+        "submittedAtEpochMs" to receivedAt,
+        "photoFileName" to "a.photo",
+        "photoSha256" to "0".repeat(64),
+        "status" to "SUBMITTED",
+        "lamport" to 3L,
+    )
+
+    private fun assertSubmissionWithoutBlob(db: SupportSQLiteDatabase) =
+        db.query("SELECT photoFileName, photoBlobId FROM chore_submissions").use { cursor ->
+            cursor.moveToFirst()
+            assertEquals("a.photo", cursor.getString(0))
+            assertTrue(cursor.isNull(1), "the kid's device has not uploaded it yet")
+        }
+
     private fun SupportSQLiteDatabase.insertRow(table: String, vararg values: Pair<String, Any?>) {
         val content = ContentValues()
         values.forEach { (column, value) ->
@@ -379,6 +485,7 @@ class MigrationTest {
                 is String -> content.put(column, value)
                 is Int -> content.put(column, value)
                 is Long -> content.put(column, value)
+                is ByteArray -> content.put(column, value)
                 else -> error("unsupported column type for $column")
             }
         }
@@ -387,6 +494,7 @@ class MigrationTest {
 
     private companion object {
         const val TEST_DB = "migration-test.db"
+        val CHAT_TABLES = listOf("messages", "message_seq", "thread_keys", "blobs", "read_marks")
         val NEW_TABLES = listOf(
             "chores",
             "chore_submissions",

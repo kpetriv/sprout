@@ -1,6 +1,7 @@
 package dev.kpetriv.sprout.core.domainledger
 
 import dev.kpetriv.sprout.core.model.DeviceId
+import dev.kpetriv.sprout.core.model.HouseholdId
 import dev.kpetriv.sprout.core.model.Role
 import java.security.GeneralSecurityException
 import java.security.KeyFactory
@@ -100,4 +101,16 @@ class InMemoryDeviceRegistry : DeviceRegistry {
 
     /** The registered role of [deviceId], or null: a `roleOf` for [Ledger.project] and [appliedCopyOf]. */
     fun roleOf(deviceId: DeviceId): Role? = devices[deviceId]?.role
+}
+
+/**
+ * Binds the raw X25519 [encryptionKey] to [deviceId] with this device key (M4 §1.1), as a registry row would carry it.
+ */
+fun SoftwareKey.bindEncryptionKey(
+    householdId: HouseholdId,
+    deviceId: DeviceId,
+    encryptionKey: ByteArray,
+): BoundEncryptionKey {
+    val signature = sign(EncryptionKeyBindingPayload.of(householdId, deviceId, encryptionKey))
+    return BoundEncryptionKey(householdId, encryptionKey, signature)
 }

@@ -8,6 +8,7 @@ import { dataOf, parent, requireId, signedIn } from '../guards.js';
 import { log } from '../log.js';
 import { hit, LIMITS } from '../rateLimit.js';
 import { attestDevice } from '../registration.js';
+import { encryptionKeyClaimOf, verifiedEncryptionKey } from '../encryptionKeys.js';
 import { deviceDocument } from './registry.js';
 
 /**
@@ -57,8 +58,12 @@ export async function createLinkCode(request: CallableRequest): Promise<{ code: 
 const INVALID_CODE = 'The code is invalid or has expired';
 
 /**
- * redeemLinkCode({ code, devicePublicKey, attestationChain? }) → { hid, kidId, deviceId }: an anonymous user without
- * a household becomes the kid of the code, with the calling device ACTIVE. Wrong, used and expired codes give the
+ * redeemLinkCode({ code, devicePublicKey, attestationChain?, encryptionKey?, encryptionKeySignature? }) →
+ * { hid, kidId, deviceId }: an anonymous user without a household becomes the kid of the code, with the calling device
+ * ACTIVE. The optional encryption key (M4 §1.1) is stored on the device row when its binding verifies against the
+ * submitted device key for the code's household (checked in the transaction, before anything is written; otherwise
+ * `permission-denied` and the code stays unused). The household is only known from the code, so a kid device normally
+ * registers its key afterwards (registerEncryptionKey). Wrong, used and expired codes give the
  * same `not-found` answer. Attempts are limited per IP, per uid and per code id (its HMAC), and counted before the
  * code is looked up. The transaction creates `userHouseholds/{uid}`, so one uid never joins two households even
  * under concurrent redemptions.
@@ -82,6 +87,7 @@ export async function redeemLinkCode(
     throw new HttpsError('failed-precondition', 'This device is already linked');
   }
   const key = parseDeviceKey(data.devicePublicKey);
+  const keyClaim = encryptionKeyClaimOf(data);
   const usable = (snap: DocumentSnapshot) =>
     snap.exists &&
     snap.get('used') === false &&
@@ -93,11 +99,12 @@ export async function redeemLinkCode(
   }
   const attestation = await attestDevice(caller.uid, data.attestationChain, key);
 
-  const { hid, kidId } = await db.runTransaction(async (tx) => {
+  const { hid, kidId, withKey } = await db.runTransaction(async (tx) => {
     const snap = await tx.get(codeRef);
     if (!usable(snap)) throw new HttpsError('not-found', INVALID_CODE);
     const hid = snap.get('hid') as string;
     const kidId = snap.get('kidId') as string;
+    const encryptionKey = keyClaim && verifiedEncryptionKey(keyClaim, hid, key.deviceId, key.key);
     const household = db.doc(`households/${hid}`);
     const deviceRef = household.collection('devices').doc(key.deviceId);
     const userRef = db.doc(`userHouseholds/${caller.uid}`);
@@ -116,10 +123,10 @@ export async function redeemLinkCode(
       kidId,
       addedAt: FieldValue.serverTimestamp(),
     });
-    tx.create(deviceRef, deviceDocument(caller.uid, 'KID', key, attestation, 'ACTIVE', kidId));
-    return { hid, kidId };
+    tx.create(deviceRef, deviceDocument(caller.uid, 'KID', key, attestation, 'ACTIVE', kidId, encryptionKey));
+    return { hid, kidId, withKey: encryptionKey !== undefined };
   });
   await auth.setCustomUserClaims(caller.uid, { hid, role: 'KID', kidId });
-  log.info('linkCode.redeemed', { hid, kidId, deviceId: key.deviceId, attestation });
+  log.info('linkCode.redeemed', { hid, kidId, deviceId: key.deviceId, attestation, encryptionKey: withKey });
   return { hid, kidId, deviceId: key.deviceId };
 }

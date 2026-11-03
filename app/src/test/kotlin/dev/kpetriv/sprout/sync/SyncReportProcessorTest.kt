@@ -25,6 +25,8 @@ class SyncReportProcessorTest {
     private var verifications = 0
     private val preferences = FakeShellPreferences()
     private val clock = FakeClock(Instant.fromEpochSeconds(1_000))
+    private var upkeeps = 0
+    private var upkeepFailure: Exception? = null
     private val processor = SyncReportProcessor(
         auditor = { audited += it },
         sessions = sessions,
@@ -39,6 +41,10 @@ class SyncReportProcessorTest {
             override fun credentialsLost() = Unit
         },
         clock = clock,
+        upkeep = {
+            upkeeps += 1
+            upkeepFailure?.let { throw it }
+        },
     )
 
     private fun refused(seq: Long) = PushRejection(seq, PushItemId("event/e$seq:abc"), "permission-denied", true)
@@ -71,6 +77,20 @@ class SyncReportProcessorTest {
         processor.handle(SyncReport())
         assertEquals(0, plans)
         assertEquals(emptySet(), preferences.firstPulls)
+    }
+
+    @Test
+    fun `the M4 upkeep runs after every successful sync only, for any session, and may fail quietly`() = runTest {
+        processor.handle(SyncReport(error = SyncError.Transient()))
+        assertEquals(0, upkeeps)
+        processor.handle(SyncReport())
+        sessions.session.value = kidSession()
+        processor.handle(SyncReport())
+        assertEquals(2, upkeeps)
+        upkeepFailure = IllegalStateException("thread key store")
+        processor.handle(SyncReport())
+        assertEquals(3, upkeeps)
+        assertEquals(clock.now(), processor.status.value.lastSyncedAt)
     }
 
     @Test

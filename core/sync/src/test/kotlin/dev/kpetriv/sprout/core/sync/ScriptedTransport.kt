@@ -27,18 +27,31 @@ internal class ScriptedTransport(private val log: MutableList<String> = mutableL
         return pages.removeFirstOrNull() ?: emptyPage(cursor)
     }
 
-    override suspend fun push(events: List<JsonObject>, documents: List<DocumentEnvelope>): PushResult {
+    /** Every pushed item in the order the transport received it. */
+    val pushedItems = mutableListOf<PushItem>()
+
+    /**
+     * Processes [items] in order like a real transport: after a permanent refusal of a kind that blocks the outbox,
+     * or a transient one, the rest of that item's lane stays unprocessed (the other lane goes on).
+     */
+    override suspend fun push(items: List<PushItem>): PushResult {
         log += "push"
-        val ids = events.map(PushItemId::ofEvent) + documents.map(PushItemId::ofDocument)
-        pushedBatches += ids
+        pushedBatches += items.map { it.id }
+        pushedItems += items
         pushError?.let { throw SyncException(it) }
         val accepted = mutableListOf<PushItemId>()
         val rejected = mutableListOf<Pair<PushItemId, SyncError>>()
-        for (id in ids) {
-            if (id !in outcomes) {
-                accepted += id
-            } else {
-                outcomes[id]?.let { rejected += id to it }
+        val stopped = mutableSetOf<OutboxItem.Lane>()
+        for (item in items) {
+            if (item.kind.lane in stopped) continue
+            val id = item.id
+            val error = outcomes[id]
+            when {
+                id !in outcomes -> accepted += id
+                error != null -> rejected += id to error
+            }
+            if (error is SyncError.Transient || (error is SyncError.Permanent && item.kind.blocksOnRefusal)) {
+                stopped += item.kind.lane
             }
         }
         return PushResult(accepted, rejected)
@@ -71,6 +84,11 @@ internal class LoggingApplier(private val inner: RemoteApplier, private val log:
     override suspend fun applyEvents(events: List<JsonObject>): EventApplyReport {
         log += "events"
         return inner.applyEvents(events)
+    }
+
+    override suspend fun applyMessages(messages: List<JsonObject>): MessageApplyReport {
+        log += "messages"
+        return inner.applyMessages(messages)
     }
 
     override suspend fun retryHeld(): EventApplyReport {

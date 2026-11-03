@@ -3,6 +3,8 @@ package dev.kpetriv.sprout.startup
 import android.database.SQLException
 import dagger.Lazy
 import dev.kpetriv.sprout.BuildConfig
+import dev.kpetriv.sprout.chat.ChatMaintenance
+import dev.kpetriv.sprout.chat.VoiceTempFiles
 import dev.kpetriv.sprout.core.database.HouseholdBootstrap
 import dev.kpetriv.sprout.core.database.RoomLedgerRepository
 import dev.kpetriv.sprout.core.database.Session
@@ -27,7 +29,8 @@ import javax.inject.Singleton
 
 /**
  * One-time, process-start work, run off the main thread on the [ApplicationScope] (IO):
- * 0. clear the plaintext chore-photo capture cache ([ChorePhotoCache], ADR-0005), best effort: a capture a crash or a
+ * 0. clear the plaintext chore-photo capture cache ([ChorePhotoCache], ADR-0005) and sweep leftover voice note temp
+ *    files from `cacheDir` ([VoiceTempFiles], audit A2-M2), best effort: a capture or a recording a crash or a
  *    process death left behind never outlives the next start;
  * 1. initialise Firebase and install App Check (core/sync-firebase, M3 §5), best effort: the app works offline and
  *    sync retries later;
@@ -37,6 +40,8 @@ import javax.inject.Singleton
  *    demo trial household ([HouseholdBootstrap]; release builds never create demo kids);
  * 4. ledger maintenance: quarantine stored events whose hash or signature no longer verifies
  *    ([RoomLedgerRepository.quarantineUnverifiable]);
+ * 4a. the M4 upkeep ([ChatMaintenance.atStartup], best effort): the orphan photo sweep, the time bank reconcile, a
+ *    parent's thread key upkeep, the chore photo upload and (in the background) the encryption key registration;
  * 5. for the trial session only, plan allowance and interest up to today ([ScheduledActionsPlanner]), best effort; a
  *    real household plans after its first successful pull instead (`SyncReportProcessor`); no session never plans;
  * 6. schedule the daily planner ([PlanScheduler], kept if already scheduled);
@@ -70,6 +75,8 @@ class AppInitializer internal constructor(
     private val startSync: () -> Unit = {},
     private val resumeRemoval: () -> Boolean = { false },
     private val removing: () -> Boolean = { false },
+    private val chatStartup: suspend () -> Unit = {},
+    private val sweepVoiceTempFiles: () -> Unit = {},
 ) : StartupStatus {
     @Inject
     @Suppress("LongParameterList") // One lazily built dependency per startup step.
@@ -85,6 +92,8 @@ class AppInitializer internal constructor(
         preferences: Lazy<ShellPreferences>,
         sync: Lazy<SyncController>,
         removals: Lazy<RemovalHandler>,
+        chat: Lazy<ChatMaintenance>,
+        voiceTempFiles: Lazy<VoiceTempFiles>,
     ) : this(
         scope = scope,
         seedDemoHousehold = demoSeeding(householdBootstrap, BuildConfig.DEBUG),
@@ -98,6 +107,8 @@ class AppInitializer internal constructor(
         startSync = { sync.get().start() },
         resumeRemoval = { removals.get().resume() },
         removing = { removals.get().isRemoving },
+        chatStartup = { chat.get().atStartup() },
+        sweepVoiceTempFiles = { voiceTempFiles.get().sweep() },
     )
 
     private val started = AtomicBoolean(false)
@@ -142,6 +153,7 @@ class AppInitializer internal constructor(
     @Suppress("ReturnCount") // One check between each pair of steps.
     private suspend fun steps() {
         clearPhotoCacheBestEffort()
+        sweepVoiceTempFilesBestEffort()
         initialiseFirebaseBestEffort()
         if (resumeRemoval()) return
         var session = reconcileSession()
@@ -154,6 +166,8 @@ class AppInitializer internal constructor(
         }
         if (removing()) return
         quarantineLedger()
+        if (removing()) return
+        chatStartupBestEffort()
         if (removing()) return
         if (session?.isLocalTrial == true) planBestEffort()
         scheduler.get().scheduleDaily()
@@ -168,6 +182,28 @@ class AppInitializer internal constructor(
             clearPhotoCache()
         } catch (expected: Exception) {
             // Nothing to show: the capture flow clears the directory again before every capture.
+        }
+    }
+
+    /** Runs on the IO scope. A file system failure never fails startup; the next start sweeps again. */
+    @Suppress("TooGenericExceptionCaught", "SwallowedException")
+    private fun sweepVoiceTempFilesBestEffort() {
+        try {
+            sweepVoiceTempFiles()
+        } catch (expected: Exception) {
+            // Nothing to show or log.
+        }
+    }
+
+    /** The M4 upkeep never fails startup: each of its steps runs again after the next sync. */
+    @Suppress("TooGenericExceptionCaught", "SwallowedException")
+    private suspend fun chatStartupBestEffort() {
+        try {
+            chatStartup()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (expected: Exception) {
+            // Nothing to show or log.
         }
     }
 

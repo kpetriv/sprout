@@ -7,6 +7,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.emitAll
 import kotlinx.coroutines.flow.emptyFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceTimeBy
@@ -129,12 +130,14 @@ class SyncEngineTest {
         val report = engine.syncOnce()
 
         assertEquals(SyncError.Transient(), report.error)
-        assertEquals(1, report.pushed)
+        assertEquals(0, report.pushed)
         val row = outbox.row(first)!!
         assertEquals(1, row.item.attempts)
         assertEquals(clock.nowMs + 1_000, row.nextAttemptAtEpochMs)
         assertEquals("transient", row.lastError)
-        assertNull(outbox.row(second), "accepted items in the same batch are acked")
+        // The transport stops the lane at the transient refusal; the item behind it is untouched and waits behind it.
+        assertEquals(0, outbox.row(second)!!.item.attempts)
+        assertNull(outbox.row(second)!!.lastError)
     }
 
     @Test
@@ -206,6 +209,8 @@ class SyncEngineTest {
         assertEquals(1, report.rejected)
         assertEquals(listOf(PushRejection(seq, id, "permission-denied")), report.rejections)
         assertTrue(outbox.rows().isEmpty())
+        // Dropped through ackRejected, so an outbox with an audit log writes the refusal with the delete (A2-L3).
+        assertEquals(report.rejections, outbox.ackedRejections)
     }
 
     @Test
@@ -223,10 +228,11 @@ class SyncEngineTest {
         val row = outbox.row(first)!!
         assertEquals(clock.nowMs + SyncEngine.EVENT_REJECTION_RETRY_MS, row.nextAttemptAtEpochMs)
         assertEquals("permission-denied", row.lastError)
-        // Items of the same batch the server accepted are acked; the push stops before the next batch.
-        assertNull(outbox.row(second))
+        // Everything behind it stays queued and untouched (not attempted); the push stops before the next batch.
         assertEquals(1, transport.pushedBatches.size)
-        assertTrue(later.drop(SyncEngine.PUSH_BATCH_SIZE - 2).all { outbox.row(it) != null })
+        assertTrue((listOf(second) + later).all { outbox.row(it)?.item?.attempts == 0 })
+        assertEquals(0, report.pushed)
+        assertEquals(InMemoryOutboxSource.Blocked(first, "permission-denied"), outbox.observeBlocked().first())
 
         // Nothing is due behind the blocked head until its retry time; then it is offered again.
         assertEquals(0, engine.syncOnce().pushed)
@@ -503,6 +509,247 @@ class SyncEngineTest {
         assertEquals(listOf("first sync done", "exclusive", "next sync done"), steps)
     }
 
+    // ---- chat lanes (M4 §3) ----
+
+    @Test
+    fun messagesAreAppliedAfterTheDocumentsOfTheirPage() = runTest {
+        val threadKey = parent.signed(DocTypes.THREAD_KEY, "kid-1.0", lamport = 1)
+        transport.pages += PullPage(
+            devices = listOf(parent.registered),
+            parentKeys = emptyList(),
+            documents = listOf(threadKey),
+            events = listOf(parent.event("e1", lamport = 2)),
+            next = SyncCursor(mapOf("messages" to "1")),
+            hasMore = false,
+            messages = listOf(parent.message("m1", seq = 1, lamport = 3), parent.message("m2", seq = 2, lamport = 4)),
+        )
+
+        val report = engine.syncOnce()
+
+        assertEquals(listOf("pull", "registry", "documents", "events", "messages", "saveCursor", "retryHeld"), log)
+        assertEquals(MessageApplyReport(applied = 2), report.pulled.messages)
+        assertEquals(listOf("m1", "m2"), recording.messages().map { it.messageId.value })
+        assertEquals(SyncCursor(mapOf("messages" to "1")), recording.cursor())
+    }
+
+    @Test
+    fun quarantinedMessagesCountAndHeldOnesAreReported() = runTest {
+        val stranger = TestIdentity("kid-device", "kid-uid", Role.KID, KID_1)
+        transport.pages += PullPage(
+            devices = listOf(parent.registered),
+            parentKeys = emptyList(),
+            documents = emptyList(),
+            events = emptyList(),
+            next = SyncCursor.START,
+            hasMore = false,
+            // A gap (seq 2 without 1) is held; an unsigned copy quarantined.
+            messages = listOf(
+                parent.message("m2", seq = 2),
+                parent.message("m9", seq = 1).with("signature", "AAAA"),
+                stranger.message("k1"),
+            ),
+        )
+
+        val report = engine.syncOnce()
+
+        assertEquals(MessageApplyReport(quarantined = 1, held = 2), report.pulled.messages)
+        assertEquals(1, report.quarantined)
+    }
+
+    @Test
+    fun itemsOfEveryKindArePushedInOutboxOrder() = runTest {
+        val chunk = parent.blobChunk("b1", thread = KID_1)
+        val message = parent.message("m1", kind = dev.kpetriv.sprout.core.domainledger.chat.MessageKind.PHOTO)
+        val submission = parent.signed(DocTypes.CHORE_SUBMISSION, "sub-1", 1)
+        outbox.enqueueEvent(parent.event("e1", 1))
+        outbox.enqueueBlobChunk(chunk)
+        outbox.enqueueDocument(submission)
+        outbox.enqueueMessage(message)
+
+        val report = engine.syncOnce()
+
+        assertEquals(
+            listOf(
+                PushItemId.ofEvent(parent.event("e1", 1)),
+                PushItemId("blob/b1.0"),
+                PushItemId.ofDocument(submission),
+                PushItemId("message/m1"),
+            ),
+            transport.pushedBatches.single(),
+        )
+        assertEquals(4, report.pushed)
+        assertTrue(outbox.rows().isEmpty())
+    }
+
+    @Test
+    fun permanentMessageRejectionIsKeptAndBlocksTheChatLaneOnly() = runTest {
+        val first = outbox.enqueueMessage(parent.message("m1"))
+        val chatBehind = listOf(
+            outbox.enqueueMessage(parent.message("m2", seq = 2)),
+            outbox.enqueueBlobChunk(parent.blobChunk("b1", thread = KID_1)),
+        )
+        val ledgerBehind = listOf(
+            outbox.enqueueEvent(parent.event("e1", 1)),
+            outbox.enqueueDocument(parent.signed(DocTypes.REWARD, "reward-1", 1)),
+        )
+        val id = PushItemId("message/m1")
+        transport.outcomes[id] = SyncError.Permanent("permission-denied")
+
+        val report = engine.syncOnce()
+
+        assertEquals(SyncError.Permanent("permission-denied"), report.error)
+        assertEquals(listOf(PushRejection(first, id, "permission-denied", blocking = true)), report.rejections)
+        val row = outbox.row(first)!!
+        assertEquals(clock.nowMs + SyncEngine.EVENT_REJECTION_RETRY_MS, row.nextAttemptAtEpochMs)
+        // The chat items queued behind the refused message are untouched: still queued, never attempted.
+        assertTrue(chatBehind.all { outbox.row(it)?.item?.attempts == 0 && outbox.row(it)?.lastError == null })
+        // The ledger lane does not wait for the chat lane (D-M4-22): the event and the document went out.
+        assertEquals(2, report.pushed)
+        assertTrue(ledgerBehind.all { outbox.row(it) == null })
+        assertEquals(InMemoryOutboxSource.Blocked(first, "permission-denied"), outbox.observeBlocked().first())
+
+        // Nothing goes out behind the blocked head until it is accepted.
+        assertEquals(0, engine.syncOnce().pushed)
+        transport.outcomes.remove(id)
+        clock.advanceBy(SyncEngine.EVENT_REJECTION_RETRY_MS)
+        assertNull(engine.syncOnce().error)
+        assertTrue(outbox.rows().isEmpty())
+        assertNull(outbox.observeBlocked().first())
+    }
+
+    @Test
+    fun aRefusedEventDoesNotHoldBackTheMessageBehindIt() = runTest {
+        val event = outbox.enqueueEvent(parent.event("e1", 1))
+        val nextEvent = outbox.enqueueEvent(parent.event("e2", 2))
+        val message = outbox.enqueueMessage(parent.message("m1"))
+        val id = PushItemId.ofEvent(parent.event("e1", 1))
+        transport.outcomes[id] = SyncError.Permanent("permission-denied")
+
+        val report = engine.syncOnce()
+
+        assertEquals(listOf(PushRejection(event, id, "permission-denied", blocking = true)), report.rejections)
+        assertNull(outbox.row(message), "the message went out")
+        assertEquals(1, report.pushed)
+        assertEquals(0, outbox.row(nextEvent)!!.item.attempts, "the next event waits behind the refused one")
+        assertEquals(InMemoryOutboxSource.Blocked(event, "permission-denied"), outbox.observeBlocked().first())
+
+        // Later chat items keep going out while the ledger lane is blocked.
+        val later = outbox.enqueueMessage(parent.message("m2", seq = 2))
+        assertEquals(1, engine.syncOnce().pushed)
+        assertNull(outbox.row(later))
+        assertTrue(outbox.row(event) != null && outbox.row(nextEvent) != null)
+    }
+
+    @Test
+    fun aDeferredChunkDoesNotHoldBackTheEventsBehindIt() = runTest {
+        val chunk = outbox.enqueueBlobChunk(parent.blobChunk("b1", thread = KID_1))
+        val message = outbox.enqueueMessage(
+            parent.message("m1", kind = dev.kpetriv.sprout.core.domainledger.chat.MessageKind.PHOTO),
+        )
+        val events = (1..3).map { n -> outbox.enqueueEvent(parent.event("e$n", n.toLong())) }
+        val id = PushItemId("blob/b1.0")
+        // Over the daily blob budget: transient until midnight (D-M4-22), never permanent.
+        transport.outcomes[id] = SyncError.Transient(retryAfterMs = 600_000)
+
+        val report = engine.syncOnce()
+
+        assertEquals(SyncError.Transient(retryAfterMs = 600_000), report.error)
+        assertTrue(report.rejections.isEmpty(), "a deferral is not a refusal")
+        assertEquals(3, report.pushed)
+        assertTrue(events.all { outbox.row(it) == null }, "the events went out")
+        assertEquals(clock.nowMs + 600_000, outbox.row(chunk)!!.nextAttemptAtEpochMs)
+        assertEquals(0, outbox.row(message)!!.item.attempts, "the message naming the blob waits, untouched")
+        assertNull(outbox.observeBlocked().first())
+
+        // New events go out while the chunk waits for its retry; the message does not overtake the chunk.
+        val later = outbox.enqueueEvent(parent.event("e4", 4))
+        assertEquals(1, engine.syncOnce().pushed)
+        assertNull(outbox.row(later))
+        assertTrue(transport.pushedBatches.last().none { it == PushItemId("message/m1") })
+
+        transport.outcomes.remove(id)
+        clock.advanceBy(600_000)
+        assertEquals(2, engine.syncOnce().pushed)
+        assertTrue(outbox.rows().isEmpty())
+    }
+
+    @Test
+    fun permanentBlobChunkRejectionBlocksTheMessageThatNamesIt() = runTest {
+        val seq = outbox.enqueueBlobChunk(parent.blobChunk("b1"))
+        val message = outbox.enqueueMessage(
+            parent.message("m1", kind = dev.kpetriv.sprout.core.domainledger.chat.MessageKind.PHOTO),
+        )
+        val id = PushItemId("blob/b1.0")
+        transport.outcomes[id] = SyncError.Permanent("permission-denied")
+
+        val report = engine.syncOnce()
+
+        assertEquals(SyncError.Permanent("permission-denied"), report.error)
+        assertEquals(listOf(PushRejection(seq, id, "permission-denied", blocking = true)), report.rejections)
+        assertEquals(listOf(listOf(id, PushItemId("message/m1"))), transport.pushedBatches)
+        assertEquals(listOf(id), transport.pushedItems.map { it.id }.take(1))
+        assertEquals(0, outbox.row(message)!!.item.attempts, "the message behind the chunk is never attempted")
+        assertEquals(InMemoryOutboxSource.Blocked(seq, "permission-denied"), outbox.observeBlocked().first())
+    }
+
+    @Test
+    fun aTransportThatIgnoresTheBlockStillAcksWhatItAccepted() = runTest {
+        // Defensive: an item accepted after a blocking refusal is on the server, so it is acked.
+        val transport = object : SyncTransport {
+            override suspend fun push(items: List<PushItem>) = PushResult(
+                accepted = items.drop(1).map { it.id },
+                rejected = listOf(items.first().id to SyncError.Permanent("permission-denied")),
+            )
+
+            override suspend fun pull(cursor: SyncCursor) = ScriptedTransport.emptyPage(cursor)
+
+            override suspend fun isAvailable() = true
+        }
+        val engine = SyncEngine(transport, outbox, applier, clock)
+        val first = outbox.enqueueEvent(parent.event("e1", 1))
+        val second = outbox.enqueueEvent(parent.event("e2", 2))
+
+        val report = engine.syncOnce()
+
+        assertEquals(1, report.pushed)
+        assertTrue(outbox.row(first) != null)
+        assertNull(outbox.row(second))
+    }
+
+    @Test
+    fun malformedRowsOfAPullAreCounted() = runTest {
+        transport.pages +=
+            PullPage(emptyList(), emptyList(), emptyList(), emptyList(), SyncCursor.START, false, malformed = 2)
+
+        assertEquals(2, engine.syncOnce().pulled.malformed)
+    }
+
+    @Test
+    fun anOutboxItemCarriesExactlyTheFieldOfItsKind() {
+        val message = parent.message("m1")
+        val chunk = parent.blobChunk("b1")
+
+        assertEquals(PushItemId("message/m1"), OutboxItem.message(1, message).pushId)
+        assertEquals(PushItemId("blob/b1.0"), OutboxItem.blobChunk(2, chunk).pushId)
+        assertEquals(3, OutboxItem.blobChunk(2, chunk).withAttempts(3).attempts)
+        kotlin.test.assertFailsWith<IllegalArgumentException> {
+            OutboxItem(1, OutboxItem.Kind.MESSAGE, null, null, 0, blobChunk = chunk)
+        }
+        kotlin.test.assertFailsWith<IllegalArgumentException> {
+            OutboxItem(1, OutboxItem.Kind.BLOB_CHUNK, null, null, 0, messageJson = message, blobChunk = chunk)
+        }
+    }
+
+    @Test
+    fun aBlobChunkCopiesItsBytesAndHidesThemFromToString() {
+        val bytes = byteArrayOf(1, 2, 3)
+        val chunk = BlobChunkJson(parent.blobChunk("b1").header, bytes)
+        bytes[0] = 9
+
+        assertEquals(1, chunk.data[0].toInt())
+        assertEquals("BlobChunkJson(docId=b1.0, size=3)", chunk.toString())
+    }
+
     private fun TestScope.settle() {
         advanceTimeBy(10_000)
         runCurrent()
@@ -514,7 +761,8 @@ private class InMemoryOutboxSourceWithDuplicates(items: List<OutboxItem>) : Outb
     private val pending = items.toMutableList()
     val acked = mutableListOf<Long>()
 
-    override suspend fun due(nowEpochMs: Long, limit: Int): List<OutboxItem> = pending.take(limit)
+    override suspend fun due(nowEpochMs: Long, limit: Int, lanes: Set<OutboxItem.Lane>): List<OutboxItem> =
+        pending.filter { it.kind.lane in lanes }.take(limit)
 
     override suspend fun ack(seq: Long) {
         acked += seq

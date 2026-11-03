@@ -1,18 +1,18 @@
 package dev.kpetriv.sprout.core.sync
 
+import dev.kpetriv.sprout.core.model.BlobId
 import dev.kpetriv.sprout.core.model.DeviceId
 import dev.kpetriv.sprout.core.model.Role
 import dev.kpetriv.sprout.core.model.UserId
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.map
-import kotlinx.serialization.json.JsonObject
 import java.util.concurrent.atomic.AtomicInteger
 
 /**
  * One device's connection to a [FakeBackend], authenticated as [uid] with role claim [role] (what Firebase Auth
  * custom claims would carry). [changes] emits for every server write made by another device (or by the test) while
- * this device is not partitioned.
+ * this device is not partitioned, except blob chunks (never pulled, only fetched: [fetchBlob]).
  */
 class FakeSyncTransport(private val backend: FakeBackend, val deviceId: DeviceId, val uid: UserId, val role: Role) :
     SyncTransport {
@@ -23,18 +23,27 @@ class FakeSyncTransport(private val backend: FakeBackend, val deviceId: DeviceId
     val pushCount: Int get() = pushes.get()
     val pullCount: Int get() = pulls.get()
 
-    override suspend fun push(events: List<JsonObject>, documents: List<DocumentEnvelope>): PushResult {
+    private val fetches = AtomicInteger()
+
+    val fetchCount: Int get() = fetches.get()
+
+    override suspend fun push(items: List<PushItem>): PushResult {
         pushes.incrementAndGet()
-        return backend.push(caller, events, documents)
+        return backend.push(caller, items)
     }
 
     override suspend fun pull(cursor: SyncCursor): PullPage {
         pulls.incrementAndGet()
-        return backend.pull(deviceId, cursor)
+        return backend.pull(caller, cursor)
+    }
+
+    override suspend fun fetchBlob(blobId: BlobId): Result<List<BlobChunkJson>> {
+        fetches.incrementAndGet()
+        return backend.fetchBlob(caller, blobId)
     }
 
     override fun changes(): Flow<RemoteChange> = backend.writes
-        .filter { it.author != deviceId && !backend.isPartitioned(deviceId) }
+        .filter { it.author != deviceId && it.collection != FakeBackend.BLOBS && !backend.isPartitioned(deviceId) }
         .map { RemoteChange(it.collection) }
 
     override suspend fun isAvailable(): Boolean = backend.isAvailable(deviceId)

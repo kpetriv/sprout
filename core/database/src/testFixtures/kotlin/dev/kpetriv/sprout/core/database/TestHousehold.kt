@@ -5,27 +5,45 @@ import androidx.room.Room
 import dev.kpetriv.sprout.core.crypto.AesGcmAead
 import dev.kpetriv.sprout.core.crypto.DeviceKeyStore
 import dev.kpetriv.sprout.core.crypto.DeviceSigner
+import dev.kpetriv.sprout.core.crypto.EncryptionKeyStore
 import dev.kpetriv.sprout.core.crypto.FakeParentAuthorizer
+import dev.kpetriv.sprout.core.crypto.HouseholdKeyDerivation
 import dev.kpetriv.sprout.core.crypto.InMemoryBlobStorage
 import dev.kpetriv.sprout.core.crypto.InMemoryDeviceKeyStore
 import dev.kpetriv.sprout.core.crypto.InMemoryKeyWrapper
 import dev.kpetriv.sprout.core.crypto.JceEcdsaVerifier
+import dev.kpetriv.sprout.core.crypto.JceX25519KeyAgreement
 import dev.kpetriv.sprout.core.crypto.ParentSigner
+import dev.kpetriv.sprout.core.crypto.SecretStoreEncryptionKeyStore
 import dev.kpetriv.sprout.core.crypto.WrappedSecretStore
+import dev.kpetriv.sprout.core.crypto.X25519KeyAgreement
+import dev.kpetriv.sprout.core.crypto.chat.BlobCipher
+import dev.kpetriv.sprout.core.crypto.chat.MessageCipher
+import dev.kpetriv.sprout.core.crypto.chat.ThreadKeyring
 import dev.kpetriv.sprout.core.database.entity.RegistrationStatus
 import dev.kpetriv.sprout.core.database.usecase.ApproveSubmissionUseCase
 import dev.kpetriv.sprout.core.database.usecase.DrainPendingParentActionsUseCase
 import dev.kpetriv.sprout.core.database.usecase.DrainResult
+import dev.kpetriv.sprout.core.database.usecase.PendingPhotoUploads
 import dev.kpetriv.sprout.core.database.usecase.PlanScheduledActionsUseCase
 import dev.kpetriv.sprout.core.database.usecase.PurchaseRewardUseCase
 import dev.kpetriv.sprout.core.database.usecase.PurgeLocalHouseholdUseCase
+import dev.kpetriv.sprout.core.database.usecase.ReconcileTimeBankUseCase
 import dev.kpetriv.sprout.core.database.usecase.RecordManualAdjustmentUseCase
 import dev.kpetriv.sprout.core.database.usecase.RedeemOwedGrantsUseCase
 import dev.kpetriv.sprout.core.database.usecase.RegisterParentKeyUseCase
+import dev.kpetriv.sprout.core.database.usecase.StartTimeBankUseCase
+import dev.kpetriv.sprout.core.database.usecase.StopTimeBankUseCase
+import dev.kpetriv.sprout.core.database.usecase.SweepOrphanPhotosUseCase
+import dev.kpetriv.sprout.core.database.usecase.ThreadKeyMaintenance
+import dev.kpetriv.sprout.core.database.usecase.TimeBankStatusReader
+import dev.kpetriv.sprout.core.database.usecase.UploadChorePhotosUseCase
 import dev.kpetriv.sprout.core.domainhousehold.PendingParentAction
 import dev.kpetriv.sprout.core.domainledger.Account
 import dev.kpetriv.sprout.core.domainledger.AccountKind
+import dev.kpetriv.sprout.core.domainledger.BoundEncryptionKey
 import dev.kpetriv.sprout.core.domainledger.Currency
+import dev.kpetriv.sprout.core.domainledger.EncryptionKeyBindingPayload
 import dev.kpetriv.sprout.core.domainledger.EventAuthor
 import dev.kpetriv.sprout.core.domainledger.ParentAuthorization
 import dev.kpetriv.sprout.core.domainledger.toHex
@@ -58,6 +76,9 @@ import kotlin.time.Instant
  * [Session.localTrial]); pass `sessionFor` to sign the household in as a real PARENT or KID session. Two instances
  * with distinct key stores and sessions of one household, wired to `SyncEngine`s over one `FakeBackend`, are two
  * devices of that household.
+ *
+ * [agreement] is this device's X25519 implementation: JCE by default (API 33+), or Tink's pure-Java one (the API 28-32
+ * fallback, D-M4-1) to pair the two in one test.
  */
 @Suppress("LongParameterList", "TooManyFunctions") // One field per repository and use case of the data layer.
 class TestHousehold(
@@ -65,6 +86,7 @@ class TestHousehold(
     val clock: FakeClock = FakeClock(DEFAULT_START),
     val keyStore: DeviceKeyStore = InMemoryDeviceKeyStore(clock),
     sessionFor: (DeviceId) -> Session = { Session.localTrial(it, clock.now()) },
+    agreement: (SecureRandom) -> X25519KeyAgreement = ::JceX25519KeyAgreement,
 ) : AutoCloseable {
     val database: SproutDatabase = inMemoryDatabase(context)
     val gbp = Currency.Fiat("GBP")
@@ -80,15 +102,31 @@ class TestHousehold(
     val ledger = RoomLedgerRepository(database, clock, signer, JceEcdsaVerifier())
     val writer = RoomLedgerWriter(database, ledger, signer, authors, clock)
     val outbox = RoomOutboxSource(database, clock)
-    val applier = RoomRemoteApplier(database, ledger, clock, signatureCheck)
+    private val random = SecureRandom()
+    private val aead = AesGcmAead(random)
+    private val secretStore =
+        WrappedSecretStore(InMemoryKeyWrapper(), InMemoryBlobStorage(), random, Dispatchers.Unconfined)
+
+    /** This device's X25519 chat key (`chat.x25519.v1`), in memory. */
+    val encryptionKeys: EncryptionKeyStore = SecretStoreEncryptionKeyStore(secretStore, agreement(random))
+    val chatCrypto = ChatCrypto(
+        ThreadKeyring(agreement(random), HouseholdKeyDerivation(), aead, random),
+        MessageCipher(aead),
+        BlobCipher(aead),
+        encryptionKeys,
+    )
+    val applier = RoomRemoteApplier(database, ledger, clock, signatureCheck, chatCrypto)
 
     val photoDirectory = newPhotoDirectory(context)
+    val blobDirectory = File(context.noBackupFilesDir, "blobs-${UUID.randomUUID()}")
     val files = LocalDataFiles(
         databaseFile = File(context.cacheDir, "unused-${UUID.randomUUID()}.db"),
         photoDirectory = photoDirectory,
         secretsDirectory = File(context.cacheDir, "secrets-${UUID.randomUUID()}"),
+        blobDirectory = blobDirectory,
     )
     val photos: PhotoStore = encryptedPhotoStore(database, authors, clock, photoDirectory)
+    val blobCache = BlobCache(database, blobDirectory, aead, secretStore, clock, Dispatchers.Unconfined)
 
     val kids = RoomKidRepository(database, authors, clock, photos, signer)
     val accounts = RoomAccountRepository(database, authors, clock, signer)
@@ -121,6 +159,24 @@ class TestHousehold(
         HouseholdCalendar(clock) { ZoneOffset.UTC },
     )
     val purge = PurgeLocalHouseholdUseCase(database, files, clock, Dispatchers.Unconfined)
+
+    val blobWrites = BlobWrites(database, clock, signer, authors, chatCrypto, signatureCheck, blobCache)
+    val messageWrites = MessageWrites(database, clock, signer, authors, chatCrypto, signatureCheck, blobWrites)
+    val chatBlobs = ChatBlobs(database, blobCache, chatCrypto, signatureCheck)
+    val threadKeyWrites = ThreadKeyWrites(database, clock, signer, authors, chatCrypto)
+    val threadKeyMaintenance = ThreadKeyMaintenance(database, sessions, chatCrypto, signatureCheck, threadKeyWrites)
+    val messageReader = MessageReader(database)
+    val chatThreads = ChatThreads(database)
+    val threadKeyStatus = ThreadKeyStatusReader(database, signatureCheck, chatCrypto, Dispatchers.Unconfined)
+
+    val timeBankStatus = TimeBankStatusReader(ledger, accounts)
+    val startTimeBank = StartTimeBankUseCase(timeBankStatus, writer)
+    val stopTimeBank = StopTimeBankUseCase(timeBankStatus, writer, clock)
+    val reconcileTimeBank = ReconcileTimeBankUseCase(ledger, timeBankStatus, writer, sessions, clock)
+
+    val photoUploads = PendingPhotoUploads(database)
+    val uploadChorePhotos = UploadChorePhotosUseCase(photoUploads, photos, blobWrites, chores, authors)
+    val sweepOrphanPhotos = SweepOrphanPhotosUseCase(database, photos, clock)
 
     init {
         runBlocking { sessions.save(session) }
@@ -162,9 +218,31 @@ class TestHousehold(
 
     fun List<Account>.minutes(): Account = first { it.currency == Currency.Minutes }
 
+    /**
+     * This device's registered encryption key as the server would list it (M4 §1.1): its X25519 public key, bound to
+     * this device by its device key.
+     */
+    suspend fun boundEncryptionKey(): BoundEncryptionKey {
+        val publicKey = encryptionKeys.publicKey().bytes
+        val signature = signer.sign(EncryptionKeyBindingPayload.of(session.householdId, deviceId, publicKey))
+        return BoundEncryptionKey(session.householdId, publicKey, signature)
+    }
+
+    /**
+     * Stands in for the server accepting this device's thread key documents (review H2): marks every key it published
+     * confirmed, as its own copy coming back in a pull or [ThreadKeyWrites.settle] after the push would. Tests that do
+     * not run a sync engine call it after [threadKeyMaintenance] before sending.
+     */
+    suspend fun confirmThreadKeys() {
+        database.threadKeyDao().all().filterNot { it.confirmed }.forEach {
+            database.threadKeyDao().upsert(it.withConfirmed(true))
+        }
+    }
+
     override fun close() {
         database.close()
         photoDirectory.deleteRecursively()
+        blobDirectory.deleteRecursively()
     }
 
     companion object {

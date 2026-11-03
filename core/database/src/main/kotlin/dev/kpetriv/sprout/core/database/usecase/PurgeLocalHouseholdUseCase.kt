@@ -11,6 +11,7 @@ import dev.kpetriv.sprout.core.database.entity.AuditLogEntity
 import dev.kpetriv.sprout.core.database.entity.OutboxEntity
 import dev.kpetriv.sprout.core.database.entity.OutboxKind
 import dev.kpetriv.sprout.core.domainledger.LedgerJson
+import dev.kpetriv.sprout.core.domainledger.chat.MessageJson
 import dev.kpetriv.sprout.core.model.DeviceId
 import dev.kpetriv.sprout.core.model.HouseholdId
 import dev.kpetriv.sprout.core.model.UserId
@@ -35,12 +36,15 @@ data class PurgeReport(val counts: Map<String, Int>) {
  * household (ADR-0004 §2, M3 §6), after the user confirmed the "your trial data will be deleted" screen.
  *
  * One transaction removes: its kids and their accounts, ledger events, balances, anomalies, chores, submissions,
- * rewards, allowance schedules, savings goals, interest policy, pending parent actions and photo rows; the household
+ * rewards, allowance schedules, savings goals, interest policy, pending parent actions and photo rows; its chat
+ * messages, message sequence numbers, thread keys, read marks and cached blobs (M4; the trial household never syncs, so
+ * these are normally empty); the household
  * policy (this device's view of the trial household, including the locally registered parent key: the parent
  * registers again in the real household) and the trial parent's `parent_keys` rows; its pull cursors; outbox rows
  * and held inbox rows of the trial household; the audit rows its
  * trial parent (and, before M3, its kids) wrote; and the trial session. It then writes one
- * `LOCAL_HOUSEHOLD_PURGED` audit row with the counts. The photo files are deleted after the transaction commits.
+ * `LOCAL_HOUSEHOLD_PURGED` audit row with the counts. The photo and blob files are deleted after the transaction
+ * commits.
  * Nothing of a real household is touched; `device_state` (the Lamport clock, which only moves forward) is kept.
  */
 class PurgeLocalHouseholdUseCase @Inject constructor(
@@ -50,21 +54,30 @@ class PurgeLocalHouseholdUseCase @Inject constructor(
     @param:Dispatcher(SproutDispatchers.IO) private val dispatcher: CoroutineDispatcher,
 ) {
     suspend operator fun invoke(): PurgeReport {
-        val (report, photoNames) = database.withTransaction { purge() }
+        val purged = database.withTransaction { purge() }
         withContext(dispatcher) {
-            val directory = files.photoDirectory.canonicalFile
-            photoNames.map { File(directory, it) }
-                .filter { it.canonicalFile.parentFile == directory }
-                .forEach { it.delete() }
+            deleteIn(files.photoDirectory, purged.photoFiles)
+            deleteIn(files.blobDirectory, purged.blobFiles)
         }
-        return report
+        return purged.report
     }
 
-    private suspend fun purge(): Pair<PurgeReport, List<String>> {
+    private fun deleteIn(directory: File, names: List<String>) {
+        val canonical = directory.canonicalFile
+        names.map { File(canonical, it) }
+            .filter { it.canonicalFile.parentFile == canonical }
+            .forEach { it.delete() }
+    }
+
+    private class Purged(val report: PurgeReport, val photoFiles: List<String>, val blobFiles: List<String>)
+
+    private suspend fun purge(): Purged {
         val household = LocalTrial.HOUSEHOLD
         val purge = database.purgeDao()
         val kids = purge.kidsOf(household)
+        val threads = kids.map { it.value }
         val photos = purge.photosOf(kids)
+        val blobs = database.blobDao().all().filter { blobHousehold(it.contextJson) in setOf(null, household.value) }
         val counts = linkedMapOf(
             "ledger_events" to purge.deleteEvents(household),
             "balances" to purge.deleteBalances(kids),
@@ -77,6 +90,11 @@ class PurgeLocalHouseholdUseCase @Inject constructor(
             "interest_policy" to purge.deleteInterestPolicy(household),
             "pending_parent_actions" to purge.deletePendingActions(kids),
             "photos" to purge.deletePhotos(kids),
+            "messages" to purge.deleteMessages(household, threads),
+            "message_seq" to purge.deleteMessageSeqs(threads),
+            "thread_keys" to purge.deleteThreadKeys(threads),
+            "read_marks" to purge.deleteReadMarks(threads),
+            "blobs" to blobs.sumOf { database.blobDao().delete(it.blobId) },
             "accounts" to purge.deleteAccounts(kids),
             "kids" to purge.deleteKids(household),
             "household_policy" to purge.deleteHouseholdPolicy(),
@@ -94,7 +112,15 @@ class PurgeLocalHouseholdUseCase @Inject constructor(
         )
         val report = PurgeReport(counts)
         writeAudit(report)
-        return report to photos
+        return Purged(report, photos, blobs.map { it.fileName })
+    }
+
+    /** The household a cached blob's context names, or null when the context no longer parses. */
+    private fun blobHousehold(contextJson: String): String? = try {
+        val context = LedgerJson.json.parseToJsonElement(contextJson) as? JsonObject
+        (context?.get("householdId") as? JsonPrimitive)?.takeIf { it.isString }?.content
+    } catch (expected: IllegalArgumentException) {
+        null
     }
 
     private suspend fun purgeLedgerInbox(household: HouseholdId): Int {
@@ -116,6 +142,10 @@ class PurgeLocalHouseholdUseCase @Inject constructor(
         OutboxKind.DOCUMENT -> DocumentJsonCodec.decodeOrNull(payload)?.householdId.let {
             it == null || it == household
         }
+
+        OutboxKind.MESSAGE -> MessageJson.decodeOrNull(payload)?.householdId.let { it == null || it == household }
+
+        OutboxKind.BLOB_CHUNK -> blobHousehold(payload).let { it == null || it == household.value }
     }
 
     private fun householdOfEvent(json: String): String? = try {

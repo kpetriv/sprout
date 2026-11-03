@@ -2,6 +2,7 @@ package dev.kpetriv.sprout.core.syncfirebase
 
 import android.content.Context
 import com.google.firebase.Timestamp
+import com.google.firebase.firestore.Blob
 import com.google.firebase.firestore.DocumentSnapshot
 import com.google.firebase.firestore.FieldPath
 import com.google.firebase.firestore.FieldValue
@@ -9,6 +10,7 @@ import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.FirebaseFirestoreException
 import com.google.firebase.firestore.MetadataChanges
 import com.google.firebase.firestore.Query
+import com.google.firebase.firestore.SetOptions
 import com.google.firebase.firestore.Source
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.channels.awaitClose
@@ -34,7 +36,14 @@ class SdkFirestoreFacade @Inject constructor(
 
     override suspend fun commit(writes: List<SetWrite>) = mapped {
         val batch = firestore.batch()
-        writes.forEach { write -> batch.set(firestore.document(write.path), toSdk(write.data)) }
+        writes.forEach { write ->
+            val document = firestore.document(write.path)
+            if (write.merge) {
+                batch.set(document, toSdk(write.data), SetOptions.merge())
+            } else {
+                batch.set(document, toSdk(write.data))
+            }
+        }
         batch.commit().await()
         Unit
     }
@@ -47,23 +56,27 @@ class SdkFirestoreFacade @Inject constructor(
         firestore.collection(path).get(Source.SERVER).await().documents.map(::toFacade)
     }
 
-    override suspend fun queryByServerTime(path: String, after: QueryPosition?, limit: Int): List<FacadeDocument> =
-        mapped {
-            var query = firestore.collection(path)
-                .orderBy(FirestoreFacade.SERVER_RECEIVED_AT)
-                .orderBy(FieldPath.documentId())
-            if (after != null) {
-                query =
-                    query.startAfter(
-                        Timestamp(after.serverReceivedAt.seconds, after.serverReceivedAt.nanos),
-                        after.documentId,
-                    )
-            }
-            query.limit(limit.toLong()).get(Source.SERVER).await().documents.map(::toFacade)
+    override suspend fun queryByServerTime(
+        path: String,
+        after: QueryPosition?,
+        limit: Int,
+        where: FieldEquals?,
+    ): List<FacadeDocument> = mapped {
+        var query = filtered(firestore.collection(path), where)
+            .orderBy(FirestoreFacade.SERVER_RECEIVED_AT)
+            .orderBy(FieldPath.documentId())
+        if (after != null) {
+            query =
+                query.startAfter(
+                    Timestamp(after.serverReceivedAt.seconds, after.serverReceivedAt.nanos),
+                    after.documentId,
+                )
         }
+        query.limit(limit.toLong()).get(Source.SERVER).await().documents.map(::toFacade)
+    }
 
-    override fun listen(path: String, latestOnly: Boolean): Flow<Unit> = callbackFlow {
-        val collection = firestore.collection(path)
+    override fun listen(path: String, latestOnly: Boolean, where: FieldEquals?): Flow<Unit> = callbackFlow {
+        val collection = filtered(firestore.collection(path), where)
         val query: Query = if (latestOnly) {
             collection.orderBy(FirestoreFacade.SERVER_RECEIVED_AT, Query.Direction.DESCENDING).limit(1)
         } else {
@@ -85,6 +98,9 @@ class SdkFirestoreFacade @Inject constructor(
         throw FirestoreFailure(FirestoreCode.fromName(failure.code.name))
     }
 
+    private fun filtered(query: Query, where: FieldEquals?): Query =
+        if (where == null) query else query.whereEqualTo(where.field, where.value)
+
     private fun toFacade(snapshot: DocumentSnapshot): FacadeDocument =
         FacadeDocument(snapshot.id, fromSdkMap(snapshot.data.orEmpty()))
 
@@ -93,7 +109,9 @@ class SdkFirestoreFacade @Inject constructor(
 
         fun toSdkValue(value: Any?): Any? = when (value) {
             ServerTimestamp -> FieldValue.serverTimestamp()
+            is FieldIncrement -> FieldValue.increment(value.by)
             is ServerTime -> Timestamp(value.seconds, value.nanos)
+            is FacadeBytes -> Blob.fromBytes(value.toByteArray())
             is Map<*, *> -> value.entries.associate { (key, item) -> key.toString() to toSdkValue(item) }
             is List<*> -> value.map(::toSdkValue)
             else -> value
@@ -108,11 +126,13 @@ class SdkFirestoreFacade @Inject constructor(
 
             is Timestamp -> ServerTime(value.seconds, value.nanoseconds)
 
+            is Blob -> FacadeBytes(value.toBytes())
+
             is Map<*, *> -> value.entries.associate { (key, item) -> key.toString() to fromSdk(item) }
 
             is List<*> -> value.map(::fromSdk)
 
-            // References, blobs, geo points and vectors never appear in Sprout documents.
+            // References, geo points and vectors never appear in Sprout documents.
             else -> null
         }
     }

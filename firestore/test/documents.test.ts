@@ -45,12 +45,16 @@ describe('documents: parent happy path', () => {
   for (const coll of Object.keys(COLLECTIONS)) {
     it(`a parent creates, updates, tombstones and reads ${coll}`, async () => {
       const parent = asParent(env);
-      await assertSucceeds(put(parent, coll, document(coll, { docId: 'p-1', lamport: 1 })));
+      // A thread key's id names its thread, epoch and creator; it is never tombstoned (audit M2).
+      const threadKey = coll === 'threadKeys';
+      const docId = threadKey ? `${KID_ID}.0.${PARENT_DEVICE}` : 'p-1';
+      await assertSucceeds(put(parent, coll, document(coll, { docId, lamport: 1 })));
       await assertSucceeds(
-        put(parent, coll, document(coll, { docId: 'p-1', lamport: 2, serverReceivedAt: serverTimestamp() })),
+        put(parent, coll, document(coll, { docId, lamport: 2, serverReceivedAt: serverTimestamp() })),
       );
-      await assertSucceeds(put(parent, coll, document(coll, { docId: 'p-1', lamport: 3, deleted: true })));
-      await assertSucceeds(getDoc(doc(parent, `households/${HID}/${coll}/p-1`)));
+      const tombstone = put(parent, coll, document(coll, { docId, lamport: 3, deleted: true }));
+      await (threadKey ? assertFails(tombstone) : assertSucceeds(tombstone));
+      await assertSucceeds(getDoc(doc(parent, `households/${HID}/${coll}/${docId}`)));
       await assertSucceeds(getDocs(collection(parent, `households/${HID}/${coll}`)));
     });
   }
@@ -191,7 +195,7 @@ describe('documents: conflict semantics match core/sync ConflictResolver', () =>
   it('stays within the rules evaluation budget for the largest kid update', async () => {
     const full = {
       note: 'n'.repeat(500),
-      photoRef: { fileName: 'f'.repeat(128), sha256: 'a'.repeat(64) },
+      photoRef: { fileName: 'f'.repeat(128), sha256: 'a'.repeat(64), blobId: 'b'.repeat(64) },
       choreId: 'c'.repeat(128),
       dueOn: '2026-11-03',
     };
@@ -204,6 +208,14 @@ describe('documents: conflict semantics match core/sync ConflictResolver', () =>
           decidedBy: 'p'.repeat(128), rejectionReason: 'r'.repeat(500) },
       })),
     );
+  });
+
+  it('a submission photoRef may name its uploaded blob (blobId, at most 64 characters) and nothing else', async () => {
+    const ref = (photoRef: Record<string, unknown>) => submission({ lamport: 1 }, { photoRef });
+    await assertSucceeds(put(asKid(env), 'choreSubmissions', ref({ fileName: 'p.jpg', sha256: 'a'.repeat(64), blobId: 'b'.repeat(64) })));
+    await assertFails(put(asKid(env), 'choreSubmissions', ref({ fileName: 'p.jpg', blobId: 'b'.repeat(65) })));
+    await assertFails(put(asKid(env), 'choreSubmissions', ref({ fileName: 'p.jpg', blobId: 7 })));
+    await assertFails(put(asKid(env), 'choreSubmissions', ref({ fileName: 'p.jpg', url: 'https://example.test' })));
   });
 
   it('a kid cannot change the identity (choreId, dueOn) of their stored submission', async () => {
@@ -310,7 +322,7 @@ describe('documents: kid role gates', () => {
   });
 
   for (const coll of ['rewards', 'chores', 'allowanceSchedules', 'kids', 'accounts', 'householdPolicy',
-    'savingsGoals', 'interestPolicy']) {
+    'savingsGoals', 'interestPolicy', 'threadKeys']) {
     it(`a kid cannot write ${coll}`, async () => {
       await assertFails(
         put(asKid(env), coll, document(coll, { authorUid: 'kid-uid', authorDeviceId: KID_DEVICE, lamport: 99 })),

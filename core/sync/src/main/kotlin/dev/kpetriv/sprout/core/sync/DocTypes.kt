@@ -22,6 +22,13 @@ object DocTypes {
     const val INTEREST_POLICY: String = "interest_policy"
 
     /**
+     * A thread key wrapped for each member device of one chat thread and epoch (M4 §1.2, D-M4-3): payload
+     * core/domain-ledger `ThreadKeyDocument`, docId `"<kidId>.<epoch>"`, collection `threadKeys`. PARENT devices
+     * only.
+     */
+    const val THREAD_KEY: String = "thread_key"
+
+    /**
      * Every known type, in the order a pulled page is applied: the household's structure (kids, accounts, policy)
      * first, so documents and events that refer to it find it.
      */
@@ -35,6 +42,7 @@ object DocTypes {
         ALLOWANCE_SCHEDULE,
         SAVINGS_GOAL,
         INTEREST_POLICY,
+        THREAD_KEY,
     )
 
     private val applyRank: Map<String, Int> = all.withIndex().associate { (index, type) -> type to index }
@@ -45,8 +53,8 @@ object DocTypes {
     fun applyOrder(docType: String): Int = applyRank[docType] ?: all.size
 
     /**
-     * The least privileged role that may write [docType]. A PARENT device may write every type; a KID device only
-     * [CHORE_SUBMISSION], and then only what [kidMayWrite] allows.
+     * The least privileged role that may write [docType]. A PARENT device may write every type (including
+     * [THREAD_KEY]); a KID device only [CHORE_SUBMISSION], and then only what [kidMayWrite] allows.
      *
      * @throws IllegalArgumentException for an unknown type (check [isKnown] first).
      */

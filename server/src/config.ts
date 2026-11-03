@@ -70,6 +70,14 @@ export const MAX_LIVE_LINK_CODES = 5;
  */
 export const MAX_EXPORT_BYTES = 4 * 1024 * 1024;
 
+/**
+ * exportHousehold reads messages in pages of this many (ordered by lamport) instead of the whole collection at once
+ * (audit L5), and refuses with `resource-exhausted` once more than [MAX_EXPORT_MESSAGES] exist: a long chat history
+ * is exported per collection in pages, and a device-side plaintext export comes in M7 (D-M4-17).
+ */
+export const EXPORT_PAGE_SIZE = 500;
+export const MAX_EXPORT_MESSAGES = 5_000;
+
 /** The document collections under households/{hid}, keyed by collection with their docType (M3 §5). */
 export const DOCUMENT_COLLECTIONS: Readonly<Record<string, string>> = {
   kids: 'kid',
@@ -81,7 +89,11 @@ export const DOCUMENT_COLLECTIONS: Readonly<Record<string, string>> = {
   allowanceSchedules: 'allowance_schedule',
   savingsGoals: 'savings_goal',
   interestPolicy: 'interest_policy',
+  threadKeys: 'thread_key',
 };
+
+/** The chat collections under households/{hid} (M4 §2, §3): create-only, carrying `authorDeviceId` and `lamport`. */
+export const CHAT_COLLECTIONS = ['messages', 'blobs'] as const;
 
 /**
  * The HMAC-SHA256 key for link-code ids (`linkCodes/{hmac(code)}`): the `LINK_CODE_HMAC_KEY` environment variable, a

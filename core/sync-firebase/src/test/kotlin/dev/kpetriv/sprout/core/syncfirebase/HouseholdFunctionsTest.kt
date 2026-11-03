@@ -52,6 +52,55 @@ class HouseholdFunctionsTest {
     }
 
     @Test
+    fun `registration callables send an encryption key only when given one`() = runTest {
+        val invoker = RecordingInvoker { name, _ ->
+            when (name) {
+                "createHousehold" -> mapOf("hid" to "h1", "deviceId" to device.value)
+                "registerParentDevice" -> mapOf("deviceId" to device.value, "fingerprint" to "aaaa aaaa aaaa aaaa")
+                else -> mapOf("hid" to "h1", "kidId" to "kid-a", "deviceId" to device.value)
+            }
+        }
+        val functions = HouseholdFunctions(invoker)
+        val key = DeviceKeyRegistration(byteArrayOf(1), null)
+        val encryptionKey = EncryptionKeyUpload(byteArrayOf(2, 3), byteArrayOf(4))
+
+        functions.createHousehold("EUR", key, encryptionKey).getOrThrow()
+        functions.registerParentDevice(key, encryptionKey).getOrThrow()
+        functions.redeemLinkCode("abcd-2345", key, encryptionKey).getOrThrow()
+        functions.registerParentDevice(key).getOrThrow()
+
+        invoker.calls.take(3).forEach { (_, data, _) ->
+            assertEquals("AgM=", data["encryptionKey"])
+            assertEquals("BA==", data["encryptionKeySignature"])
+        }
+        assertFalse("encryptionKey" in invoker.calls.last().second)
+        assertFalse("encryptionKeySignature" in invoker.calls.last().second)
+        assertFalse("AgM=" in encryptionKey.toString())
+    }
+
+    @Test
+    fun `registerEncryptionKey sends the key, its binding and the device proof`() = runTest {
+        val invoker = RecordingInvoker { _, _ -> mapOf("deviceId" to device.value, "created" to true) }
+
+        val registered = HouseholdFunctions(invoker)
+            .registerEncryptionKey(ByteArray(32) { 1 }, byteArrayOf(2), device, byteArrayOf(3))
+            .getOrThrow()
+
+        assertEquals(RegisteredEncryptionKey(device, created = true), registered)
+        val (name, data, _) = invoker.calls.single()
+        assertEquals(HouseholdFunctions.REGISTER_ENCRYPTION_KEY, name)
+        assertEquals(
+            mapOf(
+                "publicKey" to "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=",
+                "bindingSignature" to "Ag==",
+                "deviceId" to device.value,
+                "signature" to "Aw==",
+            ),
+            data,
+        )
+    }
+
+    @Test
     fun `an unattested key sends no attestationChain field`() = runTest {
         val invoker = RecordingInvoker { _, _ ->
             mapOf(

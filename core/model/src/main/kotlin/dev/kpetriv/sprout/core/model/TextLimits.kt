@@ -9,6 +9,15 @@ const val MAX_DESCRIPTION_LENGTH: Int = 500
 /** Longest submission note or rejection reason (equal to the ledger's free-text limit). */
 const val MAX_NOTE_LENGTH: Int = 200
 
+/** Longest chat text message (M4 §1.3, `TEXT` plaintext). */
+const val MAX_CHAT_TEXT_LENGTH: Int = 1000
+
+/** Longest caption on a chat photo. */
+const val MAX_CHAT_CAPTION_LENGTH: Int = 200
+
+/** Longest emoji string on a chat preset (one emoji can be several code points, for example a ZWJ sequence). */
+const val MAX_CHAT_EMOJI_LENGTH: Int = 16
+
 /** What `toString` prints in place of free text that may hold personal data. */
 internal const val REDACTED: String = "<redacted>"
 

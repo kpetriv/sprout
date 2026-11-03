@@ -18,6 +18,22 @@ class DeviceKeyRegistration(val publicKey: ByteArray, val attestationChain: List
     override fun toString(): String = "DeviceKeyRegistration(attested=${attestationChain != null})"
 }
 
+/**
+ * A device's X25519 encryption key as it is registered (M4 §1.1, D-M4-2): [publicKey] the raw 32 bytes, [signature]
+ * the device key's ECDSA signature (DER) over core/domain-ledger `EncryptionKeyBindingPayload.of(hid, deviceId,
+ * publicKey)`. The server verifies the binding against the device key before storing both on the device row.
+ */
+class EncryptionKeyUpload(publicKey: ByteArray, signature: ByteArray) {
+    private val key = publicKey.copyOf()
+    private val sig = signature.copyOf()
+
+    internal fun publicKeyBase64(): String = Base64.Default.encode(key)
+
+    internal fun signatureBase64(): String = Base64.Default.encode(sig)
+
+    override fun toString(): String = "EncryptionKeyUpload(<redacted>)"
+}
+
 @Serializable
 internal class EmptyRequest
 
@@ -26,10 +42,26 @@ internal data class CreateHouseholdRequest(
     val fiatCurrency: String,
     val devicePublicKey: String,
     val attestationChain: List<String>? = null,
+    val encryptionKey: String? = null,
+    val encryptionKeySignature: String? = null,
 )
 
 @Serializable
-internal data class RegisterDeviceRequest(val devicePublicKey: String, val attestationChain: List<String>? = null)
+internal data class RegisterDeviceRequest(
+    val devicePublicKey: String,
+    val attestationChain: List<String>? = null,
+    val encryptionKey: String? = null,
+    val encryptionKeySignature: String? = null,
+)
+
+/** `registerEncryptionKey`: [signature] is the device proof, [bindingSignature] the key's binding. */
+@Serializable
+internal data class RegisterEncryptionKeyRequest(
+    val publicKey: String,
+    val bindingSignature: String,
+    val deviceId: DeviceId,
+    val signature: String,
+)
 
 @Serializable
 internal data class ApproveDeviceRequest(val deviceId: DeviceId, val approverDeviceId: DeviceId, val signature: String)
@@ -54,6 +86,8 @@ internal data class RedeemLinkCodeRequest(
     val code: String,
     val devicePublicKey: String,
     val attestationChain: List<String>? = null,
+    val encryptionKey: String? = null,
+    val encryptionKeySignature: String? = null,
 ) {
     override fun toString(): String = "RedeemLinkCodeRequest(code=<redacted>)"
 }
@@ -114,6 +148,13 @@ data class LinkCode(val code: String, val expiresAt: Long) {
 /** `redeemLinkCode` result: the household and kid this device now belongs to. */
 @Serializable
 data class RedeemedLink(val hid: HouseholdId, val kidId: KidId, val deviceId: DeviceId)
+
+/**
+ * `registerEncryptionKey` result: [created] is false when the same key was already registered for [deviceId] (an
+ * idempotent retry).
+ */
+@Serializable
+data class RegisteredEncryptionKey(val deviceId: DeviceId, val created: Boolean)
 
 /** `revokeDevice` result: events of the device at or above [revokedAtLamport] are refused by receivers. */
 @Serializable

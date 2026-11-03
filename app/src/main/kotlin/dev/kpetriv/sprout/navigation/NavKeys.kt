@@ -55,3 +55,19 @@ data class KidHomeKey(val kidId: KidId) : NavKey
 /** The kid's chores for today, in the kid's [tier]. */
 @Serializable
 data class KidChoresKey(val kidId: KidId, val tier: KidUiTier) : NavKey
+
+// Chat and time bank (M4), in either area.
+
+/** The parent's chat inbox: one thread per kid. */
+@Serializable
+data object ChatThreadsKey : NavKey
+
+/**
+ * [kidId]'s chat thread: a parent's view in the parent area, the kid's own view (in the kid's tier) in kid mode.
+ */
+@Serializable
+data class ChatThreadKey(val kidId: KidId) : NavKey
+
+/** [kidId]'s screen time (time bank), kid mode only. */
+@Serializable
+data class TimeBankKey(val kidId: KidId) : NavKey

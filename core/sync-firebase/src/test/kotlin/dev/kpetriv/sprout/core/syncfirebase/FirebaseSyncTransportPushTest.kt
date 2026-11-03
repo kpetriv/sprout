@@ -5,7 +5,9 @@ import dev.kpetriv.sprout.core.model.HouseholdId
 import dev.kpetriv.sprout.core.model.Role
 import dev.kpetriv.sprout.core.model.UserId
 import dev.kpetriv.sprout.core.sync.DocTypes
+import dev.kpetriv.sprout.core.sync.PushItem
 import dev.kpetriv.sprout.core.sync.PushItemId
+import dev.kpetriv.sprout.core.sync.PushResult
 import dev.kpetriv.sprout.core.sync.SyncError
 import dev.kpetriv.sprout.core.sync.SyncException
 import dev.kpetriv.sprout.core.syncfirebase.TestData.HID
@@ -112,7 +114,7 @@ class FirebaseSyncTransportPushTest {
         assertEquals(
             setOf(
                 "kids", "accounts", "householdPolicy", "chores", "choreSubmissions", "rewards", "allowanceSchedules",
-                "savingsGoals", "interestPolicy",
+                "savingsGoals", "interestPolicy", "threadKeys",
             ),
             firestore.docs.keys.map { it.split('/')[2] }.toSet(),
         )
@@ -133,13 +135,55 @@ class FirebaseSyncTransportPushTest {
     }
 
     @Test
-    fun `writes go out in batches of at most the batch size`() = runTest {
-        val events = (1..850).map { TestData.event("evt-$it") }
+    fun `writes go out in batches sized by the rules budget estimate`() = runTest {
+        val events = (1..25).map { TestData.event("evt-$it") }
+        val documents = (1..9).map { TestData.document(docId = "doc-$it") }
 
-        val result = transport().push(events, emptyList())
+        val result = transport().push(events, documents)
 
-        assertEquals(850, result.accepted.size)
-        assertEquals(listOf(400, 400, 50), firestore.commits.map { it.size })
+        assertEquals(34, result.accepted.size)
+        val max = FirebaseSyncTransport.MAX_EVENTS_PER_BATCH
+        val docs = FirebaseSyncTransport.MAX_DOCUMENTS_PER_BATCH
+        assertEquals(listOf(max, max, 25 - 2 * max, docs, 9 - docs), firestore.commits.map { it.size })
+    }
+
+    @Test
+    fun `a batch is cut where the kind changes and items keep their order`() = runTest {
+        val items = listOf(
+            PushItem.Event(TestData.event("evt-1")),
+            PushItem.Document(TestData.document(docId = "doc-1")),
+            PushItem.Event(TestData.event("evt-2")),
+            PushItem.Event(TestData.event("evt-3")),
+            PushItem.Document(TestData.document(docType = DocTypes.THREAD_KEY, docId = "kid-a.0.${TestData.DEVICE}")),
+            PushItem.Document(TestData.document(docId = "doc-2")),
+        )
+
+        val result = transport().push(items)
+
+        assertEquals(items.map { it.id }, result.accepted)
+        assertEquals(
+            listOf(
+                listOf("events/evt-1"),
+                listOf("chores/doc-1"),
+                listOf("events/evt-2", "events/evt-3"),
+                listOf("threadKeys/kid-a.0.${TestData.DEVICE}"),
+                listOf("chores/doc-2"),
+            ),
+            firestore.commits.map { batch -> batch.map { it.path.removePrefix("households/h1/") } },
+        )
+    }
+
+    @Test
+    fun `a malformed event ends the push after what came before it`() = runTest {
+        val before = TestData.event("evt-1")
+        val malformed = TestData.event("evt-2", hash = "nothex")
+        val after = TestData.event("evt-3")
+
+        val result = transport().push(listOf(PushItem.Event(before), PushItem.Event(malformed), PushItem.Event(after)))
+
+        assertEquals(listOf(PushItemId.ofEvent(before)), result.accepted)
+        assertEquals(listOf(PushItemId.ofEvent(malformed)), result.rejected.map { it.first })
+        assertNull(firestore.docs["households/h1/events/evt-3"])
     }
 
     @Test
@@ -151,12 +195,26 @@ class FirebaseSyncTransportPushTest {
         val result = transport().push(events, emptyList())
 
         assertEquals(
-            listOf("evt-1", "evt-3"),
+            listOf("evt-1"),
             result.accepted.map {
                 it.value.substringAfter('/').substringBefore(':')
             },
         )
         assertEquals(listOf(PushItemId.ofEvent(events[1]) to SyncError.Permanent("permission-denied")), result.rejected)
+        // Head of line (review H3): the event after the refused one is left unprocessed, never written.
+        assertNull(firestore.docs["households/h1/events/evt-3"])
+    }
+
+    @Test
+    fun `a refused document does not stop the push`() = runTest {
+        firestore.rule = { write, _ -> if (write.path.endsWith("doc-2")) FirestoreCode.PERMISSION_DENIED else null }
+        firestore.seed("households/h1", mapOf("createdBy" to "x"))
+        val documents = (1..3).map { TestData.document(docId = "doc-$it") }
+
+        val result = transport().push(emptyList(), documents)
+
+        assertEquals(listOf(documents[0], documents[2]).map(PushItemId::ofDocument), result.accepted)
+        assertEquals(listOf(PushItemId.ofDocument(documents[1])), result.rejected.map { it.first })
     }
 
     @Test
@@ -215,7 +273,8 @@ class FirebaseSyncTransportPushTest {
 
         val result = transport().push(listOf(event), listOf(TestData.document()))
 
-        assertEquals(listOf(SyncError.Transient(), SyncError.Transient()), result.rejected.map { it.second })
+        // The event's batch is refused without evidence: transient, and the push stops before the document.
+        assertEquals(listOf(SyncError.Transient()), result.rejected.map { it.second })
         // The household document does not exist (or reads as such): still no evidence.
         firestore.readFailures.clear()
         assertEquals(SyncError.Transient(), transport().push(listOf(event), emptyList()).rejected.single().second)
@@ -361,10 +420,11 @@ class FirebaseSyncTransportPushTest {
         val foreignDocument = TestData.document(hid = HouseholdId("h2"))
         val unknown = TestData.document(docType = "gadget")
 
-        val result = transport().push(
-            listOf(noEnvelope, badHash, foreignEvent, extraEnvelopeKey),
-            listOf(unsigned, foreignDocument, unknown),
-        )
+        // Pushed one at a time: a refused event ends its push (head of line).
+        val events = listOf(noEnvelope, badHash, foreignEvent, extraEnvelopeKey)
+            .map { transport().push(listOf(it), emptyList()) }
+        val documents = transport().push(emptyList(), listOf(unsigned, foreignDocument, unknown))
+        val result = PushResult(emptyList(), events.flatMap { it.rejected } + documents.rejected)
 
         assertEquals(
             listOf(

@@ -74,6 +74,15 @@ class DeviceProofTest {
     }
 
     @Test
+    fun `registerEncryptionKey signs the raw 32-byte X25519 key`() {
+        assertEquals(
+            "7370726f75742f72656769737465722d656e6372797074696f6e2d6b65792f763200686f6d652d3100" + tokenHex + "00" +
+                "07".repeat(32),
+            DeviceProof.registerEncryptionKeyPayload(hid, tokenHash, ByteArray(32) { 7 }).hex(),
+        )
+    }
+
+    @Test
     fun `registerParentKey signs the raw SPKI bytes`() {
         assertEquals(
             "7370726f75742f72656769737465722d706172656e742d6b65792f763200686f6d652d3100" + tokenHex + "00305901ff",

@@ -134,6 +134,35 @@ class HouseholdModelTest {
     }
 
     @Test
+    fun photoRefBlobIdIsOptionalAndBounded() {
+        assertEquals(PhotoRef("a.jpg", sha), PhotoRef("a.jpg", sha, blobId = null))
+        PhotoRef("a.jpg", sha, blobId = "0f8c2a3e-7f42-4b0e-9a51-2c1d1b4f5e6a")
+        PhotoRef("a.jpg", sha, blobId = "b".repeat(MAX_PHOTO_BLOB_ID_LENGTH))
+        for (bad in listOf("", "a/b", "a b", "b".repeat(MAX_PHOTO_BLOB_ID_LENGTH + 1))) {
+            assertFailsWith<IllegalArgumentException>(bad) { PhotoRef("a.jpg", sha, blobId = bad) }
+        }
+    }
+
+    @Test
+    fun photoRefWithoutBlobIdEncodesAsBefore() {
+        val json = Json { encodeDefaults = true }
+        // A null blobId is left out even with encodeDefaults, so pre-M4 payloads encode byte for byte as before.
+        assertEquals(
+            """{"fileName":"a.jpg","sha256":"$sha"}""",
+            json.encodeToString(PhotoRef.serializer(), PhotoRef("a.jpg", sha)),
+        )
+        val uploaded = PhotoRef("a.jpg", sha, blobId = "blob-1")
+        assertEquals(
+            """{"fileName":"a.jpg","sha256":"$sha","blobId":"blob-1"}""",
+            json.encodeToString(PhotoRef.serializer(), uploaded),
+        )
+        val encoded = json.encodeToString(PhotoRef.serializer(), uploaded)
+        assertEquals(uploaded, json.decodeFromString(PhotoRef.serializer(), encoded))
+        val legacy = """{"fileName":"a.jpg","sha256":"$sha"}"""
+        assertEquals(PhotoRef("a.jpg", sha), json.decodeFromString(PhotoRef.serializer(), legacy))
+    }
+
+    @Test
     fun interestPolicyLimits() {
         val household = HouseholdId("h")
         assertFalse(InterestPolicy(household).isEnabled)

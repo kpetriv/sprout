@@ -16,8 +16,11 @@ import kotlinx.serialization.json.put
 object TestData {
     val HID = HouseholdId("h1")
     const val UID = "parent-uid"
-    val DEVICE = "a".repeat(64)
-    val OTHER_DEVICE = "b".repeat(64)
+
+    /** Device ids are the SHA-256 of the device key (`StoredShapes.deviceOf` checks it): keys AQID and BAUG. */
+    const val DEVICE = "039058c6f2c0cb492c533b0a4d14ef77cc0f78abccced5287d84a1a2011cfb81"
+    const val DEVICE_KEY = "AQID"
+    const val OTHER_DEVICE = "787c798e39a5bc1910355bae6d0cd87a36b2e10fd0202a83e3bb6b005da83472"
 
     fun hash(seed: Int): String = seed.toString(16).padStart(64, '0')
 
@@ -95,4 +98,64 @@ object TestData {
     /** A signed-in parent whose fresh claims name [hid] (null: the claim was removed). */
     fun member(hid: HouseholdId? = HID): AuthState =
         AuthState.SignedIn(UserId(UID), isAnonymous = false, claims = Claims(hid, Role.PARENT, kidId = null))
+}
+
+/** Chat wire shapes for the transport tests (signatures are opaque strings: the transport never verifies). */
+object ChatData {
+    val KID = dev.kpetriv.sprout.core.model.KidId("kid-a")
+
+    fun message(
+        id: String,
+        seq: Long = 1,
+        thread: String = KID.value,
+        hid: HouseholdId = TestData.HID,
+        ciphertext: ByteArray = ByteArray(40) { it.toByte() },
+        kind: dev.kpetriv.sprout.core.domainledger.chat.MessageKind =
+            dev.kpetriv.sprout.core.domainledger.chat.MessageKind.TEXT,
+        signature: String? = "MEUCIQ-msg-sig",
+    ): JsonObject = dev.kpetriv.sprout.core.domainledger.chat.MessageJson.toJsonObject(
+        dev.kpetriv.sprout.core.domainledger.chat.MessageEnvelope(
+            householdId = hid,
+            threadId = dev.kpetriv.sprout.core.model.ThreadId(thread),
+            messageId = dev.kpetriv.sprout.core.model.MessageId(id),
+            authorUid = UserId(TestData.UID),
+            authorDeviceId = DeviceId(TestData.DEVICE),
+            authorRole = Role.PARENT,
+            seq = seq,
+            lamport = seq,
+            createdAt = kotlin.time.Instant.fromEpochMilliseconds(1_762_000_000_123),
+            epoch = 0,
+            kind = kind,
+            ciphertext = kotlin.io.encoding.Base64.Default.encode(ciphertext),
+            blobId = if (kind.hasBlob) dev.kpetriv.sprout.core.model.BlobId("blob-$id") else null,
+            signature = signature,
+        ),
+    )
+
+    fun chunk(
+        blobId: String,
+        chunk: Int = 0,
+        chunks: Int = 1,
+        data: ByteArray = ByteArray(100) { (it * 3).toByte() },
+        hid: HouseholdId = TestData.HID,
+    ): dev.kpetriv.sprout.core.sync.BlobChunkJson {
+        val header = dev.kpetriv.sprout.core.domainledger.chat.BlobChunkHeader(
+            householdId = hid,
+            blobId = dev.kpetriv.sprout.core.model.BlobId(blobId),
+            threadId = dev.kpetriv.sprout.core.model.ThreadId(KID.value),
+            kidId = KID,
+            authorUid = UserId(TestData.UID),
+            authorDeviceId = DeviceId(TestData.DEVICE),
+            lamport = 3,
+            chunk = chunk,
+            chunks = chunks,
+            sha256 = "ab".repeat(32),
+            epoch = 0,
+            signature = "MEUCIQ-blob-sig",
+        )
+        return dev.kpetriv.sprout.core.sync.BlobChunkJson(
+            dev.kpetriv.sprout.core.domainledger.chat.BlobJson.toJsonObject(header),
+            data,
+        )
+    }
 }

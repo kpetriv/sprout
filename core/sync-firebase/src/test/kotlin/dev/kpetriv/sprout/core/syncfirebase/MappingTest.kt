@@ -72,7 +72,7 @@ class MappingTest {
         assertEquals(
             listOf(
                 "kids", "accounts", "householdPolicy", "chores", "choreSubmissions", "rewards", "allowanceSchedules",
-                "savingsGoals", "interestPolicy",
+                "savingsGoals", "interestPolicy", "threadKeys",
             ),
             FirestoreLayout.documentCollections.map { it.second },
         )

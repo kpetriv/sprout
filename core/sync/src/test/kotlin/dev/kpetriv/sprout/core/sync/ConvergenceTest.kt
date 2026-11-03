@@ -41,7 +41,8 @@ private class World(pageSize: Int = 3) {
     fun parent(id: String, status: DeviceStatus = DeviceStatus.Active) =
         Device(TestIdentity(id, "parent-uid", Role.PARENT, status = status), SoftwareKey())
 
-    fun kid(id: String = "kid-device") = Device(TestIdentity(id, "kid-uid", Role.KID, KID_1))
+    fun kid(id: String = "kid-device", uid: String = "kid-uid", kidId: dev.kpetriv.sprout.core.model.KidId = KID_1) =
+        Device(TestIdentity(id, uid, Role.KID, kidId))
 
     inner class Device(val identity: TestIdentity, val parentKey: SoftwareKey? = null) {
         val lamport = LamportClock(maxJump = POLICY.maxLamportJump)
@@ -79,6 +80,12 @@ private class World(pageSize: Int = 3) {
         /** Queues [event] for push without storing it locally. */
         fun send(event: LedgerEvent) {
             outbox.enqueueEvent(LedgerJson.encodeToJsonObject(event))
+        }
+
+        /** Queues a chat message (and the chunks of its blob first), as `DocumentWrites.appendMessage` will. */
+        fun chat(message: JsonObject, vararg chunks: BlobChunkJson) {
+            chunks.forEach { outbox.enqueueBlobChunk(it) }
+            outbox.enqueueMessage(message)
         }
 
         suspend fun sync() = engine.syncOnce()
@@ -491,5 +498,34 @@ class ConvergenceTest {
     private companion object {
         const val RUNS = 50
         const val BACKOFF_MAX_MS = 3_600_000L
+    }
+
+    @Test
+    fun chatMessagesReachTheThreadsMembersOnly() = runTest {
+        val world = World()
+        val parent = world.parent("parent-device")
+        val kid = world.kid()
+        val otherKid = world.kid("kid2-device", "kid2-uid", KID_2)
+        // Blob chunks name a kid the household has (the rules' exists(kids/<kidId>)).
+        world.backend.injectDocument(parent.identity.signed(DocTypes.KID, KID_1.value, lamport = 1))
+        val photo = parent.identity.blobChunk("blob-p1", thread = KID_1)
+        parent.chat(
+            parent.identity.message("p1", kind = dev.kpetriv.sprout.core.domainledger.chat.MessageKind.PHOTO),
+            photo,
+        )
+        parent.chat(parent.identity.message("p2", seq = 1, lamport = 2, thread = KID_2))
+        kid.chat(kid.identity.message("k1", seq = 1))
+        kid.chat(kid.identity.message("k2", seq = 2))
+
+        repeat(2) { listOf(parent, kid, otherKid).forEach { it.sync() } }
+
+        fun ids(device: World.Device) = device.applier.documents.messages().map { it.messageId.value }.toSet()
+        assertEquals(setOf("p1", "p2", "k1", "k2"), ids(parent))
+        assertEquals(setOf("p1", "k1", "k2"), ids(kid))
+        assertEquals(setOf("p2"), ids(otherKid))
+        val blobId = dev.kpetriv.sprout.core.model.BlobId("blob-p1")
+        assertEquals(listOf(photo), kid.transport.fetchBlob(blobId).getOrThrow())
+        assertTrue(otherKid.transport.fetchBlob(blobId).isFailure)
+        assertTrue(listOf(parent, kid, otherKid).all { it.outbox.rows().isEmpty() })
     }
 }

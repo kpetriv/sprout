@@ -4,11 +4,16 @@ import dev.kpetriv.sprout.core.database.entity.AuditAction
 import dev.kpetriv.sprout.core.domainhousehold.Chore
 import dev.kpetriv.sprout.core.domainhousehold.ChoreReward
 import dev.kpetriv.sprout.core.domainhousehold.SavingsGoal
+import dev.kpetriv.sprout.core.domainledger.DeviceOwner
 import dev.kpetriv.sprout.core.domainledger.Money
+import dev.kpetriv.sprout.core.domainledger.RegisteredDevice
+import dev.kpetriv.sprout.core.domainledger.chat.ThreadMembers
 import dev.kpetriv.sprout.core.model.ChoreId
 import dev.kpetriv.sprout.core.model.ChoreSchedule
 import dev.kpetriv.sprout.core.model.GoalId
+import dev.kpetriv.sprout.core.model.Role
 import dev.kpetriv.sprout.core.model.SubmissionStatus
+import dev.kpetriv.sprout.core.model.UserId
 import dev.kpetriv.sprout.core.sync.DocTypes
 import dev.kpetriv.sprout.core.sync.DocumentApplyReport
 import dev.kpetriv.sprout.core.sync.DocumentRejection
@@ -175,5 +180,32 @@ class RemoteApplierTest {
             it.getInt(0)
         }
         assertEquals(2, rows, "a position without a session is not saved")
+    }
+
+    @Test
+    fun aKnownDevicesOwnerIsPinnedAndAChangeExcludesIt() = runTest {
+        // Audit I1: the server writes a device row once; a row that later names another owner is not believed.
+        val registered = kid.registeredWithKey()
+        parent.applier.applyRegistry(listOf(registered), emptyList())
+        fun owned(owner: DeviceOwner) = RegisteredDevice(
+            registered.deviceId,
+            owner,
+            registered.publicKey,
+            registered.status,
+            registered.attestation,
+            registered.encryptionKey,
+        )
+        val promoted = owned(DeviceOwner(registered.uid, Role.PARENT))
+        repeat(2) { parent.applier.applyRegistry(listOf(promoted), emptyList()) }
+        parent.applier.applyRegistry(listOf(owned(DeviceOwner(UserId("someone-else"), Role.KID, KID_X))), emptyList())
+
+        val pinned = assertNotNull(parent.registry.device(kid.deviceId))
+        assertEquals(registered.owner, pinned.owner)
+        assertTrue(pinned.encryptionKeyConflict)
+        val changed = parent.database.auditLogDao().all().filter { it.action == AuditAction.DEVICE_KEY_CHANGED }
+        assertEquals(1, changed.size, "audited once")
+        assertTrue("\"key\":\"owner\"" in changed.single().detailsJson)
+        val membership = ThreadMembers.resolve(THREAD_X, parent.registry.devicesOf(HOME), parent.signatureCheck)
+        assertTrue(kid.deviceId in membership.excluded)
     }
 }

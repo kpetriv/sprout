@@ -7,6 +7,7 @@ import dev.kpetriv.sprout.core.database.entity.AuditAction
 import dev.kpetriv.sprout.core.database.entity.AuditLogEntity
 import dev.kpetriv.sprout.core.database.entity.ChoreEntity
 import dev.kpetriv.sprout.core.database.entity.ChoreSubmissionEntity
+import dev.kpetriv.sprout.core.database.entity.DeviceEntity
 import dev.kpetriv.sprout.core.database.entity.DocumentInboxEntity
 import dev.kpetriv.sprout.core.database.entity.DocumentStamp
 import dev.kpetriv.sprout.core.database.entity.HouseholdPolicyEntity
@@ -41,6 +42,7 @@ import dev.kpetriv.sprout.core.model.KidId
 import dev.kpetriv.sprout.core.model.RewardId
 import dev.kpetriv.sprout.core.model.ScheduleId
 import dev.kpetriv.sprout.core.model.SubmissionId
+import dev.kpetriv.sprout.core.model.ThreadId
 import dev.kpetriv.sprout.core.model.UserId
 import dev.kpetriv.sprout.core.sync.ConflictResolver
 import dev.kpetriv.sprout.core.sync.DocTypes
@@ -49,6 +51,7 @@ import dev.kpetriv.sprout.core.sync.DocumentEnvelope
 import dev.kpetriv.sprout.core.sync.DocumentJsonCodec
 import dev.kpetriv.sprout.core.sync.DocumentRejection
 import dev.kpetriv.sprout.core.sync.EventApplyReport
+import dev.kpetriv.sprout.core.sync.MessageApplyReport
 import dev.kpetriv.sprout.core.sync.RemoteApplier
 import dev.kpetriv.sprout.core.sync.RemoteDocumentVerifier
 import dev.kpetriv.sprout.core.sync.StoredDocument
@@ -91,11 +94,18 @@ class RoomRemoteApplier internal constructor(
     private val clock: Clock,
     private val check: SignatureCheck,
     private val maxLamportJump: Long,
+    private val crypto: ChatCrypto,
 ) : RemoteApplier {
     @Inject
-    constructor(database: SproutDatabase, ledger: RoomLedgerRepository, clock: Clock, check: SignatureCheck) :
-        this(database, ledger, clock, check, LedgerPolicy.DEFAULT_MAX_LAMPORT_JUMP)
+    constructor(
+        database: SproutDatabase,
+        ledger: RoomLedgerRepository,
+        clock: Clock,
+        check: SignatureCheck,
+        crypto: ChatCrypto,
+    ) : this(database, ledger, clock, check, LedgerPolicy.DEFAULT_MAX_LAMPORT_JUMP, crypto)
 
+    private val chat = ChatApplier(database, clock, check, maxLamportJump, crypto)
     private val registry = RoomDeviceRegistry(database)
     private val deviceClock = DeviceClock.of(database)
     private val audit = database.auditLogDao()
@@ -112,12 +122,31 @@ class RoomRemoteApplier internal constructor(
                     database.parentKeyDao().upsert(entity)
                 }
             }
+            // A creator's encryption key may have just arrived: open the wraps that were waiting for it.
+            if (devices.isNotEmpty()) LazyKeyPair(crypto).use { chat.retryMissingKeys(it) }
         }
     }
 
+    /**
+     * Mirrors one registry row, **pinning** what was seen first (audit H1, D-M4-16): a row whose device id is not the
+     * SHA-256 of its public key is dropped (`DEVICE_REJECTED`); a known device's public key and verified encryption
+     * key are never replaced (a different encryption key is kept out, the device is marked
+     * [DeviceEntity.encryptionKeyConflict] and so excluded from every thread, audited `DEVICE_KEY_CHANGED` once); its
+     * owner (`uid`, `role`, `kidId`) is pinned the same way (audit I1: the server writes a device row once and never
+     * changes its owner, so a change would turn, say, a known KID device into a PARENT that every thread wraps for;
+     * the first values are kept, the device is excluded, audited `DEVICE_KEY_CHANGED` with `key: "owner"` once); a
+     * REVOKED device never becomes ACTIVE or PENDING again here, and its revocation lamport never moves up
+     * (`DEVICE_REVOCATION_KEPT`).
+     */
+    @Suppress("ReturnCount") // A rejected row returns early.
     private suspend fun applyDevice(device: RegisteredDevice, session: SessionEntity?, now: Long) {
+        if (JvmSha256Hasher.sha256(device.publicKey).toHex() != device.deviceId.value) {
+            record(AuditAction.DEVICE_REJECTED, device.uid, device.deviceId, device.deviceId.value, now) {}
+            return
+        }
         val existing = database.deviceDao().get(device.deviceId)
-        val entity = device.toEntity(existing?.registeredAtEpochMs ?: now)
+        val incoming = device.toEntity(existing?.registeredAtEpochMs ?: now, session?.householdId)
+        val entity = if (existing == null) incoming else pinned(existing, incoming, now)
         database.deviceDao().upsert(entity)
         val action = when {
             existing == null -> AuditAction.DEVICE_REGISTERED
@@ -128,8 +157,8 @@ class RoomRemoteApplier internal constructor(
             else -> null
         }
         if (action != null) {
-            record(action, device.uid, device.deviceId, device.deviceId.value, now) {
-                put("role", device.role.name)
+            record(action, entity.uid, device.deviceId, device.deviceId.value, now) {
+                put("role", entity.role.name)
                 put("status", entity.status.name)
                 put("attestation", device.attestation.name)
             }
@@ -137,6 +166,59 @@ class RoomRemoteApplier internal constructor(
         if (session != null && session.deviceId == device.deviceId && session.deviceStatus != entity.status) {
             database.sessionDao().upsert(session.copy(deviceStatus = entity.status))
         }
+    }
+
+    /** [incoming] with everything [existing] pins kept; see [applyDevice]. Audits what it refused. */
+    private suspend fun pinned(existing: DeviceEntity, incoming: DeviceEntity, now: Long): DeviceEntity {
+        val pinnedKey = existing.encryptionKey?.takeIf { existing.toRegistered().verifiedEncryptionKey(check) != null }
+        val keyChanged = pinnedKey != null && incoming.encryptionKey != null &&
+            !incoming.encryptionKey.contentEquals(pinnedKey)
+        val changed = changedPin(existing, incoming, keyChanged)
+        // A changed signing key is audited every time; the other changes once, when the device is first excluded.
+        if (changed == PUBLIC_KEY || (changed != null && !existing.encryptionKeyConflict)) {
+            record(AuditAction.DEVICE_KEY_CHANGED, existing.uid, existing.deviceId, existing.deviceId.value, now) {
+                put("key", changed)
+            }
+        }
+        val revoked = existing.status == RegistrationStatus.REVOKED
+        if (revoked && incoming.status != RegistrationStatus.REVOKED) {
+            record(AuditAction.DEVICE_REVOCATION_KEPT, existing.uid, existing.deviceId, existing.deviceId.value, now) {
+                put("status", incoming.status.name)
+            }
+        }
+        val keySource = if (pinnedKey != null) existing else incoming
+        return incoming.copy(
+            uid = existing.uid,
+            role = existing.role,
+            kidId = existing.kidId,
+            publicKey = existing.publicKey,
+            status = if (revoked) RegistrationStatus.REVOKED else incoming.status,
+            revokedAtLamport = if (revoked) keptRevocation(existing, incoming) else incoming.revokedAtLamport,
+            encryptionKey = keySource.encryptionKey,
+            encryptionKeySignature = keySource.encryptionKeySignature,
+            encryptionKeyHouseholdId = keySource.encryptionKeyHouseholdId,
+            encryptionKeyConflict = existing.encryptionKeyConflict || changed != null,
+        )
+    }
+
+    /**
+     * What [incoming] tries to change of what [existing] pins, as the `key` of the `DEVICE_KEY_CHANGED` audit row:
+     * the signing key, the verified encryption key ([encryptionKeyChanged]) or the owner (`uid`, `role`, `kidId`,
+     * audit I1); null when nothing pinned changes.
+     */
+    private fun changedPin(existing: DeviceEntity, incoming: DeviceEntity, encryptionKeyChanged: Boolean): String? =
+        when {
+            !incoming.publicKey.contentEquals(existing.publicKey) -> PUBLIC_KEY
+            encryptionKeyChanged -> "encryptionKey"
+            ownerOf(incoming) != ownerOf(existing) -> "owner"
+            else -> null
+        }
+
+    /** A revoked device's revocation lamport: never moved up (that would admit more of its writes). */
+    private fun keptRevocation(existing: DeviceEntity, incoming: DeviceEntity): Long? {
+        val stored = existing.revokedAtLamport
+        val claimed = incoming.revokedAtLamport.takeIf { incoming.status == RegistrationStatus.REVOKED }
+        return if (stored == null || claimed == null) stored ?: claimed else minOf(stored, claimed)
     }
 
     override suspend fun applyDocuments(documents: List<DocumentEnvelope>): DocumentApplyReport = deviceClock.withLock {
@@ -164,27 +246,40 @@ class RoomRemoteApplier internal constructor(
         val now = clock.now().toEpochMilliseconds()
         var localMax = deviceClock.current()
         var report = DocumentApplyReport()
-        for (envelope in documents) {
-            report += when (val verified = verifier.verify(envelope, localMax)) {
-                // The author device is unknown or pending (D-M3-31): keep it and verify it again later.
-                is VerifiedDocument.Held -> {
-                    holdDocument(envelope, verified.reason, now, fromInbox)
-                    DocumentApplyReport(held = if (fromInbox) 0 else 1)
-                }
-
-                is VerifiedDocument.Rejected -> refused(envelope, verified.reason, now, fromInbox)
-
-                is VerifiedDocument.Ok -> {
-                    // The verifier bounded the lamport by localMax + maxLamportJump.
-                    localMax = maxOf(localMax, envelope.lamport)
-                    database.observeDeviceLamport(localMax)
-                    val outcome = apply(envelope, session)
-                    settleInbox(envelope, outcome, fromInbox)
-                    outcome(envelope, outcome, now)
-                }
+        LazyKeyPair(crypto).use { keys ->
+            for (envelope in documents) {
+                report += applyOne(envelope, verifier, localMax, session, keys, now, fromInbox)
+                localMax = maxOf(localMax, deviceClock.current())
             }
         }
         return report
+    }
+
+    @Suppress("LongParameterList") // One verified document and the batch's state.
+    private suspend fun applyOne(
+        envelope: DocumentEnvelope,
+        verifier: RemoteDocumentVerifier,
+        localMax: Long,
+        session: Session,
+        keys: LazyKeyPair,
+        now: Long,
+        fromInbox: Boolean,
+    ): DocumentApplyReport = when (val verified = verifier.verify(envelope, localMax)) {
+        // The author device is unknown or pending (D-M3-31): keep it and verify it again later.
+        is VerifiedDocument.Held -> {
+            holdDocument(envelope, verified.reason, now, fromInbox)
+            DocumentApplyReport(held = if (fromInbox) 0 else 1)
+        }
+
+        is VerifiedDocument.Rejected -> refused(envelope, verified.reason, now, fromInbox)
+
+        is VerifiedDocument.Ok -> {
+            // The verifier bounded the lamport by localMax + maxLamportJump.
+            database.observeDeviceLamport(maxOf(localMax, envelope.lamport))
+            val outcome = apply(envelope, session, keys)
+            settleInbox(envelope, outcome, fromInbox)
+            outcome(envelope, outcome, now)
+        }
     }
 
     /**
@@ -328,9 +423,10 @@ class RoomRemoteApplier internal constructor(
      * Resolves and writes one verified document. Parent keys are registered only by the server (`registerParentKey`,
      * D-M3-34) and reach this device through the registry pull, never as documents.
      */
-    private suspend fun apply(envelope: DocumentEnvelope, session: Session): Outcome {
+    private suspend fun apply(envelope: DocumentEnvelope, session: Session, keys: LazyKeyPair): Outcome {
         val fallbackAuthor = session.deviceId
         return when (envelope.docType) {
+            DocTypes.THREAD_KEY -> applyThreadKey(envelope, session, keys)
             DocTypes.KID -> applyKid(envelope, fallbackAuthor)
             DocTypes.ACCOUNT -> applyAccount(envelope, fallbackAuthor)
             DocTypes.HOUSEHOLD_POLICY -> applyHouseholdPolicy(envelope, fallbackAuthor)
@@ -343,6 +439,13 @@ class RoomRemoteApplier internal constructor(
             else -> Outcome.MALFORMED
         }
     }
+
+    private suspend fun applyThreadKey(envelope: DocumentEnvelope, session: Session, keys: LazyKeyPair): Outcome =
+        when (chat.applyThreadKey(envelope, session, keys)) {
+            ChatApplier.KeyOutcome.APPLIED -> Outcome.APPLIED
+            ChatApplier.KeyOutcome.IGNORED -> Outcome.IGNORED
+            ChatApplier.KeyOutcome.MALFORMED -> Outcome.MALFORMED
+        }
 
     /**
      * The shared resolve-and-write step: [decoded] is the payload (null when it does not decode), [local] the stored
@@ -526,12 +629,20 @@ class RoomRemoteApplier internal constructor(
 
     override suspend fun applyEvents(events: List<JsonObject>): EventApplyReport = ledger.ingest(events)
 
+    /** Verifies and stores pulled chat messages; see [ChatApplier]. */
+    override suspend fun applyMessages(messages: List<JsonObject>): MessageApplyReport = chat.applyMessages(messages)
+
+    override suspend fun expectedSeq(deviceId: DeviceId, threadId: ThreadId): Long =
+        chat.expectedSeq(deviceId, threadId)
+
     /**
-     * Retries held documents first (an account or kid they bring may be what a held event waits for), then held
-     * events ([RoomLedgerRepository.retryHeld]). The report is the events'; documents only show in the audit log.
+     * Retries held documents first (an account, kid or thread key they bring may be what a held event or message
+     * waits for), then held messages ([ChatApplier.retryHeld]), then held events ([RoomLedgerRepository.retryHeld]).
+     * The report is the events'; documents and messages only show in the audit log and their tables.
      */
     override suspend fun retryHeld(): EventApplyReport {
         retryHeldDocuments()
+        chat.retryHeld()
         return ledger.retryHeld()
     }
 
@@ -594,5 +705,11 @@ class RoomRemoteApplier internal constructor(
         const val MALFORMED_PAYLOAD: String = "MALFORMED_PAYLOAD"
 
         private val EMPTY = JsonObject(emptyMap())
+
+        /** The owner fields of a device row (pinned, audit I1). */
+        private fun ownerOf(device: DeviceEntity) = Triple(device.uid, device.role, device.kidId)
+
+        /** `DEVICE_KEY_CHANGED` key of a changed signing key. */
+        private const val PUBLIC_KEY = "publicKey"
     }
 }

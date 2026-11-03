@@ -2,6 +2,8 @@ package dev.kpetriv.sprout.core.syncfirebase
 
 import dev.kpetriv.sprout.core.model.DeviceId
 import dev.kpetriv.sprout.core.model.HouseholdId
+import dev.kpetriv.sprout.core.model.KidId
+import dev.kpetriv.sprout.core.model.Role
 import dev.kpetriv.sprout.core.model.UserId
 import javax.inject.Inject
 import javax.inject.Qualifier
@@ -28,6 +30,22 @@ fun interface HouseholdScope {
      * session; without it the claims are never evidence.
      */
     suspend fun currentUserId(): UserId? = null
+
+    /**
+     * The kid a KID session belongs to (its `kidId` claim), or null for a parent session or when unknown. KID members
+     * may read only their own kid's chat thread, and the rules refuse a query they cannot prove stays inside it, so
+     * the transport filters its `messages` reads and listener on `threadId == kidId`. When this is null the transport
+     * falls back to this device's own registry entry ([currentDeviceId]); a KID session with neither cannot pull
+     * messages (the read is refused). `app` implements it from the session.
+     */
+    suspend fun currentKidId(): KidId? = null
+
+    /**
+     * The role of the signed-in session (its `role` claim), or null when unknown. Only used to tell a parent session
+     * from a kid session whose kid is unknown: without a kid ([currentKidId]) and without this device's own registry
+     * entry, the transport reads `messages` unscoped only for a known PARENT and otherwise skips the lane.
+     */
+    suspend fun currentRole(): Role? = null
 }
 
 /** [HouseholdScope] from the `hid` custom claim and uid of the signed-in Firebase user (no device id). */
@@ -35,6 +53,11 @@ class ClaimsHouseholdScope @Inject constructor(private val session: FirebaseAuth
     override suspend fun currentHouseholdId(): HouseholdId? = (session.current() as? AuthState.SignedIn)?.claims?.hid
 
     override suspend fun currentUserId(): UserId? = (session.current() as? AuthState.SignedIn)?.uid
+
+    override suspend fun currentKidId(): KidId? =
+        (session.current() as? AuthState.SignedIn)?.claims?.takeIf { it.role == Role.KID }?.kidId
+
+    override suspend fun currentRole(): Role? = (session.current() as? AuthState.SignedIn)?.claims?.role
 }
 
 /**
