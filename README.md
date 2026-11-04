@@ -127,7 +127,7 @@ Each milestone ends with green CI and a tagged build.
 | M4 Chat and time bank | E2EE threads, key rotation, Seedling presets and voice notes, chore photo upload, time bank with an ongoing notification | In review |
 | M5 Games | Three games, tier difficulty, daily cap, signed scoring events | In review |
 | M6 AI | Gemini Nano integration, fallbacks, kindness check, suggestions, weekly summary, receipt prefill ([spec and as built](docs/milestones/M6.md), [ADR-0010](docs/adr/0010-on-device-ai.md)) | In review |
-| M7 Showcase polish | Glance widget, adaptive layouts, Baseline Profiles, full screenshot coverage, accessibility, retention, export/delete | Planned |
+| M7 Showcase polish | Glance widget, adaptive layouts, Baseline Profiles, full screenshot coverage, accessibility, retention, export/delete | In progress |
 | M8 Play release | Privacy policy, data-safety form, security review, app signing, staged tracks | Planned |
 
 ## Documentation
