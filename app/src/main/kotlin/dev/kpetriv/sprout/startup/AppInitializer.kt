@@ -5,9 +5,11 @@ import dagger.Lazy
 import dev.kpetriv.sprout.BuildConfig
 import dev.kpetriv.sprout.chat.ChatMaintenance
 import dev.kpetriv.sprout.chat.VoiceTempFiles
+import dev.kpetriv.sprout.core.ai.AiGateway
 import dev.kpetriv.sprout.core.database.HouseholdBootstrap
 import dev.kpetriv.sprout.core.database.RoomLedgerRepository
 import dev.kpetriv.sprout.core.database.Session
+import dev.kpetriv.sprout.core.syncfirebase.AppForeground
 import dev.kpetriv.sprout.di.ApplicationScope
 import dev.kpetriv.sprout.feature.chores.ChorePhotoCache
 import dev.kpetriv.sprout.sync.RemovalHandler
@@ -18,10 +20,13 @@ import dev.kpetriv.sprout.work.PlanScheduler
 import dev.kpetriv.sprout.work.ScheduledActionsPlanner
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import timber.log.Timber
 import java.security.GeneralSecurityException
 import java.util.concurrent.atomic.AtomicBoolean
 import javax.inject.Inject
@@ -46,6 +51,11 @@ import javax.inject.Singleton
  *    real household plans after its first successful pull instead (`SyncReportProcessor`); no session never plans;
  * 6. schedule the daily planner ([PlanScheduler], kept if already scheduled);
  * 7. start sync for the session ([SyncController]).
+ *
+ * Alongside the steps, once per process (not on [retry]): once the app is first in the foreground, read the on-device
+ * model's status ([AiGateway.status], M6 §3.6), best effort, so AICore fetches its configuration before the first AI
+ * call. It never asks for a download (that needs the parent's consent, D-M6-6) and logs only the availability and
+ * reason code, at DEBUG.
  *
  * A removal ([RemovalHandler]) stops the work: one stored by an earlier process resumes its wipe before step 2, and one
  * reported during startup (step 2, or sync elsewhere) skips every remaining step, checked between steps. Startup
@@ -77,6 +87,7 @@ class AppInitializer internal constructor(
     private val removing: () -> Boolean = { false },
     private val chatStartup: suspend () -> Unit = {},
     private val sweepVoiceTempFiles: () -> Unit = {},
+    private val refreshAiStatus: suspend () -> Unit = {},
 ) : StartupStatus {
     @Inject
     @Suppress("LongParameterList") // One lazily built dependency per startup step.
@@ -94,6 +105,8 @@ class AppInitializer internal constructor(
         removals: Lazy<RemovalHandler>,
         chat: Lazy<ChatMaintenance>,
         voiceTempFiles: Lazy<VoiceTempFiles>,
+        ai: Lazy<AiGateway>,
+        @AppForeground foreground: Flow<Boolean>,
     ) : this(
         scope = scope,
         seedDemoHousehold = demoSeeding(householdBootstrap, BuildConfig.DEBUG),
@@ -109,6 +122,11 @@ class AppInitializer internal constructor(
         removing = { removals.get().isRemoving },
         chatStartup = { chat.get().atStartup() },
         sweepVoiceTempFiles = { voiceTempFiles.get().sweep() },
+        refreshAiStatus = {
+            foreground.first { it }
+            val status = ai.get().status()
+            Timber.tag("SproutAi").d("status=%s reason=%s", status.availability, status.reason)
+        },
     )
 
     private val started = AtomicBoolean(false)
@@ -119,7 +137,10 @@ class AppInitializer internal constructor(
 
     /** Starts the work once per process; later calls do nothing. Returns immediately. */
     fun start() {
-        if (started.compareAndSet(false, true)) launchWork()
+        if (started.compareAndSet(false, true)) {
+            launchWork()
+            scope.launch { refreshAiStatusBestEffort() }
+        }
     }
 
     override fun retry() {
@@ -200,6 +221,18 @@ class AppInitializer internal constructor(
     private suspend fun chatStartupBestEffort() {
         try {
             chatStartup()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (expected: Exception) {
+            // Nothing to show or log.
+        }
+    }
+
+    /** The AI status read never fails or delays startup; the next AI call reads it again anyway. */
+    @Suppress("TooGenericExceptionCaught", "SwallowedException")
+    private suspend fun refreshAiStatusBestEffort() {
+        try {
+            refreshAiStatus()
         } catch (e: CancellationException) {
             throw e
         } catch (expected: Exception) {

@@ -4,6 +4,12 @@
 
   <!-- Sync with Firebase (M3). Each permission is added with the feature that needs it. -->
   <uses-permission android:name="android.permission.INTERNET" />
+  <!-- WorkManager's network constraint (sync, M3) and Firestore/Firebase Auth connectivity checks; also declared by
+       those libraries. It no longer comes with ML Kit's uploader, which is removed below (D-M6-33). -->
+  <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+  <!-- On-device AI (M6, ADR-0010): binding to Android's AICore system service that runs Gemini Nano. Also declared by
+       com.google.mlkit:genai-prompt. Inference runs on the phone. -->
+  <uses-permission android:name="com.google.android.apps.aicore.service.BIND_SERVICE" />
 
   <application
     android:name=".SproutApplication"
@@ -43,6 +49,21 @@
         android:value="androidx.startup"
         tools:node="remove" />
     </provider>
+
+    <!-- D-M6-33 (audit H1): ML Kit bundles Google's usage-metrics uploader (datatransport/Firelog over CCT). Removing
+         its only network backend means the SDKs' own metrics never leave the app; :app:checkMergedManifestForTelemetry
+         fails the build if any datatransport backend comes back (a new dependency, or a future Crashlytics, would need
+         a decision first). Receipt text recognition still reports one usage event per scan through Google Play
+         services, which this cannot remove (D-M6-51). The class is on the runtime classpath only (through core/ai),
+         hence MissingClass. -->
+    <service
+      android:name="com.google.android.datatransport.runtime.backends.TransportBackendDiscovery"
+      tools:ignore="MissingClass"
+      tools:node="merge">
+      <meta-data
+        android:name="backend:com.google.android.datatransport.cct.CctBackendFactory"
+        tools:node="remove" />
+    </service>
   </application>
 
 </manifest>

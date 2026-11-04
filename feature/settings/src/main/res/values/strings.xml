@@ -21,6 +21,8 @@
   <string name="feature_settings_section_interest_summary">Reward saving with a monthly bonus</string>
   <string name="feature_settings_section_security">Parent security</string>
   <string name="feature_settings_section_security_summary">PIN, fingerprint signing and auto-lock</string>
+  <string name="feature_settings_section_ai">On-device AI</string>
+  <string name="feature_settings_section_ai_summary">Kinder chat, chore ideas and the weekly summary, on this phone</string>
   <string name="feature_settings_section_about">About</string>
   <string name="feature_settings_section_about_summary">Version and privacy</string>
 
@@ -237,4 +239,19 @@
   <string name="feature_settings_data_message_too_large">The household is too large to export in one file.</string>
   <string name="feature_settings_data_message_delete_failed">Couldn’t delete the household. Try again.</string>
   <string name="feature_settings_data_message_network">Couldn’t reach Sprout. Check the connection.</string>
+
+  <!-- On-device AI (M6) -->
+  <string name="feature_settings_ai_status_available">Gemini Nano is ready on this phone.</string>
+  <string name="feature_settings_ai_status_downloadable">This phone can run Gemini Nano once the model is downloaded. Until then Sprout uses its built-in rules.</string>
+  <string name="feature_settings_ai_status_downloading">The model is downloading. Android decides when, usually on Wi-Fi. Sprout uses its built-in rules meanwhile.</string>
+  <!-- D-M6-34: on a kid's own linked phone there is no parent area, so the switch below cannot reach it. -->
+  <string name="feature_settings_ai_kid_phones">On a kid\'s own phone, the kindness check in chat uses the built-in rules in this version.</string>
+  <string name="feature_settings_ai_status_unavailable">Not available on this device. Sprout uses its built-in rules instead, and every feature still works.</string>
+  <string name="feature_settings_ai_enabled_title">Use on-device AI</string>
+  <string name="feature_settings_ai_enabled_summary">Applies to this phone only. When off, Sprout always uses its built-in rules and receipt scanning is off.</string>
+  <string name="feature_settings_ai_download_title">Download the model</string>
+  <string name="feature_settings_ai_download_summary">Android\'s AICore downloads Google\'s Gemini Nano model when it chooses, usually on Wi-Fi, and keeps it up to date. It runs only on this phone.</string>
+  <string name="feature_settings_ai_uses_title">What it is used for</string>
+  <string name="feature_settings_ai_uses">• Chat: a gentle nudge when a kid\'s message may be unkind.\n• Chores: ideas that suit each kid\'s age.\n• Dashboard: a short summary of the week.\n• Wallet: reading the total on a receipt (Google Play services\' text recognition, no model; Play services records that the scanner was used, not the receipt).</string>
+  <string name="feature_settings_ai_privacy">Your messages, chores and photos are never sent to the internet for AI. What the model writes is never saved, and you always review it before anything reaches the ledger.</string>
 </resources>

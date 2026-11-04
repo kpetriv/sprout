@@ -168,6 +168,8 @@ fun WalletScreen(
                     onEvent(WalletEvent.SubmitAdjust(amountMinor, sign, reason))
                 },
                 onDismiss = { onEvent(WalletEvent.DismissAdjust) },
+                onReceiptPicked = { onEvent(WalletEvent.ReceiptPicked(it)) },
+                onPrefillApplied = { onEvent(WalletEvent.PrefillApplied) },
             )
         }
     }

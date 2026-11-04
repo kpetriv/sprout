@@ -82,14 +82,14 @@ The full design is in [ADR-0003](docs/adr/0003-security-model.md) and the [threa
 
 ## On-device AI
 
-All AI runs locally through an `AiGateway` interface. The primary implementation uses ML Kit GenAI APIs on Gemini Nano where the device supports it; a rules-based fallback keeps every feature working on every device. Uses:
+All AI runs on the phone through one `AiGateway` (`core/ai`, [ADR-0010](docs/adr/0010-on-device-ai.md)). `AiRouter` uses **Gemini Nano** (ML Kit GenAI Prompt API on AICore, structured output) where the device has it and the parent has not switched it off, and a deterministic **rules** implementation everywhere else and whenever the model is busy, slow or wrong. The rules path is the reference behaviour: every feature works the same on the emulator and in CI, and Nano only improves the wording.
 
-- **Kindness check:** before a kid sends a message, the plaintext is checked on device and an unkind message gets a gentle nudge. It never blocks and never reports.
-- **Weekly parent summary** of chores, earnings, and spending.
-- **Chore suggestions** by age band.
-- **Receipt to manual adjustment:** prefill an adjustment from a photographed receipt.
+- **Kindness check:** before a Sprout or Sapling kid sends a message, it is checked on device; an unkind one gets a gentle nudge offering "Send anyway" and a kinder message ("Use this") side by side. It never blocks and never reports (2.5 s, then it sends), and it never nudges a kid reporting what someone else said or did, or asking for help.
+- **Weekly parent summary:** facts computed deterministically from the ledger (`WeeklyFactsUseCase`) and written up in 2 to 4 sentences, "This week so far" or "Last week", with an "On-device" chip. Every number in a model-written summary must be one of the facts, or the template text is shown.
+- **Chore suggestions** by age band in the chore editor: three to five ideas from a curated catalogue (or the model, validated against it) that fill the form; the parent saves.
+- **Receipt to manual adjustment:** on-device text recognition (Google Play services) reads a picked receipt photo; the total and shop prefill the adjustment, which the parent reviews and signs. Never the model, and only while the On-device AI switch is on.
 
-No data leaves the device for AI in v1, and the privacy policy says so.
+Model output is untrusted: user text goes in as data, answers are validated (`AiOutputRules`) and replaced by the rules result when they fail, and nothing AI produces is stored or reaches the ledger without a parent. The model is downloaded only after a parent's consent in Settings → On-device AI (by the system, usually on Wi-Fi). No message, chore, figure or photo leaves the device for AI, and ML Kit's own metrics uploader is removed; Google Play services does record that the receipt scanner was used (never the receipt), which Sprout cannot switch off, as the [privacy policy](docs/PRIVACY.md#on-device-ai) says. The Nano path is unverified on hardware until a run on a supported Pixel.
 
 ## Build and run
 
@@ -126,7 +126,7 @@ Each milestone ends with green CI and a tagged build.
 | M3 Sync and identity | Sync engine, Firebase transport, App Check, Credential Manager, the Sprout server (Spark plan), Firestore rules and emulator tests, device registry with key attestation, controls matrix, runbook | Done |
 | M4 Chat and time bank | E2EE threads, key rotation, Seedling presets and voice notes, chore photo upload, time bank with an ongoing notification | In review |
 | M5 Games | Three games, tier difficulty, daily cap, signed scoring events | In review |
-| M6 AI | Gemini Nano integration, fallbacks, kindness check, suggestions, weekly summary | Planned |
+| M6 AI | Gemini Nano integration, fallbacks, kindness check, suggestions, weekly summary, receipt prefill ([spec and as built](docs/milestones/M6.md), [ADR-0010](docs/adr/0010-on-device-ai.md)) | In review |
 | M7 Showcase polish | Glance widget, adaptive layouts, Baseline Profiles, full screenshot coverage, accessibility, retention, export/delete | Planned |
 | M8 Play release | Privacy policy, data-safety form, security review, app signing, staged tracks | Planned |
 
@@ -149,6 +149,7 @@ Each milestone ends with green CI and a tagged build.
 - [M3 milestone spec and as-built notes](docs/milestones/M3.md)
 - [M4 milestone spec and as-built notes](docs/milestones/M4.md)
 - [M5 milestone spec and as-built notes](docs/milestones/M5.md) and [ADR-0009: games scoring and credit](docs/adr/0009-games-scoring-and-credit.md)
+- [M6 milestone spec and as-built notes](docs/milestones/M6.md) and [ADR-0010: on-device AI](docs/adr/0010-on-device-ai.md)
 
 ## Engineering practices
 

@@ -299,4 +299,36 @@ class AppInitializerTest {
         assertEquals(1, sweeps)
         assertEquals(listOf("sweep", "check", "plan", "schedule"), steps)
     }
+
+    @Test
+    fun `the AI status is read once per process, never fails startup and is not repeated by a retry`() = scope.runTest {
+        var reads = 0
+        var failure: Exception? = IllegalStateException("AICore not answering")
+        var quarantineFailure: Exception? = GeneralSecurityException("keys")
+        AppInitializer(
+            scope = scope,
+            seedDemoHousehold = null,
+            quarantineLedger = { quarantineFailure?.let { throw it } },
+            planner = planner,
+            scheduler = scheduler,
+            reconcileSession = { parentSession() },
+            refreshAiStatus = {
+                reads += 1
+                failure?.let { throw it }
+            },
+        ).apply {
+            start()
+            advanceUntilIdle()
+            assertEquals(StartupState.Failed(StartupFailure.KEYS), state.value)
+            assertEquals(1, reads)
+
+            failure = null
+            quarantineFailure = null
+            retry()
+            start()
+            advanceUntilIdle()
+            assertEquals(StartupState.Ready, state.value)
+            assertEquals(1, reads)
+        }
+    }
 }

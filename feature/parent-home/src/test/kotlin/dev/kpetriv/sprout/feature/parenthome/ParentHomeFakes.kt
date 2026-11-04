@@ -40,7 +40,9 @@ import dev.kpetriv.sprout.core.time.FakeClock
 import dev.kpetriv.sprout.core.time.HouseholdCalendar
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.mapNotNull
 import java.time.ZoneOffset
 import java.util.UUID
 import kotlin.time.Instant
@@ -281,3 +283,22 @@ fun interestAction(kidId: KidId, period: String) = PendingParentAction.AccrueInt
     periodKey = period,
     amount = Money(21),
 )
+
+/** Emits [WeeklySummaryUi.Ready] per week when the test says so; [fails] makes every flow throw. */
+class FakeWeeklySummarySource : WeeklySummarySource {
+    private val results = MutableStateFlow<Map<SummaryWeek, WeeklySummaryUi>>(emptyMap())
+    val requested = mutableListOf<SummaryWeek>()
+    var fails = false
+
+    override fun observe(week: SummaryWeek): Flow<WeeklySummaryUi> {
+        requested += week
+        if (fails) return flow { error("facts unreadable") }
+        return results.mapNotNull { it[week] }
+    }
+
+    fun emit(week: SummaryWeek, text: String): WeeklySummaryUi.Ready {
+        val ready = WeeklySummaryUi.Ready(text, week, SummaryPath.RULES, Instant.fromEpochSeconds(0))
+        results.value += week to ready
+        return ready
+    }
+}

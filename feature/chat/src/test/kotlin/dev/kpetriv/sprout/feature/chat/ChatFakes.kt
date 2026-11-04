@@ -4,6 +4,7 @@ import dev.kpetriv.sprout.core.model.KidId
 import dev.kpetriv.sprout.core.model.KidUiTier
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -157,10 +158,14 @@ class FakeVoicePlayer : VoicePlayer {
 class FakeFilter : OutgoingMessageFilter {
     var verdict: FilterVerdict = FilterVerdict.Ok
     var failure: Throwable? = null
+
+    /** How long each check takes (virtual time). */
+    var delayMillis: Long = 0
     val checked = mutableListOf<Pair<String, KidUiTier>>()
 
     override suspend fun check(text: String, tier: KidUiTier): FilterVerdict {
         checked += text to tier
+        if (delayMillis > 0) delay(delayMillis)
         failure?.let { throw it }
         return verdict
     }

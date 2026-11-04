@@ -14,4 +14,13 @@ dependencies {
     implementation(projects.core.database)
     // ParentAuthUnavailableException: a device without a strong biometric (D-M2-1 fallback).
     implementation(projects.core.crypto)
+    // rememberLauncherForActivityResult: the system photo picker (PickVisualMedia) for "Scan a receipt" (M6).
+    implementation(libs.androidx.activity.compose)
+    constraints {
+        // activity 1.13 asks for navigationevent 1.0.0; the app resolves 1.1.1 (through navigation3), which is the
+        // version in gradle/verification-metadata.xml. Align on it so this module verifies on its own too.
+        implementation("androidx.navigationevent:navigationevent:1.1.1")
+    }
+    // activity 1.13 asks for androidx.core 1.18; align on the catalog's version, which the app resolves.
+    implementation(libs.androidx.core.ktx)
 }

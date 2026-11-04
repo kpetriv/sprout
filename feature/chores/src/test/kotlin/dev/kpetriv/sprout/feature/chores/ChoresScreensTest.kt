@@ -1,5 +1,8 @@
 package dev.kpetriv.sprout.feature.chores
 
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.junit4.createComposeRule
@@ -189,6 +192,63 @@ class ChoresScreensTest {
         assertTrue(events.any { it is ChoreEditorEvent.KidChanged })
         assertTrue(ChoreEditorEvent.ScheduleKindChanged(ScheduleKind.MONTHLY) in events)
         assertEquals(ChoreEditorEvent.Save, events.last())
+    }
+
+    @Test
+    fun `a new chore offers suggestions, an edited one does not`() {
+        val events = mutableListOf<ChoreEditorEvent>()
+        var state by mutableStateOf(ChoresPreviewData.editor())
+        compose.setContent { SproutTheme { ChoreEditorScreen(state = state, onEvent = { events += it }) } }
+
+        compose.onNodeWithText("Suggest chores").performClick()
+        assertEquals(ChoreEditorEvent.SuggestOpened, events.last())
+
+        state = ChoresPreviewData.editor().copy(isNew = false)
+        compose.onNodeWithText("Suggest chores").assertDoesNotExist()
+    }
+
+    @Test
+    fun `suggestion cards fill the form and close the sheet`() {
+        val events = mutableListOf<ChoreEditorEvent>()
+        compose.setContent {
+            SproutTheme {
+                ChoreSuggestionsContent(
+                    sheet = SuggestionsUi.Ready(ChoresPreviewData.suggestions),
+                    kidName = "Leo",
+                    currency = ChoresPreviewData.gbp,
+                    onEvent = { events += it },
+                )
+            }
+        }
+
+        compose.onNodeWithText("Chore ideas for Leo").assertIsDisplayed()
+        compose.onNodeWithText("£1.50 + 15 min · Every Saturday").assertIsDisplayed()
+        compose.onNodeWithText("Hoover your room").performClick()
+        compose.onNodeWithText("Close").performClick()
+
+        val picked = ChoreEditorEvent.SuggestionPicked(ChoresPreviewData.suggestions[1])
+        assertEquals(listOf(picked, ChoreEditorEvent.SuggestDismissed), events)
+    }
+
+    @Test
+    fun `the suggestion sheet shows loading, empty and a retry after an error`() {
+        val events = mutableListOf<ChoreEditorEvent>()
+        var sheet by mutableStateOf<SuggestionsUi>(SuggestionsUi.Loading)
+        compose.setContent {
+            SproutTheme {
+                ChoreSuggestionsContent(sheet, null, ChoresPreviewData.gbp, onEvent = { events += it })
+            }
+        }
+        compose.onNodeWithText("Chore ideas").assertIsDisplayed()
+        compose.onNodeWithContentDescription("Finding ideas…").assertIsDisplayed()
+
+        sheet = SuggestionsUi.Empty
+        compose.onNodeWithText("No new ideas", substring = true).assertIsDisplayed()
+
+        sheet = SuggestionsUi.Failed
+        compose.onNodeWithText("Ideas could not be loaded.").assertIsDisplayed()
+        compose.onNodeWithText("Try again").performClick()
+        assertEquals(ChoreEditorEvent.SuggestRetry, events.single())
     }
 
     @Test

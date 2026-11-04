@@ -24,6 +24,12 @@ object SettingsPreviewData {
     val leo = Kid(KidId("kid-leo"), household, "Leo", "avatar-2", YearMonth(2017, 6), KidUiTier.SPROUT)
     val zoe = Kid(KidId("kid-zoe"), household, "Zoe", "avatar-3", YearMonth(2013, 9), KidUiTier.SPROUT)
 
+    /** A phone that supports Gemini Nano before the parent agreed to the download. */
+    fun ai(status: AiModelStatus = AiModelStatus.DOWNLOADABLE): AiSettingsUiState = AiSettingsUiState(
+        isLoading = false,
+        settings = AiSettings(status = status, enabled = true, downloadConsent = false),
+    )
+
     fun kids(): KidsSettingsUiState = KidsSettingsUiState(
         isLoading = false,
         kids = listOf(

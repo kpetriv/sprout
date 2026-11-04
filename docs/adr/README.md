@@ -13,5 +13,6 @@ Each ADR records one significant decision in the short format described by Micha
 | [0007](0007-identity-linking-and-device-registry.md) | Identity, device linking and the device registry | Accepted (implemented in M3) |
 | [0008](0008-chat-encryption-and-thread-keys.md) | Chat encryption and thread keys | Accepted (implemented in M4) |
 | [0009](0009-games-scoring-and-credit.md) | Games scoring and credit | Accepted (implemented in M5) |
+| [0010](0010-on-device-ai.md) | On-device AI: gateway, router and validators | Accepted (implemented in M6) |
 
 Related: [threat model](../THREAT_MODEL.md), [controls matrix](../CONTROLS.md), [incident runbook](../RUNBOOK.md), [Firebase backend](../FIREBASE.md), [privacy policy draft](../PRIVACY.md).

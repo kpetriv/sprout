@@ -65,6 +65,8 @@
   <string name="feature_chat_nudge_send_anyway">Send anyway</string>
   <string name="feature_chat_nudge_use">Use this</string>
   <string name="feature_chat_nudge_edit">Edit</string>
+  <!-- Shown in the Send button while the kindness check runs (at most 2.5 s). -->
+  <string name="feature_chat_checking">Checking your message…</string>
 
   <!-- Notices -->
   <string name="feature_chat_notice_mic_permission">Voice notes need the microphone. You can allow it in Settings.</string>

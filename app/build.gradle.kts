@@ -1,3 +1,6 @@
+import com.android.build.api.artifact.SingleArtifact
+import javax.xml.parsers.DocumentBuilderFactory
+
 plugins {
     alias(libs.plugins.sprout.android.application)
     alias(libs.plugins.sprout.hilt)
@@ -60,8 +63,76 @@ val checkReleaseConfiguration = tasks.register("checkReleaseConfiguration") {
     }
 }
 tasks.configureEach {
-    if (name == "bundleRelease") dependsOn(checkReleaseConfiguration)
+    // A local Play bundle runs the release checks too, not only CI's `check` (audit 2 I-a).
+    if (name == "bundleRelease") dependsOn(checkReleaseConfiguration, "checkMergedManifestForTelemetryRelease")
 }
+
+/**
+ * D-M6-33 (audit H1): ML Kit pulls in Google's usage-metrics uploader (`transport-backend-cct`), whose only network
+ * backend is registered as a `backend:...CctBackendFactory` meta-data of `TransportBackendDiscovery`. The app manifest
+ * removes it; this fails the build if a merged manifest still registers it, or any other datatransport backend (any
+ * `backend:` meta-data under `TransportBackendDiscovery`, or a `backend:com.google.android.datatransport` one anywhere;
+ * audit 2 I-a), for example after a dependency update or a new SDK. Only attributes are read, so the manifest's
+ * comments do not count. CI runs it through `check`, and `bundleRelease` depends on the release one.
+ */
+abstract class CheckMergedManifestForTelemetry : DefaultTask() {
+    @get:InputFile
+    @get:PathSensitive(PathSensitivity.NONE)
+    abstract val mergedManifest: RegularFileProperty
+
+    @get:OutputFile
+    abstract val report: RegularFileProperty
+
+    @TaskAction
+    fun verify() {
+        val factory = DocumentBuilderFactory.newInstance().apply {
+            setFeature("http://apache.org/xml/features/disallow-doctype-decl", true)
+        }
+        val document = factory.newDocumentBuilder().parse(mergedManifest.get().asFile)
+        val elements = document.getElementsByTagName("*")
+        val datatransportBackend = "backend:com.google.android.datatransport"
+        fun values(node: org.w3c.dom.Node?): List<String> = node?.attributes?.let { attributes ->
+            (0 until attributes.length).map { attributes.item(it).nodeValue }
+        }.orEmpty()
+        val found = (0 until elements.length).flatMap { index ->
+            val element = elements.item(index)
+            val isMetaData = element.nodeName == "meta-data"
+            val inDiscovery = isMetaData && values(element.parentNode).any { "TransportBackendDiscovery" in it }
+            values(element).filter { value ->
+                "CctBackendFactory" in value ||
+                    (isMetaData && value.startsWith(datatransportBackend)) ||
+                    (inDiscovery && value.startsWith("backend:"))
+            }
+        }
+        if (found.isNotEmpty()) {
+            throw GradleException(
+                "The merged manifest registers a Google datatransport uploader backend (D-M6-33): " +
+                    found.distinct().joinToString() + ". Remove it in app/src/main/AndroidManifest.xml.",
+            )
+        }
+        report.get().asFile.writeText("No datatransport backend in the merged manifest.\n")
+    }
+}
+
+androidComponents {
+    onVariants { variant ->
+        if (variant.name == "debug" || variant.name == "release") {
+            tasks.register<CheckMergedManifestForTelemetry>(
+                "checkMergedManifestForTelemetry" + variant.name.replaceFirstChar(Char::titlecase),
+            ) {
+                description = "Fails if the ${variant.name} merged manifest registers ML Kit's metrics uploader."
+                mergedManifest.set(variant.artifacts.get(SingleArtifact.MERGED_MANIFEST))
+                report.set(layout.buildDirectory.file("reports/telemetry-manifest/${variant.name}.txt"))
+            }
+        }
+    }
+}
+val checkMergedManifestForTelemetry = tasks.register("checkMergedManifestForTelemetry") {
+    group = "verification"
+    description = "Fails if a debug or release merged manifest registers ML Kit's metrics uploader (D-M6-33)."
+    dependsOn("checkMergedManifestForTelemetryDebug", "checkMergedManifestForTelemetryRelease")
+}
+tasks.named("check") { dependsOn(checkMergedManifestForTelemetry) }
 
 fun String?.asBuildConfigString(): String = this?.let { "\"" + it.replace("\"", "") + "\"" } ?: "null"
 
@@ -113,6 +184,8 @@ baselineProfile {
 }
 
 dependencies {
+    // AiGateway (the AiRouter) and AiPreferences behind the M6 feature ports (chat, chores, dashboard, wallet, settings).
+    implementation(projects.core.ai)
     implementation(projects.core.common)
     // ParentAuthorizer, ParentAuthUnavailableException and verifyParentSignature for the settings adapters.
     implementation(projects.core.crypto)
@@ -160,6 +233,8 @@ dependencies {
     implementation(libs.androidx.hilt.work)
     ksp(libs.androidx.hilt.compiler)
     implementation(libs.kotlinx.serialization.core)
+    // A DebugTree in debug builds only (D-M6-18); release plants no tree, so nothing is logged there.
+    implementation(libs.timber)
     // Callable payloads (device proofs, the export bundle).
     implementation(libs.kotlinx.serialization.json)
 

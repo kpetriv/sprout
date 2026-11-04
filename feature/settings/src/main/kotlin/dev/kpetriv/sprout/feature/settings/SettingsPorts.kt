@@ -2,6 +2,7 @@ package dev.kpetriv.sprout.feature.settings
 
 import dev.kpetriv.sprout.core.crypto.LockoutDecision
 import dev.kpetriv.sprout.core.crypto.ParentAuthAvailability
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.StateFlow
 
 /*
@@ -103,4 +104,41 @@ interface LockPreferences {
     val lockWhenLeaving: StateFlow<Boolean>
 
     fun setLockWhenLeaving(enabled: Boolean)
+}
+
+/**
+ * On-device AI settings (M6 §3.5). The app adapts `core/ai`'s `AiGateway.status`/`requestDownload` and `AiPreferences`.
+ * AI is on by default where the device has AICore; the model is downloaded only after the parent agrees once here
+ * (D-M6-6). Nothing in these settings sends anything off the phone.
+ */
+interface AiSettingsSource {
+    /** The current status and preferences; emits again when either changes. */
+    fun observe(): Flow<AiSettings>
+
+    /** Turns the on-device model on or off; off means every AI feature uses the built-in rules. */
+    suspend fun setEnabled(enabled: Boolean)
+
+    /**
+     * Records the parent's answer to "Download the model". True also asks AICore to download (the system decides
+     * when, usually on Wi-Fi); false only withdraws the consent (a downloaded model is managed by the system).
+     */
+    suspend fun setDownloadConsent(consent: Boolean)
+}
+
+/** What [AiSettingsSource] reports. */
+data class AiSettings(val status: AiModelStatus, val enabled: Boolean, val downloadConsent: Boolean)
+
+/** Mirrors `core/ai`'s `AiAvailability`. */
+enum class AiModelStatus {
+    /** Gemini Nano is ready on this phone. */
+    AVAILABLE,
+
+    /** The device supports it; the model is not downloaded yet. */
+    DOWNLOADABLE,
+
+    /** The system is downloading the model (when it chooses, usually on Wi-Fi). */
+    DOWNLOADING,
+
+    /** No AICore on this device: the built-in rules do everything. */
+    UNAVAILABLE,
 }

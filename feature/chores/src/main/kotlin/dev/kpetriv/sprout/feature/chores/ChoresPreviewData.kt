@@ -2,6 +2,7 @@ package dev.kpetriv.sprout.feature.chores
 
 import dev.kpetriv.sprout.core.domainledger.Currency
 import dev.kpetriv.sprout.core.domainledger.Money
+import dev.kpetriv.sprout.core.model.AgeBand
 import dev.kpetriv.sprout.core.model.CalendarDate
 import dev.kpetriv.sprout.core.model.ChoreId
 import dev.kpetriv.sprout.core.model.ChoreSchedule
@@ -116,7 +117,10 @@ internal object ChoresPreviewData {
     fun editor(errors: Set<EditorError> = emptySet()) = ChoreEditorUiState(
         isLoading = false,
         isNew = true,
-        kids = listOf(KidOption(KidId("kid-leo"), "Leo"), KidOption(KidId("kid-mia"), "Mia")),
+        kids = listOf(
+            KidOption(KidId("kid-leo"), "Leo", AgeBand.AGES_8_TO_11),
+            KidOption(KidId("kid-mia"), "Mia", AgeBand.AGES_5_TO_7),
+        ),
         kidId = if (errors.isEmpty()) KidId("kid-leo") else null,
         title = if (errors.isEmpty()) "Make bed" else "",
         moneyText = if (errors.isEmpty()) "2.50" else "2.5.0",
@@ -136,6 +140,38 @@ internal object ChoresPreviewData {
         currency = gbp,
         today = today,
         errors = errors,
+    )
+
+    /** Ideas for an 8 to 11 year old, as the rules catalogue would offer them. */
+    val suggestions = listOf(
+        ChoreSuggestionUi(
+            title = "Feed the cat",
+            description = "Fresh water and one scoop of food",
+            money = Money(50),
+            minutes = null,
+            schedule = ChoreSchedule.Daily(DayOfWeek.entries.toSet()),
+        ),
+        ChoreSuggestionUi(
+            title = "Hoover your room",
+            description = null,
+            money = Money(150),
+            minutes = 15,
+            schedule = ChoreSchedule.Weekly(DayOfWeek.SATURDAY),
+        ),
+        ChoreSuggestionUi(
+            title = "Help cook dinner",
+            description = "Wash the vegetables and set the table",
+            money = null,
+            minutes = 20,
+            schedule = ChoreSchedule.Weekly(DayOfWeek.SUNDAY),
+        ),
+        ChoreSuggestionUi(
+            title = "Sort the recycling",
+            description = null,
+            money = Money(100),
+            minutes = null,
+            schedule = ChoreSchedule.Once(null),
+        ),
     )
 
     fun choreList() = ChoreListUiState.Ready(

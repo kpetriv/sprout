@@ -11,6 +11,8 @@ import androidx.lifecycle.viewmodel.MutableCreationExtras
 import androidx.lifecycle.viewmodel.compose.LocalViewModelStoreOwner
 import androidx.lifecycle.viewmodel.compose.viewModel
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 
 /**
  * A Hilt ViewModel of type [VM] scoped to the current `ViewModelStoreOwner` (the nav entry) under [key], with
@@ -37,6 +39,21 @@ internal suspend fun <T> attempt(block: suspend () -> T): Result<T> = try {
     Result.success(block())
 } catch (e: CancellationException) {
     throw e
+} catch (e: Exception) {
+    Result.failure(e)
+}
+
+/**
+ * [attempt] for a call into on-device AI (review M6): a [CancellationException] the call throws while this coroutine is
+ * still active (an ML Kit future cancelled by AICore or Play services) is a failure too; this coroutine's own
+ * cancellation still propagates.
+ */
+@Suppress("TooGenericExceptionCaught") // Any AI failure becomes the sheet's error, never a stuck spinner.
+internal suspend fun <T> attemptAi(block: suspend () -> T): Result<T> = try {
+    Result.success(block())
+} catch (e: CancellationException) {
+    currentCoroutineContext().ensureActive()
+    Result.failure(e)
 } catch (e: Exception) {
     Result.failure(e)
 }

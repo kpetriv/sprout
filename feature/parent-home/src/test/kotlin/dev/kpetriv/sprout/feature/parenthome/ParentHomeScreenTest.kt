@@ -1,5 +1,12 @@
 package dev.kpetriv.sprout.feature.parenthome
 
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.test.SemanticsMatcher
+import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsNotEnabled
@@ -35,6 +42,7 @@ class ParentHomeScreenTest {
         onSwitchToKidMode = { opened += "kid mode" },
         onOpenKid = { opened += "kid ${it.value}" },
         onRegisterSigningKey = { opened += "security" },
+        onOpenAiSettings = { opened += "ai settings" },
     )
 
     private fun show(state: ParentHomeUiState) = compose.setContent {
@@ -57,6 +65,55 @@ class ParentHomeScreenTest {
         compose.onNodeWithText("Sapling").assertIsDisplayed()
         compose.onAllNodes(hasText("Next allowance:", substring = true)).assertCountEquals(2)
         compose.onNodeWithText("Weekly summary").assertIsDisplayed()
+    }
+
+    @Test
+    fun `the summary card toggles weeks and offers the model download`() {
+        show(ParentHomePreviewData.busy())
+
+        compose.onNodeWithText("On-device").assertIsDisplayed()
+        compose.onNodeWithText("So far this week", substring = true).assertIsDisplayed()
+        compose.onNodeWithText("Last week").performClick()
+        compose.onNodeWithText("Download the on-device model").performClick()
+
+        assertEquals(ParentHomeEvent.SummaryWeekChanged(SummaryWeek.LAST_WEEK), events.last())
+        assertEquals(listOf("ai settings"), opened)
+    }
+
+    @Test
+    fun `the summary is announced only after the parent switches the week (review L13)`() {
+        val summary = ParentHomePreviewData.summary()
+        var week by mutableStateOf(SummaryWeek.THIS_WEEK)
+        compose.setContent {
+            SproutTheme {
+                WeeklySummaryCard(
+                    summary = summary.copy(week = week),
+                    week = week,
+                    onWeekChange = { week = it },
+                    onDownloadModel = {},
+                )
+            }
+        }
+        val text = compose.onNodeWithText("So far this week", substring = true)
+        text.assert(SemanticsMatcher.keyNotDefined(SemanticsProperties.LiveRegion))
+
+        compose.onNodeWithText("Last week").performClick()
+
+        text.assert(SemanticsMatcher.expectValue(SemanticsProperties.LiveRegion, LiveRegionMode.Polite))
+    }
+
+    @Test
+    fun `the summary card fails soft`() {
+        show(ParentHomePreviewData.empty().copy(summary = WeeklySummaryUi.Unavailable))
+        compose.onNodeWithText("The summary is not available right now.").assertIsDisplayed()
+        compose.onNodeWithText("Download the on-device model").assertDoesNotExist()
+    }
+
+    @Test
+    fun `no download action without an offer`() {
+        show(ParentHomePreviewData.empty().copy(summary = ParentHomePreviewData.summary(offerModelDownload = false)))
+        compose.onNodeWithText("So far this week", substring = true).assertIsDisplayed()
+        compose.onNodeWithText("Download the on-device model").assertDoesNotExist()
     }
 
     @Test

@@ -14,6 +14,7 @@ import dev.kpetriv.sprout.core.domainhousehold.ChoreValidation
 import dev.kpetriv.sprout.core.domainhousehold.ChoreViolation
 import dev.kpetriv.sprout.core.domainledger.Currency
 import dev.kpetriv.sprout.core.domainledger.Money
+import dev.kpetriv.sprout.core.model.AgeBand
 import dev.kpetriv.sprout.core.model.CalendarDate
 import dev.kpetriv.sprout.core.model.ChoreId
 import dev.kpetriv.sprout.core.model.ChoreSchedule
@@ -26,14 +27,18 @@ import dev.kpetriv.sprout.core.model.MAX_TITLE_LENGTH
 import dev.kpetriv.sprout.core.time.Clock
 import dev.kpetriv.sprout.core.time.HouseholdCalendar
 import dev.kpetriv.sprout.core.ui.MinorUnitsParser
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.job
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import java.util.UUID
 import javax.inject.Inject
+import kotlin.time.Duration.Companion.milliseconds
 
 /** How often a chore repeats, as picked in the editor. */
 enum class ScheduleKind { ONCE, DAILY, WEEKLY, MONTHLY }
@@ -81,9 +86,14 @@ enum class EditorError {
     DUE_DATE_IN_PAST,
 }
 
-data class KidOption(val id: KidId, val name: String)
+/** A kid the chore can be assigned to; [band] is their age band this month (chore suggestions are per band). */
+data class KidOption(val id: KidId, val name: String, val band: AgeBand)
 
-/** The chore editor. [errors] are shown once the parent has tried to save, and then follow every change. */
+/**
+ * The chore editor. [errors] are shown once the parent has tried to save, and then follow every change.
+ *
+ * @property suggestions the "Suggest chores" sheet, while it is open.
+ */
 data class ChoreEditorUiState(
     val isLoading: Boolean = true,
     val isNew: Boolean = true,
@@ -101,7 +111,11 @@ data class ChoreEditorUiState(
     val isSaving: Boolean = false,
     val saveFailed: Boolean = false,
     val saved: Boolean = false,
-)
+    val suggestions: SuggestionsUi? = null,
+) {
+    /** "Suggest chores" is offered for a new chore once its kid is picked. */
+    val canSuggest: Boolean get() = isNew && !isLoading && !isSaving && !saved && kids.any { it.id == kidId }
+}
 
 sealed interface ChoreEditorEvent {
     data class KidChanged(val kidId: KidId) : ChoreEditorEvent
@@ -127,6 +141,17 @@ sealed interface ChoreEditorEvent {
     data object Save : ChoreEditorEvent
 
     data object SaveFailedShown : ChoreEditorEvent
+
+    /** Opens the "Suggest chores" sheet and asks [ChoreSuggestions] for ideas for the picked kid. */
+    data object SuggestOpened : ChoreEditorEvent
+
+    /** Asks again after [SuggestionsUi.Failed]. */
+    data object SuggestRetry : ChoreEditorEvent
+
+    data object SuggestDismissed : ChoreEditorEvent
+
+    /** Fills the form with [suggestion] (through the field events above) and closes the sheet; never saves. */
+    data class SuggestionPicked(val suggestion: ChoreSuggestionUi) : ChoreEditorEvent
 }
 
 /**
@@ -134,7 +159,12 @@ sealed interface ChoreEditorEvent {
  * new one) and [KID_ID_KEY] (the kid a new chore starts assigned to). Amounts are typed text parsed with
  * [MinorUnitsParser] (money in the household currency's decimals, minutes whole); the form is checked with
  * [ChoreValidation] against today. An existing chore keeps its id, kid, creation time and state.
+ *
+ * "Suggest chores" (new chores only) asks [ChoreSuggestions] for ideas for the picked kid's [AgeBand], away from the
+ * kid's current chore titles, within [SUGGEST_TIMEOUT_MILLIS]; picking one replays the field events, so the parent
+ * reviews and saves as usual (M6 §3.2).
  */
+@Suppress("LongParameterList") // The repositories, the suggestion port, the clock and the calendar.
 @HiltViewModel
 class ChoreEditorViewModel @Inject constructor(
     savedStateHandle: SavedStateHandle,
@@ -143,12 +173,14 @@ class ChoreEditorViewModel @Inject constructor(
     private val fiat: FiatCurrencyProvider,
     private val clock: Clock,
     private val calendar: HouseholdCalendar,
+    private val suggestions: ChoreSuggestions,
 ) : ViewModel() {
     private val choreId = savedStateHandle.get<String>(CHORE_ID_KEY)?.let(::ChoreId)
     private val initialKid = savedStateHandle.get<String>(KID_ID_KEY)?.let(::KidId)
     private val mutableState = MutableStateFlow(ChoreEditorUiState(isNew = choreId == null))
     private var existing: Chore? = null
     private var attempted = false
+    private var suggesting: Job? = null
 
     val state: StateFlow<ChoreEditorUiState> = mutableState.asStateFlow()
 
@@ -161,6 +193,15 @@ class ChoreEditorViewModel @Inject constructor(
             ChoreEditorEvent.Save -> save()
 
             ChoreEditorEvent.SaveFailedShown -> mutableState.update { it.copy(saveFailed = false) }
+
+            ChoreEditorEvent.SuggestOpened, ChoreEditorEvent.SuggestRetry -> suggest()
+
+            ChoreEditorEvent.SuggestDismissed -> {
+                suggesting?.cancel()
+                mutableState.update { it.copy(suggestions = null) }
+            }
+
+            is ChoreEditorEvent.SuggestionPicked -> apply(event.suggestion)
 
             is ChoreEditorEvent.ScheduleKindChanged,
             is ChoreEditorEvent.OnceDateChanged,
@@ -202,9 +243,13 @@ class ChoreEditorViewModel @Inject constructor(
 
     private suspend fun load() {
         val kidList = attempt { kids.observeKids().first() }.getOrDefault(emptyList())
-        val options = kidList.map { KidOption(it.id, it.firstName) }
-        val currency = fiat.fiatCurrency()
         val today = calendar.today()
+        val month = today.yearMonth
+        // A birth month in the future (a clock set back) counts as this month: the youngest band.
+        val options = kidList.map { kid ->
+            KidOption(kid.id, kid.firstName, AgeBand.of(minOf(kid.birthYearMonth, month), month))
+        }
+        val currency = fiat.fiatCurrency()
         val chore = choreId?.let { id -> attempt { chores.get(id) }.getOrNull() }
         existing = chore
         mutableState.update { current ->
@@ -227,6 +272,49 @@ class ChoreEditorViewModel @Inject constructor(
                 }
             }
         }
+    }
+
+    private fun suggest() {
+        val current = mutableState.value
+        if (!current.canSuggest) return
+        val kid = current.kids.firstOrNull { it.id == current.kidId } ?: return
+        suggesting?.cancel()
+        mutableState.update { it.copy(suggestions = SuggestionsUi.Loading) }
+        suggesting = viewModelScope.launch {
+            val run = coroutineContext.job
+            try {
+                val existingTitles = attempt { chores.observeChores(kid.id).first().map { it.title } }
+                    .getOrDefault(emptyList())
+                val items = attemptAi {
+                    withTimeoutOrNull(SUGGEST_TIMEOUT_MILLIS.milliseconds) {
+                        suggestions.suggest(kid.id, kid.band, existingTitles)
+                    }
+                }.getOrNull()
+                val sheet = when {
+                    items == null -> SuggestionsUi.Failed
+                    items.isEmpty() -> SuggestionsUi.Empty
+                    else -> SuggestionsUi.Ready(items)
+                }
+                mutableState.update { if (it.suggestions == null) it else it.copy(suggestions = sheet) }
+            } finally {
+                // Review M6: however this run ends, the sheet never stays on Loading. A run that was cancelled (the
+                // sheet dismissed, or a retry started a newer run) leaves the sheet to whoever cancelled it.
+                if (!run.isCancelled) {
+                    mutableState.update {
+                        if (it.suggestions == SuggestionsUi.Loading) it.copy(suggestions = SuggestionsUi.Failed) else it
+                    }
+                }
+            }
+        }
+    }
+
+    /** Replays [suggestion] as the editor's own field events, so the form behaves as if the parent typed it. */
+    private fun apply(suggestion: ChoreSuggestionUi) {
+        if (mutableState.value.suggestions == null) return
+        suggesting?.cancel()
+        mutableState.update { it.copy(suggestions = null) }
+        val current = mutableState.value
+        suggestionEvents(suggestion, current.schedule, current.currency.fractionDigits).forEach(::onEvent)
     }
 
     private fun edit(transform: (ChoreEditorUiState) -> ChoreEditorUiState) = mutableState.update { current ->
@@ -276,6 +364,50 @@ class ChoreEditorViewModel @Inject constructor(
 
         /** [SavedStateHandle] key of the kid a new chore is assigned to first. */
         const val KID_ID_KEY: String = "kidId"
+
+        /**
+         * How long the sheet waits for ideas before it shows the error (D-M6-10 gives the gateway 6 s and its rules
+         * fallback; this is the feature's own outer bound).
+         */
+        const val SUGGEST_TIMEOUT_MILLIS: Long = 8_000L
+    }
+}
+
+/**
+ * The field events that put [suggestion] into a form whose schedule is [schedule]: title, description, both amounts
+ * (blank when the suggestion has none) and the schedule kind with its value. Daily days are toggled to match.
+ */
+internal fun suggestionEvents(
+    suggestion: ChoreSuggestionUi,
+    schedule: ScheduleForm,
+    fractionDigits: Int,
+): List<ChoreEditorEvent> = buildList {
+    add(ChoreEditorEvent.TitleChanged(suggestion.title))
+    add(ChoreEditorEvent.DescriptionChanged(suggestion.description.orEmpty()))
+    add(ChoreEditorEvent.MoneyChanged(suggestion.money?.let { amountText(it, fractionDigits) }.orEmpty()))
+    add(ChoreEditorEvent.MinutesChanged(suggestion.minutes?.let { amountText(Money(it), 0) }.orEmpty()))
+    when (val target = suggestion.schedule) {
+        is ChoreSchedule.Once -> {
+            add(ChoreEditorEvent.ScheduleKindChanged(ScheduleKind.ONCE))
+            add(ChoreEditorEvent.OnceDateChanged(target.dueOn))
+        }
+
+        is ChoreSchedule.Daily -> {
+            add(ChoreEditorEvent.ScheduleKindChanged(ScheduleKind.DAILY))
+            DayOfWeek.entries
+                .filter { (it in schedule.dailyDays) != (it in target.daysOfWeek) }
+                .forEach { add(ChoreEditorEvent.DailyDayToggled(it)) }
+        }
+
+        is ChoreSchedule.Weekly -> {
+            add(ChoreEditorEvent.ScheduleKindChanged(ScheduleKind.WEEKLY))
+            add(ChoreEditorEvent.WeeklyDayChanged(target.dayOfWeek))
+        }
+
+        is ChoreSchedule.Monthly -> {
+            add(ChoreEditorEvent.ScheduleKindChanged(ScheduleKind.MONTHLY))
+            add(ChoreEditorEvent.MonthlyDayChanged(target.dayOfMonth))
+        }
     }
 }
 

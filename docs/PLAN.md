@@ -178,7 +178,7 @@ Pin at scaffold time to latest stable: Kotlin 2.x (K2), AGP, Compose BOM, Room (
 6. **M5 Games** — three games, tier difficulty, daily cap, scoring → signed ledger events.
 7. **M6 AI** — `core/ai`, Gemini Nano integration, fallbacks, kindness check, chore suggestions, weekly summary.
 8. **M7 Showcase polish** — Glance widget, adaptive layouts, Baseline Profiles + Macrobenchmark, screenshot tests for every screen × tier × state, accessibility pass, `FLAG_SECURE` audit, retention settings, export/delete flows in settings.
-9. **M8 Play release** — privacy policy page, data-safety form, security review checklist, app signing, internal → closed → production tracks; store screenshots from screenshot tests.
+9. **M8 Play release** — privacy policy page, data-safety form, security review checklist (including a network capture on a real device of the AI paths and a receipt scan, D-M6-51), app signing, internal → closed → production tracks; store screenshots from screenshot tests.
 
 ## Verification
 

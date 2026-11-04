@@ -121,6 +121,14 @@ class ChatScreenTest {
     }
 
     @Test
+    fun `a running kindness check shows a spinner in the disabled send button`() {
+        show(ChatPreviewData.kidChecking(KidUiTier.SPROUT))
+
+        compose.onNodeWithContentDescription("Checking your message…").assertIsDisplayed()
+        compose.onNodeWithText("Send").assertIsNotEnabled()
+    }
+
+    @Test
     fun `the nudge offers the suggestion, editing and sending anyway`() {
         show(ChatPreviewData.kidNudge(KidUiTier.SAPLING))
 

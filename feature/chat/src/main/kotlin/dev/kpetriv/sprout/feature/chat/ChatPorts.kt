@@ -246,14 +246,16 @@ fun interface BlobLoader {
 data class BlobExpectation(val threadId: KidId, val authorDeviceId: String?, val sha256: String?)
 
 /**
- * The kindness hook (M6 fills it): looks at text a kid is about to send. It never blocks: a [FilterVerdict.Nudge] is
- * shown to the kid, who may still send. Implementations must not log or store [text].
+ * The kindness check (M6): looks at text a Sprout or Sapling kid is about to send. It never blocks: a
+ * [FilterVerdict.Nudge] is shown to the kid, who may still send. The app binds it to the on-device AI gateway; the
+ * ViewModel gives it [ChatViewModel.FILTER_TIMEOUT_MILLIS] and sends the text unchecked when it fails or takes longer.
+ * Whether the model or the rules answered is not shown to kids. Implementations must not log or store [text].
  */
 fun interface OutgoingMessageFilter {
     suspend fun check(text: String, tier: KidUiTier): FilterVerdict
 
     companion object {
-        /** Lets everything through; the default until M6. */
+        /** Lets everything through; for tests and previews (the app binds the real check). */
         val None: OutgoingMessageFilter = OutgoingMessageFilter { _, _ -> FilterVerdict.Ok }
     }
 }

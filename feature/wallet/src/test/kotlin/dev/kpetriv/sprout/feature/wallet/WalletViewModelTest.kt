@@ -61,6 +61,7 @@ class WalletViewModelTest {
         authorizations = requester,
         promptText = { name, amount -> "Adjust $name's balance by $amount" },
         formatter = MoneyFormatter(Locale.UK),
+        receiptScanner = FakeReceiptScanner(),
     )
 
     private fun goal(id: String, title: String, target: Long, achievedOn: CalendarDate? = null) = SavingsGoal(

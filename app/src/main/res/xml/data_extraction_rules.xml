@@ -3,6 +3,8 @@
   allowBackup="false" disables cloud backup, but Android 12+ still performs device-to-device
   transfers unless excluded here. The database and keys must never leave the device this way.
   Both credential-encrypted (root, file, ...) and device-encrypted (device_*) storage are excluded.
+  That includes the on-device AI settings (files/datastore/ai_preferences.preferences_pb, M6, under "file"): they are
+  per device (each device has its own model and its own download consent) and must not be restored onto another one.
 -->
 <data-extraction-rules>
   <cloud-backup>

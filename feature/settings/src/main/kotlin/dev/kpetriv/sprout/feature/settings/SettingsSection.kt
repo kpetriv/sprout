@@ -10,6 +10,9 @@ enum class SettingsSection {
     DEVICES,
     ACCOUNT,
     DATA,
+
+    /** On-device AI (M6): status, the enable switch and the model download consent. */
+    AI,
     ABOUT,
     ;
 
@@ -26,6 +29,7 @@ internal fun SettingsSection.titleRes(): Int = when (this) {
     SettingsSection.DEVICES -> R.string.feature_settings_section_devices
     SettingsSection.ACCOUNT -> R.string.feature_settings_section_account
     SettingsSection.DATA -> R.string.feature_settings_section_data
+    SettingsSection.AI -> R.string.feature_settings_section_ai
     SettingsSection.ABOUT -> R.string.feature_settings_section_about
 }
 
@@ -38,5 +42,6 @@ internal fun SettingsSection.summaryRes(): Int = when (this) {
     SettingsSection.DEVICES -> R.string.feature_settings_section_devices_summary
     SettingsSection.ACCOUNT -> R.string.feature_settings_section_account_summary
     SettingsSection.DATA -> R.string.feature_settings_section_data_summary
+    SettingsSection.AI -> R.string.feature_settings_section_ai_summary
     SettingsSection.ABOUT -> R.string.feature_settings_section_about_summary
 }

@@ -7,14 +7,16 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilledTonalIconButton
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.SuggestionChip
 import androidx.compose.material3.Text
@@ -29,6 +31,7 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 
 /**
@@ -58,7 +61,8 @@ internal fun TextComposer(
         OutlinedTextField(
             value = state.draft,
             onValueChange = { onEvent(ChatEvent.DraftChanged(it)) },
-            enabled = state.canSend,
+            // Review M7: the text being checked is the text sent, so it cannot be edited while the check runs.
+            enabled = state.canSend && !state.checking,
             placeholder = { Text(stringResource(R.string.feature_chat_input_hint)) },
             maxLines = MAX_COMPOSER_LINES,
             modifier = Modifier.weight(1f),
@@ -67,8 +71,29 @@ internal fun TextComposer(
             onClick = { onEvent(ChatEvent.SendText) },
             enabled = state.canSendDraft,
             modifier = Modifier.heightIn(min = minTouch),
-        ) { Text(stringResource(R.string.feature_chat_send)) }
+        ) {
+            if (state.checking) CheckingIndicator()
+            Text(stringResource(R.string.feature_chat_send))
+        }
     }
+}
+
+/** The kindness check is running (at most 2.5 s): a small spinner in the Send button, announced once. */
+@Composable
+private fun CheckingIndicator() {
+    val checking = stringResource(R.string.feature_chat_checking)
+    CircularProgressIndicator(
+        modifier = Modifier
+            .padding(end = 8.dp)
+            .size(16.dp)
+            .semantics {
+                contentDescription = checking
+                liveRegion = LiveRegionMode.Polite
+            },
+        // Inside the disabled Send button: the button's (disabled) content colour, not the default primary (L13).
+        color = LocalContentColor.current,
+        strokeWidth = 2.dp,
+    )
 }
 
 private const val MAX_COMPOSER_LINES = 4
@@ -92,8 +117,8 @@ internal fun PresetChips(state: ChatUiState.Ready, onEvent: (ChatEvent) -> Unit,
 }
 
 /**
- * The kindness nudge: never blocks. The kid can send anyway, take the suggestion, or go back and edit. The kid's own
- * text is not repeated here (it is still in the composer).
+ * The kindness nudge: never blocks. The kid can send anyway, take the suggestion (both filled, side by side), or go
+ * back and edit. The kid's own text is not repeated here (it is still in the composer).
  */
 @Composable
 internal fun NudgeCard(nudge: NudgeUi, onEvent: (ChatEvent) -> Unit, modifier: Modifier = Modifier) {
@@ -117,18 +142,24 @@ internal fun NudgeCard(nudge: NudgeUi, onEvent: (ChatEvent) -> Unit, modifier: M
                     style = MaterialTheme.typography.bodyLarge,
                 )
             }
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+            // "Send anyway" is a filled button first, never less prominent than the suggestion: a kid reporting
+            // something must not be steered into replacing it (D-M6-52).
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Button(onClick = { onEvent(ChatEvent.NudgeSendAnyway) }, modifier = Modifier.weight(1f)) {
+                    Text(stringResource(R.string.feature_chat_nudge_send_anyway), textAlign = TextAlign.Center)
+                }
                 if (nudge.suggestion != null) {
-                    Button(onClick = { onEvent(ChatEvent.NudgeUseSuggestion) }) {
-                        Text(stringResource(R.string.feature_chat_nudge_use))
+                    Button(onClick = { onEvent(ChatEvent.NudgeUseSuggestion) }, modifier = Modifier.weight(1f)) {
+                        Text(stringResource(R.string.feature_chat_nudge_use), textAlign = TextAlign.Center)
                     }
                 }
-                OutlinedButton(onClick = { onEvent(ChatEvent.NudgeDismiss) }) {
-                    Text(stringResource(R.string.feature_chat_nudge_edit))
-                }
-                TextButton(onClick = { onEvent(ChatEvent.NudgeSendAnyway) }) {
-                    Text(stringResource(R.string.feature_chat_nudge_send_anyway))
-                }
+            }
+            TextButton(onClick = { onEvent(ChatEvent.NudgeDismiss) }) {
+                Text(stringResource(R.string.feature_chat_nudge_edit))
             }
         }
     }

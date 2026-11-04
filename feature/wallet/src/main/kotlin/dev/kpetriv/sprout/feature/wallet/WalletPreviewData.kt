@@ -131,4 +131,7 @@ internal object WalletPreviewData {
     }
 
     val adjustment = AdjustmentUi(currency = gbp)
+
+    /** The sheet after "Scan a receipt" read a £12.49 total from the Corner Shop. */
+    val adjustmentPrefilled = adjustment.copy(prefill = AdjustmentPrefill(Money(1_249), "Corner Shop"))
 }

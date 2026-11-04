@@ -11,7 +11,9 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -23,7 +25,9 @@ import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import javax.inject.Inject
+import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Instant
 
 /**
@@ -35,8 +39,11 @@ import kotlin.time.Instant
  * shows it from then on) or stays as "failed" with retry and discard. Nothing is sent while [ThreadKeyStatus] says
  * the device is waiting for a parent device.
  *
- * Kid text (Sprout and Sapling) passes [OutgoingMessageFilter] first; a nudge is shown but never blocks. Seedling has
- * no free text: preset tiles, the emoji row and voice notes held to record (at most [VoiceRecorder.MAX_DURATION_MS]).
+ * Kid text (Sprout and Sapling) passes [OutgoingMessageFilter] first; a nudge is shown but never blocks. The check has
+ * [FILTER_TIMEOUT_MILLIS] (D-M6-10): a filter that fails or takes longer lets the text through (fail open). A
+ * suggestion the kid takes with [ChatEvent.NudgeUseSuggestion] is sent without a second check while the draft is still
+ * exactly that suggestion (D-M6-2). Seedling has no free text: preset tiles, the emoji row and voice notes held to
+ * record (at most [VoiceRecorder.MAX_DURATION_MS]).
  *
  * Arguments from the [SavedStateHandle]: [THREAD_ID_KEY] (the kid id), [MODE_KEY] (a [ChatMode] name) and, in kid
  * mode, [TIER_KEY] (a [KidUiTier] name). Message text never reaches a log or a `toString`.
@@ -80,8 +87,14 @@ class ChatViewModel @Inject constructor(
     @Suppress("CyclomaticComplexMethod") // A flat dispatch: one branch per event.
     fun onEvent(event: ChatEvent) {
         when (event) {
-            is ChatEvent.DraftChanged -> local.update {
-                it.copy(draft = event.text.truncatedTo(OutgoingMessage.MAX_TEXT_LENGTH), nudge = null)
+            // Review M7: the field is disabled while the check runs, and an edit that still arrives is ignored, so
+            // the text checked is the text sent.
+            is ChatEvent.DraftChanged -> if (!local.value.checking) {
+                local.update {
+                    val draft = event.text.truncatedTo(OutgoingMessage.MAX_TEXT_LENGTH)
+                    val accepted = it.acceptedSuggestion?.takeIf { suggestion -> suggestion == draft }
+                    it.copy(draft = draft, nudge = null, acceptedSuggestion = accepted)
+                }
             }
 
             ChatEvent.SendText -> sendDraft()
@@ -119,9 +132,11 @@ class ChatViewModel @Inject constructor(
             ChatEvent.NudgeSendAnyway -> nudgeSendAnyway()
 
             ChatEvent.NudgeUseSuggestion -> local.update { s ->
+                val suggestion = s.nudge?.suggestion?.truncatedTo(OutgoingMessage.MAX_TEXT_LENGTH)
                 s.copy(
-                    draft = s.nudge?.suggestion?.truncatedTo(OutgoingMessage.MAX_TEXT_LENGTH) ?: s.draft,
+                    draft = suggestion ?: s.draft,
                     nudge = null,
+                    acceptedSuggestion = suggestion ?: s.acceptedSuggestion,
                 )
             }
 
@@ -246,32 +261,61 @@ class ChatViewModel @Inject constructor(
                 send(OutgoingMessage.Text(text))
             }
 
-            else -> checkThenSend(text, kidTier)
+            else -> if (local.value.acceptedSuggestion == ready.draft) {
+                // D-M6-2: the kid took the filter's own suggestion and did not change it; checking it again could
+                // flag it and loop.
+                local.update { it.copy(draft = "", acceptedSuggestion = null) }
+                send(OutgoingMessage.Text(text))
+            } else {
+                checkThenSend(text, kidTier)
+            }
         }
     }
 
-    /** Runs the kindness filter first; a nudge is shown instead of sending, a failing filter lets the text through. */
+    /**
+     * Runs the kindness filter first; a nudge is shown instead of sending. A filter that fails or does not answer
+     * within [FILTER_TIMEOUT_MILLIS] lets the text through (fail open, D-M6-10). `checking` is always cleared, however
+     * the check ends (review M6).
+     */
     private fun checkThenSend(text: String, kidTier: KidUiTier) {
         local.update { it.copy(checking = true) }
         viewModelScope.launch {
-            val verdict = attempt { Result.success(filter.check(text, kidTier)) }.getOrDefault(FilterVerdict.Ok)
-            when (verdict) {
-                FilterVerdict.Ok -> {
-                    local.update { it.copy(checking = false, draft = "") }
-                    send(OutgoingMessage.Text(text))
-                }
+            try {
+                when (val verdict = checkKindness(text, kidTier)) {
+                    FilterVerdict.Ok -> {
+                        local.update { it.copy(checking = false, draft = "", acceptedSuggestion = null) }
+                        send(OutgoingMessage.Text(text))
+                    }
 
-                is FilterVerdict.Nudge -> local.update {
-                    it.copy(checking = false, nudge = NudgeUi(text, verdict.suggestion))
+                    is FilterVerdict.Nudge -> local.update {
+                        it.copy(checking = false, nudge = NudgeUi(text, verdict.suggestion))
+                    }
                 }
+            } finally {
+                local.update { it.copy(checking = false) }
             }
         }
+    }
+
+    /**
+     * The filter's verdict, or [FilterVerdict.Ok] when it fails, times out or throws a [CancellationException] of its
+     * own (an ML Kit future cancelled by AICore or Play services while this coroutine is still active, review M6).
+     * Cancellation of this coroutine itself (the screen left) still propagates.
+     */
+    @Suppress("TooGenericExceptionCaught", "SwallowedException") // Fail open; nothing is logged.
+    private suspend fun checkKindness(text: String, kidTier: KidUiTier): FilterVerdict = try {
+        withTimeoutOrNull(FILTER_TIMEOUT_MILLIS.milliseconds) { filter.check(text, kidTier) } ?: FilterVerdict.Ok
+    } catch (cancelled: CancellationException) {
+        currentCoroutineContext().ensureActive()
+        FilterVerdict.Ok
+    } catch (failure: Exception) {
+        FilterVerdict.Ok
     }
 
     private fun nudgeSendAnyway() {
         val nudge = local.value.nudge ?: return
         if (ready()?.canSend != true) return
-        local.update { it.copy(nudge = null, draft = "") }
+        local.update { it.copy(nudge = null, draft = "", acceptedSuggestion = null) }
         send(OutgoingMessage.Text(nudge.text))
     }
 
@@ -509,6 +553,8 @@ class ChatViewModel @Inject constructor(
         val checking: Boolean = false,
         val nudge: NudgeUi? = null,
         val notice: ChatNotice? = null,
+        /** The suggestion the kid took into the draft (D-M6-2); cleared as soon as the draft differs from it. */
+        val acceptedSuggestion: String? = null,
     ) {
         override fun toString(): String = "LocalState(pending=${pending.size}, recording=$recording)"
     }
@@ -525,6 +571,9 @@ class ChatViewModel @Inject constructor(
 
         /** Messages per page. */
         const val PAGE_SIZE = 50
+
+        /** How long the kindness check may take before the text is sent unchecked (D-M6-10). */
+        const val FILTER_TIMEOUT_MILLIS = 2_500L
 
         private const val LOCAL_ID_PREFIX = "local-"
         private const val RECORDING_TICK_MS = 1_000L

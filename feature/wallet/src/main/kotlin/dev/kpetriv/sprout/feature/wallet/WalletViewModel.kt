@@ -27,6 +27,9 @@ import dev.kpetriv.sprout.core.model.KidUiTier
 import dev.kpetriv.sprout.core.ui.MoneyFormatter
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -42,7 +45,9 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import javax.inject.Inject
+import kotlin.time.Duration.Companion.milliseconds
 
 /**
  * Wallet screen state for one kid. Reads the kid ([WalletDataSource]), balances, anomalies and recent events
@@ -55,6 +60,9 @@ import javax.inject.Inject
  * ([ParentAuthUnavailableException]) the use case falls back per D-M2-1 to an unsigned append when the household
  * policy has parent signatures off (the sheet warns about it up front), and refuses otherwise. A failed adjustment
  * shows its error in the sheet, or in a snackbar if the sheet was dismissed while it was saving.
+ *
+ * "Scan a receipt" (M6 §3.4) hands the picked image to [ReceiptScanner] (within [SCAN_TIMEOUT_MILLIS]) and puts what it
+ * found into [AdjustmentUi.prefill] for the form to take; the parent still reviews and signs.
  *
  * Arguments come from the [SavedStateHandle]: [KID_ID_KEY] (required) and [MODE_KEY] (a [WalletMode] name,
  * default [WalletMode.KID], the safe choice); [WalletRoute] sets both.
@@ -72,6 +80,7 @@ class WalletViewModel @Inject constructor(
     private val authorizations: ParentAuthorizationRequester,
     private val promptText: AdjustmentPromptText,
     private val formatter: MoneyFormatter,
+    private val receiptScanner: ReceiptScanner,
 ) : ViewModel() {
     private val kidId = KidId(checkNotNull(savedStateHandle.get<String>(KID_ID_KEY)) { "kidId argument missing" })
     private val mode = savedStateHandle.get<String>(MODE_KEY)?.let(WalletMode::valueOf) ?: WalletMode.KID
@@ -93,6 +102,8 @@ class WalletViewModel @Inject constructor(
             WalletEvent.OpenAdjust -> openAdjust()
             WalletEvent.DismissAdjust -> local.update { it.copy(adjustment = null) }
             is WalletEvent.SubmitAdjust -> submitAdjust(event)
+            is WalletEvent.ReceiptPicked -> scanReceipt(event.uri)
+            WalletEvent.PrefillApplied -> local.update { it.copy(adjustment = it.adjustment?.copy(prefill = null)) }
             is WalletEvent.FilterChanged -> local.update { it.copy(filter = event.category) }
             WalletEvent.MessageShown -> local.update { it.copy(message = null) }
         }
@@ -159,13 +170,72 @@ class WalletViewModel @Inject constructor(
         if (mode != WalletMode.PARENT) return
         viewModelScope.launch {
             val currency = mainAccount()?.currency as? Currency.Fiat ?: return@launch
-            local.update { it.copy(adjustment = AdjustmentUi(currency)) }
+            local.update { it.copy(adjustment = AdjustmentUi(currency, canScan = scanAvailable())) }
         }
     }
 
+    private fun scanReceipt(uri: String) {
+        if (mode != WalletMode.PARENT) return
+        val sheet = local.value.adjustment?.takeIf { it.canScan && !it.scanning && !it.isSubmitting } ?: return
+        setAdjustment(sheet.copy(scanning = true, scanSlow = false, scanFailed = false, prefill = null))
+        viewModelScope.launch {
+            var found: AdjustmentPrefill? = null
+            // D-M6-54: the first scan on a device can take over 10 s while Play services loads text recognition.
+            val slow = launch {
+                delay(SCAN_SLOW_MILLIS.milliseconds)
+                local.update { state ->
+                    state.copy(adjustment = state.adjustment?.takeIf { it.scanning }?.copy(scanSlow = true))
+                }
+            }
+            try {
+                found = scanned(uri)
+            } finally {
+                slow.cancel()
+                // Review M6: however the scan ends (even with this coroutine cancelled), the sheet stops scanning.
+                // "No total found" (scanFailed) also when only a merchant was read (review L14); a merchant still
+                // prefills the reason.
+                val usable = found?.takeIf { it.hasTotal() || !it.merchant.isNullOrBlank() }
+                val noTotal = usable?.hasTotal() != true
+                local.update { state ->
+                    val open = state.adjustment ?: return@update state // The sheet was dismissed meanwhile.
+                    val done = open.copy(scanning = false, scanSlow = false, scanFailed = noTotal, prefill = usable)
+                    state.copy(adjustment = done)
+                }
+            }
+        }
+    }
+
+    /**
+     * The scanner's prefill, or null when it fails, times out or throws a [CancellationException] of its own (an ML Kit
+     * task cancelled by Play services while this coroutine is still active, review M6). Cancellation of this coroutine
+     * itself still propagates.
+     */
+    @Suppress("TooGenericExceptionCaught", "SwallowedException") // The parent types the amount instead; nothing logged.
+    private suspend fun scanned(uri: String): AdjustmentPrefill? = try {
+        withTimeoutOrNull(SCAN_TIMEOUT_MILLIS.milliseconds) { receiptScanner.scan(uri) }
+    } catch (e: CancellationException) {
+        currentCoroutineContext().ensureActive()
+        null
+    } catch (e: Exception) {
+        null // An unreadable image or a recogniser failure.
+    }
+
+    /** [ReceiptScanner.isAvailable]; false when it fails (the sheet then just has no scan button). */
+    @Suppress("TooGenericExceptionCaught", "SwallowedException") // Not offering a scan is the safe answer.
+    private suspend fun scanAvailable(): Boolean = try {
+        receiptScanner.isAvailable()
+    } catch (e: CancellationException) {
+        throw e
+    } catch (e: Exception) {
+        false
+    }
+
+    private fun AdjustmentPrefill.hasTotal(): Boolean = (amount?.minorUnits ?: 0) > 0
+
     private fun submitAdjust(event: WalletEvent.SubmitAdjust) {
         val current = local.value.adjustment
-        if (current == null || current.isSubmitting) return
+        // Audit L5: nothing is saved while a receipt is being read (the sheet's Save is disabled too).
+        if (current == null || current.isSubmitting || current.scanning) return
         val invalid = when {
             mode != WalletMode.PARENT -> AdjustmentError.NotAllowed
             event.amountMinor <= 0 -> AdjustmentError.InvalidAmount
@@ -301,6 +371,15 @@ class WalletViewModel @Inject constructor(
 
         /** [SavedStateHandle] key of the [WalletMode] name. */
         const val MODE_KEY = "walletMode"
+
+        /**
+         * How long reading a receipt may take before the sheet says it found nothing: the first scan on a device waits
+         * for Play services to load its text recognition (about 13 s on the emulator walk, D-M6-54).
+         */
+        const val SCAN_TIMEOUT_MILLIS = 25_000L
+
+        /** After this long the sheet says "Preparing the scanner…" ([AdjustmentUi.scanSlow], D-M6-54). */
+        const val SCAN_SLOW_MILLIS = 5_000L
 
         private const val STOP_TIMEOUT_MILLIS = 5_000L
     }

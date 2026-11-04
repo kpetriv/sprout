@@ -1,5 +1,9 @@
 package dev.kpetriv.sprout.feature.wallet
 
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.ProgressBarRangeInfo
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.SemanticsMatcher
@@ -140,6 +144,120 @@ class WalletScreenTest {
             ),
         )
         compose.onNodeWithText("Parent signatures are off: this change is saved unsigned.").assertIsDisplayed()
+    }
+
+    @Test
+    fun `the adjustment sheet offers a receipt scan and says the reason is plain text`() {
+        show(WalletPreviewData.ready(KidUiTier.SPROUT, adjustment = WalletPreviewData.adjustment))
+        compose.onNodeWithText("Scan a receipt").assertIsDisplayed()
+        compose.onNodeWithText("saved in the ledger as plain text", substring = true).assertIsDisplayed()
+        compose.onNodeWithText("Google Play services records that the scanner was used", substring = true)
+            .assertIsDisplayed()
+    }
+
+    @Test
+    fun `with the On-device AI switch off the sheet has no receipt scan (D-M6-51)`() {
+        show(WalletPreviewData.ready(KidUiTier.SPROUT, adjustment = WalletPreviewData.adjustment.copy(canScan = false)))
+        compose.onNodeWithText("Save").assertExists()
+        compose.onNodeWithText("Scan a receipt").assertDoesNotExist()
+    }
+
+    @Test
+    fun `a slow first scan says the scanner is being prepared (D-M6-54)`() {
+        compose.setContent {
+            SproutTheme {
+                ManualAdjustmentForm(
+                    adjustment = WalletPreviewData.adjustment.copy(scanning = true, scanSlow = true),
+                    onSubmit = { _, _, _ -> },
+                    onCancel = {},
+                    onScanReceipt = {},
+                )
+            }
+        }
+        compose.onNodeWithText("Preparing the scanner…")
+            .assertIsDisplayed()
+            .assert(SemanticsMatcher.expectValue(SemanticsProperties.LiveRegion, LiveRegionMode.Polite))
+        compose.onNodeWithContentDescription("Reading the receipt…").assertIsDisplayed()
+    }
+
+    @Test
+    fun `a prefill fills a debit and the receipt reason once`() {
+        var applied = 0
+        var scans = 0
+        val submitted = mutableListOf<Triple<Long, AdjustmentSign, String>>()
+        compose.setContent {
+            SproutTheme {
+                ManualAdjustmentForm(
+                    adjustment = WalletPreviewData.adjustment.copy(
+                        prefill = AdjustmentPrefill(Money(1_249), "Corner Shop " + "x".repeat(300)),
+                    ),
+                    onSubmit = { amount, sign, reason -> submitted += Triple(amount, sign, reason) },
+                    onCancel = {},
+                    onScanReceipt = { scans++ },
+                    onPrefillApplied = { applied++ },
+                )
+            }
+        }
+
+        compose.onNodeWithText("Take away").assertIsSelected()
+        compose.onNodeWithText("Scan a receipt").performClick()
+        compose.onNodeWithText("Save").performClick()
+
+        assertEquals(1, applied)
+        assertEquals(1, scans)
+        val (amount, sign, reason) = submitted.single()
+        assertEquals(1_249L, amount)
+        assertEquals(AdjustmentSign.DEBIT, sign)
+        assertEquals(MAX_REASON_LENGTH, reason.length)
+        assertTrue(reason.startsWith("Receipt: Corner Shop"))
+    }
+
+    @Test
+    fun `a late prefill keeps what the parent changed while the receipt was read, and Save waits (audit L5)`() {
+        var adjustment by mutableStateOf(WalletPreviewData.adjustment)
+        val submitted = mutableListOf<Triple<Long, AdjustmentSign, String>>()
+        compose.setContent {
+            SproutTheme {
+                ManualAdjustmentForm(
+                    adjustment = adjustment,
+                    onSubmit = { amount, sign, reason -> submitted += Triple(amount, sign, reason) },
+                    onCancel = {},
+                    onScanReceipt = { adjustment = adjustment.copy(scanning = true) },
+                    onPrefillApplied = { adjustment = adjustment.copy(prefill = null) },
+                )
+            }
+        }
+
+        compose.onNodeWithText("Scan a receipt").performClick()
+        compose.onNodeWithText("Add").performClick()
+        compose.onNode(hasSetTextAction() and hasText("Amount")).performTextInput("3")
+        compose.onNodeWithText("Save").assertIsNotEnabled()
+
+        adjustment = adjustment.copy(scanning = false, prefill = AdjustmentPrefill(Money(1_249), "Corner Shop"))
+        compose.waitForIdle()
+
+        compose.onNodeWithText("Add").assertIsSelected()
+        compose.onNodeWithText("Save").assertIsEnabled().performClick()
+        assertEquals(Triple(300L, AdjustmentSign.CREDIT, "Receipt: Corner Shop"), submitted.single())
+    }
+
+    @Test
+    fun `a receipt with no total says so and a scan in progress is announced`() {
+        compose.setContent {
+            SproutTheme {
+                ManualAdjustmentForm(
+                    adjustment = WalletPreviewData.adjustment.copy(scanFailed = true, scanning = true),
+                    onSubmit = { _, _, _ -> },
+                    onCancel = {},
+                    onScanReceipt = {},
+                )
+            }
+        }
+        compose.onNodeWithText("No total found on that receipt. Type the amount instead.").assertIsDisplayed()
+        compose.onNodeWithContentDescription("Reading the receipt…")
+            .assertIsDisplayed()
+            .assert(SemanticsMatcher.expectValue(SemanticsProperties.LiveRegion, LiveRegionMode.Polite))
+        compose.onNodeWithText("Scan a receipt").assertIsNotEnabled()
     }
 
     @Test

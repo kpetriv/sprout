@@ -16,7 +16,8 @@ import dev.kpetriv.sprout.feature.chores.UseCaseSubmissionApprover
 /**
  * Chores bindings that need nothing from the app. `core/domain-ledger`'s `ParentAuthorizationRequester` is bound by
  * `feature/lock`; the repositories, `PhotoStore`, `FiatCurrencyProvider`, `Clock` and `HouseholdCalendar` come from
- * `core/database` and `core/common`.
+ * `core/database` and `core/common`; the app binds [dev.kpetriv.sprout.feature.chores.ChoreSuggestions] to the
+ * on-device AI gateway (M6).
  */
 @Module
 @InstallIn(ViewModelComponent::class)

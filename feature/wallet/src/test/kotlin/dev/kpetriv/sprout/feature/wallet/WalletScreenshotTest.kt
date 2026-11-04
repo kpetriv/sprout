@@ -46,6 +46,17 @@ class WalletScreenshotTest : ScreenshotTest() {
     }
 
     @Test
+    fun `adjustment form, prefilled from a receipt`() = screenshot.captureLightDark("wallet_adjustment_prefilled") {
+        ManualAdjustmentForm(
+            adjustment = WalletPreviewData.adjustmentPrefilled,
+            onSubmit = { _, _, _ -> },
+            onCancel = {},
+            modifier = Modifier.padding(24.dp),
+            onScanReceipt = {},
+        )
+    }
+
+    @Test
     fun `adjustment form, rejected by the ledger`() = screenshot.captureLightDark("wallet_adjustment_form_rejected") {
         ManualAdjustmentForm(
             adjustment = WalletPreviewData.adjustment.copy(error = AdjustmentError.InsufficientFunds("£7.45")),

@@ -1,5 +1,8 @@
 package dev.kpetriv.sprout.feature.parenthome
 
+import androidx.compose.foundation.layout.padding
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
 import dev.kpetriv.sprout.core.testing.screenshot.ScreenshotTest
 import org.junit.Test
 import org.robolectric.annotation.Config
@@ -9,6 +12,17 @@ class ParentHomeScreenshotTest : ScreenshotTest() {
     @Test
     fun `empty household`() = screenshot.captureLightDark("parent_home_empty") {
         ParentHomeScreen(ParentHomePreviewData.empty(), onEvent = {}, onSignNow = {}, links = ParentHomeLinks())
+    }
+
+    @Test
+    fun `weekly summary card`() = screenshot.captureLightDark("parent_home_summary") {
+        WeeklySummaryCard(
+            summary = ParentHomePreviewData.summary(),
+            week = SummaryWeek.THIS_WEEK,
+            onWeekChange = {},
+            onDownloadModel = {},
+            modifier = Modifier.padding(16.dp),
+        )
     }
 
     @Test

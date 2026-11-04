@@ -27,6 +27,7 @@ import dev.kpetriv.sprout.core.model.Role
 import dev.kpetriv.sprout.core.model.UserId
 import dev.kpetriv.sprout.core.model.YearMonth
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.flow
@@ -193,4 +194,29 @@ object TestData {
 
     fun setTier(source: InMemoryWalletDataSource, tier: KidUiTier) =
         source.kids.update { kids -> kids.mapValues { it.value.copy(uiTier = tier) } }
+}
+
+class FakeReceiptScanner : ReceiptScanner {
+    var result: AdjustmentPrefill? = null
+    var failure: Throwable? = null
+
+    /** When set, [scan] suspends until it completes. */
+    var gate: CompletableDeferred<Unit>? = null
+
+    /** How long each scan takes (virtual time). */
+    var delayMillis: Long = 0
+    val scanned = mutableListOf<String>()
+
+    /** What [isAvailable] answers (the app's On-device AI switch). */
+    var available: Boolean = true
+
+    override suspend fun isAvailable(): Boolean = available
+
+    override suspend fun scan(imageUri: String): AdjustmentPrefill? {
+        scanned += imageUri
+        gate?.await()
+        if (delayMillis > 0) delay(delayMillis)
+        failure?.let { throw it }
+        return result
+    }
 }

@@ -11,6 +11,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
@@ -60,7 +61,10 @@ fun ChoreEditorRoute(
     ChoreEditorScreen(state = state, onEvent = viewModel::onEvent, onBack = onBack, modifier = modifier)
 }
 
-/** The chore form: kid, title, description, reward (money and/or minutes) and schedule, with validation errors. */
+/**
+ * The chore form: kid, title, description, reward (money and/or minutes) and schedule, with validation errors. A new
+ * chore offers "Suggest chores" once its kid is picked (M6 §3.2).
+ */
 @Composable
 fun ChoreEditorScreen(
     state: ChoreEditorUiState,
@@ -103,6 +107,14 @@ fun ChoreEditorScreen(
     }
     val failed = if (state.saveFailed) stringResource(R.string.feature_chores_editor_save_failed) else null
     MessageEffect(snackbar, state.saveFailed, failed) { onEvent(ChoreEditorEvent.SaveFailedShown) }
+    state.suggestions?.let { sheet ->
+        ChoreSuggestionsSheet(
+            sheet = sheet,
+            kidName = state.kids.firstOrNull { it.id == state.kidId }?.name,
+            currency = state.currency,
+            onEvent = onEvent,
+        )
+    }
 }
 
 @Composable
@@ -116,6 +128,11 @@ private fun EditorForm(state: ChoreEditorUiState, onEvent: (ChoreEditorEvent) ->
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
         KidPicker(state, onEvent)
+        if (state.isNew) {
+            OutlinedButton(onClick = { onEvent(ChoreEditorEvent.SuggestOpened) }, enabled = state.canSuggest) {
+                Text(stringResource(R.string.feature_chores_suggest))
+            }
+        }
         OutlinedTextField(
             value = state.title,
             onValueChange = { onEvent(ChoreEditorEvent.TitleChanged(it)) },
