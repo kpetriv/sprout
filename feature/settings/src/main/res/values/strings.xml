@@ -268,7 +268,7 @@
   <string name="feature_settings_data_retention_confirm">Delete older messages</string>
   <string name="feature_settings_data_chat_delete">Delete chat history now</string>
   <string name="feature_settings_data_chat_delete_title">Delete all chat history?</string>
-  <string name="feature_settings_data_chat_delete_text">Deletes every message, photo and voice note in every chat, on every phone and on Sprout’s server. This can’t be undone. You’ll confirm with your fingerprint or PIN.</string>
+  <string name="feature_settings_data_chat_delete_text">Deletes every message, photo and voice note in every chat on this phone and on Sprout’s server. Other phones keep their copy until their chat retention removes it (set “Keep chat messages for” above). This can’t be undone. You’ll confirm with your fingerprint or PIN.</string>
   <string name="feature_settings_data_chat_delete_confirm">Delete chat history</string>
   <string name="feature_settings_data_export_chat_text">Chats are included as readable text with their photos and voice notes (the chat folder), decrypted on this phone. Keep the file somewhere safe. You’ll confirm with your fingerprint or PIN.</string>
   <string name="feature_settings_data_export_confirming">Waiting for your fingerprint or PIN…</string>
@@ -279,15 +279,18 @@
   <string name="feature_settings_data_message_not_confirmed">Couldn’t confirm it’s you. Nothing changed.</string>
   <string name="feature_settings_data_message_retention_saved">Chat retention saved</string>
   <string name="feature_settings_data_message_retention_failed">Couldn’t save chat retention. Try again.</string>
-  <string name="feature_settings_data_message_chat_deleted">Chat history deleted</string>
-  <string name="feature_settings_data_message_chat_deleted_here">Chat history deleted on this phone. Sprout’s server will follow when it’s reachable.</string>
+  <string name="feature_settings_data_message_chat_deleted">Chat history deleted on this phone and on Sprout’s server. Other phones keep theirs until their chat retention removes it.</string>
+  <string name="feature_settings_data_message_chat_deleted_here">Chat history deleted on this phone. Sprout’s server will follow when it’s reachable; other phones keep theirs until their chat retention removes it.</string>
   <string name="feature_settings_data_message_chat_delete_failed">Couldn’t delete chat history. Try again.</string>
+  <!-- D-M7-57: a phone without the household policy yet never writes one. -->
+  <string name="feature_settings_policy_waiting">Waiting for the household policy to sync</string>
+  <string name="feature_settings_policy_not_synced">Waiting for the household policy to sync. Try again in a moment.</string>
   <!-- M7: the parent-configurable daily game cap (D-M5-4, D-M7-10). -->
   <string name="feature_settings_allowance_games_title">Games</string>
   <string name="feature_settings_game_cap_title">Daily game limit</string>
   <string name="feature_settings_game_cap_summary">Brain games can earn each kid up to %1$s a day</string>
   <string name="feature_settings_game_cap_summary_default">Brain games can earn each kid up to %1$s a day (the default)</string>
-  <string name="feature_settings_game_cap_text">The most brain games can add to each kid’s pocket money in a day. 0 turns game rewards off. Applies on every phone, to earlier days too: lowering it marks plays over the new limit “Not counted”.</string>
+  <string name="feature_settings_game_cap_text">The most brain games can add to each kid’s pocket money in a day. 0 turns game rewards off. Applies on every phone, to earlier days too: lowering it marks plays over the new limit “Not counted”, and raising it counts earlier plays again.</string>
   <string name="feature_settings_game_cap_amount">Limit (%1$s)</string>
   <string name="feature_settings_game_cap_reset">Use the default (%1$s)</string>
   <string name="feature_settings_game_cap_too_large">At most %1$s</string>

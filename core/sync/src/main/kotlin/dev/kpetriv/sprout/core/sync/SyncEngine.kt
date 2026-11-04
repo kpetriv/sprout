@@ -26,8 +26,9 @@ import kotlinx.coroutines.sync.withLock
  * A [syncOnce] pulls first, then pushes, so a remote account or document a local write refers to is known before
  * anything is sent:
  * 1. pull pages until the transport says there is no more; per page: registry, then documents (in
- *    [DocTypes.applyOrder]; `thread_key` documents among them), then events, then chat messages (after the documents,
- *    so the thread keys that decrypt them are applied first), then [RemoteApplier.saveCursor] with the page's cursor;
+ *    [DocTypes.applyOrder]; `thread_key` documents among them), then events, then the chat prune watermark when the
+ *    page carries one ([RemoteApplier.applyChatPrune]), then chat messages (after the documents, so the thread keys
+ *    that decrypt them are applied first), then [RemoteApplier.saveCursor] with the page's cursor;
  * 2. [RemoteApplier.retryHeld] for events whose gap the pull may have filled;
  * 3. push the outbox in batches of at most [PUSH_BATCH_SIZE], handed to the transport as one ordered list
  *    ([SyncTransport.push]). The outbox is **two lanes** (D-M4-22, [OutboxItem.Lane]): the ledger lane (events,
@@ -181,6 +182,7 @@ class SyncEngine(
                 pulled.documents += applier.applyDocuments(page.documents.sortedBy { DocTypes.applyOrder(it.docType) })
             }
             if (page.events.isNotEmpty()) pulled.events += applier.applyEvents(page.events)
+            page.chatPrunedBefore?.let { applier.applyChatPrune(it) }
             if (page.messages.isNotEmpty()) pulled.messages += applier.applyMessages(page.messages)
             applier.saveCursor(page.next)
             pulled.add(page)

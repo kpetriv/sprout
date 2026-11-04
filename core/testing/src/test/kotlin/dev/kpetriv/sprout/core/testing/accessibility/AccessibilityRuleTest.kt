@@ -3,6 +3,9 @@ package dev.kpetriv.sprout.core.testing.accessibility
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.size
 import androidx.compose.material3.Button
 import androidx.compose.material3.Text
@@ -99,7 +102,46 @@ class AccessibilityRuleTest {
             "",
             issues(KidUiTier.SEEDLING) {
                 Button(onClick = {}) { Text("Material") }
+                // Far enough apart that the extended areas (72 dp each) do not meet.
+                Spacer(Modifier.height(24.dp))
                 Box(Modifier.size(56.dp).clickable {}.semantics { contentDescription = "Custom" })
+            },
+        )
+    }
+
+    @Test
+    fun `adjacent small targets whose extended areas overlap fail`() {
+        // The view configuration says 72 dp under Seedling, but two 24 dp targets side by side share that area: a
+        // finger between them gets whichever is nearer (review M3).
+        val message = issues(KidUiTier.SEEDLING) {
+            Row {
+                Box(Modifier.size(24.dp).clickable {}.semantics { contentDescription = "Left" })
+                Box(Modifier.size(24.dp).clickable {}.semantics { contentDescription = "Right" })
+            }
+        }
+        assertTrue("overlap once extended" in message, message)
+        assertTrue("Left" in message && "Right" in message, message)
+    }
+
+    @Test
+    fun `adjacent small targets fail on a parent screen too`() {
+        val message = issues {
+            Row {
+                Box(Modifier.size(24.dp).clickable {}.semantics { contentDescription = "One" })
+                Box(Modifier.size(24.dp).clickable {}.semantics { contentDescription = "Two" })
+            }
+        }
+        assertTrue("overlap once extended" in message, message)
+    }
+
+    @Test
+    fun `a clickable card holding a button and overlapping layouts pass`() {
+        assertEquals(
+            "",
+            issues(KidUiTier.SEEDLING) {
+                Box(Modifier.size(200.dp).clickable {}.semantics { contentDescription = "Card" }) {
+                    Box(Modifier.size(72.dp).clickable {}.semantics { contentDescription = "Inside" })
+                }
             },
         )
     }

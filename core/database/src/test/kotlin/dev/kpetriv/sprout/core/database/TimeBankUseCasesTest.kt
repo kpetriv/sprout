@@ -23,6 +23,7 @@ import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
+import kotlin.time.Duration.Companion.hours
 import kotlin.time.Duration.Companion.minutes
 import kotlin.time.Duration.Companion.seconds
 
@@ -136,6 +137,28 @@ class TimeBankUseCasesTest {
         household.monotonic.reboot(uptime = 3.minutes)
 
         assertEquals(12, assertIs<TimeBankResult.Stopped>(household.stopTimeBank(kid)).minutesUsed)
+    }
+
+    @Test
+    fun afterARestartAtLeastTheTimeSinceTheBootIsDebited() = runTest {
+        val kid = household.kidWithMinutes(60)
+        household.startTimeBank(kid)
+        // The kid sets the wall clock back (only 2 minutes seem to pass) and restarts the phone; it has been up for 25.
+        household.clock.advanceBy(2.minutes)
+        household.monotonic.reboot(uptime = 25.minutes)
+
+        assertEquals(25, assertIs<TimeBankResult.Stopped>(household.stopTimeBank(kid)).minutesUsed)
+        assertEquals(35, household.balance(kid))
+    }
+
+    @Test
+    fun theRestartFloorIsCappedByTheBalance() = runTest {
+        val kid = household.kidWithMinutes(30)
+        household.startTimeBank(kid)
+        household.clock.advanceBy(1.minutes)
+        household.monotonic.reboot(uptime = 3.hours)
+
+        assertEquals(30, assertIs<TimeBankResult.Stopped>(household.stopTimeBank(kid)).minutesUsed)
     }
 
     @Test

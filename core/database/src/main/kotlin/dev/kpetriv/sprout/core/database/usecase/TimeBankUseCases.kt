@@ -54,6 +54,21 @@ data class TimeBankStatus(val kidId: KidId, val account: Account, val state: Tim
     } else {
         minOf(monotonic.coerceAtLeast(Duration.ZERO).inWholeMinutes, balance.minorUnits.coerceAtLeast(0))
     }
+
+    /**
+     * [minutesToDebit] with a lower bound when the monotonic time is not known: [atLeast] is how long the session
+     * has certainly run (this device started it before its last restart, so at least the time since that boot,
+     * D-M7-60). The wall clock's minutes, raised to [atLeast]'s, capped by the balance.
+     */
+    fun minutesToDebit(now: Instant, monotonic: Duration?, atLeast: Duration?): Long =
+        if (monotonic != null || atLeast == null || !running) {
+            minutesToDebit(now, monotonic)
+        } else {
+            minOf(
+                maxOf(elapsedMinutes(now), atLeast.coerceAtLeast(Duration.ZERO).inWholeMinutes),
+                balance.minorUnits.coerceAtLeast(0),
+            )
+        }
 }
 
 /**
@@ -85,6 +100,21 @@ class TimeBankClocks @Inject constructor(private val database: SproutDatabase, p
         val now = monotonic.elapsedRealtimeMs()
         val sameBoot = start.bootCount != null && boot == start.bootCount && now >= start.elapsedRealtimeMs
         return if (sameBoot) (now - start.elapsedRealtimeMs).milliseconds else null
+    }
+
+    /**
+     * How long [sessionId] has certainly run when this device started it before its last restart (D-M7-60): the
+     * time since the current boot, which the session spans. Null when this device holds no reading for it, or when it
+     * cannot tell that the device restarted (the boot counts match, or are unknown while elapsed realtime has not gone
+     * back). Closes "set the clock back, restart, stop" debiting nothing.
+     */
+    suspend fun sinceRestart(sessionId: String): Duration? {
+        val start = clocks.get(sessionId) ?: return null
+        val boot = monotonic.bootCount()
+        val now = monotonic.elapsedRealtimeMs()
+        val bootChanged = start.bootCount != null && boot != null && boot != start.bootCount
+        val restarted = bootChanged || now < start.elapsedRealtimeMs
+        return if (restarted) now.coerceAtLeast(0).milliseconds else null
     }
 
     /** Forgets [sessionId]'s reading (the session stopped). */
@@ -177,7 +207,8 @@ class StartTimeBankUseCase @Inject constructor(
  * balance)`, never a process timer. Elapsed is the monotonic clock's time since the start when this device started the
  * session and has not restarted since ([TimeBankClocks], D-M4-24): a wall clock moved back during the session does not
  * shorten it, and one moved forward does not lengthen it. Otherwise it is `now - TimeBankState.startedAt` (the start
- * event's `createdAt`) on the wall clock, as in M4.
+ * event's `createdAt`) on the wall clock, as in M4, but at least the time since the restart when this device started
+ * the session before restarting ([TimeBankClocks.sinceRestart], D-M7-60).
  */
 class StopTimeBankUseCase @Inject constructor(
     private val reader: TimeBankStatusReader,
@@ -191,7 +222,8 @@ class StopTimeBankUseCase @Inject constructor(
         if (!status.running) return TimeBankResult.Refused(TimeBankRefusal.NOT_RUNNING)
         val sessionId = requireNotNull(status.state?.sessionId)
         val monotonic = clocks.elapsedSince(sessionId)
-        val result = stop(writer, status, status.minutesToDebit(clock.now(), monotonic))
+        val atLeast = if (monotonic == null) clocks.sinceRestart(sessionId) else null
+        val result = stop(writer, status, status.minutesToDebit(clock.now(), monotonic, atLeast))
         if (result is TimeBankResult.Stopped) clocks.forget(sessionId)
         return result
     }

@@ -75,12 +75,25 @@ interface OutboxDao {
     @Query("DELETE FROM outbox WHERE kind = :kind AND refId = :refId")
     suspend fun deleteRef(kind: OutboxKind, refId: String): Int
 
-    /** Queued chunks of [blobId] (not uploaded yet). */
-    @Query("SELECT COUNT(*) FROM outbox WHERE kind = 'BLOB_CHUNK' AND refId LIKE :blobId || '.%'")
+    /**
+     * Queued chunks of [blobId] (not uploaded yet): `refId`s that start with exactly `"<blobId>."` (a prefix compare,
+     * not `LIKE`, where `_` and `%` in an id would match other blobs' chunks).
+     */
+    @Query(
+        """
+        SELECT COUNT(*) FROM outbox WHERE kind = 'BLOB_CHUNK'
+        AND substr(refId, 1, length(:blobId) + 1) = :blobId || '.'
+        """,
+    )
     suspend fun countBlobChunks(blobId: String): Int
 
-    /** Removes the queued chunks of blob [blobId] (their `refId`s are `"<blobId>.<chunk>"`). */
-    @Query("DELETE FROM outbox WHERE kind = 'BLOB_CHUNK' AND refId LIKE :blobId || '.%'")
+    /** Removes the queued chunks of blob [blobId] (`refId`s `"<blobId>.<chunk>"`, matched as [countBlobChunks]). */
+    @Query(
+        """
+        DELETE FROM outbox WHERE kind = 'BLOB_CHUNK'
+        AND substr(refId, 1, length(:blobId) + 1) = :blobId || '.'
+        """,
+    )
     suspend fun deleteBlobChunks(blobId: String): Int
 
     /** Records a failed attempt and when to try again. */

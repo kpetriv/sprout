@@ -55,7 +55,8 @@ interface SyncTransport {
 
     /**
      * One page of the registry, documents, events and messages written after [cursor]. Messages are read-scoped: a KID
-     * device receives only its own kid's thread. Blob chunks are never pulled: see [fetchBlob].
+     * device receives only its own kid's thread. Blob chunks are never pulled: see [fetchBlob]. A page with messages
+     * also carries the household's chat prune watermark ([PullPage.chatPrunedBefore]) when one exists.
      */
     suspend fun pull(cursor: SyncCursor): PullPage = throw SyncException(SyncError.Transient())
 
@@ -174,6 +175,13 @@ class PullPage(
      * Counted for the sync report only.
      */
     val malformed: Int = 0,
+    /**
+     * The household's chat prune watermark (D-M7-53): every message the server stored before this instant was deleted
+     * by a retention prune or a purge (`households/{hid}.chatPrune.prunedBefore`, written by the server only). Null
+     * when no prune ever ran, or when the transport did not read it for this page (it reads it with messages only).
+     * [RemoteApplier.applyChatPrune] receives it before the page's messages.
+     */
+    val chatPrunedBefore: Instant? = null,
 )
 
 /**

@@ -87,13 +87,22 @@ fun AllowanceSettingsScreen(
                         style = MaterialTheme.typography.bodySmall,
                         modifier = Modifier.sectionPadding(),
                     )
-                    state.gameCap?.let { cap ->
-                        HorizontalDivider()
-                        SectionHeading(
-                            stringResource(R.string.feature_settings_allowance_games_title),
+                    HorizontalDivider()
+                    SectionHeading(
+                        stringResource(R.string.feature_settings_allowance_games_title),
+                        modifier = Modifier.sectionPadding(),
+                    )
+                    val cap = state.gameCap
+                    if (cap != null) {
+                        GameCapRow(cap, onClick = { onEvent(AllowanceSettingsEvent.EditGameCap) })
+                    } else {
+                        // No household policy on this phone yet: it never writes one of its own (D-M7-57).
+                        Text(
+                            stringResource(R.string.feature_settings_policy_waiting),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.sectionPadding(),
                         )
-                        GameCapRow(cap, onClick = { onEvent(AllowanceSettingsEvent.EditGameCap) })
                     }
                 }
             }

@@ -45,23 +45,40 @@ internal object HouseholdExport {
 
     private val prettyJson = Json { prettyPrint = true }
 
-    /** The zip with [JSON_NAME] and [CSV_NAME], and the chat entries when [chat] is given. */
+    /**
+     * The zip with [JSON_NAME] and [CSV_NAME], and the chat entries when [chat] is given. The buffer starts at about
+     * the size the media need (so it rarely grows and leaves copies behind) and is wiped once the zip is copied out:
+     * it holds plaintext chat.
+     */
     fun zip(bundle: JsonObject, chat: ChatExportContent? = null): ByteArray {
-        val bytes = ByteArrayOutputStream()
-        ZipOutputStream(bytes).use { zip ->
-            zip.entry(JSON_NAME, prettyJson.encodeToString(JsonObject.serializer(), bundle).encodeToByteArray())
-            zip.entry(CSV_NAME, ledgerCsv(bundle).encodeToByteArray())
-            if (chat != null) writeChat(zip, chat)
+        val expected = (chat?.media?.values?.sumOf { it.size.toLong() } ?: 0L) + BUFFER_HEADROOM
+        val bytes = WipingOutputStream(expected.coerceAtMost(Int.MAX_VALUE.toLong() - BUFFER_HEADROOM).toInt())
+        try {
+            ZipOutputStream(bytes).use { zip ->
+                zip.entry(JSON_NAME, prettyJson.encodeToString(JsonObject.serializer(), bundle).encodeToByteArray())
+                zip.entry(CSV_NAME, ledgerCsv(bundle).encodeToByteArray())
+                if (chat != null) writeChat(zip, chat)
+            }
+            return bytes.toByteArray()
+        } finally {
+            bytes.wipe()
         }
-        return bytes.toByteArray()
+    }
+
+    /** A [ByteArrayOutputStream] whose buffer can be zeroed. */
+    private class WipingOutputStream(size: Int) : ByteArrayOutputStream(size) {
+        fun wipe() = buf.fill(0)
     }
 
     private fun writeChat(zip: ZipOutputStream, chat: ChatExportContent) {
         val names = mediaFileNames(chat.threads, chat.media.keys + chat.missing.map { it.fileName })
         val threadNames = UniqueNames()
+        // `chat/missing.json` is taken; a kid id that sanitises to "missing" becomes "kid-missing" (review L5).
+        threadNames.claim(MISSING_BASE, ".json")
         chat.threads.forEach { thread ->
             val json = threadJson(thread, names)
-            zip.entry(CHAT_DIR + threadNames.claim(safeName(thread.kidId.value)) + ".json", json)
+            val base = safeName(thread.kidId.value).let { if (it == MISSING_BASE) "kid-$it" else it }
+            zip.entry(CHAT_DIR + threadNames.claim(base, ".json"), json)
         }
         chat.media.forEach { (fileName, bytes) -> zip.entry(CHAT_DIR + MEDIA_DIR + names.getValue(fileName), bytes) }
         // Missing: what the reader reported, plus anything referenced that neither arrived nor was reported.
@@ -164,6 +181,8 @@ internal object HouseholdExport {
     }
 
     private const val MAX_NAME = 64
+    private const val MISSING_BASE = "missing"
+    private const val BUFFER_HEADROOM = 1024 * 1024
     private const val NOT_AVAILABLE = "NOT_AVAILABLE"
     private const val MAX_EXTENSION = 5
 

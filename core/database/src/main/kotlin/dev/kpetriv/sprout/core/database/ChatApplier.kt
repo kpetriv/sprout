@@ -9,6 +9,7 @@ import dev.kpetriv.sprout.core.database.entity.AuditLogEntity
 import dev.kpetriv.sprout.core.database.entity.MessageEntity
 import dev.kpetriv.sprout.core.database.entity.MessageSeqEntity
 import dev.kpetriv.sprout.core.database.entity.MessageStatus
+import dev.kpetriv.sprout.core.database.entity.SyncCursorEntity
 import dev.kpetriv.sprout.core.database.entity.ThreadKeyEntity
 import dev.kpetriv.sprout.core.domainledger.LedgerJson
 import dev.kpetriv.sprout.core.domainledger.QuarantineReason
@@ -20,6 +21,7 @@ import dev.kpetriv.sprout.core.domainledger.chat.MessageVerifier
 import dev.kpetriv.sprout.core.domainledger.chat.ThreadKeyDocument
 import dev.kpetriv.sprout.core.domainledger.chat.VerifiedMessage
 import dev.kpetriv.sprout.core.model.DeviceId
+import dev.kpetriv.sprout.core.model.HouseholdId
 import dev.kpetriv.sprout.core.model.ThreadId
 import dev.kpetriv.sprout.core.model.UserId
 import dev.kpetriv.sprout.core.sync.ConflictResolver
@@ -32,6 +34,7 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonObjectBuilder
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
+import kotlin.time.Instant
 
 /**
  * The chat half of [RoomRemoteApplier] (M4 §1.2, §1.3, §4).
@@ -60,7 +63,12 @@ import kotlinx.serialization.json.put
  *   the farthest ahead (highest `seq`) first among those received together (audited `HELD_DROPPED`).
  *   A gap older than [HELD_GAP_TIMEOUT_MS] (its predecessor was quarantined, or never uploaded) is skipped: the
  *   author's expected `seq` jumps to its lowest held one (audited `MESSAGE_GAP_SKIPPED`) and the skipped range is
- *   remembered, so one bad message cannot stall a thread for ever.
+ *   remembered, so one bad message cannot stall a thread for ever. A gap a server prune explains is skipped at once
+ *   (D-M7-53): the household's chat prune watermark ([applyChatPrune]) is later than when this device received the
+ *   author's last stored message before the gap (or nothing of that author is stored here), so the missing messages
+ *   may have been deleted before this device pulled them. Pulls are ordered by the server's stamp and an author
+ *   uploads in `seq` order, so a missing message stored after the cut would already have come with the held one; if
+ *   one still turns up, it is accepted late as for any skipped range.
  * - **Quarantined**: audited `MESSAGE_QUARANTINED` (ids and reason only) and kept as a QUARANTINED row without
  *   ciphertext; a verified message with the same id replaces that row.
  *
@@ -119,6 +127,25 @@ internal class ChatApplier(
             if (session == null) MessageApplyReport() else releaseHeld(Batch(session, deviceClock.current()))
         }
     }
+
+    /**
+     * Remembers the household's chat prune watermark ([dev.kpetriv.sprout.core.sync.PullPage.chatPrunedBefore],
+     * D-M7-53) for the session's household, never moving it back. Kept device-local in `sync_cursor` under
+     * [CHAT_PRUNED_BEFORE] (a key no collection has; [RoomRemoteApplier.cursor] leaves it out), so no schema change.
+     */
+    suspend fun applyChatPrune(prunedBefore: Instant) {
+        database.withTransaction {
+            val household = database.sessionDao().get()?.householdId ?: return@withTransaction
+            val known = chatPrunedBefore(household)
+            val value = prunedBefore.toEpochMilliseconds()
+            if (known == null || value > known) {
+                database.syncCursorDao().upsert(listOf(SyncCursorEntity(household, CHAT_PRUNED_BEFORE, "$value")))
+            }
+        }
+    }
+
+    private suspend fun chatPrunedBefore(household: HouseholdId): Long? = database.syncCursorDao().all(household)
+        .firstOrNull { it.collection == CHAT_PRUNED_BEFORE }?.cursor?.toLongOrNull()
 
     /** The `seq` [MessageVerifier] expects next from [deviceId] in [threadId]; 1 when none was applied. */
     suspend fun expectedSeq(deviceId: DeviceId, threadId: ThreadId): Long =
@@ -334,7 +361,7 @@ internal class ChatApplier(
      */
     private suspend fun releaseHeld(batch: Batch): MessageApplyReport {
         var report = MessageApplyReport()
-        skipExpiredGaps(batch.now)
+        skipExpiredGaps(batch.now, chatPrunedBefore(batch.session.householdId))
         do {
             var progress = false
             for (row in messages.withStatus(MessageStatus.HELD)) {
@@ -352,19 +379,22 @@ internal class ChatApplier(
     }
 
     /**
-     * For each (author, thread) whose oldest SEQ_GAP row has waited longer than [HELD_GAP_TIMEOUT_MS], moves the
-     * expected `seq` up to its lowest held one and remembers the skipped range.
+     * For each (author, thread) whose oldest SEQ_GAP row has waited longer than [HELD_GAP_TIMEOUT_MS], or whose gap a
+     * prune explains ([prunedBefore], see the class documentation), moves the expected `seq` up to its lowest held one
+     * and remembers the skipped range.
      */
-    private suspend fun skipExpiredGaps(now: Long) {
+    private suspend fun skipExpiredGaps(now: Long, prunedBefore: Long?) {
         val gaps = messages.withStatus(MessageStatus.HELD)
             .filter { it.reason == QuarantineReason.SEQ_GAP.name }
             .groupBy { it.authorDeviceId to it.threadId }
-        val expired = gaps.filterValues { rows -> now - rows.minOf { it.receivedAtEpochMs } > HELD_GAP_TIMEOUT_MS }
-        for ((key, rows) in expired) {
+        for ((key, rows) in gaps) {
             val (author, threadId) = key
             val expected = expectedSeq(author, ThreadId(threadId))
             val lowest = rows.minOf { it.seq }
-            if (lowest <= expected) continue
+            val timedOut = now - rows.minOf { it.receivedAtEpochMs } > HELD_GAP_TIMEOUT_MS
+            val pruned = !timedOut && prunedBefore != null && lowest > expected &&
+                (messages.storedAt(author, threadId, expected - 1)?.receivedAtEpochMs ?: Long.MIN_VALUE) < prunedBefore
+            if (lowest <= expected || !(timedOut || pruned)) continue
             val current = messages.seq(threadId, author) ?: MessageSeqEntity(threadId, author, 1)
             messages.upsertSeq(
                 current.copy(
@@ -375,6 +405,7 @@ internal class ChatApplier(
             audit(AuditAction.MESSAGE_GAP_SKIPPED, author, threadId, now) {
                 put("fromSeq", expected)
                 put("toSeq", lowest)
+                if (pruned) put("cause", "pruned")
             }
         }
     }
@@ -617,6 +648,12 @@ internal class ChatApplier(
     companion object {
         /** Most HELD messages kept per author device; beyond it the earliest received are dropped (audited). */
         const val MAX_HELD_PER_AUTHOR: Int = 500
+
+        /**
+         * The `sync_cursor` key of the chat prune watermark ([applyChatPrune]): epoch ms as text. `#` never starts a
+         * Firestore collection id, so no transport cursor can collide with it.
+         */
+        const val CHAT_PRUNED_BEFORE: String = "#chatPrunedBefore"
 
         /** How long a `seq` gap may hold later messages before it is skipped: one day. */
         const val HELD_GAP_TIMEOUT_MS: Long = 24L * 60 * 60 * 1000

@@ -593,7 +593,21 @@ internal constructor(
             }
         }
 
-        return PullPage(devices, parentKeys, documents, events, SyncCursor(next), hasMore, messages, malformed)
+        // Read only with messages: a gap a prune left can only show when messages come (one read per such page).
+        val chatPrunedBefore = if (messages.isEmpty()) null else chatPrunedBefore(hid)
+        return PullPage(
+            devices, parentKeys, documents, events, SyncCursor(next), hasMore, messages, malformed, chatPrunedBefore,
+        )
+    }
+
+    /**
+     * The household's chat prune watermark, `households/{hid}.chatPrune.prunedBefore` (written by the server's
+     * `pruneMessages`, readable by members, D-M7-53); null when no prune ran or the field is not a timestamp.
+     */
+    private suspend fun chatPrunedBefore(hid: HouseholdId): kotlin.time.Instant? {
+        val root = call { get(FirestoreLayout.household(hid)) }
+        val watermark = root?.data?.get(FirestoreLayout.CHAT_PRUNE) as? Map<*, *>
+        return (watermark?.get(FirestoreLayout.PRUNED_BEFORE) as? ServerTime)?.toInstant()
     }
 
     @Suppress("LongParameterList")

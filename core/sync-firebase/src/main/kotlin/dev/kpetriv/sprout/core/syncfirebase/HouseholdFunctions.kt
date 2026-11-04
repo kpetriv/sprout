@@ -192,11 +192,14 @@ class HouseholdFunctions @Inject constructor(private val invoker: CallableInvoke
     ).map { }
 
     /**
-     * Asks the server to delete the household's chat messages and chat blob chunks dated before [before] (M7 §2,
-     * D-M7-8): the retention cut (no earlier than the synced `chatRetentionDays` allows), or with [purge] any instant
-     * up to now ("Delete chat history now"). [signature] is [callerDeviceId]'s (an ACTIVE parent device) signature
-     * over [DeviceProof.pruneMessagesPayload]. `failed-precondition` when the household keeps messages and [purge] is
-     * false; [PrunedMessages.more] asks for another call.
+     * Asks the server to delete the household's chat messages and chat blob chunks it stored before [before] (M7 §2,
+     * D-M7-8, D-M7-52: the server's own stamp decides, not the author's date): the retention cut, which must be no
+     * later than `now − chatRetentionDays` plus five minutes of clock skew (`invalid-argument` otherwise, D-M7-51; any
+     * earlier cut is accepted, so a phone that just shortened the retention pushes the policy first), or with [purge]
+     * any instant up to now ("Delete chat history now"). [signature] is [callerDeviceId]'s (an ACTIVE parent device)
+     * signature over [DeviceProof.pruneMessagesPayload]. `failed-precondition` when the household keeps messages and
+     * [purge] is false; [PrunedMessages.more] asks for another call. The server then raises the household's chat prune
+     * watermark, which the transport pulls ([PullPage.chatPrunedBefore][dev.kpetriv.sprout.core.sync.PullPage]).
      */
     suspend fun pruneMessages(
         before: Instant,

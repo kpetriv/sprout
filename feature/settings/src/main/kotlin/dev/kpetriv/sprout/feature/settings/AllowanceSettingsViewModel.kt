@@ -242,12 +242,15 @@ class AllowanceSettingsViewModel @Inject constructor(
         viewModelScope.launch {
             when (confirm()) {
                 ConfirmationOutcome.CONFIRMED -> {
-                    val saved = attempt { rules.setDailyGameCap(value) }
+                    val written = policyWrite { rules.setDailyGameCap(value) }
                     local.update { current ->
-                        if (saved) {
-                            current.copy(gameCapEditor = null, message = SettingsMessage.SAVED)
-                        } else {
-                            current.copy(
+                        when (written) {
+                            PolicyWrite.SAVED -> current.copy(gameCapEditor = null, message = SettingsMessage.SAVED)
+
+                            PolicyWrite.NO_POLICY_YET ->
+                                current.copy(gameCapEditor = null, message = SettingsMessage.POLICY_NOT_SYNCED)
+
+                            PolicyWrite.FAILED -> current.copy(
                                 gameCapEditor = current.gameCapEditor?.copy(isSaving = false, saveFailed = true),
                             )
                         }

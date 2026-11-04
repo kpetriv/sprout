@@ -164,6 +164,13 @@ class RecordingApplier(
         EventApplyReport(applied = applied, duplicates = duplicates)
     }
 
+    /** Every chat prune watermark the engine handed over, in order (kept out of [callLog]). */
+    val chatPrunes: MutableList<Instant> = mutableListOf()
+
+    override suspend fun applyChatPrune(prunedBefore: Instant) {
+        synchronized(this) { chatPrunes += prunedBefore }
+    }
+
     override suspend fun applyMessages(messages: List<JsonObject>): MessageApplyReport {
         synchronized(this) { callLog += "messages" }
         val report = verifyMessages(messages) + retryHeldMessages()

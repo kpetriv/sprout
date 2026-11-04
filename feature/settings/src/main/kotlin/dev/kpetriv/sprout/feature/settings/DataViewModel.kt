@@ -24,8 +24,14 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import javax.inject.Inject
 
-/** A finished export waiting for the parent to pick where to save it. [bytes] is the zip. */
+/**
+ * A finished export waiting for the parent to pick where to save it. [bytes] is the zip (plaintext chat): the
+ * ViewModel wipes it once it is saved, the save is cancelled or the screen goes ([wipe]).
+ */
 class PendingExport(val fileName: String, val bytes: ByteArray) {
+    /** Overwrites [bytes] with zeros. */
+    fun wipe() = bytes.fill(0)
+
     override fun toString(): String = "PendingExport(fileName=$fileName, size=${bytes.size})"
 }
 
@@ -68,6 +74,9 @@ enum class DataMessage {
     /** Deleted on this phone; the server copy goes when the server is reachable again. */
     CHAT_DELETED_ON_THIS_PHONE,
     CHAT_DELETE_FAILED,
+
+    /** This phone has no household policy yet, so it does not write one (D-M7-57). */
+    POLICY_NOT_SYNCED,
 }
 
 /** Why the "Sign in again to confirm" step did not get through. */
@@ -209,6 +218,9 @@ class DataViewModel @Inject constructor(
 ) : ViewModel() {
     private val local = MutableStateFlow(DataUiState())
 
+    /** The export's media budget ([MAX_MEDIA_BYTES]); tests lower it. */
+    internal var mediaBudgetBytes: Long = MAX_MEDIA_BYTES
+
     /** The retention row's own state ([RetentionUi.pending], [RetentionUi.saving]); its days come from the policy. */
     private val retentionLocal = MutableStateFlow(RetentionUi(days = null))
 
@@ -217,8 +229,16 @@ class DataViewModel @Inject constructor(
         .onStart { emit(null) }
         .catch { emit(null) }
 
+    // An account flow that fails must not hold back the rest of the screen (review L12): it reads as no account.
     val state: StateFlow<DataUiState> =
-        combine(account.observe().catch { }, policy, retentionLocal, local) { info, rules, retention, now ->
+        combine(
+            account.observe().catch {
+                emit(NO_ACCOUNT)
+            },
+            policy,
+            retentionLocal,
+            local,
+        ) { info, rules, retention, now ->
             val row = rules?.let { retention.copy(days = it.chatRetentionDays) }
             now.copy(householdId = info.householdId, retention = row)
         }.stateIn(viewModelScope, SharingStarted.Eagerly, DataUiState())
@@ -292,9 +312,10 @@ class DataViewModel @Inject constructor(
         updateRetention { it.copy(saving = true) }
         viewModelScope.launch {
             val message = when (confirm(ConfirmationPurpose.CHANGE_CHAT_RETENTION)) {
-                ConfirmationOutcome.CONFIRMED -> {
-                    val saved = attempt { rules.setChatRetentionDays(days) }
-                    if (saved) DataMessage.RETENTION_SAVED else DataMessage.RETENTION_FAILED
+                ConfirmationOutcome.CONFIRMED -> when (policyWrite { rules.setChatRetentionDays(days) }) {
+                    PolicyWrite.SAVED -> DataMessage.RETENTION_SAVED
+                    PolicyWrite.NO_POLICY_YET -> DataMessage.POLICY_NOT_SYNCED
+                    PolicyWrite.FAILED -> DataMessage.RETENTION_FAILED
                 }
 
                 ConfirmationOutcome.CANCELLED -> null
@@ -370,14 +391,23 @@ class DataViewModel @Inject constructor(
 
     private suspend fun buildExport() {
         progress(ExportProgress(ExportStage.HOUSEHOLD))
-        val result = safely {
-            data.export().map { bundle ->
-                progress(ExportProgress(ExportStage.CHAT))
-                val content = readChat()
-                progress(ExportProgress(ExportStage.PACKING))
-                // The zip (JSON, CSV, chat and media) is built off the main thread, before the state changes.
-                withContext(dispatcher) { HouseholdExport.zip(bundle, content) }
+        var content: ChatExportContent? = null
+        val result = try {
+            safely {
+                data.export().map { bundle ->
+                    progress(ExportProgress(ExportStage.CHAT))
+                    val chatContent = readChat().also { content = it }
+                    progress(ExportProgress(ExportStage.PACKING))
+                    // The zip (JSON, CSV, chat and media) is built off the main thread, before the state changes.
+                    withContext(dispatcher) { HouseholdExport.zip(bundle, chatContent) }
+                }
             }
+        } catch (_: OutOfMemoryError) {
+            // Media are bounded (MAX_MEDIA_BYTES), but a heap that small still fails the export, not the app.
+            Result.failure(AdminException(AdminFailure.TOO_LARGE))
+        } finally {
+            // The decrypted media copies are not needed once they are in the zip (or the export failed).
+            content?.media?.values?.forEach { it.fill(0) }
         }
         local.update { state ->
             result.fold(
@@ -397,19 +427,31 @@ class DataViewModel @Inject constructor(
         }
     }
 
-    /** The chat and every media file that could be had; a thread whose media fails lists them as missing. */
+    /**
+     * The chat and every media file that could be had, up to [mediaBudgetBytes] in all (the zip is built in memory,
+     * D-M7-56): files past that budget are listed as missing with [TOO_LARGE]; a thread whose media fails lists them as
+     * missing too.
+     */
     @Suppress("TooGenericExceptionCaught") // One unreadable thread's media must not sink the export.
     private suspend fun readChat(): ChatExportContent {
         val threads = withContext(dispatcher) { chat.threads() }
         val total = HouseholdExport.mediaFileNames(threads).size
         val media = LinkedHashMap<String, ByteArray>()
         val missing = mutableListOf<ChatMissingMedia>()
+        var mediaBytes = 0L
         fun done() = (media.keys + missing.map { it.fileName }).size.coerceAtMost(total)
         if (total > 0) progress(ExportProgress(ExportStage.MEDIA, done = 0, total = total))
         threads.forEach { thread ->
             val sink = ChatMediaSink { fileName, bytes ->
                 // The reader wipes its buffer after this returns.
-                media[fileName] = bytes.copyOf()
+                if (fileName !in media && missing.none { it.fileName == fileName }) {
+                    if (mediaBytes + bytes.size > mediaBudgetBytes) {
+                        missing += ChatMissingMedia(fileName, TOO_LARGE)
+                    } else {
+                        mediaBytes += bytes.size
+                        media[fileName] = bytes.copyOf()
+                    }
+                }
                 progress(ExportProgress(ExportStage.MEDIA, done = done(), total = total))
             }
             missing += try {
@@ -431,10 +473,15 @@ class DataViewModel @Inject constructor(
         val pending = local.value.pendingExport ?: return
         if (destination == null) {
             local.update { it.copy(pendingExport = null) }
+            pending.wipe()
             return
         }
         viewModelScope.launch {
-            val written = attempt { writer.write(destination, pending.bytes) }
+            val written = try {
+                attempt { writer.write(destination, pending.bytes) }
+            } finally {
+                pending.wipe()
+            }
             local.update {
                 it.copy(
                     pendingExport = null,
@@ -486,6 +533,10 @@ class DataViewModel @Inject constructor(
         }
     }
 
+    override fun onCleared() {
+        local.value.pendingExport?.wipe()
+    }
+
     /** [ParentConfirmation.confirm]; a throwing adapter counts as [ConfirmationOutcome.FAILED]. */
     @Suppress("TooGenericExceptionCaught")
     private suspend fun confirm(purpose: ConfirmationPurpose): ConfirmationOutcome = try {
@@ -510,10 +561,18 @@ class DataViewModel @Inject constructor(
         Result.failure(failure)
     }
 
-    private companion object {
+    internal companion object {
         const val MAX_TYPED = 64
 
         /** Why media is missing when the reader itself failed (its own reason name for "could not be had"). */
         const val NOT_AVAILABLE = "NOT_AVAILABLE"
+
+        /** Why media is missing when it did not fit the export's media budget. */
+        const val TOO_LARGE = "TOO_LARGE"
+
+        /** At most this many bytes of decrypted media go into one export (it is built in memory, D-M7-56). */
+        const val MAX_MEDIA_BYTES: Long = 64L * 1024 * 1024
+
+        private val NO_ACCOUNT = AccountInfo(email = null, householdId = null, trial = false)
     }
 }

@@ -252,23 +252,7 @@ internal fun DeleteHouseholdContent(state: DataUiState, onEvent: (DataEvent) -> 
 
 @Composable
 private fun DataMessageEffect(message: DataMessage?, snackbar: SnackbarHostState, onShown: () -> Unit) {
-    val text = message?.let {
-        stringResource(
-            when (it) {
-                DataMessage.EXPORTED -> R.string.feature_settings_data_message_exported
-                DataMessage.EXPORT_FAILED -> R.string.feature_settings_data_message_export_failed
-                DataMessage.EXPORT_TOO_LARGE -> R.string.feature_settings_data_message_too_large
-                DataMessage.DELETE_FAILED -> R.string.feature_settings_data_message_delete_failed
-                DataMessage.NETWORK -> R.string.feature_settings_data_message_network
-                DataMessage.NOT_CONFIRMED -> R.string.feature_settings_data_message_not_confirmed
-                DataMessage.RETENTION_SAVED -> R.string.feature_settings_data_message_retention_saved
-                DataMessage.RETENTION_FAILED -> R.string.feature_settings_data_message_retention_failed
-                DataMessage.CHAT_DELETED -> R.string.feature_settings_data_message_chat_deleted
-                DataMessage.CHAT_DELETED_ON_THIS_PHONE -> R.string.feature_settings_data_message_chat_deleted_here
-                DataMessage.CHAT_DELETE_FAILED -> R.string.feature_settings_data_message_chat_delete_failed
-            },
-        )
-    }
+    val text = message?.let { stringResource(it.textRes()) }
     val shown by rememberUpdatedState(onShown)
     LaunchedEffect(message, text) {
         if (text != null) {
@@ -276,6 +260,21 @@ private fun DataMessageEffect(message: DataMessage?, snackbar: SnackbarHostState
             shown()
         }
     }
+}
+
+private fun DataMessage.textRes(): Int = when (this) {
+    DataMessage.EXPORTED -> R.string.feature_settings_data_message_exported
+    DataMessage.EXPORT_FAILED -> R.string.feature_settings_data_message_export_failed
+    DataMessage.EXPORT_TOO_LARGE -> R.string.feature_settings_data_message_too_large
+    DataMessage.DELETE_FAILED -> R.string.feature_settings_data_message_delete_failed
+    DataMessage.NETWORK -> R.string.feature_settings_data_message_network
+    DataMessage.NOT_CONFIRMED -> R.string.feature_settings_data_message_not_confirmed
+    DataMessage.RETENTION_SAVED -> R.string.feature_settings_data_message_retention_saved
+    DataMessage.RETENTION_FAILED -> R.string.feature_settings_data_message_retention_failed
+    DataMessage.CHAT_DELETED -> R.string.feature_settings_data_message_chat_deleted
+    DataMessage.CHAT_DELETED_ON_THIS_PHONE -> R.string.feature_settings_data_message_chat_deleted_here
+    DataMessage.CHAT_DELETE_FAILED -> R.string.feature_settings_data_message_chat_delete_failed
+    DataMessage.POLICY_NOT_SYNCED -> R.string.feature_settings_policy_not_synced
 }
 
 private const val ZIP_MIME = "application/zip"

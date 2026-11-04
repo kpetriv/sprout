@@ -231,6 +231,19 @@ class AllowanceSettingsViewModelTest {
     }
 
     @Test
+    fun `a phone without the household policy yet does not write a game limit`() = test {
+        val vm = viewModel()
+        rules.noPolicyYet = true
+        vm.onEvent(AllowanceSettingsEvent.EditGameCap)
+        vm.onEvent(AllowanceSettingsEvent.GameCapChanged("1.00"))
+        vm.onEvent(AllowanceSettingsEvent.SaveGameCap)
+
+        assertNull(vm.state.value.gameCapEditor)
+        assertEquals(SettingsMessage.POLICY_NOT_SYNCED, vm.state.value.message)
+        assertTrue(rules.capWrites.isEmpty())
+    }
+
+    @Test
     fun `a failed game limit write keeps the dialog open and says so`() = test {
         val vm = viewModel()
         rules.failWrites = true

@@ -88,14 +88,23 @@ export const DAILY_GAME_CAP_MINOR = { min: 0, max: 10_000 } as const;
 
 /**
  * pruneMessages (M7 §2, D-M7-8): deletes in batches of [PRUNE_BATCH_SIZE] (Firestore allows 500 writes per batch) and
- * at most [MAX_PRUNE_DOCUMENTS] documents per call (it answers `more: true` then, and the device calls again), so a
- * long history never runs into the host's time limit. A requested cut may be up to [PRUNE_CLOCK_SKEW_MS] ahead of the
- * server clock (it is clamped to now), and a retention cut up to that much earlier than the policy allows: device
- * clocks drift.
+ * at most [MAX_PRUNE_DOCUMENTS] documents per call, and reads at most [MAX_PRUNE_CHUNK_PAGES] pages of blob chunks per
+ * call (it answers `more: true` when either limit is reached, and the device calls again), so a long history never
+ * runs into the host's time limit. A requested cut may be up to [PRUNE_CLOCK_SKEW_MS] ahead of the server clock (it is
+ * clamped to now), and a retention cut up to that much later than the policy allows (`now − chatRetentionDays`):
+ * device clocks drift. Any earlier retention cut is accepted (it deletes less).
  */
 export const PRUNE_BATCH_SIZE = 400;
 export const MAX_PRUNE_DOCUMENTS = 5_000;
+export const MAX_PRUNE_CHUNK_PAGES = 25;
 export const PRUNE_CLOCK_SKEW_MS = 5 * 60 * 1000;
+
+/**
+ * Blob chunks stored less than this long before a prune's cut are kept (D-M7-55): a chunk is uploaded before the
+ * message that names it, so a chunk that recent may belong to a message still on its way (an author that went offline
+ * between the two). A later prune removes it once it is that old and still unnamed.
+ */
+export const PRUNE_BLOB_GRACE_MS = 10 * 60 * 1000;
 
 /** The document collections under households/{hid}, keyed by collection with their docType (M3 §5). */
 export const DOCUMENT_COLLECTIONS: Readonly<Record<string, string>> = {

@@ -549,12 +549,18 @@ class FakeBackendRulesTest {
         assertEquals("failed-precondition", refusal(backend.pruneMessages(parent.deviceId, now - 30.days, false)))
         transport.push(emptyList(), listOf(policy(buildJsonObject { put("chatRetentionDays", 30) })))
         assertEquals(FakeBackend.PERMISSION_DENIED, refusal(backend.pruneMessages(kid.deviceId, now, true)))
-        assertEquals("invalid-argument", refusal(backend.pruneMessages(parent.deviceId, now - 31.days, false)))
+        // A retention cut later than the policy allows deletes more than it says (D-M7-51).
+        assertEquals("invalid-argument", refusal(backend.pruneMessages(parent.deviceId, now, false)))
+        assertEquals("invalid-argument", refusal(backend.pruneMessages(parent.deviceId, now - 29.days, false)))
         assertEquals("invalid-argument", refusal(backend.pruneMessages(parent.deviceId, now + 1.days, true)))
+        assertNull(backend.chatPrunedBefore)
 
-        val counts = backend.pruneMessages(parent.deviceId, now - 30.days, false).getOrThrow()
+        // Any earlier cut is accepted (a device clock behind, a retry computed a while ago).
+        val counts = backend.pruneMessages(parent.deviceId, now - 31.days, false).getOrThrow()
 
         assertEquals(FakeBackend.PruneCounts(messages = 1, blobChunks = 1), counts)
+        assertEquals(now - 31.days, backend.chatPrunedBefore)
+        assertEquals(now - 31.days, transport.pull(SyncCursor.START).chatPrunedBefore, "pulls carry the watermark")
         assertEquals(listOf("m-new"), backend.messages().map { it.string("messageId") })
         assertEquals(
             setOf("blob-m-new.0", "p-photo.0"),
@@ -564,5 +570,28 @@ class FakeBackendRulesTest {
         // A purge takes everything before now; pulls after it simply never see the deleted rows.
         assertEquals(1, backend.pruneMessages(parent.deviceId, now, true).getOrThrow().messages)
         assertTrue(backend.messages().isEmpty())
+        assertEquals(now, backend.chatPrunedBefore)
+        // An earlier cut never moves the watermark back.
+        backend.pruneMessages(parent.deviceId, now - 40.days, false).getOrThrow()
+        assertEquals(now, backend.chatPrunedBefore)
+    }
+
+    @Test
+    fun pruneMessagesGoesByTheServerStampNotTheAuthorsDate() = runTest {
+        val day = 86_400_000L
+        val created = CREATED_AT.toEpochMilliseconds()
+        // Signed as created 400 days before the server stored it (a clock behind, or a forged date).
+        backend.nowEpochMs = { created + 400 * day }
+        transport.pushMessages(parent.message("m-backdated", seq = 1))
+        transport.pushChunks(parent.blobChunk("b-uploading"))
+        backend.nowEpochMs = { created + 400 * day + 5 * 60_000 }
+        transport.push(emptyList(), listOf(policy(buildJsonObject { put("chatRetentionDays", 30) })))
+        val now = Instant.fromEpochMilliseconds(backend.nowEpochMs())
+
+        val retention = backend.pruneMessages(parent.deviceId, now - 30.days, false).getOrThrow()
+        assertEquals(FakeBackend.PruneCounts(0, 0), retention, "stored recently by the server: kept")
+        // A purge right after keeps a chunk stored minutes ago: its message may still be on its way (D-M7-55).
+        assertEquals(FakeBackend.PruneCounts(1, 0), backend.pruneMessages(parent.deviceId, now, true).getOrThrow())
+        assertEquals(listOf("b-uploading.0"), backend.blobs().map { it.docId })
     }
 }

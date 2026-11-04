@@ -5,6 +5,7 @@ import dev.kpetriv.sprout.core.domainledger.RegisteredParentKey
 import dev.kpetriv.sprout.core.model.DeviceId
 import dev.kpetriv.sprout.core.model.ThreadId
 import kotlinx.serialization.json.JsonObject
+import kotlin.time.Instant
 
 /**
  * Applies what a pull brought into the local store (core/database implements it with Room, the device registry
@@ -31,6 +32,16 @@ interface RemoteApplier {
      * ([DocTypes.THREAD_KEY]) pulled with them are already applied.
      */
     suspend fun applyMessages(messages: List<JsonObject>): MessageApplyReport
+
+    /**
+     * Remembers the household's chat prune watermark ([PullPage.chatPrunedBefore], D-M7-53), so a `seq` gap left by
+     * messages a prune deleted before this device pulled them is skipped at once instead of after the held-gap
+     * timeout. Called before [applyMessages] of the same page; never moves an earlier-known watermark back. The
+     * default ignores it (gaps then wait for the timeout, as before M7).
+     */
+    suspend fun applyChatPrune(prunedBefore: Instant) {
+        // Optional: an applier that does not hold messages has nothing to skip.
+    }
 
     /**
      * The `seq` the next message of [deviceId] in [threadId] must carry to apply now (1 when none was applied): the

@@ -20,6 +20,7 @@ import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.long
 import kotlinx.serialization.json.put
 import org.junit.After
+import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -38,10 +39,29 @@ class HouseholdPolicyV2Test {
     private val saplingSums = GameId(GameKind.ARITHMETIC, Difficulty.SAPLING)
     private val perfectTimed = Score(correct = 10, total = 10, perfect = true, timedBonus = true)
 
+    @Before
+    fun policy() = runTest {
+        // The household's policy row, as bootstrap creates it: the v2 setters never create one (D-M7-57).
+        parent.policies.ensure(parent.gbp)
+    }
+
     @After
     fun close() {
         parent.close()
         kid.close()
+    }
+
+    @Test
+    fun aDeviceWithoutThePolicyYetRefusesToCreateOne() = runTest {
+        val fresh = parentDevice()
+        try {
+            assertFailsWith<NoHouseholdPolicyYetException> { fresh.policies.setChatRetention(30) }
+            assertFailsWith<NoHouseholdPolicyYetException> { fresh.policies.setDailyGameCap(120) }
+            assertNull(fresh.policies.get())
+            assertTrue(fresh.queuedDocuments().none { it.docType == DocTypes.HOUSEHOLD_POLICY })
+        } finally {
+            fresh.close()
+        }
     }
 
     private suspend fun policyDocument(on: TestHousehold) =

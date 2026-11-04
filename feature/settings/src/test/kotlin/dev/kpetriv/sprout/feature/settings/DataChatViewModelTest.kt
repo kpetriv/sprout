@@ -9,6 +9,8 @@ import dev.kpetriv.sprout.core.time.HouseholdCalendar
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
@@ -43,12 +45,13 @@ fun newDataViewModel(
     purger: FakeChatHistoryPurger = FakeChatHistoryPurger(),
     chat: ChatExportSource = FakeChatExportSource(),
     confirmation: FakeParentConfirmation = FakeParentConfirmation(),
+    account: AccountControl = FakeAccountControl(),
     dispatcher: CoroutineDispatcher,
 ): DataViewModel = DataViewModel(
     data,
     writer,
     calendar,
-    FakeAccountControl(),
+    account,
     rules,
     purger,
     chat,
@@ -429,6 +432,128 @@ class DataChatViewModelTest {
         viewModel.onEvent(DataEvent.RetentionChosen(365))
         assertEquals(listOf<Int?>(365), rules.retentionWrites)
         assertEquals(List(3) { ConfirmationPurpose.CHANGE_CHAT_RETENTION }, confirmation.asked)
+    }
+
+    @Test
+    fun `media past the export budget are listed as too large, and the saved zip is wiped`() = runTest {
+        val big = "blob-photo-big.jpg"
+        val thread = ChatExportThread(
+            ThreadId("thread-leo"),
+            KidId("kid-leo"),
+            listOf(
+                message("08:00", Role.KID, MessageKind.PHOTO, media = photo),
+                message("08:01", Role.KID, MessageKind.PHOTO, media = big),
+                message("08:02", Role.KID, MessageKind.PHOTO, media = big),
+            ),
+        )
+        val chat = FakeChatExportSource(listOf(thread), mutableMapOf(photo to ByteArray(6) { 1 }, big to ByteArray(8)))
+        val writer = FakeExportWriter()
+        val viewModel = newDataViewModel(
+            FakeHouseholdData(Result.success(bundle)),
+            writer = writer,
+            chat = chat,
+            dispatcher = UnconfinedTestDispatcher(testScheduler),
+        )
+        viewModel.mediaBudgetBytes = 10
+
+        viewModel.onEvent(DataEvent.Export)
+
+        val pending = assertNotNull(viewModel.state.value.pendingExport)
+        val entries = unzip(pending.bytes)
+        assertContentEquals(ByteArray(6) { 1 }, entries.getValue("chat/media/blob-photo-1.jpg"))
+        assertFalse("chat/media/blob-photo-big.jpg" in entries)
+        val missing = Json.parseToJsonElement(entries.getValue(HouseholdExport.MISSING_NAME).decodeToString())
+            .jsonObject.getValue("missing").jsonArray.map { it.jsonObject }
+        assertEquals(1, missing.size, "listed once, however many messages name it")
+        assertEquals("TOO_LARGE", missing.single().getValue("reason").jsonPrimitive.content)
+
+        viewModel.onEvent(DataEvent.ExportDestination("content://saved"))
+        assertNull(viewModel.state.value.pendingExport)
+        assertTrue(writer.written.getValue("content://saved").all { it == 0.toByte() }, "wiped after the save")
+    }
+
+    @Test
+    fun `a cancelled save wipes the zip`() = runTest {
+        val viewModel = newDataViewModel(
+            FakeHouseholdData(Result.success(bundle)),
+            chat = FakeChatExportSource(listOf(leoThread), mutableMapOf(photo to byteArrayOf(1, 2, 3))),
+            dispatcher = UnconfinedTestDispatcher(testScheduler),
+        )
+        viewModel.onEvent(DataEvent.Export)
+        val pending = assertNotNull(viewModel.state.value.pendingExport)
+
+        viewModel.onEvent(DataEvent.ExportDestination(null))
+
+        assertNull(viewModel.state.value.pendingExport)
+        assertTrue(pending.bytes.all { it == 0.toByte() })
+    }
+
+    @Test
+    fun `running out of memory fails the export instead of the app`() = runTest {
+        val chat = FakeChatExportSource(listOf(leoThread)).apply { outOfMemory = true }
+        val viewModel = newDataViewModel(
+            FakeHouseholdData(Result.success(bundle)),
+            chat = chat,
+            dispatcher = UnconfinedTestDispatcher(testScheduler),
+        )
+
+        viewModel.onEvent(DataEvent.Export)
+
+        assertNull(viewModel.state.value.exportProgress)
+        assertNull(viewModel.state.value.pendingExport)
+        assertEquals(DataMessage.EXPORT_TOO_LARGE, viewModel.state.value.message)
+    }
+
+    @Test
+    fun `a phone without the household policy yet says so instead of writing one`() = runTest {
+        val rules = FakeHouseholdRules().apply { noPolicyYet = true }
+        val viewModel = newDataViewModel(rules = rules, dispatcher = UnconfinedTestDispatcher(testScheduler))
+
+        viewModel.onEvent(DataEvent.RetentionChosen(30))
+        viewModel.onEvent(DataEvent.ConfirmRetention)
+
+        assertEquals(DataMessage.POLICY_NOT_SYNCED, viewModel.state.value.message)
+        assertTrue(rules.retentionWrites.isEmpty())
+        assertNull(viewModel.state.value.retention?.pending)
+    }
+
+    @Test
+    fun `an account flow that fails does not freeze the screen`() = runTest {
+        val account = object : AccountControl by FakeAccountControl() {
+            override fun observe(): Flow<AccountInfo> = flow { throw IllegalStateException("no account") }
+        }
+        val rules = FakeHouseholdRules(HouseholdRulesState(chatRetentionDays = 90, dailyGameCapMinor = null))
+        val viewModel = newDataViewModel(
+            rules = rules,
+            account = account,
+            dispatcher = UnconfinedTestDispatcher(testScheduler),
+        )
+
+        assertEquals(90, viewModel.state.value.retention?.days)
+        assertNull(viewModel.state.value.householdId)
+    }
+
+    @Test
+    fun `a kid id that sanitises to missing does not collide with the missing list`() {
+        val thread =
+            ChatExportThread(
+                ThreadId("missing"),
+                KidId("missing"),
+                listOf(message("08:00", Role.KID, MessageKind.TEXT, text = "hi")),
+            )
+        val other =
+            ChatExportThread(
+                ThreadId("m"),
+                KidId("kid-missing"),
+                listOf(message("08:01", Role.KID, MessageKind.TEXT, text = "yo")),
+            )
+
+        val entries =
+            unzip(HouseholdExport.zip(bundle, ChatExportContent(listOf(thread, other), emptyMap(), emptyList())))
+
+        assertTrue("chat/missing.json" in entries)
+        assertTrue("chat/kid-missing.json" in entries)
+        assertTrue("chat/kid-missing-2.json" in entries)
     }
 
     private fun unzip(bytes: ByteArray): Map<String, ByteArray> = buildMap {

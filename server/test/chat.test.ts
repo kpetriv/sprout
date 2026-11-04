@@ -1,6 +1,6 @@
 import { Timestamp } from 'firebase-admin/firestore';
 import { beforeEach, describe, expect, it } from 'vitest';
-import { MAX_PRUNE_DOCUMENTS, PRUNE_BATCH_SIZE, PRUNE_CLOCK_SKEW_MS } from '../src/config.js';
+import { MAX_PRUNE_DOCUMENTS, PRUNE_BATCH_SIZE, PRUNE_BLOB_GRACE_MS, PRUNE_CLOCK_SKEW_MS } from '../src/config.js';
 import {
   call,
   db,
@@ -71,7 +71,7 @@ const prune = (h: Household, before: number, purge = false) =>
   call(fns.pruneMessages, req(h.parent, withProof(h, 'pruneMessages', { before, purge })));
 
 describe('pruneMessages', () => {
-  it('deletes messages and chat blob chunks older than the retention cut and records the prune', async () => {
+  it('deletes messages and chat blob chunks the server stored before the retention cut and records the prune', async () => {
     const h = await newHousehold();
     await setRetention(h, 30);
     const now = Date.now();
@@ -79,9 +79,10 @@ describe('pruneMessages', () => {
     const recent = now - DAY_MS;
     await message(h, 'm-old', old, 'b-old');
     await message(h, 'm-old-text', old);
-    // Dated recently by its author but stored by the server long ago, and the other way round: both go.
+    // Only the server's stamp counts (D-M7-52): a message its author dated in the future but stored long ago goes, a
+    // backdated one stored recently stays.
     await message(h, 'm-forged', now + 365 * DAY_MS, null, old);
-    await message(h, 'm-late', old, null, recent);
+    await message(h, 'm-backdated', 0, null, recent);
     await message(h, 'm-new', recent, 'b-kept');
     await chunk(h, 'b-old', old);
     await chunk(h, 'b-kept', old); // named by m-new, which stays
@@ -92,31 +93,54 @@ describe('pruneMessages', () => {
     const before = now - 30 * DAY_MS;
     const result = await prune(h, before);
 
-    expect(result).toEqual({ messages: 4, blobChunks: 2, more: false, before });
-    expect(await ids(h, 'messages')).toEqual(['m-new']);
+    expect(result).toEqual({ messages: 3, blobChunks: 2, more: false, before });
+    expect(await ids(h, 'messages')).toEqual(['m-backdated', 'm-new']);
     expect(await ids(h, 'blobs')).toEqual(['b-kept.0', 'b-new.0', 'p-photo.0']);
     const records = await db.collection(`households/${h.hid}/prunes`).get();
     expect(records.size).toBe(1);
     const record = records.docs[0].data();
-    expect(Object.keys(record).sort()).toEqual(['at', 'before', 'counts', 'deviceId', 'purge']);
-    expect(record).toMatchObject({ purge: false, deviceId: h.device.deviceId, counts: { messages: 4, blobChunks: 2 } });
+    expect(Object.keys(record).sort()).toEqual(['at', 'before', 'counts', 'deviceId', 'purge', 'status']);
+    expect(record).toMatchObject({
+      purge: false,
+      status: 'done',
+      deviceId: h.device.deviceId,
+      counts: { messages: 3, blobChunks: 2 },
+    });
     expect((record.before as Timestamp).toMillis()).toBe(before);
+    // The watermark members read (D-M7-53): the cut, when it ran, no purge yet.
+    const watermark = (await db.doc(`households/${h.hid}`).get()).get('chatPrune') as Record<string, unknown>;
+    expect((watermark.prunedBefore as Timestamp).toMillis()).toBe(before);
+    expect(watermark.prunedAt).toBeInstanceOf(Timestamp);
+    expect(watermark.purgedAt).toBeUndefined();
 
     // Idempotent: nothing older is left.
     expect(await prune(h, before)).toEqual({ messages: 0, blobChunks: 0, more: false, before });
+    // An earlier cut never moves the watermark back.
+    await prune(h, before - DAY_MS);
+    const again = (await db.doc(`households/${h.hid}`).get()).get('chatPrune.prunedBefore') as Timestamp;
+    expect(again.toMillis()).toBe(before);
   });
 
-  it('refuses a retention cut earlier than the policy allows, a cut in the future and a household that keeps messages', async () => {
+  it('refuses a retention cut later than the policy allows, a cut in the future and a household that keeps messages', async () => {
     const h = await newHousehold();
     const now = Date.now();
-    await expectCode(prune(h, now - DAY_MS), 'failed-precondition');
+    await expectCode(prune(h, now - 31 * DAY_MS), 'failed-precondition');
     await setRetention(h, 30, true);
-    await expectCode(prune(h, now - DAY_MS), 'failed-precondition'); // a tombstoned policy keeps messages
+    await expectCode(prune(h, now - 31 * DAY_MS), 'failed-precondition'); // a tombstoned policy keeps messages
     await setRetention(h, 30);
-    await expectCode(prune(h, now - 31 * DAY_MS), 'invalid-argument');
-    await expectCode(prune(h, now + PRUNE_CLOCK_SKEW_MS + 60_000), 'invalid-argument');
-    // A device clock a little ahead is fine: the cut is clamped to the server's now.
-    await message(h, 'm-new', now - 1000);
+    await message(h, 'm-recent', now - DAY_MS);
+    // A later cut deletes more than the policy allows (D-M7-51): refused without purge.
+    await expectCode(prune(h, now), 'invalid-argument');
+    await expectCode(prune(h, now - 30 * DAY_MS + PRUNE_CLOCK_SKEW_MS + 60_000), 'invalid-argument');
+    await expectCode(prune(h, now - DAY_MS), 'invalid-argument');
+    expect(await ids(h, 'messages')).toEqual(['m-recent']);
+    // Any earlier cut is fine: a slow device clock, a retry computed a while ago, a longer retention elsewhere.
+    expect(await prune(h, now - 31 * DAY_MS)).toMatchObject({ messages: 0, more: false });
+    expect(await prune(h, now - 400 * DAY_MS)).toMatchObject({ messages: 0, more: false });
+    // A device clock a little ahead of the server is fine too.
+    expect(await prune(h, now - 30 * DAY_MS + 60_000)).toMatchObject({ messages: 0 });
+    await expectCode(prune(h, now + PRUNE_CLOCK_SKEW_MS + 60_000, true), 'invalid-argument');
+    // A purge's cut is clamped to the server's now.
     const result = await prune(h, now + 60_000, true);
     expect(result.before).toBeLessThanOrEqual(Date.now());
     expect(result.messages).toBe(1);
@@ -133,6 +157,33 @@ describe('pruneMessages', () => {
     expect(await ids(h, 'messages')).toEqual([]);
     expect(await ids(h, 'blobs')).toEqual([]);
     expect((await db.collection(`households/${h.hid}/prunes`).get()).docs[0].get('purge')).toBe(true);
+    const watermark = (await db.doc(`households/${h.hid}`).get()).get('chatPrune') as Record<string, unknown>;
+    expect((watermark.prunedBefore as Timestamp).toMillis()).toBe(result.before);
+    expect(watermark.purgedAt).toBeInstanceOf(Timestamp);
+  });
+
+  it('keeps blob chunks stored just before a purge: their message may still be on its way', async () => {
+    const h = await newHousehold();
+    const now = Date.now();
+    await chunk(h, 'b-uploading', now - PRUNE_BLOB_GRACE_MS / 2);
+    await chunk(h, 'b-stale', now - PRUNE_BLOB_GRACE_MS - 60_000);
+    const result = await prune(h, now, true);
+    expect(result).toMatchObject({ blobChunks: 1, more: false });
+    expect(await ids(h, 'blobs')).toEqual(['b-uploading.0']);
+  });
+
+  it('reads whether a whole page of chunks is still named at once and keeps the named ones', async () => {
+    const h = await newHousehold();
+    const now = Date.now();
+    const old = now - 2 * DAY_MS;
+    // More distinct blobs than one `in` query takes, half of them named by a message stored after the cut.
+    for (let i = 0; i < 70; i++) {
+      await chunk(h, `b-${i}`, old);
+      if (i % 2 === 0) await message(h, `m-${i}`, now, `b-${i}`);
+    }
+    const result = await prune(h, now - DAY_MS, true);
+    expect(result).toMatchObject({ messages: 0, blobChunks: 35, more: false });
+    expect((await ids(h, 'blobs')).length).toBe(35);
   });
 
   it('deletes in batches', async () => {
@@ -180,6 +231,7 @@ describe('pruneMessages', () => {
     await expectCode(call(fns.pruneMessages, req(h.parent, withProof(h, 'pruneMessages', { before: now }))), 'invalid-argument');
     expect(await ids(h, 'messages')).toEqual(['m-1']);
     expect((await db.collection(`households/${h.hid}/prunes`).get()).size).toBe(0);
+    expect((await db.doc(`households/${h.hid}`).get()).get('chatPrune')).toBeUndefined();
   });
 
   it('is rate limited per uid', async () => {

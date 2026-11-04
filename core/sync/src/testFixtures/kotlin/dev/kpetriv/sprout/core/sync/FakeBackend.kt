@@ -337,12 +337,22 @@ class FakeBackend(val householdId: HouseholdId, private val pageSize: Int = DEFA
     class CallableRefusedException(val code: String) : Exception(code)
 
     /**
-     * Mirrors the server's `pruneMessages` callable (M7 §2, D-M7-8), minus the device proof and the rate limit: the
-     * [caller] must be an ACTIVE PARENT device (`permission-denied`); [before] at most [PRUNE_CLOCK_SKEW_MS] ahead of
-     * [nowEpochMs] (`invalid-argument`, clamped to now); without [purge], the household's synced `chatRetentionDays`
-     * must be set (`failed-precondition`) and [before] no earlier than that many days before now, less the skew
-     * (`invalid-argument`). Deletes every message whose `createdAt` or server stamp is before the cut, then every chat
-     * blob chunk (never a chore photo's) stored before the cut that no remaining message names.
+     * The household's chat prune watermark (server `households/{hid}.chatPrune.prunedBefore`, D-M7-53): the latest cut
+     * any [pruneMessages] applied, never moved back; null before the first prune. Every pull page carries it.
+     */
+    @get:Synchronized
+    var chatPrunedBefore: Instant? = null
+        private set
+
+    /**
+     * Mirrors the server's `pruneMessages` callable (M7 §2, D-M7-8), minus the device proof, the rate limit, the
+     * per-call limits and the audit record: the [caller] must be an ACTIVE PARENT device (`permission-denied`);
+     * [before] at most [PRUNE_CLOCK_SKEW_MS] ahead of [nowEpochMs] (`invalid-argument`, clamped to now); without
+     * [purge], the household's synced `chatRetentionDays` must be set (`failed-precondition`) and [before] no later
+     * than that many days before now, plus the skew (`invalid-argument`, D-M7-51: a later cut deletes more). Deletes
+     * every message the server stored before the cut (its own stamp, never the author's `createdAt`, D-M7-52), then
+     * every chat blob chunk (never a chore photo's) stored more than [PRUNE_BLOB_GRACE_MS] before the cut that no
+     * remaining message names, and raises [chatPrunedBefore].
      */
     @Synchronized
     fun pruneMessages(caller: DeviceId, before: Instant, purge: Boolean): Result<PruneCounts> {
@@ -356,19 +366,22 @@ class FakeBackend(val householdId: HouseholdId, private val pageSize: Int = DEFA
             device == null || device.role != Role.PARENT || device.status != DeviceStatus.Active -> PERMISSION_DENIED
             requested > now + PRUNE_CLOCK_SKEW_MS -> "invalid-argument"
             !purge && days == null -> "failed-precondition"
-            !purge && requested < now - requireNotNull(days) * DAY_MS - PRUNE_CLOCK_SKEW_MS -> "invalid-argument"
+            !purge && requested > now - requireNotNull(days) * DAY_MS + PRUNE_CLOCK_SKEW_MS -> "invalid-argument"
             else -> null
         }
         if (refusal != null) return Result.failure(CallableRefusedException(refusal))
         val cut = minOf(requested, now)
-        val doomed = messages.filterValues { (it.value.long(CREATED_AT) ?: Long.MAX_VALUE) < cut || it.at < cut }.keys
+        val doomed = messages.filterValues { it.at < cut }.keys
         doomed.forEach { messages.remove(it) }
         val named = messages.values.mapNotNull { it.value.string(BLOB_ID) }.toSet()
         val chunks = blobs.filterValues { stored ->
             val header = stored.value.header
-            stored.at < cut && header.string(THREAD_ID) != null && header.string(BLOB_ID) !in named
+            stored.at < cut - PRUNE_BLOB_GRACE_MS && header.string(THREAD_ID) != null &&
+                header.string(BLOB_ID) !in named
         }.keys
         chunks.forEach { blobs.remove(it) }
+        val cutInstant = Instant.fromEpochMilliseconds(cut)
+        chatPrunedBefore = maxOf(chatPrunedBefore ?: cutInstant, cutInstant)
         return Result.success(PruneCounts(doomed.size, chunks.size))
     }
 
@@ -423,6 +436,7 @@ class FakeBackend(val householdId: HouseholdId, private val pageSize: Int = DEFA
             messages = page(MESSAGES, messages) { mayReadThread(caller, it.string(THREAD_ID)) },
             next = SyncCursor(next),
             hasMore = hasMore,
+            chatPrunedBefore = chatPrunedBefore,
         )
     }
 
@@ -837,6 +851,9 @@ class FakeBackend(val householdId: HouseholdId, private val pageSize: Int = DEFA
 
         /** How far ahead of the server clock a prune's `before` may be (server `PRUNE_CLOCK_SKEW_MS`). */
         const val PRUNE_CLOCK_SKEW_MS: Long = 5 * 60 * 1000
+
+        /** Chat blob chunks stored less than this before a prune's cut are kept (server `PRUNE_BLOB_GRACE_MS`). */
+        const val PRUNE_BLOB_GRACE_MS: Long = 10 * 60 * 1000
 
         private const val CHAT_RETENTION_DAYS = "chatRetentionDays"
         private const val DAILY_GAME_CAP_MINOR = "dailyGameCapMinor"

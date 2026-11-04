@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, beforeEach, describe, it } from 'vitest';
 import { assertFails, assertSucceeds, type RulesTestEnvironment } from '@firebase/rules-unit-testing';
-import { collection, deleteDoc, doc, getDoc, getDocs, setDoc, type Firestore } from 'firebase/firestore';
+import { collection, deleteDoc, doc, getDoc, getDocs, setDoc, Timestamp, updateDoc, type Firestore } from 'firebase/firestore';
 import {
   asKid,
   asKid2,
@@ -404,5 +404,18 @@ describe('documents: household policy v2 (M7 §1)', () => {
     // Messages and blobs stay create-only for clients: the server prunes them.
     await assertFails(deleteDoc(doc(parent, `households/${HID}/messages/m-1`)));
     await assertFails(deleteDoc(doc(parent, `households/${HID}/blobs/b-1.0`)));
+  });
+
+  it('the chat prune watermark on the household root is readable by members and written by the server only', async () => {
+    await env.withSecurityRulesDisabled(async (ctx) => {
+      await updateDoc(doc(ctx.firestore() as unknown as Firestore, `households/${HID}`), {
+        chatPrune: { prunedBefore: Timestamp.fromMillis(1_000), prunedAt: Timestamp.now() },
+      });
+    });
+    for (const member of [asParent(env), asKid(env)]) {
+      await assertSucceeds(getDoc(doc(member, `households/${HID}`)));
+      await assertFails(updateDoc(doc(member, `households/${HID}`), { 'chatPrune.prunedBefore': Timestamp.now() }));
+    }
+    await assertFails(getDoc(doc(asOtherParent(env), `households/${HID}`)));
   });
 });

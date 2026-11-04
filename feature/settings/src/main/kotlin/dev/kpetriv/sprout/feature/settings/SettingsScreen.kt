@@ -21,6 +21,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.VerticalDivider
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -84,7 +85,15 @@ fun SettingsRoute(
     // The open section, or the link screen above it; null shows the hub (one pane) or a hint (two panes).
     val detail: (@Composable (Modifier) -> Unit)? = when {
         linking != null -> { paneModifier ->
-            LinkDeviceRoute(kidId = KidId(linking), kidName = linkKidName, onBack = closeLink, modifier = paneModifier)
+            // The link screen opens from a section: its back arrow returns there, beside the hub too.
+            CompositionLocalProvider(LocalBesideHub provides false) {
+                LinkDeviceRoute(
+                    kidId = KidId(linking),
+                    kidName = linkKidName,
+                    onBack = closeLink,
+                    modifier = paneModifier,
+                )
+            }
         }
 
         current != null -> { paneModifier ->
@@ -115,7 +124,8 @@ fun SettingsRoute(
 /**
  * The hub beside a section, for an Expanded window (D-M7-2): the hub ([SettingsScreen], [selected] highlighted) in a
  * fixed-width list pane, [detail] (or a "Choose a section" hint when null) in the rest. The detail pane gets its own
- * width class so a section lays out for the pane, not the window.
+ * width class so a section lays out for the pane, not the window, and no back arrow of its own ([LocalBesideHub]): the
+ * hub beside it is the way out, and system back still closes the section.
  */
 @Composable
 fun SettingsListDetail(
@@ -133,12 +143,13 @@ fun SettingsListDetail(
             modifier = Modifier.width(ListPaneWidth).fillMaxHeight(),
             sections = sections,
             selected = selected,
+            listPane = true,
         )
         VerticalDivider()
         BoxWithConstraints(modifier = Modifier.weight(1f).fillMaxHeight()) {
             ProvideWindowWidthClass(WindowWidthClass.fromWidth(maxWidth)) {
                 if (detail != null) {
-                    detail(Modifier.fillMaxSize())
+                    CompositionLocalProvider(LocalBesideHub provides true) { detail(Modifier.fillMaxSize()) }
                 } else {
                     Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                         Text(
@@ -179,7 +190,11 @@ private fun SectionRoute(
     }
 }
 
-/** The settings hub: one row per [SettingsSection] in [sections]; [selected] is highlighted (the open detail pane). */
+/**
+ * The settings hub: one row per [SettingsSection] in [sections]; [selected] is highlighted (the open detail pane).
+ * As the [listPane] beside a detail pane, every row is selectable (announced selected or not), "Choose a section"
+ * included.
+ */
 @Composable
 fun SettingsScreen(
     onOpen: (SettingsSection) -> Unit,
@@ -187,6 +202,7 @@ fun SettingsScreen(
     modifier: Modifier = Modifier,
     sections: List<SettingsSection> = SettingsSection.entries,
     selected: SettingsSection? = null,
+    listPane: Boolean = selected != null,
 ) {
     SettingsScaffold(title = stringResource(R.string.feature_settings_title), onBack = onBack, modifier = modifier) {
         Column(modifier = Modifier.padding(it).fillMaxSize().verticalScroll(rememberScrollState())) {
@@ -201,9 +217,9 @@ fun SettingsScreen(
                     } else {
                         ListItemDefaults.colors()
                     },
-                    // Selection is announced only beside a detail pane, where one row is the open section.
+                    // Selection is announced only beside a detail pane, where a row is the open section or none is.
                     modifier = Modifier.fillMaxWidth().then(
-                        if (selected == null) {
+                        if (!listPane) {
                             Modifier.clickable(role = Role.Button) { onOpen(section) }
                         } else {
                             Modifier.selectable(selected = isSelected, role = Role.Button) { onOpen(section) }

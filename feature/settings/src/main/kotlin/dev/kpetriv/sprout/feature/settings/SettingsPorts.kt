@@ -153,7 +153,9 @@ enum class AiModelStatus {
 /**
  * The synced household policy's chat retention and daily game cap (M7 §1, D-M7-10). The app adapts `core/database`'s
  * `HouseholdPolicyRepository` (parent-only writes that go to Room and the outbox like every policy change). Writes
- * throw on failure; the ViewModels turn any failure into a message.
+ * throw on failure; the ViewModels turn any failure into a message. While this phone has no policy yet, [observe]
+ * emits nothing and the writes throw `core/database`'s `NoHouseholdPolicyYetException` (D-M7-57): the screens say
+ * they are waiting for the household policy to sync.
  */
 interface HouseholdRules {
     /** The policy's values; emits again when another parent device changes them. */
@@ -221,16 +223,21 @@ enum class ConfirmationOutcome {
 }
 
 /**
- * "Delete chat history now" (D-M7-8): the app deletes every local message, read mark and cached blob before now
- * (`core/database`'s purge use case), then asks the server to delete them too (`pruneMessages` with the explicit
- * instant). Called only after the typed confirmation and [ParentConfirmation].
+ * "Delete chat history now" (D-M7-8, D-M7-58): the app deletes every local message, read mark and cached blob before
+ * now, and this phone's own messages still waiting to upload (`core/database`'s purge use case), then asks the server
+ * to delete them too (`pruneMessages` with the explicit instant). Other phones are not told: they keep their copies
+ * until their own chat retention removes them (a synced purge is M8). Called only after the typed confirmation and
+ * [ParentConfirmation].
  */
 fun interface ChatHistoryPurger {
     suspend fun purgeAll(): ChatPurgeOutcome
 }
 
 enum class ChatPurgeOutcome {
-    /** Deleted on this phone and on the server; other phones delete theirs when they next sync. */
+    /**
+     * Deleted on this phone and on the server. Other phones keep their copies until their chat retention removes
+     * them; nothing tells them to delete now (D-M7-58).
+     */
     PURGED,
 
     /** Deleted on this phone; the server could not be reached (the app retries the server prune later). */

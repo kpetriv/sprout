@@ -64,6 +64,7 @@ import kotlinx.serialization.json.JsonObjectBuilder
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import javax.inject.Inject
+import kotlin.time.Instant
 
 /**
  * [RemoteApplier] on Room: what a pull brings is verified and written to the same tables local writes use.
@@ -244,7 +245,7 @@ class RoomRemoteApplier internal constructor(
     private suspend fun <T> rebuildingOnCapChange(apply: suspend () -> T): T {
         val before = database.householdPolicyDao().get()?.dailyGameCapMinor
         val result = apply()
-        if (database.householdPolicyDao().get()?.dailyGameCapMinor != before) ledger.rebuildCaches()
+        if (database.householdPolicyDao().get()?.dailyGameCapMinor != before) ledger.rebuildCachesRetrying()
         return result
     }
 
@@ -656,6 +657,9 @@ class RoomRemoteApplier internal constructor(
     /** Verifies and stores pulled chat messages; see [ChatApplier]. */
     override suspend fun applyMessages(messages: List<JsonObject>): MessageApplyReport = chat.applyMessages(messages)
 
+    /** Remembers the household's chat prune watermark; see [ChatApplier.applyChatPrune]. */
+    override suspend fun applyChatPrune(prunedBefore: Instant) = chat.applyChatPrune(prunedBefore)
+
     override suspend fun expectedSeq(deviceId: DeviceId, threadId: ThreadId): Long =
         chat.expectedSeq(deviceId, threadId)
 
@@ -673,7 +677,11 @@ class RoomRemoteApplier internal constructor(
     /** The session household's positions; empty without a real session (nothing to resume). */
     override suspend fun cursor(): SyncCursor {
         val household = syncedHousehold() ?: return SyncCursor(emptyMap())
-        return SyncCursor(database.syncCursorDao().all(household).associate { it.collection to it.cursor })
+        return SyncCursor(
+            database.syncCursorDao().all(household)
+                .filter { it.collection != ChatApplier.CHAT_PRUNED_BEFORE }
+                .associate { it.collection to it.cursor },
+        )
     }
 
     /** Saved under the session's household; dropped without a real session. */

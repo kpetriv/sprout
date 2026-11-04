@@ -267,7 +267,7 @@ class FirebaseEmulatorTransportTest {
 
         blocking { session.signInWithEmailPassword("parent@example.test", "emulator-only-password").getOrThrow() }
         assertRegistersEncryptionKey(session, functions, created, sign)
-        assertPrunesMessages(session, functions, created, sign)
+        assertPrunesMessages(session, functions, created, sign, SdkFirestoreFacade(bootstrap, context))
 
         // Deleted (a fresh sign-in, as the server requires): the device learns the household is gone.
         blocking { session.signInWithEmailPassword("parent@example.test", "emulator-only-password").getOrThrow() }
@@ -285,13 +285,15 @@ class FirebaseEmulatorTransportTest {
 
     /**
      * pruneMessages (M7 §2): a retention prune is refused while the household keeps messages; a purge up to now is
-     * accepted with a proof over the cut and the flag, and one over other arguments is refused.
+     * accepted with a proof over the cut and the flag, and one over other arguments is refused. The purge's cut is
+     * then the household's chat prune watermark, which the parent reads through the rules (D-M7-53).
      */
     private fun assertPrunesMessages(
         session: FirebaseAuthSession,
         functions: HouseholdFunctions,
         created: CreatedHousehold,
         sign: (ByteArray) -> ByteArray,
+        firestore: FirestoreFacade,
     ) {
         val before = kotlin.time.Clock.System.now()
         val prune = { purge: Boolean, signedBefore: kotlin.time.Instant ->
@@ -305,6 +307,12 @@ class FirebaseEmulatorTransportTest {
         assertEquals(PrunedMessages(0, 0, more = false, before = before.toEpochMilliseconds()), purged)
         val forged = prune(true, before - kotlin.time.Duration.parse("1s"))
         assertEquals(FunctionsError.PermissionDenied, (forged.exceptionOrNull() as FunctionsException).error)
+        val root = blocking { firestore.get(FirestoreLayout.household(created.hid)) }
+        val watermark = root?.data?.get(FirestoreLayout.CHAT_PRUNE) as? Map<*, *>
+        assertEquals(
+            before.toEpochMilliseconds(),
+            (watermark?.get(FirestoreLayout.PRUNED_BEFORE) as? ServerTime)?.toInstant()?.toEpochMilliseconds(),
+        )
     }
 
     /** registerEncryptionKey: the binding and a proof bound to the token the SDK sends; idempotent. */

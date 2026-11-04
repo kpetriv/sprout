@@ -138,22 +138,41 @@ interface MessageDao {
     suspend fun threadIds(): List<String>
 
     /**
-     * The messages of [threadId] the chat retention removes at [cut] (M7 §2): any status, dated before [cut] by their
-     * signed `createdAt` or, when that is later (a clock ahead, or a forged date), by when this device received them;
-     * except this device's own messages still queued for upload (they are not on the server yet).
+     * The messages of [threadId] the chat retention removes at [cut] (M7 §2, D-M7-52): any status, received by this
+     * device (its own clock) before [cut]. Never by the author's signed `createdAt` (nor the time shown, which is that
+     * date for an author's first message): a clock behind, or a forged date, would otherwise make a message vanish on
+     * arrival; a date ahead cannot outlive the retention either. Except this device's own messages still queued for
+     * upload (they are not on the server yet).
      */
     @Query(
         """
         SELECT messageId, blobId FROM messages WHERE threadId = :threadId
-        AND MIN(createdAtEpochMs, receivedAtEpochMs) < :cut
+        AND receivedAtEpochMs < :cut
         AND messageId NOT IN (SELECT refId FROM outbox WHERE kind = 'MESSAGE')
         """,
     )
     suspend fun prunable(threadId: String, cut: Long): List<PrunableMessage>
 
+    /**
+     * This device's own messages of [threadId] still queued for upload and written before [cut] (their `receivedAt` is
+     * when this device wrote them): what a purge drops with their outbox rows, so they never upload deleted history
+     * (D-M7-59).
+     */
+    @Query(
+        """
+        SELECT messageId, blobId FROM messages WHERE threadId = :threadId
+        AND receivedAtEpochMs < :cut
+        AND messageId IN (SELECT refId FROM outbox WHERE kind = 'MESSAGE')
+        """,
+    )
+    suspend fun queuedBefore(threadId: String, cut: Long): List<PrunableMessage>
+
     /** How many messages of [threadId] are dated before [cut] as [prunable] dates them, queued ones included. */
     @Query(
-        "SELECT COUNT(*) FROM messages WHERE threadId = :threadId AND MIN(createdAtEpochMs, receivedAtEpochMs) < :cut",
+        """
+        SELECT COUNT(*) FROM messages WHERE threadId = :threadId
+        AND receivedAtEpochMs < :cut
+        """,
     )
     suspend fun countOlderThan(threadId: String, cut: Long): Int
 

@@ -1,5 +1,6 @@
 package dev.kpetriv.sprout.feature.settings
 
+import dev.kpetriv.sprout.core.database.NoHouseholdPolicyYetException
 import dev.kpetriv.sprout.core.database.entity.RegistrationStatus
 import dev.kpetriv.sprout.core.domainledger.AttestationLevel
 import dev.kpetriv.sprout.core.model.DeviceId
@@ -145,23 +146,29 @@ class FakeExportWriter : ExportWriter {
     }
 }
 
-/** The household policy's retention and game cap; [failWrites] makes every write throw. */
+/**
+ * The household policy's retention and game cap; [failWrites] makes every write throw, [noPolicyYet] makes it throw
+ * as a phone without the policy does (D-M7-57).
+ */
 class FakeHouseholdRules(initial: HouseholdRulesState = HouseholdRulesState(null, null)) : HouseholdRules {
     val state = MutableStateFlow(initial)
     val retentionWrites = mutableListOf<Int?>()
     val capWrites = mutableListOf<Long?>()
     var failWrites = false
+    var noPolicyYet = false
 
     override fun observe(): Flow<HouseholdRulesState> = state
 
     override suspend fun setChatRetentionDays(days: Int?) {
         check(!failWrites) { "write failed" }
+        if (noPolicyYet) throw NoHouseholdPolicyYetException()
         retentionWrites += days
         state.value = state.value.copy(chatRetentionDays = days)
     }
 
     override suspend fun setDailyGameCap(minorUnits: Long?) {
         check(!failWrites) { "write failed" }
+        if (noPolicyYet) throw NoHouseholdPolicyYetException()
         capWrites += minorUnits
         state.value = state.value.copy(dailyGameCapMinor = minorUnits)
     }
@@ -192,10 +199,14 @@ class FakeChatExportSource(
     val media: MutableMap<String, ByteArray> = mutableMapOf(),
 ) : ChatExportSource {
     var failThreads = false
+
+    /** Makes [threads] run out of memory, as a huge chat would. */
+    var outOfMemory = false
     val mediaRequests = mutableListOf<ThreadId>()
 
     override suspend fun threads(): List<ChatExportThread> {
         check(!failThreads) { "cannot read chat" }
+        if (outOfMemory) throw OutOfMemoryError("test")
         return threads
     }
 

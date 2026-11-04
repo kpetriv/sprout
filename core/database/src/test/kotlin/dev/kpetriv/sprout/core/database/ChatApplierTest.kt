@@ -40,6 +40,7 @@ import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.hours
+import kotlin.time.Duration.Companion.minutes
 
 @RunWith(RobolectricTestRunner::class)
 class ChatApplierTest {
@@ -197,6 +198,73 @@ class ChatApplierTest {
             MessageApplyReport(duplicates = 1),
             kid.applier.applyMessages(listOf(MessageJson.toJsonObject(m1))),
         )
+    }
+
+    @Test
+    fun aGapAServerPruneExplainsIsSkippedAtOnce() = runTest {
+        linked()
+        listOf("one", "two", "three").forEach { parent.messageWrites.send(THREAD_X, text(it)) }
+        val sent = parent.queuedMessages().map { it.envelope() }
+        kid.applier.applyDocuments(parent.queuedDocuments())
+        kid.applier.applyMessages(listOf(MessageJson.toJsonObject(sent[0])))
+        kid.clock.advanceBy(1.hours)
+        // "two" was deleted on the server (a purge) before the kid pulled it: the watermark is after "one" arrived.
+        kid.applier.applyChatPrune(kid.clock.now() - 30.minutes)
+
+        kid.applier.applyMessages(listOf(MessageJson.toJsonObject(sent[2])))
+
+        assertEquals(MessageStatus.RECEIVED, kid.row(sent[2].messageId.value)?.status)
+        val skipped = auditRows(AuditAction.MESSAGE_GAP_SKIPPED).single()
+        assertTrue("\"cause\":\"pruned\"" in skipped.detailsJson && "\"fromSeq\":2" in skipped.detailsJson)
+        // Should the missing one still turn up, it is accepted late, as for any skipped range.
+        kid.applier.applyMessages(listOf(MessageJson.toJsonObject(sent[1])))
+        assertTrue(assertNotNull(kid.row(sent[1].messageId.value)).late)
+    }
+
+    @Test
+    fun aGapAfterThePruneWatermarkStillWaitsForTheTimeout() = runTest {
+        linked()
+        listOf("one", "two", "three").forEach { parent.messageWrites.send(THREAD_X, text(it)) }
+        val sent = parent.queuedMessages().map { it.envelope() }
+        kid.applier.applyDocuments(parent.queuedDocuments())
+        kid.applier.applyChatPrune(kid.clock.now() - 1.hours)
+        // "one" arrived after the prune's cut, so the prune cannot be why "two" is missing.
+        kid.applier.applyMessages(listOf(MessageJson.toJsonObject(sent[0])))
+        kid.applier.applyMessages(listOf(MessageJson.toJsonObject(sent[2])))
+
+        assertEquals(MessageStatus.HELD, kid.row(sent[2].messageId.value)?.status)
+        assertTrue(auditRows(AuditAction.MESSAGE_GAP_SKIPPED).isEmpty())
+        kid.clock.advanceBy(25.hours)
+        kid.applier.retryHeld()
+        assertEquals(MessageStatus.RECEIVED, kid.row(sent[2].messageId.value)?.status)
+        assertFalse("pruned" in auditRows(AuditAction.MESSAGE_GAP_SKIPPED).single().detailsJson)
+    }
+
+    @Test
+    fun anAuthorWhoseEarlierMessagesWereAllPrunedIsShownAtOnce() = runTest {
+        linked()
+        listOf("one", "two").forEach { parent.messageWrites.send(THREAD_X, text(it)) }
+        val sent = parent.queuedMessages().map { it.envelope() }
+        kid.applier.applyDocuments(parent.queuedDocuments())
+        kid.applier.applyChatPrune(kid.clock.now())
+
+        kid.applier.applyMessages(listOf(MessageJson.toJsonObject(sent[1])))
+
+        assertEquals(MessageStatus.RECEIVED, kid.row(sent[1].messageId.value)?.status)
+    }
+
+    @Test
+    fun thePruneWatermarkNeverMovesBackAndStaysOutOfTheCursor() = runTest {
+        linked()
+        val later = kid.clock.now()
+        kid.applier.applyChatPrune(later)
+        kid.applier.applyChatPrune(later - 2.hours)
+        kid.applier.saveCursor(dev.kpetriv.sprout.core.sync.SyncCursor(mapOf("messages" to "c1")))
+
+        assertEquals(mapOf("messages" to "c1"), kid.applier.cursor().perCollection)
+        val stored = kid.database.syncCursorDao().all(kid.session.householdId)
+            .single { it.collection == ChatApplier.CHAT_PRUNED_BEFORE }
+        assertEquals(later.toEpochMilliseconds().toString(), stored.cursor)
     }
 
     /**

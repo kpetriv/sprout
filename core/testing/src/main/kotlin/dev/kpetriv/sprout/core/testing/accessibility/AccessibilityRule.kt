@@ -1,5 +1,6 @@
 package dev.kpetriv.sprout.core.testing.accessibility
 
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsConfiguration
 import androidx.compose.ui.semantics.SemanticsNode
@@ -9,6 +10,7 @@ import androidx.compose.ui.test.SemanticsNodeInteraction
 import androidx.compose.ui.test.isRoot
 import androidx.compose.ui.test.junit4.ComposeTestRule
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.toSize
 import dev.kpetriv.sprout.core.designsystem.theme.TierTokens
 import dev.kpetriv.sprout.core.model.KidUiTier
 import org.junit.rules.TestRule
@@ -27,7 +29,9 @@ import java.lang.reflect.Method
  *    apart;
  * 3. an actionable node is smaller than [minTouchTarget] in either direction (the tier minimum: 72 dp Seedling, 56 dp
  *    Sprout, 48 dp Sapling and parent screens), measured on its unclipped size extended to the view configuration's
- *    minimum touch target, as Compose's hit testing does;
+ *    minimum touch target, as Compose's hit testing does; and that extension must be the node's own (D-M7-54): when
+ *    the extended areas of two actionable nodes of one window overlap while the nodes themselves do not, a finger
+ *    between them gets whichever is nearer, so neither has the touch target the extension promised, and both fail;
  * 4. a `clearAndSetSemantics` hides an actionable node from accessibility services.
  *
  * Use it next to the test's Compose rule, inside it, so the check runs before the Compose rule tears the activity
@@ -100,8 +104,53 @@ fun mergedTreeIssues(root: SemanticsNode, minTouchTarget: Dp): List<String> {
     val issues = mutableListOf<String>()
     val minPx = with(root.layoutInfo.density) { minTouchTarget.toPx() } - ROUNDING_PX
     checkMerged(root, minPx, minTouchTarget, issues)
+    issues += sharedTouchAreaIssues(root)
     return issues
 }
+
+/** One placed, touchable actionable node: its own unclipped bounds and the area hit testing extends them to. */
+private class TouchArea(val node: SemanticsNode, val own: Rect, val extended: Rect)
+
+/**
+ * Rule 3's second half: pairs of actionable nodes in [root]'s subtree whose extended touch areas overlap while their
+ * own bounds do not (a node and its ancestor or descendant excepted: Compose gives the tap to the inner one).
+ */
+private fun sharedTouchAreaIssues(root: SemanticsNode): List<String> {
+    val areas = mutableListOf<TouchArea>()
+    collectTouchAreas(root, areas)
+    val issues = mutableListOf<String>()
+    for (i in areas.indices) {
+        for (j in i + 1 until areas.size) {
+            val (a, b) = areas[i] to areas[j]
+            val related = a.node.isAncestorOf(b.node) || b.node.isAncestorOf(a.node)
+            if (!related && a.extended.overlaps(b.extended) && !a.own.overlaps(b.own)) {
+                issues += "Touch targets overlap once extended to the minimum (move them apart or make them " +
+                    "larger): ${a.node.describe()} and ${b.node.describe()}"
+            }
+        }
+    }
+    return issues
+}
+
+private fun collectTouchAreas(node: SemanticsNode, into: MutableList<TouchArea>) {
+    val placed = node.size.width > 0 && node.size.height > 0
+    if (placed && node.config.isTouchTarget()) {
+        val layout = node.layoutInfo
+        val minimum = with(layout.density) { layout.viewConfiguration.minimumTouchTargetSize.toSize() }
+        val own = Rect(node.positionInRoot, node.size.toSize())
+        val padX = maxOf(0f, minimum.width - own.width) / 2
+        val padY = maxOf(0f, minimum.height - own.height) / 2
+        into += TouchArea(node, own, Rect(own.left - padX, own.top - padY, own.right + padX, own.bottom + padY))
+    }
+    node.children.forEach { collectTouchAreas(it, into) }
+}
+
+/** Overlap by more than the rounding slack in both directions (touching edges do not count). */
+private fun Rect.overlaps(other: Rect): Boolean = minOf(right, other.right) - maxOf(left, other.left) > ROUNDING_PX &&
+    minOf(bottom, other.bottom) - maxOf(top, other.top) > ROUNDING_PX
+
+private fun SemanticsNode.isAncestorOf(other: SemanticsNode): Boolean =
+    generateSequence(other.parent) { it.parent }.any { it.id == id }
 
 /** Rule 4 on [root]'s subtree. */
 fun hiddenNodeIssues(root: SemanticsNode): List<String> {
@@ -166,6 +215,10 @@ private fun SemanticsConfiguration.isActionable(): Boolean = contains(SemanticsA
     contains(SemanticsProperties.ToggleableState) ||
     contains(SemanticsActions.SetText) ||
     contains(SemanticsActions.SetProgress)
+
+/** An actionable node a finger aims at: not hidden from accessibility, not a text field. */
+private fun SemanticsConfiguration.isTouchTarget(): Boolean =
+    isActionable() && !isHiddenFromAccessibility() && isTouchable()
 
 /** Text fields are measured by the text field's own minimum height, not the tier's touch target. */
 private fun SemanticsConfiguration.isTouchable(): Boolean = !contains(SemanticsActions.SetText)

@@ -37,6 +37,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalConfiguration
@@ -57,7 +58,13 @@ import java.time.LocalDate
 import java.time.format.DateTimeFormatter
 import java.time.format.FormatStyle
 
-/** A settings page: top bar with back, snackbar host, and [content] below. */
+/**
+ * True inside the detail pane beside the settings hub (Expanded width, D-M7-26): pages there show no back arrow, since
+ * the hub beside them is the way out (system back still closes the section).
+ */
+internal val LocalBesideHub = staticCompositionLocalOf { false }
+
+/** A settings page: top bar with back (none beside the hub, [LocalBesideHub]), snackbar host, and [content] below. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun SettingsScaffold(
@@ -73,11 +80,13 @@ internal fun SettingsScaffold(
             TopAppBar(
                 title = { Text(title) },
                 navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(
-                            painter = painterResource(R.drawable.feature_settings_ic_arrow_back),
-                            contentDescription = stringResource(R.string.feature_settings_back),
-                        )
+                    if (!LocalBesideHub.current) {
+                        IconButton(onClick = onBack) {
+                            Icon(
+                                painter = painterResource(R.drawable.feature_settings_ic_arrow_back),
+                                contentDescription = stringResource(R.string.feature_settings_back),
+                            )
+                        }
                     }
                 },
             )
@@ -111,6 +120,7 @@ private fun SettingsMessage.textRes(): Int = when (this) {
     SettingsMessage.KEY_NOT_SHARED -> R.string.feature_settings_message_key_not_shared
     SettingsMessage.SAVE_FAILED -> R.string.feature_settings_message_save_failed
     SettingsMessage.NOT_CONFIRMED -> R.string.feature_settings_data_message_not_confirmed
+    SettingsMessage.POLICY_NOT_SYNCED -> R.string.feature_settings_policy_not_synced
 }
 
 /** Loading spinner or load error, shared by the sections. Returns true when it drew something. */

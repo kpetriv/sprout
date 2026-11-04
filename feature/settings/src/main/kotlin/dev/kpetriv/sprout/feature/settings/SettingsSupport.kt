@@ -2,6 +2,7 @@ package dev.kpetriv.sprout.feature.settings
 
 import dev.kpetriv.sprout.core.database.FiatCurrencyProvider
 import dev.kpetriv.sprout.core.database.HouseholdPolicyRepository
+import dev.kpetriv.sprout.core.database.NoHouseholdPolicyYetException
 import dev.kpetriv.sprout.core.database.SessionAuthorProvider
 import dev.kpetriv.sprout.core.domainledger.Currency
 import dev.kpetriv.sprout.core.model.HouseholdId
@@ -59,6 +60,25 @@ internal suspend fun attempt(block: suspend () -> Unit): Boolean = try {
     false
 }
 
+/** How a household policy write went (D-M7-57). */
+internal enum class PolicyWrite { SAVED, NO_POLICY_YET, FAILED }
+
+/**
+ * Runs a [HouseholdRules] write: [PolicyWrite.NO_POLICY_YET] when this phone has no household policy yet
+ * (`NoHouseholdPolicyYetException`), [PolicyWrite.FAILED] for any other failure.
+ */
+@Suppress("TooGenericExceptionCaught") // Any failure becomes a message.
+internal suspend fun policyWrite(block: suspend () -> Unit): PolicyWrite = try {
+    block()
+    PolicyWrite.SAVED
+} catch (e: CancellationException) {
+    throw e
+} catch (_: NoHouseholdPolicyYetException) {
+    PolicyWrite.NO_POLICY_YET
+} catch (_: Exception) {
+    PolicyWrite.FAILED
+}
+
 /** One-off snackbar messages shared by the settings sections. */
 enum class SettingsMessage {
     SAVED,
@@ -74,6 +94,9 @@ enum class SettingsMessage {
 
     /** The parent's fingerprint or PIN check failed: nothing changed. */
     NOT_CONFIRMED,
+
+    /** This phone has no household policy yet, so it does not write one (D-M7-57). */
+    POLICY_NOT_SYNCED,
 }
 
 /** How long a section's state flow keeps its upstream after the screen stops collecting (rotation survives). */

@@ -56,6 +56,13 @@ internal fun ChatDataSection(state: DataUiState, onEvent: (DataEvent) -> Unit) {
             onSelect = { onEvent(DataEvent.RetentionChosen(it)) },
             enabled = !retention.saving,
         )
+    } else {
+        // No household policy on this phone yet: it never writes one of its own (D-M7-57).
+        Text(
+            stringResource(R.string.feature_settings_policy_waiting),
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
     }
     Text(stringResource(R.string.feature_settings_data_retention_text), style = MaterialTheme.typography.bodyMedium)
     OutlinedButton(onClick = { onEvent(DataEvent.AskDeleteChat) }, enabled = !state.purgingChat) {

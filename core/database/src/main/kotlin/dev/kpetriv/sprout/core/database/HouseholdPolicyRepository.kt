@@ -135,8 +135,11 @@ interface HouseholdPolicyRepository {
      * Sets how long chat messages are kept (M7 §2, D-M7-10): [days] within [HouseholdPolicyLimits.CHAT_RETENTION_DAYS],
      * or null to keep them. Parent sessions only ([IllegalStateException] otherwise; the UI asks for parent
      * authorisation first). Republishes the synced `household_policy` document, audited `HOUSEHOLD_POLICY_UPDATED`.
+     * Never creates the policy (D-M7-57): a device without its policy row yet would publish defaults over the
+     * household's real policy (signatures off, its own currency).
      *
      * @throws IllegalArgumentException for [days] outside the bounds.
+     * @throws NoHouseholdPolicyYetException when this device has no policy row yet (it has not synced it).
      */
     suspend fun setChatRetention(days: Int?): HouseholdPolicy =
         throw UnsupportedOperationException("this repository cannot change the chat retention")
@@ -148,6 +151,7 @@ interface HouseholdPolicyRepository {
      * the balances are recomputed at once.
      *
      * @throws IllegalArgumentException for [minor] outside the bounds.
+     * @throws NoHouseholdPolicyYetException when this device has no policy row yet, as for [setChatRetention].
      */
     suspend fun setDailyGameCap(minor: Long?): HouseholdPolicy =
         throw UnsupportedOperationException("this repository cannot change the game cap")
@@ -264,25 +268,26 @@ class RoomHouseholdPolicyRepository @Inject constructor(
 
     override suspend fun setDailyGameCap(minor: Long?): HouseholdPolicy {
         require(minor == null || minor in HouseholdPolicyLimits.DAILY_GAME_CAP_MINOR) { "game cap out of range" }
-        val before = get()?.dailyGameCapMinor
-        val updated = update { it.copy(dailyGameCapMinor = minor) }
-        // The cap decides which plays count on every day: the cached balances follow it at once.
-        if (before != minor) ledger.rebuildCaches()
+        var before: Long? = null
+        val updated = update { current ->
+            before = current.dailyGameCapMinor
+            current.copy(dailyGameCapMinor = minor)
+        }
+        // The cap decides which plays count on every day: the cached balances follow it at once. The rebuild binds the
+        // local check, so it cannot join the write's transaction; it is retried instead (review L8).
+        if (before != minor) ledger.rebuildCachesRetrying()
         return updated
     }
 
-    /** Rewrites the policy row (created first if missing) with [change] applied; parent sessions only. */
+    /**
+     * Rewrites the existing policy row with [change] applied (read inside the transaction); parent sessions only.
+     * Refuses with [NoHouseholdPolicyYetException] when there is no row (D-M7-57).
+     */
     private suspend fun update(change: (HouseholdPolicyEntity) -> HouseholdPolicyEntity): HouseholdPolicy {
         val author = authors.currentAuthor()
         check(author.role == Role.PARENT) { "only a parent changes the household policy" }
         return writes.transaction {
-            val current = policies.get() ?: HouseholdPolicyEntity(
-                requireParentSignature = false,
-                parentSignatureFromLamport = null,
-                parentPublicKey = null,
-                fiatCurrency = currency.fiatCurrency(),
-                createdAtEpochMs = clock.now().toEpochMilliseconds(),
-            )
+            val current = policies.get() ?: throw NoHouseholdPolicyYetException()
             write(author, change(current)).toDomain()
         }
     }
@@ -343,3 +348,10 @@ internal fun HouseholdPolicyEntity.toDomain() = HouseholdPolicy(
     chatRetentionDays = chatRetentionDays,
     dailyGameCapMinor = dailyGameCapMinor,
 )
+
+/**
+ * A policy setting was changed on a device that has no `household_policy` row yet (a newly linked phone before its
+ * first pull, or a pulled policy that is still held): refused, so it never publishes defaults over the household's
+ * real policy (D-M7-57). The screen says it is waiting for the household policy to sync.
+ */
+class NoHouseholdPolicyYetException : IllegalStateException("no household policy yet")
