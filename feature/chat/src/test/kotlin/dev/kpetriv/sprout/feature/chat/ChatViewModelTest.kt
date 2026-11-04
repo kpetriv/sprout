@@ -43,21 +43,19 @@ class ChatViewModelTest {
 
     private fun viewModel(mode: ChatMode = ChatMode.PARENT, tier: KidUiTier? = null) = viewModel(args(mode, tier))
 
-    private fun viewModel(handle: SavedStateHandle): ChatViewModel {
-        return ChatViewModel(
-            savedStateHandle = handle,
-            threads = threads,
-            reader = reader,
-            sender = sender,
-            keyStatus = keys,
-            blobs = blobs,
-            recorder = recorder,
-            player = player,
-            filter = filter,
-            pickPhoto = pickPhoto,
-            clock = FakeClock(ChatTestData.start),
-        )
-    }
+    private fun viewModel(handle: SavedStateHandle): ChatViewModel = ChatViewModel(
+        savedStateHandle = handle,
+        threads = threads,
+        reader = reader,
+        sender = sender,
+        keyStatus = keys,
+        blobs = blobs,
+        recorder = recorder,
+        player = player,
+        filter = filter,
+        pickPhoto = pickPhoto,
+        clock = FakeClock(ChatTestData.start),
+    )
 
     private fun TestScope.ready(vm: ChatViewModel): () -> ChatUiState.Ready {
         val state = subscribe(vm.state)
