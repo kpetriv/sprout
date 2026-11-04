@@ -150,6 +150,35 @@ class BlobCache(
     /** Whether [blobId] is in the index. */
     suspend fun contains(blobId: BlobId): Boolean = blobs.get(blobId.value) != null
 
+    /**
+     * Deletes the files [fileNames] whose index rows were already removed (the chat prune removes the rows inside its
+     * transaction and the files once it committed). A file that is already gone is skipped.
+     */
+    internal suspend fun deleteFiles(fileNames: Collection<String>) {
+        if (fileNames.isEmpty()) return
+        withContext(dispatcher) { fileNames.forEach { fileOf(it).delete() } }
+    }
+
+    /**
+     * Deletes the files in the blob directory that no index row names (D-M7-59): what a crash between a chat prune's
+     * commit and [deleteFiles] left behind, and temp files of an interrupted write. Files modified less than
+     * [ORPHAN_GRACE_MS] ago are kept ([put] writes the file before its row). Returns how many went. The chat prune
+     * calls it after every run; the app may also call it at start-up.
+     */
+    suspend fun sweepOrphans(): Int {
+        val named = blobs.all().mapTo(HashSet()) { it.fileName }
+        return withContext(dispatcher) {
+            val newest = System.currentTimeMillis() - ORPHAN_GRACE_MS
+            val files = directory.listFiles().orEmpty()
+            files.count { file ->
+                val orphan = file.isFile && file.name !in named &&
+                    (file.name.endsWith(EXTENSION) || file.name.endsWith(TEMP_SUFFIX)) &&
+                    file.lastModified() < newest
+                orphan && file.delete()
+            }
+        }
+    }
+
     /** Drops [blobId] from the cache (index row and file), if it is there. */
     suspend fun remove(blobId: BlobId) {
         blobs.get(blobId.value)?.let { drop(it) }
@@ -212,6 +241,9 @@ class BlobCache(
 
         /** Subdirectory of `noBackupFilesDir` holding the cached blobs. */
         const val DIRECTORY_NAME: String = "blobs"
+
+        /** [sweepOrphans] keeps files modified more recently than this: a [put] may be between its file and row. */
+        const val ORPHAN_GRACE_MS: Long = 60_000
 
         /** Cache budget (M4 §2): 50 MB of E2EE ciphertext. */
         const val MAX_BYTES: Long = 50L * 1024 * 1024

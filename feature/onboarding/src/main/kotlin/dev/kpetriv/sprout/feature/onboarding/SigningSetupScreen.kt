@@ -21,6 +21,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextAlign
@@ -29,6 +30,7 @@ import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.kpetriv.sprout.core.ui.PinDots
 import dev.kpetriv.sprout.core.ui.PinPad
+import dev.kpetriv.sprout.core.ui.contentWidth
 
 /**
  * Turns on fingerprint signing for a parent who already has a PIN, backed by a [SigningSetupViewModel]. Calls
@@ -58,6 +60,7 @@ fun SigningSetupScreen(
             modifier = Modifier
                 .safeDrawingPadding()
                 .verticalScroll(rememberScrollState())
+                .contentWidth()
                 .padding(horizontal = 24.dp, vertical = 32.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(20.dp),
@@ -66,6 +69,7 @@ fun SigningSetupScreen(
                 stringResource(R.string.feature_onboarding_signing_title),
                 style = MaterialTheme.typography.headlineSmall,
                 textAlign = TextAlign.Center,
+                modifier = Modifier.semantics { heading() },
             )
             Text(
                 stringResource(R.string.feature_onboarding_signing_detail),

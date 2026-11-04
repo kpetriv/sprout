@@ -28,6 +28,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.kpetriv.sprout.core.designsystem.theme.ProvideKidTier
 import dev.kpetriv.sprout.core.model.KidId
 import dev.kpetriv.sprout.core.model.KidUiTier
+import dev.kpetriv.sprout.core.ui.ContentWidth
 import dev.kpetriv.sprout.core.ui.ReadAloud
 
 /**
@@ -127,7 +128,8 @@ fun ChatScreen(
         topBar = { ChatTopBar(title = title, onBack = onBack) },
         snackbarHost = { SnackbarHost(snackbar) },
     ) { padding ->
-        Box(modifier = Modifier.padding(padding).fillMaxSize().imePadding()) {
+        // Capped and centred on wide windows and panes (D-M7-2); a phone gets the full width as before.
+        ContentWidth(modifier = Modifier.padding(padding).fillMaxSize().imePadding()) {
             when (state) {
                 ChatUiState.Loading -> LoadingContent()
 

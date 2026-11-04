@@ -14,4 +14,10 @@ object ScreenshotDevice {
      * Tests whose content scrolls can make the window taller with `@Config(qualifiers = "+h1400dp")`.
      */
     const val PIXEL_7 = "en-rGB-w411dp-h914dp-normal-long-notround-any-420dpi-keyshidden-nonav"
+
+    /**
+     * A 10" tablet in landscape: 1280 x 800 dp at mdpi (density 1.0, so 1280 x 800 px images) in British English. An
+     * Expanded width class. Used by `ScreenshotRule.captureWidthClasses`; a test may also pin it with `@Config`.
+     */
+    const val TABLET = "en-rGB-w1280dp-h800dp-xlarge-notlong-notround-any-mdpi-keyshidden-nonav"
 }

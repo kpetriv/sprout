@@ -30,6 +30,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.KeyboardType
@@ -42,6 +43,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dev.kpetriv.sprout.R
+import dev.kpetriv.sprout.core.ui.contentWidth
 import dev.kpetriv.sprout.sync.CredentialGate
 import dev.kpetriv.sprout.sync.EraseConfirmation
 import dev.kpetriv.sprout.sync.ErasePinCheck
@@ -207,6 +209,7 @@ internal fun SignInAgainScreen(gate: GateState, onEvent: (SignInAgainEvent) -> U
         Column(
             modifier = Modifier
                 .verticalScroll(rememberScrollState())
+                .contentWidth()
                 .padding(24.dp)
                 .semantics { liveRegion = LiveRegionMode.Polite },
             verticalArrangement = Arrangement.spacedBy(16.dp, Alignment.CenterVertically),
@@ -216,6 +219,7 @@ internal fun SignInAgainScreen(gate: GateState, onEvent: (SignInAgainEvent) -> U
                 stringResource(R.string.gate_title),
                 style = MaterialTheme.typography.headlineSmall,
                 textAlign = TextAlign.Center,
+                modifier = Modifier.semantics { heading() },
             )
             when (gate) {
                 GateState.Checking -> {

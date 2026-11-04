@@ -34,6 +34,7 @@ export const LIMITS = {
   revokeDevice: { uid: { max: 30, windowMs: HOUR }, ip: { max: 60, windowMs: HOUR } },
   exportHousehold: { uid: { max: 5, windowMs: HOUR }, ip: { max: 10, windowMs: HOUR } },
   deleteHousehold: { uid: { max: 3, windowMs: HOUR }, ip: { max: 10, windowMs: HOUR } },
+  pruneMessages: { uid: { max: 10, windowMs: HOUR }, ip: { max: 30, windowMs: HOUR } },
   deviceStatus: { device: { max: 30, windowMs: HOUR }, ip: { max: 120, windowMs: HOUR } },
 } as const satisfies Record<string, Record<string, Limit>>;
 

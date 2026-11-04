@@ -99,4 +99,6 @@
   <string name="feature_chat_emoji_thumbs_up">Thumbs up</string>
   <string name="feature_chat_emoji_party">Party</string>
   <string name="feature_chat_emoji_dog">Dog</string>
+  <!-- Detail pane of the chat list on a tablet before a thread is picked. -->
+  <string name="feature_chat_thread_placeholder">Pick a conversation to read it here.</string>
 </resources>

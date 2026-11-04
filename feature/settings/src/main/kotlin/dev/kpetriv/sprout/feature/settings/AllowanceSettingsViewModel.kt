@@ -23,12 +23,15 @@ import dev.kpetriv.sprout.core.model.MAX_SCHEDULE_DAY_OF_MONTH
 import dev.kpetriv.sprout.core.model.ScheduleId
 import dev.kpetriv.sprout.core.time.HouseholdCalendar
 import dev.kpetriv.sprout.core.ui.MinorUnitsParser
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.onStart
 import kotlinx.coroutines.flow.stateIn
@@ -43,7 +46,23 @@ data class AllowanceSettingsUiState(
     val loadFailed: Boolean = false,
     val rows: List<AllowanceRowUi> = emptyList(),
     val editor: AllowanceEditorUi? = null,
+    /** The household's daily game limit (D-M5-4); null until the policy is read. */
+    val gameCap: GameCapUi? = null,
+    /** The game limit dialog; null while closed. */
+    val gameCapEditor: GameCapEditorUi? = null,
     val message: SettingsMessage? = null,
+)
+
+/** The daily game limit in [currency]'s minor units; [isDefault] when the policy leaves it unset. */
+data class GameCapUi(val capMinor: Long, val isDefault: Boolean, val currency: Currency.Fiat)
+
+/** The game limit dialog: [text] parsed with [MinorUnitsParser] in [currency]'s decimals, 0 allowed. */
+data class GameCapEditorUi(
+    val text: String,
+    val currency: Currency.Fiat,
+    val error: AmountError? = null,
+    val isSaving: Boolean = false,
+    val saveFailed: Boolean = false,
 )
 
 /** A kid's allowance. [schedule] is null when the kid has none; [nextDue] is null when inactive. */
@@ -98,28 +117,48 @@ sealed interface AllowanceSettingsEvent {
     data object Dismiss : AllowanceSettingsEvent
 
     data object MessageShown : AllowanceSettingsEvent
+
+    data object EditGameCap : AllowanceSettingsEvent
+
+    data class GameCapChanged(val text: String) : AllowanceSettingsEvent
+
+    data object SaveGameCap : AllowanceSettingsEvent
+
+    /** Back to the default limit (the policy field unset). */
+    data object ResetGameCap : AllowanceSettingsEvent
+
+    data object DismissGameCap : AllowanceSettingsEvent
 }
 
 /**
  * Allowance per kid: amount, weekly or monthly cadence, start date and active toggle, written through
  * [AllowanceRepository.upsert] (outbox + audit). The next due date is [AllowancePlanner.nextDueDate] on or after
  * today. One schedule per kid is edited here; the first (oldest) is shown when a kid has several.
+ *
+ * The section also holds the household's daily game limit (D-M5-4, M7 §10): the most brain games can earn a kid per
+ * day, in the household currency, written to the synced policy through [HouseholdRules] after [ParentConfirmation]
+ * (0 to [HouseholdRulesState.MAX_DAILY_GAME_CAP_MINOR]; unset is the default of 50 minor units). Lowering it also
+ * re-decides earlier days (D-M7-11), which the dialog says.
  */
 @HiltViewModel
+@Suppress("TooManyFunctions", "LongParameterList") // One handler per editor action; the injected sources.
 class AllowanceSettingsViewModel @Inject constructor(
     private val kids: KidRepository,
     private val accounts: AccountRepository,
     private val allowances: AllowanceRepository,
     private val household: HouseholdContext,
     private val calendar: HouseholdCalendar,
+    private val rules: HouseholdRules,
+    private val confirmation: ParentConfirmation,
 ) : ViewModel() {
     private val local = MutableStateFlow(AllowanceSettingsUiState())
 
-    val state: StateFlow<AllowanceSettingsUiState> = combine(rows(), local) { rows, localState ->
+    val state: StateFlow<AllowanceSettingsUiState> = combine(rows(), gameCap(), local) { rows, cap, localState ->
         localState.copy(
             isLoading = rows is Load.Loading,
             loadFailed = rows is Load.Failed,
             rows = (rows as? Load.Ready)?.value.orEmpty(),
+            gameCap = cap,
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MILLIS), AllowanceSettingsUiState())
 
@@ -146,7 +185,100 @@ class AllowanceSettingsViewModel @Inject constructor(
             AllowanceSettingsEvent.Dismiss -> local.update { it.copy(editor = null) }
 
             AllowanceSettingsEvent.MessageShown -> local.update { it.copy(message = null) }
+
+            else -> onGameCapEvent(event)
         }
+    }
+
+    private fun onGameCapEvent(event: AllowanceSettingsEvent) {
+        when (event) {
+            AllowanceSettingsEvent.EditGameCap -> editGameCap()
+
+            is AllowanceSettingsEvent.GameCapChanged -> local.update { current ->
+                current.copy(gameCapEditor = current.gameCapEditor?.copy(text = event.text, error = null))
+            }
+
+            AllowanceSettingsEvent.SaveGameCap -> saveGameCap(reset = false)
+
+            AllowanceSettingsEvent.ResetGameCap -> saveGameCap(reset = true)
+
+            AllowanceSettingsEvent.DismissGameCap -> local.update {
+                if (it.gameCapEditor?.isSaving == true) it else it.copy(gameCapEditor = null)
+            }
+
+            else -> Unit
+        }
+    }
+
+    private fun gameCap(): Flow<GameCapUi?> =
+        combine(rules.observe(), flow { emit(household.fiatCurrency()) }) { policy, currency ->
+            GameCapUi(policy.effectiveDailyGameCapMinor, policy.dailyGameCapMinor == null, currency)
+        }
+            .map<GameCapUi, GameCapUi?> { it }
+            .onStart { emit(null) }
+            .catch { emit(null) }
+
+    private fun editGameCap() {
+        val cap = state.value.gameCap ?: return
+        val text = MinorUnitsParser.toInputText(cap.capMinor, cap.currency.fractionDigits)
+        local.update { it.copy(gameCapEditor = GameCapEditorUi(text, cap.currency)) }
+    }
+
+    private fun saveGameCap(reset: Boolean) {
+        val editor = local.value.gameCapEditor?.takeUnless { it.isSaving } ?: return
+        val value: Long? = if (reset) {
+            null
+        } else {
+            when (val parsed = parseGameCap(editor.text, editor.currency)) {
+                is GameCapParse.Valid -> parsed.minorUnits
+
+                is GameCapParse.Invalid -> {
+                    local.update { it.copy(gameCapEditor = editor.copy(error = parsed.error)) }
+                    return
+                }
+            }
+        }
+        local.update { it.copy(gameCapEditor = editor.copy(isSaving = true, saveFailed = false, error = null)) }
+        viewModelScope.launch {
+            when (confirm()) {
+                ConfirmationOutcome.CONFIRMED -> {
+                    val written = policyWrite { rules.setDailyGameCap(value) }
+                    local.update { current ->
+                        when (written) {
+                            PolicyWrite.SAVED -> current.copy(gameCapEditor = null, message = SettingsMessage.SAVED)
+
+                            PolicyWrite.NO_POLICY_YET ->
+                                current.copy(gameCapEditor = null, message = SettingsMessage.POLICY_NOT_SYNCED)
+
+                            PolicyWrite.FAILED -> current.copy(
+                                gameCapEditor = current.gameCapEditor?.copy(isSaving = false, saveFailed = true),
+                            )
+                        }
+                    }
+                }
+
+                ConfirmationOutcome.CANCELLED -> local.update { current ->
+                    current.copy(gameCapEditor = current.gameCapEditor?.copy(isSaving = false))
+                }
+
+                ConfirmationOutcome.FAILED -> local.update { current ->
+                    current.copy(
+                        gameCapEditor = current.gameCapEditor?.copy(isSaving = false),
+                        message = SettingsMessage.NOT_CONFIRMED,
+                    )
+                }
+            }
+        }
+    }
+
+    /** [ParentConfirmation] for a game limit change; a throwing adapter counts as failed. */
+    @Suppress("TooGenericExceptionCaught")
+    private suspend fun confirm(): ConfirmationOutcome = try {
+        confirmation.confirm(ConfirmationPurpose.CHANGE_GAME_CAP)
+    } catch (cancellation: CancellationException) {
+        throw cancellation
+    } catch (_: Exception) {
+        ConfirmationOutcome.FAILED
     }
 
     private fun rows() = combine(kids.observeKids(), allowances.observeSchedules(null)) { kidList, schedules ->
@@ -272,6 +404,22 @@ class AllowanceSettingsViewModel @Inject constructor(
 
         private val PREVIEW_ID = ScheduleId("preview")
         private val PREVIEW_ACCOUNT = AccountId("preview")
+    }
+}
+
+/** A typed game limit: 0 to [HouseholdRulesState.MAX_DAILY_GAME_CAP_MINOR] minor units. Never floating point. */
+internal sealed interface GameCapParse {
+    data class Valid(val minorUnits: Long) : GameCapParse
+
+    data class Invalid(val error: AmountError) : GameCapParse
+}
+
+internal fun parseGameCap(text: String, currency: Currency.Fiat): GameCapParse {
+    val max = HouseholdRulesState.MAX_DAILY_GAME_CAP_MINOR
+    return when (val parsed = MinorUnitsParser.parse(text, currency.fractionDigits, max)) {
+        MinorUnitsParser.Result.Empty -> GameCapParse.Invalid(AmountError.REQUIRED)
+        is MinorUnitsParser.Result.Invalid -> GameCapParse.Invalid(parsed.error.toAmountError())
+        is MinorUnitsParser.Result.Valid -> GameCapParse.Valid(parsed.minorUnits)
     }
 }
 

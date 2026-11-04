@@ -37,6 +37,11 @@
     <item quantity="one">%1$d of %2$d stars</item>
     <item quantity="other">%1$d of %2$d stars</item>
   </plurals>
+  <!-- MinutesSun state: %1$d minutes out of the %2$d the full sun stands for. -->
+  <plurals name="core_ui_sun_state">
+    <item quantity="one">%1$d of %2$d minute</item>
+    <item quantity="other">%1$d of %2$d minutes</item>
+  </plurals>
   <string name="core_ui_savings_no_target">No goal amount set yet</string>
   <string name="core_ui_event_row_description">%1$s, %2$s</string>
 

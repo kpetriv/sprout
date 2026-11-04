@@ -215,6 +215,37 @@ class RoomLedgerRepository internal constructor(
     }
 
     /**
+     * Rebuilds the balances and anomalies caches from every stored, verified event under the policy in force now
+     * (quarantining rows that no longer verify, as every load does). For changes that re-decide what counts without a
+     * new event: the household's synced daily game cap (D-M7-10, D-M7-11).
+     */
+    suspend fun rebuildCaches() {
+        val check = bindLocalCheck()
+        database.withTransaction {
+            val active = policies.load()
+            val loaded = loadVerified(check, active)
+            refreshCaches(project(loaded.events, active, loaded.received), loaded.events)
+        }
+    }
+
+    /**
+     * [rebuildCaches], tried up to [REBUILD_ATTEMPTS] times (review L8): after a cap change has committed, a failed
+     * rebuild would leave the balances stale until the next load. The last failure is thrown.
+     */
+    internal suspend fun rebuildCachesRetrying() {
+        repeat(REBUILD_ATTEMPTS - 1) {
+            try {
+                return rebuildCaches()
+            } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                throw cancelled
+            } catch (expected: Exception) {
+                // Tried again below.
+            }
+        }
+        rebuildCaches()
+    }
+
+    /**
      * Ingests pulled event documents (`LedgerJson` trees with their server stamps, kept on the stored row and on a
      * held `ledger_inbox` row) in one transaction, under the device clock's lock:
      * 1. [RemoteEventVerifier] (registry, [check], the lamport bound and the household's **synced**
@@ -1159,6 +1190,9 @@ class RoomLedgerRepository internal constructor(
     }
 
     companion object {
+        /** How often [rebuildCachesRetrying] tries. */
+        private const val REBUILD_ATTEMPTS = 3
+
         /** [AppendResult.Rejected.reason] when the event does not link to its author's stored chain head. */
         const val CHAIN_REJECTION: String = "chain verification failed"
 

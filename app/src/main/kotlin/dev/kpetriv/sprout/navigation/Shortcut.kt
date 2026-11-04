@@ -23,6 +23,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import dev.kpetriv.sprout.R
+import dev.kpetriv.sprout.core.ui.contentWidth
 
 /** One button of a [WithShortcuts] bar. */
 internal data class Shortcut(val label: Int, val onClick: () -> Unit)
@@ -51,6 +52,8 @@ private fun ShortcutBar(shortcuts: List<Shortcut>) {
             modifier = Modifier
                 .fillMaxWidth()
                 .navigationBarsPadding()
+                // On a tablet the buttons keep a phone's proportions, centred (M7 §5).
+                .contentWidth()
                 .padding(horizontal = 16.dp, vertical = 8.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {

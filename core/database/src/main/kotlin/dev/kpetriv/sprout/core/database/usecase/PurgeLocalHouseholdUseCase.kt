@@ -94,6 +94,7 @@ class PurgeLocalHouseholdUseCase @Inject constructor(
             "message_seq" to purge.deleteMessageSeqs(threads),
             "thread_keys" to purge.deleteThreadKeys(threads),
             "read_marks" to purge.deleteReadMarks(threads),
+            "time_bank_clocks" to database.timeBankClockDao().deleteForKids(threads),
             "blobs" to blobs.sumOf { database.blobDao().delete(it.blobId) },
             "accounts" to purge.deleteAccounts(kids),
             "kids" to purge.deleteKids(household),

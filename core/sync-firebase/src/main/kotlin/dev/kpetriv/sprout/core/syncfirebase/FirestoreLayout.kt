@@ -27,6 +27,13 @@ object FirestoreLayout {
     const val THREAD_KEYS: String = "threadKeys"
     const val QUOTAS: String = "quotas"
 
+    /**
+     * The chat prune watermark on the household root document (D-M7-53): a map the server's `pruneMessages` writes
+     * (`prunedBefore`, `prunedAt`, `purgedAt` timestamps); members read it, nobody else writes it.
+     */
+    const val CHAT_PRUNE: String = "chatPrune"
+    const val PRUNED_BEFORE: String = "prunedBefore"
+
     /** Separator between `eventId` and `hash` in the id of a conflicting event copy. */
     const val CONFLICT_SEPARATOR: String = "__"
 

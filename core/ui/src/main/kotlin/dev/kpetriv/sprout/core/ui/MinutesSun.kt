@@ -14,10 +14,12 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.DrawScope
+import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.semantics.ProgressBarRangeInfo
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.progressBarRangeInfo
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.Dp
@@ -29,7 +31,8 @@ import kotlin.math.sin
 
 /**
  * Screen-time minutes as a sun whose rays light up like a clock face: each lit ray is
- * [maxMinutes] / 12 minutes. [label] ("45 min") sits underneath. One accessibility node with [contentDescription].
+ * [maxMinutes] / 12 minutes. [label] ("45 min") sits underneath. One accessibility node with [contentDescription]
+ * and the rays as a state in minutes ("45 of 120 minutes"), so TalkBack never reads the rays as a bare percentage.
  */
 @Composable
 fun MinutesSun(
@@ -44,11 +47,18 @@ fun MinutesSun(
     require(maxMinutes > 0) { "maxMinutes must be positive" }
     val fraction = (minutes.coerceIn(0, maxMinutes).toFloat() / maxMinutes)
     val animated by animateFloatAsState(targetValue = fraction, label = "sunRays")
+    val state = pluralStringResource(
+        R.plurals.core_ui_sun_state,
+        maxMinutes.toInt(),
+        minutes.coerceIn(0, maxMinutes),
+        maxMinutes,
+    )
     val lit = MaterialTheme.colorScheme.secondary
     val unlit = MaterialTheme.colorScheme.outlineVariant
     Column(
         modifier = modifier.clearAndSetSemantics {
             this.contentDescription = contentDescription
+            stateDescription = state
             progressBarRangeInfo = ProgressBarRangeInfo(fraction, 0f..1f)
         },
         horizontalAlignment = Alignment.CenterHorizontally,

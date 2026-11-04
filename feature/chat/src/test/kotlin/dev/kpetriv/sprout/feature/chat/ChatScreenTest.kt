@@ -14,6 +14,7 @@ import androidx.compose.ui.test.performTouchInput
 import dev.kpetriv.sprout.core.designsystem.theme.SproutTheme
 import dev.kpetriv.sprout.core.model.KidId
 import dev.kpetriv.sprout.core.model.KidUiTier
+import dev.kpetriv.sprout.core.testing.accessibility.AccessibilityRule
 import dev.kpetriv.sprout.core.ui.ReadAloud
 import org.junit.Rule
 import org.junit.Test
@@ -27,8 +28,11 @@ import kotlin.test.assertTrue
 @RunWith(RobolectricTestRunner::class)
 @Config(qualifiers = "en-rGB-w411dp-h1200dp")
 class ChatScreenTest {
-    @get:Rule
+    @get:Rule(order = 0)
     val compose = createComposeRule()
+
+    @get:Rule(order = 1)
+    val a11y = AccessibilityRule(compose)
 
     private val events = mutableListOf<ChatEvent>()
     private val spoken = mutableListOf<String>()

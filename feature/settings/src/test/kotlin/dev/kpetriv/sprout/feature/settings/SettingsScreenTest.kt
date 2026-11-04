@@ -1,10 +1,15 @@
 package dev.kpetriv.sprout.feature.settings
 
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
+import androidx.compose.ui.test.assertIsNotSelected
+import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createComposeRule
@@ -19,7 +24,9 @@ import dev.kpetriv.sprout.core.crypto.ParentAuthAvailability
 import dev.kpetriv.sprout.core.designsystem.theme.SproutTheme
 import dev.kpetriv.sprout.core.model.CalendarDate
 import dev.kpetriv.sprout.core.model.DayOfWeek
+import dev.kpetriv.sprout.core.model.HouseholdId
 import dev.kpetriv.sprout.core.model.KidUiTier
+import dev.kpetriv.sprout.core.testing.accessibility.AccessibilityRule
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -28,12 +35,18 @@ import org.robolectric.annotation.Config
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
-/** Renders the settings screens under Robolectric. A tall window keeps every section composed. */
+/**
+ * Renders the settings screens under Robolectric. A tall window keeps every section composed. Every test ends with
+ * the accessibility rule (M7 §8, D-M7-5) over whatever is left on screen, dialogs included.
+ */
 @RunWith(RobolectricTestRunner::class)
 @Config(qualifiers = "w411dp-h2400dp")
 class SettingsScreenTest {
-    @get:Rule
+    @get:Rule(order = 0)
     val compose = createComposeRule()
+
+    @get:Rule(order = 1)
+    val a11y = AccessibilityRule(compose)
 
     private fun show(content: @Composable () -> Unit) = compose.setContent { SproutTheme { content() } }
 
@@ -290,5 +303,136 @@ class SettingsScreenTest {
             )
         }
         compose.onNodeWithText("Too easy to guess: avoid runs like 123456").assertIsDisplayed()
+    }
+
+    private val household = HouseholdId("hh7f3k2q9xabc")
+
+    @Test
+    fun `the data section offers chat retention and sends the period picked`() {
+        val events = mutableListOf<DataEvent>()
+        show {
+            DataScreen(
+                DataUiState(householdId = household, retention = RetentionUi(days = 90)),
+                onEvent = { events += it },
+                onBack = {},
+            )
+        }
+
+        compose.onNodeWithText("Keep chat messages for").assertIsDisplayed()
+        compose.onNodeWithContentDescription("Keep chat messages for, 90 days").performClick()
+        compose.onNodeWithText("30 days").performClick()
+        compose.onNodeWithText("Delete chat history now").performScrollTo().performClick()
+
+        assertEquals(listOf(DataEvent.RetentionChosen(30), DataEvent.AskDeleteChat), events)
+    }
+
+    @Test
+    fun `a shorter retention asks before deleting older messages`() {
+        val events = mutableListOf<DataEvent>()
+        show {
+            DataScreen(
+                DataUiState(
+                    householdId = household,
+                    retention = RetentionUi(days = null, pending = RetentionChoice(30)),
+                ),
+                onEvent = { events += it },
+                onBack = {},
+            )
+        }
+
+        compose.onNodeWithText("Keep chat messages for 30 days?").assertIsDisplayed()
+        compose.onNodeWithText("Delete older messages").performClick()
+        assertEquals(listOf<DataEvent>(DataEvent.ConfirmRetention), events)
+    }
+
+    @Test
+    fun `delete chat history is enabled only once the word is typed`() {
+        val events = mutableListOf<DataEvent>()
+        var typed by mutableStateOf("")
+        show {
+            DeleteChatCard(DataUiState(householdId = household, chatDeleteTyped = typed), onEvent = { events += it })
+        }
+
+        compose.onNodeWithText("To confirm, type DELETE below.").assertIsDisplayed()
+        compose.onNodeWithText("Delete chat history").assertIsNotEnabled()
+        compose.onNodeWithText("Confirmation").performTextInput("delete")
+        typed = "delete"
+        compose.onNodeWithText("Delete chat history").assertIsEnabled().performClick()
+
+        assertEquals(listOf(DataEvent.ChatDeleteTyped("delete"), DataEvent.ConfirmDeleteChat), events)
+    }
+
+    @Test
+    fun `a running export says what it is doing and cannot start twice`() {
+        show {
+            DataScreen(
+                DataUiState(householdId = household, exportProgress = ExportProgress(ExportStage.MEDIA, 1, 4)),
+                onEvent = {},
+                onBack = {},
+            )
+        }
+
+        compose.onNodeWithText("Adding photos and voice notes (1 of 4)…").assertIsDisplayed()
+        compose.onNodeWithText("Export").assertIsNotEnabled()
+        compose.onNodeWithText("decrypted on this phone", substring = true).assertIsDisplayed()
+    }
+
+    @Test
+    fun `the allowance section shows the daily game limit and opens its dialog`() {
+        val events = mutableListOf<AllowanceSettingsEvent>()
+        show {
+            AllowanceSettingsScreen(
+                AllowanceSettingsUiState(
+                    isLoading = false,
+                    gameCap = GameCapUi(capMinor = 50, isDefault = true, currency = SettingsPreviewData.gbp),
+                ),
+                onEvent = { events += it },
+                onBack = {},
+            )
+        }
+
+        compose.onNodeWithText("Brain games can earn each kid up to 50p a day (the default)").assertIsDisplayed()
+        compose.onNodeWithText("Daily game limit").performClick()
+        assertEquals(listOf<AllowanceSettingsEvent>(AllowanceSettingsEvent.EditGameCap), events)
+    }
+
+    @Test
+    fun `the game limit dialog explains a limit that is too high and resets to the default`() {
+        val events = mutableListOf<AllowanceSettingsEvent>()
+        show {
+            GameCapDialogCard(
+                GameCapEditorUi("120", SettingsPreviewData.gbp, error = AmountError.TOO_LARGE),
+                onEvent = { events += it },
+            )
+        }
+
+        compose.onNodeWithText("At most £100.00").assertIsDisplayed()
+        compose.onNodeWithText("Use the default (50p)").performClick()
+        compose.onNodeWithText("Save").performClick()
+        assertEquals(listOf(AllowanceSettingsEvent.ResetGameCap, AllowanceSettingsEvent.SaveGameCap), events)
+    }
+
+    @Test
+    @Config(qualifiers = "w1280dp-h800dp")
+    fun `on a wide window the hub stays beside the open section`() {
+        val opened = mutableListOf<SettingsSection>()
+        var selected by mutableStateOf<SettingsSection?>(null)
+        show {
+            SettingsListDetail(
+                sections = SettingsSection.entries,
+                selected = selected,
+                onOpen = { opened += it },
+                onBack = {},
+                detail = selected?.let { { modifier -> AboutScreen("1.0", onBack = {}, modifier = modifier) } },
+            )
+        }
+
+        compose.onNodeWithText("Choose a section").assertIsDisplayed()
+        compose.onNodeWithText("About").performScrollTo().performClick()
+        selected = SettingsSection.ABOUT
+        compose.onNodeWithText("Version 1.0").assertIsDisplayed()
+        compose.onNode(hasText("Version and privacy")).assertIsSelected()
+        compose.onNodeWithText("Kids").assertIsNotSelected()
+        assertEquals(listOf(SettingsSection.ABOUT), opened)
     }
 }

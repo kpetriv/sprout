@@ -3,6 +3,7 @@ package dev.kpetriv.sprout.sync
 import dev.kpetriv.sprout.FakeSessionStore
 import dev.kpetriv.sprout.FakeShellPreferences
 import dev.kpetriv.sprout.REAL_HOUSEHOLD
+import dev.kpetriv.sprout.core.database.ChatPruneScheduler
 import dev.kpetriv.sprout.core.database.entity.RegistrationStatus
 import dev.kpetriv.sprout.core.sync.PushItemId
 import dev.kpetriv.sprout.core.sync.PushRejection
@@ -27,6 +28,8 @@ class SyncReportProcessorTest {
     private val clock = FakeClock(Instant.fromEpochSeconds(1_000))
     private var upkeeps = 0
     private var upkeepFailure: Exception? = null
+    private var pruneRequests = 0
+    private var widgetRefreshes = 0
     private val processor = SyncReportProcessor(
         auditor = { audited += it },
         sessions = sessions,
@@ -45,6 +48,14 @@ class SyncReportProcessorTest {
             upkeeps += 1
             upkeepFailure?.let { throw it }
         },
+        prunes = object : ChatPruneScheduler {
+            override fun scheduleDaily() = Unit
+
+            override fun pruneSoon() {
+                pruneRequests += 1
+            }
+        },
+        widgets = { widgetRefreshes += 1 },
     )
 
     private fun refused(seq: Long) = PushRejection(seq, PushItemId("event/e$seq:abc"), "permission-denied", true)
@@ -119,5 +130,15 @@ class SyncReportProcessorTest {
         )
         failing.handle(SyncReport(rejections = listOf(refused(1))))
         assertEquals(1, plans)
+    }
+
+    @Test
+    fun `every successful sync asks for the chat prune and a widget refresh, even after a failed upkeep`() = runTest {
+        upkeepFailure = IllegalStateException("upkeep")
+        processor.handle(SyncReport())
+        processor.handle(SyncReport(error = SyncError.Transient()))
+        processor.handle(SyncReport(householdGone = true))
+        assertEquals(1, pruneRequests)
+        assertEquals(1, widgetRefreshes)
     }
 }

@@ -42,6 +42,7 @@ import dev.kpetriv.sprout.core.model.KidUiTier
 import dev.kpetriv.sprout.core.ui.ReadAloud
 import dev.kpetriv.sprout.core.ui.TierScaledText
 import dev.kpetriv.sprout.core.ui.TierTextRole
+import dev.kpetriv.sprout.core.ui.contentWidth
 
 /**
  * Navigation entry for one play of [kind] by [kidId] at [tier]: the start card, the rounds and the result, all in this
@@ -118,7 +119,7 @@ fun GamePlayScreen(
 private fun StartCard(state: GamePlayUiState.Start, onEvent: (GamePlayEvent) -> Unit) {
     val touch = SproutTheme.tierTokens.minTouchTarget
     Column(
-        modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(24.dp),
+        modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).contentWidth().padding(24.dp),
         verticalArrangement = Arrangement.spacedBy(24.dp, Alignment.CenterVertically),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
@@ -185,7 +186,7 @@ private fun PlayingContent(state: GamePlayUiState.Playing, onEvent: (GamePlayEve
     val progressDescription =
         stringResource(R.string.feature_games_progress_description, state.roundNumber, state.roundCount)
     Column(
-        modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(24.dp),
+        modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).contentWidth().padding(24.dp),
         verticalArrangement = Arrangement.spacedBy(20.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {

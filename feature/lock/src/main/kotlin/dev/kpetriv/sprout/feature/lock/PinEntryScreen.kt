@@ -19,6 +19,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextAlign
@@ -30,6 +31,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.kpetriv.sprout.core.designsystem.theme.SproutTheme
 import dev.kpetriv.sprout.core.ui.PinDots
 import dev.kpetriv.sprout.core.ui.PinPad
+import dev.kpetriv.sprout.core.ui.contentWidth
 
 /** PIN entry backed by a [PinEntryViewModel]; shows the fingerprint option when this activity can prompt. */
 @Composable
@@ -64,6 +66,7 @@ fun PinEntryScreen(
             modifier = Modifier
                 .safeDrawingPadding()
                 .verticalScroll(rememberScrollState())
+                .contentWidth()
                 .padding(horizontal = 24.dp, vertical = 32.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(24.dp),
@@ -72,6 +75,7 @@ fun PinEntryScreen(
                 text = stringResource(R.string.feature_lock_entry_title),
                 style = MaterialTheme.typography.headlineSmall,
                 textAlign = TextAlign.Center,
+                modifier = Modifier.semantics { heading() },
             )
             PinEntryBody(state = state, onEvent = onEvent, onUseBiometric = onUseBiometric, keySize = 72.dp)
         }

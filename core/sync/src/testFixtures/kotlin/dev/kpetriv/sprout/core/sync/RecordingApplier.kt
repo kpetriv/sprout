@@ -164,8 +164,21 @@ class RecordingApplier(
         EventApplyReport(applied = applied, duplicates = duplicates)
     }
 
-    override suspend fun applyMessages(messages: List<JsonObject>): MessageApplyReport {
-        synchronized(this) { callLog += "messages" }
+    /** Every chat prune watermark the engine handed over, in order (kept out of [callLog]). */
+    val chatPrunes: MutableList<Instant> = mutableListOf()
+
+    override suspend fun applyChatPrune(prunedBefore: Instant) {
+        synchronized(this) { chatPrunes += prunedBefore }
+    }
+
+    /** Every message's server stamp the engine handed over with it, by message id (D-M7-80). */
+    val messageStamps: MutableMap<String, Instant> = mutableMapOf()
+
+    override suspend fun applyMessages(messages: List<JsonObject>, stamps: Map<String, Instant>): MessageApplyReport {
+        synchronized(this) {
+            callLog += "messages"
+            messageStamps += stamps
+        }
         val report = verifyMessages(messages) + retryHeldMessages()
         val keys = messages.map { (it["messageId"] as? JsonPrimitive)?.content.orEmpty() }.toSet()
         return report.copy(held = synchronized(this) { heldMessages.keys.count { it in keys } })

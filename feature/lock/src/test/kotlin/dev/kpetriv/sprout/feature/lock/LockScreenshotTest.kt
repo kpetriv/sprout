@@ -11,7 +11,7 @@ import org.junit.Test
  * Golden screenshots of the lock screens (parent sizing), in src/test/screenshots. Re-record with
  * `./gradlew :feature:lock:recordRoborazziDebug`.
  */
-class LockScreenshotTest : ScreenshotTest() {
+class LockScreenshotTest : ScreenshotTest(checkAccessibility = true) {
     @Test
     fun `pin entry`() = screenshot.captureLightDark("lock_pin_entry") {
         PinEntryScreen(
@@ -45,6 +45,28 @@ class LockScreenshotTest : ScreenshotTest() {
             onEvent = {},
             onUseBiometric = {},
         )
+    }
+
+    @Test
+    fun `kid mode exit gate`() = screenshot.captureLightDark("lock_exit_gate") {
+        KidModeExitGateCard(onDismiss = {}) {
+            KidModeExitPinContent(
+                state = PinEntryUiState(enteredDigits = 3, biometricAvailable = true),
+                onEvent = {},
+                onUseBiometric = {},
+            )
+        }
+    }
+
+    @Test
+    fun `kid mode exit gate, wrong pin`() = screenshot.captureLightDark("lock_exit_gate_wrong_pin") {
+        KidModeExitGateCard(onDismiss = {}) {
+            KidModeExitPinContent(
+                state = PinEntryUiState(error = PinEntryError.WRONG_PIN),
+                onEvent = {},
+                onUseBiometric = null,
+            )
+        }
     }
 
     @Test

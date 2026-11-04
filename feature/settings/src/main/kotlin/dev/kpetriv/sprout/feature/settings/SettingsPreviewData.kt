@@ -4,14 +4,22 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.tooling.preview.Preview
 import dev.kpetriv.sprout.core.crypto.ParentAuthAvailability
 import dev.kpetriv.sprout.core.designsystem.theme.SproutTheme
+import dev.kpetriv.sprout.core.domainhousehold.AllowanceSchedule
+import dev.kpetriv.sprout.core.domainhousehold.SavingsGoal
 import dev.kpetriv.sprout.core.domainledger.Currency
 import dev.kpetriv.sprout.core.domainledger.InterestCalculator
 import dev.kpetriv.sprout.core.domainledger.Money
+import dev.kpetriv.sprout.core.model.AccountId
+import dev.kpetriv.sprout.core.model.AllowanceCadence
+import dev.kpetriv.sprout.core.model.CalendarDate
+import dev.kpetriv.sprout.core.model.DayOfWeek
+import dev.kpetriv.sprout.core.model.GoalId
 import dev.kpetriv.sprout.core.model.HouseholdId
 import dev.kpetriv.sprout.core.model.InterestPolicy
 import dev.kpetriv.sprout.core.model.Kid
 import dev.kpetriv.sprout.core.model.KidId
 import dev.kpetriv.sprout.core.model.KidUiTier
+import dev.kpetriv.sprout.core.model.ScheduleId
 import dev.kpetriv.sprout.core.model.YearMonth
 
 /** Fixed sample states for previews and screenshot tests. No clock, no random ids, no real people. */
@@ -38,6 +46,92 @@ object SettingsPreviewData {
             KidRowUi(zoe, 13, KidUiTier.SAPLING),
         ),
     )
+
+    /** Leo weekly, Mia paused, Zoe none; the default game limit. */
+    fun allowance(): AllowanceSettingsUiState {
+        val leoWeekly = AllowanceSchedule(
+            id = ScheduleId("leo-weekly"),
+            kidId = leo.id,
+            accountId = AccountId("leo-main"),
+            amount = Money(500),
+            currency = gbp,
+            cadence = AllowanceCadence.Weekly(DayOfWeek.SATURDAY),
+            startsOn = CalendarDate(2026, 10, 3),
+        )
+        val miaMonthly = leoWeekly.copy(
+            id = ScheduleId("mia-monthly"),
+            kidId = mia.id,
+            accountId = AccountId("mia-main"),
+            amount = Money(1_000),
+            cadence = AllowanceCadence.Monthly(1),
+            active = false,
+        )
+        return AllowanceSettingsUiState(
+            isLoading = false,
+            rows = listOf(
+                AllowanceRowUi(mia, miaMonthly, null),
+                AllowanceRowUi(leo, leoWeekly, CalendarDate(2026, 11, 7)),
+                AllowanceRowUi(zoe, null, null),
+            ),
+            gameCap = GameCapUi(capMinor = HouseholdRulesState.DEFAULT_DAILY_GAME_CAP_MINOR, isDefault = true, gbp),
+        )
+    }
+
+    fun allowanceEditor(): AllowanceEditorUi = AllowanceEditorUi(
+        kidId = leo.id,
+        kidName = "Leo",
+        scheduleId = ScheduleId("leo-weekly"),
+        currency = gbp,
+        amountText = "5.00",
+        cadence = CadenceKind.WEEKLY,
+        dayOfWeek = DayOfWeek.SATURDAY,
+        dayOfMonth = 1,
+        startsOn = CalendarDate(2026, 10, 3),
+        active = true,
+        nextDue = CalendarDate(2026, 11, 7),
+    )
+
+    fun kidEditor(isNew: Boolean = false): KidEditorUi = KidEditorUi(
+        kidId = if (isNew) null else zoe.id,
+        firstName = if (isNew) "" else "Zoe",
+        birthYear = if (isNew) 2020 else 2013,
+        birthMonth = if (isNew) 1 else 9,
+        tier = if (isNew) KidUiTier.SEEDLING else KidUiTier.SPROUT,
+        tierChosen = !isNew,
+        suggestedTier = if (isNew) KidUiTier.SEEDLING else KidUiTier.SAPLING,
+        years = (2026 downTo 2008).toList(),
+    )
+
+    fun goals(): SavingsGoalsUiState = SavingsGoalsUiState(
+        isLoading = false,
+        kids = listOf(mia, leo, zoe),
+        selectedKidId = leo.id,
+        currency = gbp,
+        goals = listOf(
+            SavingsGoal(GoalId("goal-bike"), leo.id, "New bike", Money(12_000), CalendarDate(2026, 9, 1)),
+            SavingsGoal(
+                GoalId("goal-lego"),
+                leo.id,
+                "Lego set",
+                Money(4_500),
+                CalendarDate(2026, 6, 1),
+                achievedOn = CalendarDate(2026, 10, 12),
+            ),
+        ),
+    )
+
+    fun goalEditor(): GoalEditorUi = GoalEditorUi(
+        goalId = null,
+        kidId = leo.id,
+        currency = gbp,
+        title = "Football boots",
+        targetText = "",
+        targetError = AmountError.REQUIRED,
+    )
+
+    /** The data section of a synced household keeping chat for 90 days. */
+    fun data(retentionDays: Int? = 90): DataUiState =
+        DataUiState(householdId = HouseholdId("hh7f3k2q9xabc"), retention = RetentionUi(days = retentionDays))
 
     fun interest(rateText: String = "2.50", accrualDay: Int = 1): InterestSettingsUiState {
         val parsed = InterestRate.parse(rateText)

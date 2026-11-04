@@ -78,6 +78,8 @@ internal fun WordGame(ui: RoundUi.Word, tier: KidUiTier, onEvent: (GamePlayEvent
             round.scrambled.forEachIndexed { index, letter ->
                 LetterTile(
                     letter = letter,
+                    position = index + 1,
+                    count = round.scrambled.length,
                     used = index in ui.used,
                     size = maxOf(touch, slotSize(tier)),
                     onClick = { onEvent(GamePlayEvent.TapLetter(index)) },
@@ -131,8 +133,9 @@ private fun AnswerSlot(letter: Char?, size: Dp) {
 }
 
 @Composable
-private fun LetterTile(letter: Char, used: Boolean, size: Dp, onClick: () -> Unit) {
-    val description = stringResource(R.string.feature_games_word_letter, letter.uppercase())
+private fun LetterTile(letter: Char, position: Int, count: Int, used: Boolean, size: Dp, onClick: () -> Unit) {
+    // The position keeps two tiles with the same letter apart for TalkBack ("Letter R, 3 of 6", M7 §8).
+    val description = stringResource(R.string.feature_games_word_letter, letter.uppercase(), position, count)
     FilledTonalButton(
         onClick = onClick,
         enabled = !used,

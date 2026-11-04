@@ -10,11 +10,14 @@ import org.robolectric.annotation.GraphicsMode
  * Base class for Roborazzi screenshot tests: Robolectric on a pinned SDK and device ([ScreenshotDevice]) with
  * native graphics, a fixed locale and time zone, and [screenshot] for capturing. The module applies
  * `sprout.android.screenshot`. Subclasses may narrow the device with `@Config(qualifiers = "+...")`.
+ *
+ * Pass [checkAccessibility] = true (every screen test from M7 on, D-M7-5) to run the accessibility rule on every
+ * captured variant.
  */
 @RunWith(RobolectricTestRunner::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 @Config(sdk = [ScreenshotDevice.SDK], qualifiers = ScreenshotDevice.PIXEL_7)
-abstract class ScreenshotTest {
+abstract class ScreenshotTest(checkAccessibility: Boolean = false) {
     @get:Rule
-    val screenshot = ScreenshotRule()
+    val screenshot = ScreenshotRule(checkAccessibility = checkAccessibility)
 }

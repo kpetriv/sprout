@@ -64,6 +64,11 @@ service cloud.firestore {
       return m.get(k, null) == null || m[k] is int;
     }
 
+    // Optional field k of map m: absent, null, or an integer from lo to hi.
+    function optIntIn(m, k, lo, hi) {
+      return m.get(k, null) == null || (m[k] is int && m[k] >= lo && m[k] <= hi);
+    }
+
     // Optional field k of map m: absent, null, or a bool.
     function optBool(m, k) {
       return m.get(k, null) == null || m[k] is bool;
@@ -386,9 +391,12 @@ service cloud.firestore {
             && optString(p, 'kind', 32);
         }
 
+        // Policy v2 (M7 §1, D-M7-10): chatRetentionDays 1..3650 and dailyGameCapMinor 0..10000, each absent or null
+        // when not set (server/src/config.ts, core/database HouseholdPolicyLimits).
         function householdPolicyPayload(p) {
-          return p.keys().hasOnly(['fiatCurrency', 'requireParentSignature'])
-            && optString(p, 'fiatCurrency', 32) && optBool(p, 'requireParentSignature');
+          return p.keys().hasOnly(['fiatCurrency', 'requireParentSignature', 'chatRetentionDays', 'dailyGameCapMinor'])
+            && optString(p, 'fiatCurrency', 32) && optBool(p, 'requireParentSignature')
+            && optIntIn(p, 'chatRetentionDays', 1, 3650) && optIntIn(p, 'dailyGameCapMinor', 0, 10000);
         }
 
         function chorePayload(p) {

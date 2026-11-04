@@ -6,7 +6,17 @@ plugins {
     alias(libs.plugins.sprout.hilt)
     alias(libs.plugins.kotlin.serialization)
     alias(libs.plugins.baselineprofile)
+    // Robolectric, Compose UI test and Roborazzi for the shell's goldens (M7 §7) and SecureAreaTest.
+    alias(libs.plugins.sprout.android.screenshot)
 }
+
+/**
+ * The benchmark build types (D-M7-3, D-M7-41). They carry the names the Baseline Profile plugin derives from `release`
+ * (`nonMinifiedRelease` generates the profile, `benchmarkRelease` is measured), declared here so the plugin keeps them
+ * and they are benchmark builds rather than plain release copies: `BuildConfig.BENCHMARK`, the demo household seeded,
+ * a placeholder backend, no Firebase (so no sync and no App Check), debug signing.
+ */
+val benchmarkBuildTypes = listOf("nonMinifiedRelease", "benchmarkRelease")
 
 // A real Firebase project's config (never committed, D-M3-1). Without it, debug builds initialise Firebase
 // programmatically for the `demo-sprout` emulator project (core/sync-firebase FirebaseBootstrap).
@@ -21,6 +31,17 @@ if (file("google-services.json").exists()) {
     tasks.configureEach {
         if (name == "processDebugGoogleServices") enabled = false
         if (name.endsWith("DebugResources") && name != "dropDebugGoogleServices") dependsOn(dropDebugGoogleServices)
+    }
+    // The benchmark build types (below) never talk to any Firebase project either (D-M7-3).
+    benchmarkBuildTypes.forEach { buildType ->
+        val variant = buildType.replaceFirstChar(Char::titlecase)
+        val drop = tasks.register<Delete>("drop${variant}GoogleServices") {
+            delete(layout.buildDirectory.dir("generated/res/process${variant}GoogleServices"))
+        }
+        tasks.configureEach {
+            if (name == "process${variant}GoogleServices") enabled = false
+            if (name.endsWith("${variant}Resources") && !name.startsWith("drop")) dependsOn(drop)
+        }
     }
 }
 
@@ -62,9 +83,26 @@ val checkReleaseConfiguration = tasks.register("checkReleaseConfiguration") {
         }
     }
 }
+
+/**
+ * The benchmark build types are debug-signed release copies with a placeholder backend and the demo household
+ * (D-M7-41): never a Play upload. Their bundle tasks depend on this check, which always fails (M7 audit 2 I3); their
+ * APKs (`assemble…`, what the benchmarks install) are unaffected.
+ */
+val checkNotForPlay = tasks.register("checkNotForPlay") {
+    description = "Refuses to bundle a benchmark build type: those builds are never uploaded to Play."
+    doLast {
+        throw GradleException(
+            "Benchmark build types (nonMinifiedRelease, benchmarkRelease) are debug-signed, seed a demo " +
+                "household and have no backend: they are never bundled for Play. Use bundleRelease for an upload.",
+        )
+    }
+}
 tasks.configureEach {
     // A local Play bundle runs the release checks too, not only CI's `check` (audit 2 I-a).
     if (name == "bundleRelease") dependsOn(checkReleaseConfiguration, "checkMergedManifestForTelemetryRelease")
+    val benchmarkBundles = benchmarkBuildTypes.map { "bundle" + it.replaceFirstChar(Char::titlecase) }
+    if (name in benchmarkBundles) dependsOn(checkNotForPlay)
 }
 
 /**
@@ -144,6 +182,8 @@ android {
         versionCode = 1
         versionName = "0.1.0"
         buildConfigField("String", "GOOGLE_SERVER_CLIENT_ID", googleServerClientId.asBuildConfigString())
+        // True only in the benchmark build types (D-M7-3): BenchmarkSeed reads it.
+        buildConfigField("boolean", "BENCHMARK", "false")
     }
 
     // BuildConfig.DEBUG gates the TEMPORARY demo-household seeding (HouseholdBootstrap) to debug builds; the Firebase
@@ -175,12 +215,31 @@ android {
                 "proguard-rules.pro",
             )
         }
+        // Release code and R8 setup (initWith), debug-signed and profileable; the plugin turns R8 off for
+        // nonMinifiedRelease. The functions URL is a placeholder that passes FirebaseModule's https check: nothing
+        // calls it, since the benchmark build never initialises Firebase and the trial household never syncs.
+        // checkReleaseConfiguration only guards bundleRelease and is unaffected.
+        benchmarkBuildTypes.forEach { name ->
+            create(name) {
+                initWith(getByName("release"))
+                isDebuggable = false
+                isProfileable = true
+                signingConfig = signingConfigs.getByName("debug")
+                matchingFallbacks += "release"
+                buildConfigField("boolean", "BENCHMARK", "true")
+                buildConfigField("String", "FUNCTIONS_BASE_URL", "\"https://benchmark.invalid\"")
+            }
+        }
     }
 }
 
 baselineProfile {
-    // Profiles are generated on demand (./gradlew :app:generateBaselineProfile), not on every build.
+    // Profiles are generated on demand on an emulator (README "Performance"), not on every build, and committed under
+    // src/main/generated/baselineProfiles so every variant, release included, ships them.
     automaticGenerationDuringBuild = false
+    mergeIntoMain = true
+    // startup-prof.txt drives R8's dex layout: startup classes go into the primary dex.
+    dexLayoutOptimization = true
 }
 
 dependencies {
@@ -226,6 +285,8 @@ dependencies {
     implementation(libs.androidx.lifecycle.viewmodel.navigation3)
     implementation(libs.androidx.navigation3.runtime)
     implementation(libs.androidx.navigation3.ui)
+    // ListDetailSceneStrategy: chat and chores list-detail on an Expanded window (M7 §5, D-M7-2).
+    implementation(libs.androidx.compose.material3.adaptive.navigation3)
     implementation(libs.androidx.profileinstaller)
     // Room's invalidation tracker on the outbox table is the sync trigger (OutboxSyncTrigger).
     implementation(libs.androidx.room.runtime)

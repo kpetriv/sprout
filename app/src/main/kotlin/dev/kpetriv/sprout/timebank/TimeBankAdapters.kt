@@ -15,6 +15,7 @@ import dev.kpetriv.sprout.feature.timebank.TimeBankRefusedException
 import dev.kpetriv.sprout.feature.timebank.TimeBankSession
 import dev.kpetriv.sprout.feature.timebank.TimeBankSnapshot
 import dev.kpetriv.sprout.feature.timebank.TimeBankStateSource
+import dev.kpetriv.sprout.widget.WidgetRefresher
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
@@ -70,7 +71,8 @@ class LedgerTimeBankStateSource @Inject constructor(
 /**
  * [TimeBankControl] over the time bank use cases (M4 §4) plus what the app adds (M4 §5.3, D-M4-9): Start posts the
  * ongoing "screen time" notification ([TimeBankNotifier]) and schedules the auto-stop at zero ([TimeBankAutoStop]);
- * Stop cancels both. A refusal is a [TimeBankRefusedException]; a ledger rejection a plain failure.
+ * Stop cancels both and refreshes the widget. A refusal is a [TimeBankRefusedException]; a ledger rejection a plain
+ * failure.
  */
 @Singleton
 class UseCaseTimeBankControl @Inject constructor(
@@ -79,6 +81,7 @@ class UseCaseTimeBankControl @Inject constructor(
     private val reader: TimeBankStatusReader,
     private val notifier: TimeBankNotifier,
     private val autoStop: TimeBankAutoStop,
+    private val widgets: WidgetRefresher = WidgetRefresher.None,
 ) : TimeBankControl {
     override suspend fun start(kidId: KidId): Result<Unit> = attempt {
         when (val result = startUseCase(kidId)) {
@@ -111,10 +114,14 @@ class UseCaseTimeBankControl @Inject constructor(
         }
     }
 
-    /** The session of [kidId] ended (here, by the auto-stop, the start-up reconcile or another device). */
+    /**
+     * The session of [kidId] ended (here, by the auto-stop, the start-up reconcile or another device): the
+     * notification and the auto-stop go, and the home screen widget shows the minutes left (M7 §4).
+     */
     fun stopped(kidId: KidId) {
         notifier.cancel(kidId)
         autoStop.cancel(kidId)
+        widgets.refresh()
     }
 
     @Suppress("TooGenericExceptionCaught") // Every failure is a result for the screen.

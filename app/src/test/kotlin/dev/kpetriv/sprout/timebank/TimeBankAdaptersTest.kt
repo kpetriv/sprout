@@ -57,7 +57,9 @@ class TimeBankAdaptersTest {
         reader,
         notifier,
         autoStop,
+        widgets = { widgetRefreshes += 1 },
     )
+    private var widgetRefreshes = 0
     private val source = LedgerTimeBankStateSource(household.ledger, reader)
 
     @After
@@ -99,6 +101,8 @@ class TimeBankAdaptersTest {
         assertEquals(12L, control.stop(kidId).getOrThrow())
         assertTrue(notifications.allNotifications.isEmpty())
         assertEquals(listOf(kidId), cancelled)
+        // The home screen widget shows the minutes left (M7 §4).
+        assertEquals(1, widgetRefreshes)
         val stopped = source.observe(kidId).first()
         assertEquals(18L, stopped?.balanceMinutes)
         assertEquals(listOf(12L), stopped?.sessions?.map { it.minutesUsed })

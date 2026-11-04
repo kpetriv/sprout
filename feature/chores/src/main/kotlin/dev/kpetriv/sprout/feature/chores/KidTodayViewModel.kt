@@ -13,10 +13,12 @@ import dev.kpetriv.sprout.core.domainhousehold.Chore
 import dev.kpetriv.sprout.core.domainhousehold.ChoreProposalRules
 import dev.kpetriv.sprout.core.domainhousehold.ChoreReward
 import dev.kpetriv.sprout.core.domainhousehold.ChoreScheduler
+import dev.kpetriv.sprout.core.domainhousehold.KidToday
+import dev.kpetriv.sprout.core.domainhousehold.TodayOccurrence
+import dev.kpetriv.sprout.core.domainhousehold.TodayStatus
 import dev.kpetriv.sprout.core.domainledger.Currency
 import dev.kpetriv.sprout.core.model.CalendarDate
 import dev.kpetriv.sprout.core.model.ChoreId
-import dev.kpetriv.sprout.core.model.ChoreSchedule
 import dev.kpetriv.sprout.core.model.ChoreState
 import dev.kpetriv.sprout.core.model.ChoreSubmission
 import dev.kpetriv.sprout.core.model.HouseholdId
@@ -298,8 +300,7 @@ class KidTodayViewModel @Inject constructor(
     private fun ready(data: Data, localState: Local): KidTodayUiState.Ready {
         val currency = fiat.fiatCurrency()
         val active = data.chores.filter { it.state == ChoreState.ACTIVE }
-        val today = active.mapNotNull { todayItem(it, data, currency) }
-            .sortedWith(compareBy<TodayChoreUi> { it.status.ordinal }.thenBy { it.title.lowercase() })
+        val today = KidToday.occurrences(data.chores, data.submissions, data.today).map { todayItem(it, currency) }
         val upcoming = if (tier == KidUiTier.SEEDLING) {
             emptyList()
         } else {
@@ -334,25 +335,23 @@ class KidTodayViewModel @Inject constructor(
     }
 
     /**
-     * Today's entry for [chore], or null when it is not due today. A one-off "any time" chore (`Once(null)`) has a
-     * single occurrence keyed on [ChoreScheduler.anyTimeDueOn] whatever day it is done, so it pays once: it stays in
-     * the list (waiting, or not accepted) until it is approved, and then disappears.
+     * Today's entry for [chore], or null when it is not due today ([KidToday.occurrence], shared with the widget's
+     * `KidTodaySummaryUseCase`).
      */
-    @Suppress("ReturnCount") // Guard clauses: each early return is a precondition that is not met.
-    private fun todayItem(chore: Chore, data: Data, currency: Currency.Fiat): TodayChoreUi? {
-        if (!ChoreScheduler.isDueOn(chore, data.today)) return null
-        val dueOn = ChoreScheduler.occurrenceDate(chore, data.today)
-        val submission = data.submissions.firstOrNull { it.choreId == chore.id && it.dueOn == dueOn }
-        val anyTime = chore.schedule == ChoreSchedule.Once(null)
-        if (anyTime && submission?.status == SubmissionStatus.APPROVED) return null
+    private fun todayItem(chore: Chore, data: Data, currency: Currency.Fiat): TodayChoreUi? =
+        KidToday.occurrence(chore, data.submissions, data.today)?.let { todayItem(it, currency) }
+
+    private fun todayItem(occurrence: TodayOccurrence, currency: Currency.Fiat): TodayChoreUi {
+        val chore = occurrence.chore
+        val submission = occurrence.submission
         return TodayChoreUi(
             choreId = chore.id,
             title = chore.title,
             description = chore.description,
             emoji = ChoreEmoji.forTitle(chore.title),
-            dueOn = dueOn,
+            dueOn = occurrence.dueOn,
             reward = reward(chore, currency),
-            status = submission.toStatus(),
+            status = occurrence.status.toUi(),
             rejectionReason = submission?.rejectionReason?.takeIf { submission.status == SubmissionStatus.REJECTED },
         )
     }
@@ -585,9 +584,9 @@ class KidTodayViewModel @Inject constructor(
     }
 }
 
-private fun ChoreSubmission?.toStatus(): OccurrenceStatus = when (this?.status) {
-    null -> OccurrenceStatus.TO_DO
-    SubmissionStatus.SUBMITTED -> OccurrenceStatus.WAITING
-    SubmissionStatus.APPROVED -> OccurrenceStatus.DONE
-    SubmissionStatus.REJECTED -> OccurrenceStatus.NOT_ACCEPTED
+private fun TodayStatus.toUi(): OccurrenceStatus = when (this) {
+    TodayStatus.TO_DO -> OccurrenceStatus.TO_DO
+    TodayStatus.WAITING -> OccurrenceStatus.WAITING
+    TodayStatus.NOT_ACCEPTED -> OccurrenceStatus.NOT_ACCEPTED
+    TodayStatus.DONE -> OccurrenceStatus.DONE
 }

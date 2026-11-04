@@ -9,11 +9,15 @@ import dev.kpetriv.sprout.feature.lock.ParentKeyRegistry
 import dev.kpetriv.sprout.feature.lock.ParentSession
 import dev.kpetriv.sprout.feature.parenthome.HouseholdStatusSource
 import dev.kpetriv.sprout.feature.settings.AccountControl
+import dev.kpetriv.sprout.feature.settings.ChatExportSource
+import dev.kpetriv.sprout.feature.settings.ChatHistoryPurger
 import dev.kpetriv.sprout.feature.settings.DeviceAdmin
 import dev.kpetriv.sprout.feature.settings.ExportWriter
 import dev.kpetriv.sprout.feature.settings.HouseholdData
+import dev.kpetriv.sprout.feature.settings.HouseholdRules
 import dev.kpetriv.sprout.feature.settings.KidLinking
 import dev.kpetriv.sprout.feature.settings.LockPreferences
+import dev.kpetriv.sprout.feature.settings.ParentConfirmation
 import dev.kpetriv.sprout.feature.settings.ParentKeyRegistrar
 import dev.kpetriv.sprout.feature.settings.PinChanger
 import dev.kpetriv.sprout.home.SyncHouseholdStatusSource
@@ -25,7 +29,11 @@ import dev.kpetriv.sprout.settings.HouseholdParentKeyRegistry
 import dev.kpetriv.sprout.settings.LockParentKeyRegistrar
 import dev.kpetriv.sprout.settings.LockSettingsPreferences
 import dev.kpetriv.sprout.settings.ParentSessionPinChanger
+import dev.kpetriv.sprout.settings.PromptParentConfirmation
+import dev.kpetriv.sprout.settings.ReaderChatExportSource
 import dev.kpetriv.sprout.settings.RegistryDeviceAdmin
+import dev.kpetriv.sprout.settings.RepositoryHouseholdRules
+import dev.kpetriv.sprout.settings.RetentionChatHistoryPurger
 import dev.kpetriv.sprout.settings.SessionAccountControl
 
 /**
@@ -35,6 +43,7 @@ import dev.kpetriv.sprout.settings.SessionAccountControl
  */
 @Module
 @InstallIn(SingletonComponent::class)
+@Suppress("TooManyFunctions") // One binding per port.
 internal abstract class ShellModule {
     @Binds
     abstract fun pinChanger(impl: ParentSessionPinChanger): PinChanger
@@ -64,6 +73,20 @@ internal abstract class ShellModule {
 
     @Binds
     abstract fun exportWriter(impl: ContentResolverExportWriter): ExportWriter
+
+    // Settings' M7 sections: retention and game cap (household policy v2), the readable export, delete-now, and the
+    // parent confirmation they all ask for (D-M7-21).
+    @Binds
+    abstract fun householdRules(impl: RepositoryHouseholdRules): HouseholdRules
+
+    @Binds
+    abstract fun chatExportSource(impl: ReaderChatExportSource): ChatExportSource
+
+    @Binds
+    abstract fun chatHistoryPurger(impl: RetentionChatHistoryPurger): ChatHistoryPurger
+
+    @Binds
+    abstract fun parentConfirmation(impl: PromptParentConfirmation): ParentConfirmation
 
     /** The dashboard's trial banner, sync line, refused events and new-device cards. */
     @Binds

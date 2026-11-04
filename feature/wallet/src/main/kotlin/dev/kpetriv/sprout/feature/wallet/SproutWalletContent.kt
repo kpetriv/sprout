@@ -25,6 +25,7 @@ import dev.kpetriv.sprout.core.ui.LedgerEventRow
 import dev.kpetriv.sprout.core.ui.SavingsGoalBar
 import dev.kpetriv.sprout.core.ui.TierScaledText
 import dev.kpetriv.sprout.core.ui.TierTextRole
+import dev.kpetriv.sprout.core.ui.contentWidth
 
 /**
  * Sprout (about 8 to 11): real currency with decimals, chores and shop buttons, the savings goal bar and the last 10
@@ -42,6 +43,7 @@ internal fun SproutWalletContent(
         modifier = modifier
             .fillMaxSize()
             .verticalScroll(rememberScrollState())
+            .contentWidth()
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {

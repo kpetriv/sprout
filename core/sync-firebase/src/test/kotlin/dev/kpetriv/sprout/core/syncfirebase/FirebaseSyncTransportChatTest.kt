@@ -80,6 +80,39 @@ class FirebaseSyncTransportChatTest {
         val page = transport().pull(SyncCursor.START)
         assertEquals(listOf(message), page.messages)
         assertNotNull(page.next.perCollection[FirestoreLayout.MESSAGES])
+        // The server stamp comes along by message id, for the prune watermark's gap check (D-M7-80).
+        val stamp = assertIs<ServerTime>(stored[FirestoreFacade.SERVER_RECEIVED_AT])
+        assertEquals(mapOf("m1" to stamp.toInstant()), page.messageStamps)
+    }
+
+    @Test
+    fun `a page with messages carries the household's chat prune watermark`() = runTest {
+        firestore.seed("households/h1", mapOf("createdBy" to TestData.UID))
+        // Without messages the root is not read for it (a failing read of the root would fail the pull).
+        firestore.readFailures["households/h1"] = FirestoreCode.UNAVAILABLE
+        val empty = transport().pull(SyncCursor.START)
+        assertNull(empty.chatPrunedBefore)
+        firestore.readFailures.remove("households/h1")
+        val cursor = empty.next
+
+        transport().push(emptyList(), emptyList(), listOf(ChatData.message("m1")), emptyList())
+        assertNull(transport().pull(cursor).chatPrunedBefore, "no prune ran yet")
+
+        val prunedBefore = ServerTime(1_700_000_000, 5_000_000)
+        firestore.seed(
+            "households/h1",
+            mapOf(
+                "createdBy" to TestData.UID,
+                FirestoreLayout.CHAT_PRUNE to mapOf(
+                    FirestoreLayout.PRUNED_BEFORE to prunedBefore,
+                    "prunedAt" to ServerTime(1_700_000_100, 0),
+                ),
+            ),
+        )
+        assertEquals(prunedBefore.toInstant(), transport().pull(cursor).chatPrunedBefore)
+        // Something else in the field is ignored, not a failure.
+        firestore.seed("households/h1", mapOf(FirestoreLayout.CHAT_PRUNE to mapOf(FirestoreLayout.PRUNED_BEFORE to 5L)))
+        assertNull(transport().pull(cursor).chatPrunedBefore)
     }
 
     @Test

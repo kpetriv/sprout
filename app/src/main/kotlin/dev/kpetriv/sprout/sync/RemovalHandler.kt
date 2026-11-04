@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.work.WorkManager
 import dagger.Lazy
 import dagger.hilt.android.qualifiers.ApplicationContext
+import dev.kpetriv.sprout.chat.PruneChatWorker
 import dev.kpetriv.sprout.core.common.Dispatcher
 import dev.kpetriv.sprout.core.common.SproutDispatchers
 import dev.kpetriv.sprout.core.crypto.BlobStorage
@@ -18,6 +19,9 @@ import dev.kpetriv.sprout.feature.lock.EncryptedParentPinStore
 import dev.kpetriv.sprout.feature.lock.ParentSession
 import dev.kpetriv.sprout.timebank.TimeBankNotifier
 import dev.kpetriv.sprout.timebank.WorkManagerTimeBankAutoStop
+import dev.kpetriv.sprout.widget.WidgetBlanker
+import dev.kpetriv.sprout.widget.WidgetRefreshWorker
+import dev.kpetriv.sprout.widget.WidgetRefresher
 import dev.kpetriv.sprout.work.PlanScheduledActionsWorker
 import dev.kpetriv.sprout.work.UploadChorePhotosWorker
 import kotlinx.coroutines.CancellationException
@@ -38,8 +42,9 @@ fun interface HouseholdRemovals {
 }
 
 /**
- * The WorkManager work a removal cancels (sync, the daily planner, the chore photo upload and every time bank
- * auto-stop), and the time bank notifications it removes.
+ * The WorkManager work a removal cancels (sync, the daily planner, the chore photo upload, every time bank auto-stop,
+ * the chat prune and the widget's periodic refresh), and the time bank notifications it removes. The home screen
+ * widget is redrawn: with a removal stored it shows nothing (M7 §4).
  */
 fun interface BackgroundWork {
     fun cancelAll()
@@ -48,6 +53,7 @@ fun interface BackgroundWork {
 class WorkManagerBackgroundWork @Inject constructor(
     @param:ApplicationContext private val context: Context,
     private val timeBankNotifications: TimeBankNotifier,
+    private val widgets: WidgetRefresher,
 ) : BackgroundWork {
     override fun cancelAll() {
         val work = WorkManager.getInstance(context)
@@ -56,7 +62,11 @@ class WorkManagerBackgroundWork @Inject constructor(
         work.cancelUniqueWork(PlanScheduledActionsWorker.UNIQUE_NAME)
         work.cancelUniqueWork(UploadChorePhotosWorker.UNIQUE_NAME)
         work.cancelAllWorkByTag(WorkManagerTimeBankAutoStop.TAG)
+        work.cancelUniqueWork(PruneChatWorker.DAILY_NAME)
+        work.cancelUniqueWork(PruneChatWorker.SOON_NAME)
+        work.cancelUniqueWork(WidgetRefreshWorker.UNIQUE_NAME)
         timeBankNotifications.cancelAll()
+        widgets.refresh()
     }
 }
 
@@ -71,7 +81,9 @@ class WorkManagerBackgroundWork @Inject constructor(
  *
  * The database is closed after the wipe, so the process must not go on using it: in the foreground the shell shows
  * the removed screen, whose "Continue" [acknowledge]s and restarts; in the background the process exits (the next
- * start shows the removed screen). Nothing is logged.
+ * start shows the removed screen). Before that, wiped or not, the home screen widget is drawn blank at once
+ * ([WidgetBlanker], audit 2 N1): the debounced refresh of the work cancel would never run in a process that exits.
+ * Nothing is logged.
  */
 @Singleton
 @Suppress("LongParameterList") // Seams for each step of the wipe; the injected constructor is shorter.
@@ -83,6 +95,7 @@ class RemovalHandler internal constructor(
     private val eraser: LocalDataEraser,
     private val inForeground: () -> Boolean,
     private val exitProcess: () -> Unit,
+    private val blankWidgets: suspend () -> Unit = {},
 ) : HouseholdRemovals {
     @Inject
     @Suppress("LongParameterList") // One collaborator per step of the wipe.
@@ -93,6 +106,7 @@ class RemovalHandler internal constructor(
         work: BackgroundWork,
         eraser: LocalDataEraser,
         foreground: ForegroundState,
+        widgets: WidgetBlanker,
     ) : this(
         scope = scope,
         preferences = preferences,
@@ -101,6 +115,7 @@ class RemovalHandler internal constructor(
         eraser = eraser,
         inForeground = foreground::isForeground,
         exitProcess = { Runtime.getRuntime().exit(0) },
+        blankWidgets = widgets::blankNow,
     )
 
     private val mutableState = MutableStateFlow(preferences.removal())
@@ -157,6 +172,8 @@ class RemovalHandler internal constructor(
             mutableFailed.value = true
             wiping.set(false)
         }
+        // Awaited: the blank drawing must reach the launcher before a background process exits.
+        bestEffort { blankWidgets() }
         if (!inForeground()) exitProcess()
     }
 

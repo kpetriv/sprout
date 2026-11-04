@@ -126,6 +126,7 @@ export const SIGNED_CALLABLES = {
   revokeDevice: 'sprout/revoke-device/v2',
   exportHousehold: 'sprout/export-household/v2',
   deleteHousehold: 'sprout/delete-household/v2',
+  pruneMessages: 'sprout/prune-messages/v2',
 } as const;
 
 export type SignedCallable = keyof typeof SIGNED_CALLABLES;

@@ -5,6 +5,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
@@ -32,11 +33,13 @@ import dev.kpetriv.sprout.core.designsystem.theme.SproutTheme
 import dev.kpetriv.sprout.core.games.GameKind
 import dev.kpetriv.sprout.core.model.KidId
 import dev.kpetriv.sprout.core.model.KidUiTier
+import dev.kpetriv.sprout.core.ui.AdaptiveColumns
 import dev.kpetriv.sprout.core.ui.BalanceJar
 import dev.kpetriv.sprout.core.ui.BalanceJarDefaults
 import dev.kpetriv.sprout.core.ui.ReadAloud
 import dev.kpetriv.sprout.core.ui.TierScaledText
 import dev.kpetriv.sprout.core.ui.TierTextRole
+import dev.kpetriv.sprout.core.ui.contentWidth
 import dev.kpetriv.sprout.core.ui.rememberMoneyFormatter
 
 /**
@@ -110,14 +113,40 @@ private fun HubContent(state: GamesHubUiState.Ready, onPlay: (GameKind) -> Unit,
         modifier = Modifier
             .fillMaxSize()
             .verticalScroll(rememberScrollState())
+            .contentWidth()
             .padding(24.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         if (state.tier == KidUiTier.SEEDLING) SeedlingRemaining(state, readAloud) else ListRemaining(state)
-        state.games.forEach { kind -> GameTile(kind = kind, tier = state.tier, onClick = { onPlay(kind) }) }
+        // One column on a phone; two on a wider window (D-M7-2). Tiles keep the tier's touch target either way.
+        AdaptiveColumns(
+            minColumnWidth = GAME_TILE_MIN_WIDTH,
+            spacing = TILE_SPACING,
+            maxColumns = MAX_TILE_COLUMNS,
+        ) { columns ->
+            Column(verticalArrangement = Arrangement.spacedBy(TILE_SPACING)) {
+                state.games.chunked(columns).forEach { row ->
+                    Row(horizontalArrangement = Arrangement.spacedBy(TILE_SPACING)) {
+                        row.forEach { kind ->
+                            GameTile(
+                                kind = kind,
+                                tier = state.tier,
+                                onClick = { onPlay(kind) },
+                                modifier = Modifier.weight(1f),
+                            )
+                        }
+                        repeat(columns - row.size) { Spacer(modifier = Modifier.weight(1f)) }
+                    }
+                }
+            }
+        }
     }
 }
+
+private val GAME_TILE_MIN_WIDTH = 280.dp
+private val TILE_SPACING = 16.dp
+private const val MAX_TILE_COLUMNS = 2
 
 @Composable
 private fun SeedlingRemaining(state: GamesHubUiState.Ready, readAloud: ReadAloud) {
@@ -189,13 +218,13 @@ private fun ListRemaining(state: GamesHubUiState.Ready) {
 }
 
 @Composable
-private fun GameTile(kind: GameKind, tier: KidUiTier, onClick: () -> Unit) {
+private fun GameTile(kind: GameKind, tier: KidUiTier, onClick: () -> Unit, modifier: Modifier = Modifier) {
     val name = gameName(kind)
     val description = gameDescription(kind, tier)
     val action = stringResource(R.string.feature_games_play_game, name)
     Card(
         onClick = onClick,
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
             .heightIn(min = SproutTheme.tierTokens.minTouchTarget)
             .semantics { contentDescription = action },

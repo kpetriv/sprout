@@ -6,13 +6,17 @@ import dagger.hilt.InstallIn
 import dagger.hilt.android.components.ViewModelComponent
 import dagger.hilt.components.SingletonComponent
 import dev.kpetriv.sprout.chat.ChatMaintenance
+import dev.kpetriv.sprout.chat.ChatPruneRecord
 import dev.kpetriv.sprout.chat.MediaVoicePlayer
 import dev.kpetriv.sprout.chat.MediaVoiceRecorder
 import dev.kpetriv.sprout.chat.RoomChatThreads
 import dev.kpetriv.sprout.chat.RoomMessageReader
 import dev.kpetriv.sprout.chat.RoomMessageSender
 import dev.kpetriv.sprout.chat.RoomThreadKeyStatus
+import dev.kpetriv.sprout.chat.SharedChatPruneRecord
 import dev.kpetriv.sprout.chat.TransportBlobLoader
+import dev.kpetriv.sprout.chat.WorkManagerChatPruneScheduler
+import dev.kpetriv.sprout.core.database.ChatPruneScheduler
 import dev.kpetriv.sprout.feature.chat.BlobLoader
 import dev.kpetriv.sprout.feature.chat.ChatThreads
 import dev.kpetriv.sprout.feature.chat.MessageReader
@@ -57,7 +61,7 @@ internal abstract class ChatPortsModule {
     abstract fun voicePlayer(impl: MediaVoicePlayer): VoicePlayer
 }
 
-/** Blobs, the time bank ports, the photo upload and the M4 sync upkeep. */
+/** Blobs, the time bank ports, the photo upload, the M4 sync upkeep and the M7 chat retention. */
 @Module
 @InstallIn(SingletonComponent::class)
 internal abstract class ChatModule {
@@ -81,4 +85,11 @@ internal abstract class ChatModule {
 
     @Binds
     abstract fun syncUpkeep(impl: ChatMaintenance): SyncUpkeep
+
+    /** The chat retention (M7 §2): PruneChatWorker daily and soon. */
+    @Binds
+    abstract fun chatPruneScheduler(impl: WorkManagerChatPruneScheduler): ChatPruneScheduler
+
+    @Binds
+    abstract fun chatPruneRecord(impl: SharedChatPruneRecord): ChatPruneRecord
 }

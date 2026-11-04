@@ -41,6 +41,7 @@ class RemovalHandlerTest {
         },
         inForeground = { foreground },
         exitProcess = { steps += "exit" },
+        blankWidgets = { steps += "blank widgets" },
     )
 
     @Test
@@ -48,7 +49,11 @@ class RemovalHandlerTest {
         val handler = handler()
         handler.remove(RemovalReason.DEVICE_REVOKED)
 
-        assertEquals(listOf("stop sync", "cancel work", "erase"), steps, "in the foreground the shell shows it")
+        assertEquals(
+            listOf("stop sync", "cancel work", "erase", "blank widgets"),
+            steps,
+            "in the foreground the shell shows it",
+        )
         assertEquals(Removal(RemovalReason.DEVICE_REVOKED, wiped = true), preferences.storedRemoval)
         assertEquals(Removal(RemovalReason.DEVICE_REVOKED, wiped = true), handler.state.value)
         assertNull(preferences.linkedDigest, "no rows are left to belong to anyone")
@@ -75,7 +80,7 @@ class RemovalHandlerTest {
         erased = true
         val next = handler()
         assertTrue(next.resume())
-        assertEquals(listOf("stop sync", "cancel work", "erase"), steps)
+        assertEquals(listOf("stop sync", "cancel work", "erase", "blank widgets"), steps)
         assertEquals(Removal(RemovalReason.HOUSEHOLD_GONE, wiped = true), preferences.storedRemoval)
         assertFalse(next.failed.value)
     }
@@ -85,8 +90,50 @@ class RemovalHandlerTest {
         erased = false
         foreground = false
         handler().remove(RemovalReason.DEVICE_REVOKED)
-        assertEquals(listOf("stop sync", "cancel work", "erase", "exit"), steps)
+        assertEquals(listOf("stop sync", "cancel work", "erase", "blank widgets", "exit"), steps)
         assertEquals(false, preferences.storedRemoval?.wiped)
+    }
+
+    @Test
+    fun `a background removal draws the widget blank once, before the process exits`() = runTest {
+        foreground = false
+        var blanks = 0
+        val handler = RemovalHandler(
+            scope = CoroutineScope(backgroundScope.coroutineContext + UnconfinedTestDispatcher(testScheduler)),
+            preferences = preferences,
+            stopSync = { },
+            // The work cancel's debounced refresh never runs in a process that exits (audit 2 N1).
+            work = { },
+            eraser = { true },
+            inForeground = { foreground },
+            exitProcess = { steps += "exit after $blanks blank drawing(s)" },
+            blankWidgets = { blanks += 1 },
+        )
+
+        handler.remove(RemovalReason.DEVICE_REVOKED)
+
+        assertEquals(1, blanks)
+        assertEquals(listOf("exit after 1 blank drawing(s)"), steps)
+    }
+
+    @Test
+    fun `a widget that cannot be drawn never stops the wipe from ending the process`() = runTest {
+        foreground = false
+        val handler = RemovalHandler(
+            scope = CoroutineScope(backgroundScope.coroutineContext + UnconfinedTestDispatcher(testScheduler)),
+            preferences = preferences,
+            stopSync = { },
+            work = { },
+            eraser = { true },
+            inForeground = { foreground },
+            exitProcess = { steps += "exit" },
+            blankWidgets = { error("no widget host") },
+        )
+
+        handler.remove(RemovalReason.HOUSEHOLD_GONE)
+
+        assertEquals(listOf("exit"), steps)
+        assertEquals(true, preferences.storedRemoval?.wiped)
     }
 
     @Test
@@ -104,7 +151,7 @@ class RemovalHandlerTest {
         val handler = handler()
         assertTrue(handler.isRemoving)
         assertTrue(handler.resume())
-        assertEquals(listOf("stop sync", "cancel work", "erase"), steps)
+        assertEquals(listOf("stop sync", "cancel work", "erase", "blank widgets"), steps)
         assertEquals(true, preferences.storedRemoval?.wiped)
 
         steps.clear()
@@ -152,7 +199,7 @@ class RemovalHandlerTest {
         val outcome = SessionBackgroundSync(FakeSessionStore(parentSession()), runner, testPause()).syncOnce()
 
         assertEquals(BackgroundSyncOutcome.DONE, outcome)
-        assertEquals(listOf("stop sync", "cancel work", "erase", "exit"), steps)
+        assertEquals(listOf("stop sync", "cancel work", "erase", "blank widgets", "exit"), steps)
         assertEquals(Removal(RemovalReason.HOUSEHOLD_GONE, wiped = true), preferences.storedRemoval)
     }
 }

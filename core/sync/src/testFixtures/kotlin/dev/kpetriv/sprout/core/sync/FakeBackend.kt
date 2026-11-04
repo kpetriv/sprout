@@ -67,6 +67,8 @@ import kotlin.time.Instant
  * - **Thread keys** (`thread_key` documents, PARENT only like every non-submission type): never a tombstone; docId
  *   `"<threadId>.<epoch>.<createdByDeviceId>"`; `createdByDeviceId` is the author device; `lamport` at most
  *   [MAX_THREAD_KEY_LAMPORT]; an update only from the same author device (one creator per document, D-M4-3).
+ * - **Household policy** (`household_policy`, PARENT only): the closed payload key set of policy v2, with
+ *   `chatRetentionDays` 1 to 3650 and `dailyGameCapMinor` 0 to 10,000 when set (M7 §1).
  * - **Read scoping**: a PARENT member pulls every message; a KID member only those of its own thread, and fetches
  *   only blobs of its own kid ([PERMISSION_DENIED] otherwise). Blobs are never pulled, only fetched by id.
  * - **Encryption keys** (M4 §1.1): [registerEncryptionKey] mirrors the `registerEncryptionKey` callable (binding
@@ -104,7 +106,8 @@ class FakeBackend(val householdId: HouseholdId, private val pageSize: Int = DEFA
     /** A server-side write; [author] is null for writes made by the test itself (registry, injections). */
     data class Write(val collection: String, val author: DeviceId?)
 
-    private class Stored<T>(val seq: Long, val value: T)
+    /** A stored row: its collection sequence, the value and the server time it was stored at ([nowEpochMs]). */
+    private class Stored<T>(val seq: Long, val value: T, val at: Long = 0)
 
     /** The envelope fields of a pushed event the rules look at. */
     private class EventFields(
@@ -327,6 +330,63 @@ class FakeBackend(val householdId: HouseholdId, private val pageSize: Int = DEFA
     @Synchronized
     fun isPartitioned(deviceId: DeviceId): Boolean = deviceId in partitioned
 
+    /** What [pruneMessages] deleted: messages and chat blob chunks. */
+    data class PruneCounts(val messages: Int, val blobChunks: Int)
+
+    /** A callable refusal of [pruneMessages], with the Firebase error code (`permission-denied`, ...). */
+    class CallableRefusedException(val code: String) : Exception(code)
+
+    /**
+     * The household's chat prune watermark (server `households/{hid}.chatPrune.prunedBefore`, D-M7-53): the latest cut
+     * any [pruneMessages] applied, never moved back; null before the first prune. Every pull page carries it here;
+     * the Firebase transport reads it only for pages that carry messages (audit 2 I7), which is all the engine needs:
+     * a gap can only show when messages come.
+     */
+    @get:Synchronized
+    var chatPrunedBefore: Instant? = null
+        private set
+
+    /**
+     * Mirrors the server's `pruneMessages` callable (M7 §2, D-M7-8), minus the device proof, the rate limit, the
+     * per-call limits and the audit record: the [caller] must be an ACTIVE PARENT device (`permission-denied`);
+     * [before] at most [PRUNE_CLOCK_SKEW_MS] ahead of [nowEpochMs] (`invalid-argument`, clamped to now); without
+     * [purge], the household's synced `chatRetentionDays` must be set (`failed-precondition`) and [before] no later
+     * than that many days before now, plus the skew (`invalid-argument`, D-M7-51: a later cut deletes more). Deletes
+     * every message the server stored before the cut (its own stamp, never the author's `createdAt`, D-M7-52), then
+     * every chat blob chunk (never a chore photo's) stored more than [PRUNE_BLOB_GRACE_MS] before the cut that no
+     * remaining message names, and raises [chatPrunedBefore].
+     */
+    @Synchronized
+    fun pruneMessages(caller: DeviceId, before: Instant, purge: Boolean): Result<PruneCounts> {
+        val device = devices[caller]?.value
+        val now = nowEpochMs()
+        val requested = before.toEpochMilliseconds()
+        val days = (document(DocTypes.HOUSEHOLD_POLICY, householdId.value)?.takeUnless { it.deleted }?.payload)
+            ?.long(CHAT_RETENTION_DAYS)?.takeIf { it in POLICY_RETENTION_DAYS }
+        val refusal = when {
+            gone -> "not-found"
+            device == null || device.role != Role.PARENT || device.status != DeviceStatus.Active -> PERMISSION_DENIED
+            requested > now + PRUNE_CLOCK_SKEW_MS -> "invalid-argument"
+            !purge && days == null -> "failed-precondition"
+            !purge && requested > now - requireNotNull(days) * DAY_MS + PRUNE_CLOCK_SKEW_MS -> "invalid-argument"
+            else -> null
+        }
+        if (refusal != null) return Result.failure(CallableRefusedException(refusal))
+        val cut = minOf(requested, now)
+        val doomed = messages.filterValues { it.at < cut }.keys
+        doomed.forEach { messages.remove(it) }
+        val named = messages.values.mapNotNull { it.value.string(BLOB_ID) }.toSet()
+        val chunks = blobs.filterValues { stored ->
+            val header = stored.value.header
+            stored.at < cut - PRUNE_BLOB_GRACE_MS && header.string(THREAD_ID) != null &&
+                header.string(BLOB_ID) !in named
+        }.keys
+        chunks.forEach { blobs.remove(it) }
+        val cutInstant = Instant.fromEpochMilliseconds(cut)
+        chatPrunedBefore = maxOf(chatPrunedBefore ?: cutInstant, cutInstant)
+        return Result.success(PruneCounts(doomed.size, chunks.size))
+    }
+
     // ---- what transports call ----
 
     @Synchronized
@@ -362,22 +422,30 @@ class FakeBackend(val householdId: HouseholdId, private val pageSize: Int = DEFA
         checkReachable(caller.deviceId)
         var hasMore = false
         val next = cursor.perCollection.toMutableMap()
-        fun <T> page(collection: String, source: Map<*, Stored<T>>, readable: (T) -> Boolean = { true }): List<T> {
+        fun <T> stored(collection: String, source: Map<*, Stored<T>>, readable: (T) -> Boolean): List<Stored<T>> {
             val after = cursor.perCollection[collection]?.toLongOrNull() ?: 0
             val newer = source.values.filter { it.seq > after && readable(it.value) }.sortedBy { it.seq }
             if (newer.size > pageSize) hasMore = true
             val taken = newer.take(pageSize)
             taken.lastOrNull()?.let { next[collection] = it.seq.toString() }
-            return taken.map { it.value }
+            return taken
         }
+        fun <T> page(collection: String, source: Map<*, Stored<T>>): List<T> =
+            stored(collection, source) { true }.map { it.value }
+        val pulledMessages = stored(MESSAGES, messages) { mayReadThread(caller, it.string(THREAD_ID)) }
         return PullPage(
             devices = page(DEVICES, devices),
             parentKeys = page(PARENT_KEYS, parentKeys),
             documents = page(DOCUMENTS, documents),
             events = page(EVENTS, events),
-            messages = page(MESSAGES, messages) { mayReadThread(caller, it.string(THREAD_ID)) },
+            messages = pulledMessages.map { it.value },
             next = SyncCursor(next),
             hasMore = hasMore,
+            chatPrunedBefore = chatPrunedBefore,
+            // Each message's server stamp (when it was stored), as the Firebase transport reads `serverReceivedAt`.
+            messageStamps = pulledMessages.mapNotNull { row ->
+                row.value.string(MESSAGE_ID)?.let { it to Instant.fromEpochMilliseconds(row.at) }
+            }.toMap(),
         )
     }
 
@@ -510,6 +578,7 @@ class FakeBackend(val householdId: HouseholdId, private val pageSize: Int = DEFA
             isActiveDeviceOf(document.authorDeviceId, caller.uid) &&
             roleMayWrite &&
             (document.docType != DocTypes.THREAD_KEY || threadKeyAllowed(document, stored)) &&
+            (document.docType != DocTypes.HOUSEHOLD_POLICY || householdPolicyAllowed(document.payload)) &&
             (stored == null || updateAllowed(stored, document))
     }
 
@@ -527,6 +596,21 @@ class FakeBackend(val householdId: HouseholdId, private val pageSize: Int = DEFA
             document.docId == "${payload.string(THREAD_ID)}.$epoch.$creator" &&
             document.lamport <= MAX_THREAD_KEY_LAMPORT &&
             (stored == null || stored.authorDeviceId == document.authorDeviceId)
+    }
+
+    /**
+     * The `householdPolicy` payload rule (policy v2, M7 §1): the closed key set, and `chatRetentionDays` (1 to 3650)
+     * and `dailyGameCapMinor` (0 to 10,000) absent, null or an integer within bounds.
+     */
+    private fun householdPolicyAllowed(payload: JsonObject): Boolean {
+        fun bounded(key: String, range: LongRange): Boolean {
+            val value = payload[key]
+            return value == null || value is JsonNull ||
+                ((value as? JsonPrimitive)?.takeUnless { it.isString }?.longOrNull?.let { it in range } == true)
+        }
+        return POLICY_KEYS.containsAll(payload.keys) &&
+            bounded(CHAT_RETENTION_DAYS, POLICY_RETENTION_DAYS) &&
+            bounded(DAILY_GAME_CAP_MINOR, POLICY_GAME_CAP_MINOR)
     }
 
     /**
@@ -639,7 +723,7 @@ class FakeBackend(val householdId: HouseholdId, private val pageSize: Int = DEFA
     private fun storeMessage(id: String, message: JsonObject, author: DeviceId?, replace: Boolean) {
         if (!replace && id in messages) return
         messages.remove(id)
-        messages[id] = Stored(nextSeq(MESSAGES), message)
+        messages[id] = Stored(nextSeq(MESSAGES), message, nowEpochMs())
         writeFlow.tryEmit(Write(MESSAGES, author))
     }
 
@@ -710,7 +794,7 @@ class FakeBackend(val householdId: HouseholdId, private val pageSize: Int = DEFA
         val id = chunk.docId
         if (!replace && id in blobs) return
         blobs.remove(id)
-        blobs[id] = Stored(nextSeq(BLOBS), chunk)
+        blobs[id] = Stored(nextSeq(BLOBS), chunk, nowEpochMs())
         writeFlow.tryEmit(Write(BLOBS, author))
     }
 
@@ -773,6 +857,21 @@ class FakeBackend(val householdId: HouseholdId, private val pageSize: Int = DEFA
         const val MAX_THREAD_KEY_LAMPORT: Long = 1L shl 50
 
         private const val DAY_MS: Long = 86_400_000
+
+        /** How far ahead of the server clock a prune's `before` may be (server `PRUNE_CLOCK_SKEW_MS`). */
+        const val PRUNE_CLOCK_SKEW_MS: Long = 5 * 60 * 1000
+
+        /** Chat blob chunks stored less than this before a prune's cut are kept (server `PRUNE_BLOB_GRACE_MS`). */
+        const val PRUNE_BLOB_GRACE_MS: Long = 10 * 60 * 1000
+
+        private const val CHAT_RETENTION_DAYS = "chatRetentionDays"
+        private const val DAILY_GAME_CAP_MINOR = "dailyGameCapMinor"
+
+        /** The closed key set of a `household_policy` payload (core/database `DocumentPayloads`, policy v2). */
+        private val POLICY_KEYS =
+            setOf("fiatCurrency", "requireParentSignature", CHAT_RETENTION_DAYS, DAILY_GAME_CAP_MINOR)
+        private val POLICY_RETENTION_DAYS = 1L..3650L
+        private val POLICY_GAME_CAP_MINOR = 0L..10_000L
 
         const val MALFORMED: String = "malformed"
         const val WRONG_HOUSEHOLD: String = "wrong-household"

@@ -38,6 +38,7 @@ import dev.kpetriv.sprout.core.database.usecase.StartTimeBankUseCase
 import dev.kpetriv.sprout.core.database.usecase.StopTimeBankUseCase
 import dev.kpetriv.sprout.core.database.usecase.SweepOrphanPhotosUseCase
 import dev.kpetriv.sprout.core.database.usecase.ThreadKeyMaintenance
+import dev.kpetriv.sprout.core.database.usecase.TimeBankClocks
 import dev.kpetriv.sprout.core.database.usecase.TimeBankStatusReader
 import dev.kpetriv.sprout.core.database.usecase.UploadChorePhotosUseCase
 import dev.kpetriv.sprout.core.domainhousehold.PendingParentAction
@@ -140,7 +141,7 @@ class TestHousehold(
     val allowances = RoomAllowanceRepository(database, authors, clock, signer)
     val goals = RoomSavingsGoalRepository(database, authors, clock, signer)
     val interest = RoomInterestPolicyRepository(database, authors, clock, signer)
-    val policies = RoomHouseholdPolicyRepository(database, authors, { gbp }, clock, signer)
+    val policies = RoomHouseholdPolicyRepository(database, authors, { gbp }, clock, signer, ledger)
     val pending = RoomPendingParentActionRepository(database, authors, clock)
 
     val parentAuthorizer = FakeParentAuthorizer()
@@ -175,12 +176,21 @@ class TestHousehold(
     val threadKeyStatus = ThreadKeyStatusReader(database, signatureCheck, chatCrypto, Dispatchers.Unconfined)
 
     val timeBankStatus = TimeBankStatusReader(ledger, accounts)
-    val startTimeBank = StartTimeBankUseCase(timeBankStatus, writer)
-    val stopTimeBank = StopTimeBankUseCase(timeBankStatus, writer, clock)
+
+    /** This device's monotonic clock: follows [clock] from an hour after boot 1 ([FakeMonotonicClock]). */
+    val monotonic = FakeMonotonicClock(clock)
+    val timeBankClocks = TimeBankClocks(database, monotonic)
+    val startTimeBank = StartTimeBankUseCase(timeBankStatus, writer, timeBankClocks)
+    val stopTimeBank = StopTimeBankUseCase(timeBankStatus, writer, clock, timeBankClocks)
     val reconcileTimeBank = ReconcileTimeBankUseCase(ledger, timeBankStatus, writer, sessions, clock)
 
     val playGame = PlayGameUseCase(accounts, ledger, writer, calendar)
     val gameCap = GameCapReader(accounts, ledger, calendar)
+
+    val pruneChat = PruneChatUseCase(database, blobCache, clock)
+    val purgeChat = PurgeChatUseCase(database, blobCache, sessions, clock)
+    val chatExport = ChatExportReader(database, chatBlobs, sessions)
+    val kidTodaySummary = KidTodaySummaryUseCase(kids, chores, accounts, ledger, calendar)
 
     val photoUploads = PendingPhotoUploads(database)
     val uploadChorePhotos = UploadChorePhotosUseCase(photoUploads, photos, blobWrites, chores, authors)

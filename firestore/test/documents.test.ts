@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, beforeEach, describe, it } from 'vitest';
 import { assertFails, assertSucceeds, type RulesTestEnvironment } from '@firebase/rules-unit-testing';
-import { collection, deleteDoc, doc, getDoc, getDocs, setDoc, type Firestore } from 'firebase/firestore';
+import { collection, deleteDoc, doc, getDoc, getDocs, setDoc, Timestamp, updateDoc, type Firestore } from 'firebase/firestore';
 import {
   asKid,
   asKid2,
@@ -340,5 +340,82 @@ describe('documents: cross household', () => {
     await assertFails(getDoc(doc(asOtherParent(env), `households/${HID}/kids/${KID_ID}`)));
     await assertFails(getDocs(collection(asOtherParent(env), `households/${HID}/kids`)));
     await assertFails(put(asOtherParent(env), 'rewards', document('rewards')));
+  });
+});
+
+describe('documents: household policy v2 (M7 §1)', () => {
+  const policy = (payload: Record<string, unknown>, lamport = 10) =>
+    document('householdPolicy', {
+      docId: HID,
+      lamport,
+      payload: { fiatCurrency: 'EUR', requireParentSignature: true, ...payload },
+    });
+
+  it('a parent sets the chat retention and the daily game cap within their bounds', async () => {
+    const parent = asParent(env);
+    await assertSucceeds(put(parent, 'householdPolicy', policy({ chatRetentionDays: 30, dailyGameCapMinor: 120 })));
+    await assertSucceeds(put(parent, 'householdPolicy', policy({ chatRetentionDays: 1, dailyGameCapMinor: 0 }, 11)));
+    await assertSucceeds(
+      put(parent, 'householdPolicy', policy({ chatRetentionDays: 3650, dailyGameCapMinor: 10000 }, 12)),
+    );
+    // Null or absent: keep messages, default cap.
+    await assertSucceeds(put(parent, 'householdPolicy', policy({ chatRetentionDays: null }, 13)));
+    await assertSucceeds(put(parent, 'householdPolicy', policy({}, 14)));
+  });
+
+  it('refuses values out of bounds, of the wrong type, and unknown keys', async () => {
+    const parent = asParent(env);
+    for (const payload of [
+      { chatRetentionDays: 0 },
+      { chatRetentionDays: 3651 },
+      { chatRetentionDays: -30 },
+      { chatRetentionDays: 30.5 },
+      { chatRetentionDays: '30' },
+      { dailyGameCapMinor: -1 },
+      { dailyGameCapMinor: 10001 },
+      { dailyGameCapMinor: true },
+      { purgeChatAt: 5 },
+    ]) {
+      await assertFails(put(parent, 'householdPolicy', policy(payload)));
+    }
+  });
+
+  it('a kid cannot change either setting', async () => {
+    await assertFails(
+      put(
+        asKid(env),
+        'householdPolicy',
+        document('householdPolicy', {
+          docId: HID,
+          authorUid: 'kid-uid',
+          authorDeviceId: KID_DEVICE,
+          lamport: 99,
+          payload: { fiatCurrency: 'EUR', requireParentSignature: false, dailyGameCapMinor: 10000 },
+        }),
+      ),
+    );
+  });
+
+  it('prune records are the server\'s only: no client reads or writes them', async () => {
+    const parent = asParent(env);
+    await assertFails(setDoc(doc(parent, `households/${HID}/prunes/p-1`), { counts: { messages: 0 } }));
+    await assertFails(getDoc(doc(parent, `households/${HID}/prunes/p-1`)));
+    await assertFails(getDocs(collection(parent, `households/${HID}/prunes`)));
+    // Messages and blobs stay create-only for clients: the server prunes them.
+    await assertFails(deleteDoc(doc(parent, `households/${HID}/messages/m-1`)));
+    await assertFails(deleteDoc(doc(parent, `households/${HID}/blobs/b-1.0`)));
+  });
+
+  it('the chat prune watermark on the household root is readable by members and written by the server only', async () => {
+    await env.withSecurityRulesDisabled(async (ctx) => {
+      await updateDoc(doc(ctx.firestore() as unknown as Firestore, `households/${HID}`), {
+        chatPrune: { prunedBefore: Timestamp.fromMillis(1_000), prunedAt: Timestamp.now() },
+      });
+    });
+    for (const member of [asParent(env), asKid(env)]) {
+      await assertSucceeds(getDoc(doc(member, `households/${HID}`)));
+      await assertFails(updateDoc(doc(member, `households/${HID}`), { 'chatPrune.prunedBefore': Timestamp.now() }));
+    }
+    await assertFails(getDoc(doc(asOtherParent(env), `households/${HID}`)));
   });
 });

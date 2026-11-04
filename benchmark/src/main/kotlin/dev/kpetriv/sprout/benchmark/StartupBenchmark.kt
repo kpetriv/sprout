@@ -11,8 +11,9 @@ import org.junit.Test
 import org.junit.runner.RunWith
 
 /**
- * Cold start with and without the Baseline Profile.
- * Run on a device with ./gradlew :benchmark:connectedBenchmarkReleaseAndroidTest.
+ * Cold start to the unlocked parent dashboard, without any ahead-of-time compilation and with the Baseline Profile,
+ * against the `benchmarkRelease` build (R8, D-M7-3). Run on an emulator or device (README "Performance"):
+ * `./gradlew :benchmark:connectedBenchmarkReleaseAndroidTest`.
  */
 @RunWith(AndroidJUnit4::class)
 class StartupBenchmark {
@@ -33,10 +34,6 @@ class StartupBenchmark {
         iterations = ITERATIONS,
         setupBlock = { pressHome() },
     ) {
-        startActivityAndWait()
-    }
-
-    private companion object {
-        const val ITERATIONS = 10
+        startToParentDashboard()
     }
 }

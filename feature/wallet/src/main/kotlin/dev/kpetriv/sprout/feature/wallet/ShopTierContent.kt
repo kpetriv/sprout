@@ -9,7 +9,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
@@ -31,12 +30,16 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import dev.kpetriv.sprout.core.designsystem.theme.SproutTheme
 import dev.kpetriv.sprout.core.model.KidUiTier
+import dev.kpetriv.sprout.core.ui.AdaptiveColumns
+import dev.kpetriv.sprout.core.ui.ContentWidth
 import dev.kpetriv.sprout.core.ui.TierScaledText
 import dev.kpetriv.sprout.core.ui.TierTextRole
 
 /**
- * Seedling shop: two columns of big picture tiles, green when the kid can buy the reward and grey when not. Tapping a
- * tile opens the confirm (or "not yet") dialog; a parent browsing cannot tap.
+ * Seedling shop: big picture tiles, green with a tick when the kid can buy the reward and grey with a piggy bank when
+ * not (never colour alone, M7 §8). Two columns on a phone, more on a wider window (tiles at least
+ * [SEEDLING_TILE_MIN_WIDTH], the grid capped at [GRID_MAX_WIDTH], D-M7-2). Tapping a tile opens the confirm (or "not
+ * yet") dialog; a parent browsing cannot tap.
  */
 @Composable
 internal fun SeedlingShopContent(
@@ -44,16 +47,18 @@ internal fun SeedlingShopContent(
     onSelect: (ShopItemUi) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    LazyVerticalGrid(
-        columns = GridCells.Fixed(SEEDLING_COLUMNS),
-        modifier = modifier.fillMaxSize(),
-        contentPadding = PaddingValues(24.dp),
-        horizontalArrangement = Arrangement.spacedBy(16.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp),
-    ) {
-        item(span = { GridItemSpan(maxLineSpan) }) { ShopBalanceHeader(state) }
-        items(state.items, key = { it.rewardId.value }) { item ->
-            PictureTile(item, enabled = state.canPurchase, onClick = { onSelect(item) })
+    ContentWidth(modifier = modifier.fillMaxSize(), max = GRID_MAX_WIDTH) {
+        LazyVerticalGrid(
+            columns = AdaptiveColumns(minColumnWidth = SEEDLING_TILE_MIN_WIDTH, minColumns = SEEDLING_COLUMNS),
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(24.dp),
+            horizontalArrangement = Arrangement.spacedBy(16.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp),
+        ) {
+            item(span = { GridItemSpan(maxLineSpan) }) { ShopBalanceHeader(state) }
+            items(state.items, key = { it.rewardId.value }) { item ->
+                PictureTile(item, enabled = state.canPurchase, onClick = { onSelect(item) })
+            }
         }
     }
 }
@@ -100,6 +105,12 @@ private fun PictureTile(item: ShopItemUi, enabled: Boolean, onClick: () -> Unit)
             Text(text = item.kind.icon, style = MaterialTheme.typography.displayMedium)
             TierScaledText(text = item.title, role = TierTextRole.Body, tier = tier, textAlign = TextAlign.Center)
             TierScaledText(text = item.priceText, role = TierTextRole.Label, tier = tier, textAlign = TextAlign.Center)
+            TierScaledText(
+                text = (if (item.canAfford) "✓ " else "🐷 ") + status,
+                role = TierTextRole.Label,
+                tier = tier,
+                textAlign = TextAlign.Center,
+            )
         }
     }
 }
@@ -111,14 +122,16 @@ internal fun SproutShopContent(
     onSelect: (ShopItemUi) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    LazyColumn(
-        modifier = modifier.fillMaxSize(),
-        contentPadding = PaddingValues(16.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
-        item { ShopBalanceHeader(state) }
-        items(state.items, key = { it.rewardId.value }) { item ->
-            RewardRow(item, KidUiTier.SPROUT, state.canPurchase, onBuy = { onSelect(item) })
+    ContentWidth(modifier = modifier.fillMaxSize()) {
+        LazyColumn(
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            item { ShopBalanceHeader(state) }
+            items(state.items, key = { it.rewardId.value }) { item ->
+                RewardRow(item, KidUiTier.SPROUT, state.canPurchase, onBuy = { onSelect(item) })
+            }
         }
     }
 }
@@ -135,36 +148,38 @@ internal fun SaplingShopContent(
     modifier: Modifier = Modifier,
 ) {
     val tier = KidUiTier.SAPLING
-    LazyColumn(
-        modifier = modifier.fillMaxSize(),
-        contentPadding = PaddingValues(16.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
-        item { ShopBalanceHeader(state) }
-        if (state.items.isNotEmpty()) {
-            item { SectionHeading(stringResource(R.string.feature_wallet_shop_wishlist), tier) }
-            val wishlist = state.wishlist
-            if (wishlist.isEmpty()) {
-                item {
-                    TierScaledText(
-                        text = stringResource(R.string.feature_wallet_shop_wishlist_empty),
-                        role = TierTextRole.Body,
-                        tier = tier,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
+    ContentWidth(modifier = modifier.fillMaxSize()) {
+        LazyColumn(
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            item { ShopBalanceHeader(state) }
+            if (state.items.isNotEmpty()) {
+                item { SectionHeading(stringResource(R.string.feature_wallet_shop_wishlist), tier) }
+                val wishlist = state.wishlist
+                if (wishlist.isEmpty()) {
+                    item {
+                        TierScaledText(
+                            text = stringResource(R.string.feature_wallet_shop_wishlist_empty),
+                            role = TierTextRole.Body,
+                            tier = tier,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                } else {
+                    items(wishlist, key = { "wish-${it.rewardId.value}" }) { item ->
+                        RewardRow(item, tier, state.canPurchase, { onSelect(item) }, onToggleWishlist = {
+                            onToggleWishlist(item)
+                        })
+                    }
                 }
-            } else {
-                items(wishlist, key = { "wish-${it.rewardId.value}" }) { item ->
+                item { SectionHeading(stringResource(R.string.feature_wallet_shop_all_rewards), tier) }
+                items(state.items, key = { it.rewardId.value }) { item ->
                     RewardRow(item, tier, state.canPurchase, { onSelect(item) }, onToggleWishlist = {
                         onToggleWishlist(item)
                     })
                 }
-            }
-            item { SectionHeading(stringResource(R.string.feature_wallet_shop_all_rewards), tier) }
-            items(state.items, key = { it.rewardId.value }) { item ->
-                RewardRow(item, tier, state.canPurchase, { onSelect(item) }, onToggleWishlist = {
-                    onToggleWishlist(item)
-                })
             }
         }
     }
@@ -257,3 +272,5 @@ private fun WishlistToggle(item: ShopItemUi, onToggle: () -> Unit) {
 }
 
 private const val SEEDLING_COLUMNS = 2
+private val SEEDLING_TILE_MIN_WIDTH = 160.dp
+private val GRID_MAX_WIDTH = 960.dp

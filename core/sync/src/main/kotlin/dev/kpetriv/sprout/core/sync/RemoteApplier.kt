@@ -5,6 +5,7 @@ import dev.kpetriv.sprout.core.domainledger.RegisteredParentKey
 import dev.kpetriv.sprout.core.model.DeviceId
 import dev.kpetriv.sprout.core.model.ThreadId
 import kotlinx.serialization.json.JsonObject
+import kotlin.time.Instant
 
 /**
  * Applies what a pull brought into the local store (core/database implements it with Room, the device registry
@@ -28,9 +29,24 @@ interface RemoteApplier {
      * Verifies and stores chat messages (`MessageJson` trees; core/domain-ledger `MessageVerifier`): applied (stored,
      * decrypted when the epoch key is known, otherwise kept locked), duplicates, quarantined, or held for a `seq` gap
      * or an author device not yet known. Called after [applyDocuments] of the same page, so `thread_key` documents
-     * ([DocTypes.THREAD_KEY]) pulled with them are already applied.
+     * ([DocTypes.THREAD_KEY]) pulled with them are already applied. [stamps] are the backend's `serverReceivedAt`
+     * stamps by `messageId` ([PullPage.messageStamps], D-M7-80), kept for the prune watermark's gap check; empty from
+     * transports without them.
      */
-    suspend fun applyMessages(messages: List<JsonObject>): MessageApplyReport
+    suspend fun applyMessages(
+        messages: List<JsonObject>,
+        stamps: Map<String, Instant> = emptyMap(),
+    ): MessageApplyReport
+
+    /**
+     * Remembers the household's chat prune watermark ([PullPage.chatPrunedBefore], D-M7-53), so a `seq` gap left by
+     * messages a prune deleted before this device pulled them is skipped at once instead of after the held-gap
+     * timeout. Called before [applyMessages] of the same page; never moves an earlier-known watermark back. The
+     * default ignores it (gaps then wait for the timeout, as before M7).
+     */
+    suspend fun applyChatPrune(prunedBefore: Instant) {
+        // Optional: an applier that does not hold messages has nothing to skip.
+    }
 
     /**
      * The `seq` the next message of [deviceId] in [threadId] must carry to apply now (1 when none was applied): the

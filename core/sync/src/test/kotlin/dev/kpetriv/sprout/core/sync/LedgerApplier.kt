@@ -79,8 +79,8 @@ internal class LedgerApplier(
 
     override suspend fun applyEvents(events: List<PulledEvent>): EventApplyReport = ingest(events)
 
-    override suspend fun applyMessages(messages: List<JsonObject>): MessageApplyReport =
-        documents.applyMessages(messages)
+    override suspend fun applyMessages(messages: List<JsonObject>, stamps: Map<String, Instant>): MessageApplyReport =
+        documents.applyMessages(messages, stamps)
 
     override suspend fun expectedSeq(deviceId: DeviceId, threadId: ThreadId): Long =
         documents.expectedSeq(deviceId, threadId)

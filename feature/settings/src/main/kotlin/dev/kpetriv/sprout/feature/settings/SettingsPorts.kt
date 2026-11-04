@@ -2,8 +2,15 @@ package dev.kpetriv.sprout.feature.settings
 
 import dev.kpetriv.sprout.core.crypto.LockoutDecision
 import dev.kpetriv.sprout.core.crypto.ParentAuthAvailability
+import dev.kpetriv.sprout.core.database.HouseholdPolicyLimits
+import dev.kpetriv.sprout.core.domainledger.LedgerPolicy
+import dev.kpetriv.sprout.core.domainledger.chat.MessageKind
+import dev.kpetriv.sprout.core.model.KidId
+import dev.kpetriv.sprout.core.model.Role
+import dev.kpetriv.sprout.core.model.ThreadId
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.StateFlow
+import kotlin.time.Instant
 
 /*
  * What settings needs from other features. Features never depend on each other (CLAUDE.md), so the app adapts these
@@ -141,4 +148,151 @@ enum class AiModelStatus {
 
     /** No AICore on this device: the built-in rules do everything. */
     UNAVAILABLE,
+}
+
+/**
+ * The synced household policy's chat retention and daily game cap (M7 §1, D-M7-10). The app adapts `core/database`'s
+ * `HouseholdPolicyRepository` (parent-only writes that go to Room and the outbox like every policy change). Writes
+ * throw on failure; the ViewModels turn any failure into a message. While this phone has no policy yet, [observe]
+ * emits nothing and the writes throw `core/database`'s `NoHouseholdPolicyYetException` (D-M7-57): the screens say
+ * they are waiting for the household policy to sync.
+ */
+interface HouseholdRules {
+    /** The policy's values; emits again when another parent device changes them. */
+    fun observe(): Flow<HouseholdRulesState>
+
+    /** Keep chat messages for [days] (1 to [HouseholdRulesState.MAX_RETENTION_DAYS]); null keeps them forever. */
+    suspend fun setChatRetentionDays(days: Int?)
+
+    /**
+     * The most games can earn per kid per day, in the household currency's minor units (0 to
+     * [HouseholdRulesState.MAX_DAILY_GAME_CAP_MINOR]); null is the default
+     * ([HouseholdRulesState.DEFAULT_DAILY_GAME_CAP_MINOR]).
+     */
+    suspend fun setDailyGameCap(minorUnits: Long?)
+}
+
+/** What [HouseholdRules] reports: null fields are "not set" (keep forever, the default cap). */
+data class HouseholdRulesState(val chatRetentionDays: Int?, val dailyGameCapMinor: Long?) {
+    /** The cap the ledger applies (ADR-0009): the policy's, or the default. */
+    val effectiveDailyGameCapMinor: Long get() = dailyGameCapMinor ?: DEFAULT_DAILY_GAME_CAP_MINOR
+
+    companion object {
+        /** The ledger's default (ADR-0009). */
+        val DEFAULT_DAILY_GAME_CAP_MINOR: Long = LedgerPolicy.DEFAULT_DAILY_GAME_CAP.minorUnits
+
+        /** The policy's bounds (the rules and the server enforce the same). */
+        val MAX_DAILY_GAME_CAP_MINOR: Long = HouseholdPolicyLimits.DAILY_GAME_CAP_MINOR.last
+        val MAX_RETENTION_DAYS: Int = HouseholdPolicyLimits.CHAT_RETENTION_DAYS.last
+    }
+}
+
+/**
+ * Asks the parent to prove they are present again before a sensitive action (M7 §2, §3: the readable chat export,
+ * "Delete chat history now" and the household policy writes, D-M7-17), on top of the unlocked parent area. The app
+ * adapts `feature/lock`: the strong biometric prompt where the device has one, the parent PIN (under its lockout)
+ * otherwise.
+ */
+fun interface ParentConfirmation {
+    suspend fun confirm(purpose: ConfirmationPurpose): ConfirmationOutcome
+}
+
+/** Why [ParentConfirmation] is asked; the app words its prompt from it. */
+enum class ConfirmationPurpose {
+    /** The household export, which now includes every chat in plain text. */
+    EXPORT_HOUSEHOLD,
+
+    /** Deleting every chat message of the household. */
+    DELETE_CHAT_HISTORY,
+
+    /** Changing how long chat messages are kept (a shorter period deletes older ones everywhere). */
+    CHANGE_CHAT_RETENTION,
+
+    /** Changing the daily game limit, which re-decides what games earned (D-M7-11). */
+    CHANGE_GAME_CAP,
+}
+
+enum class ConfirmationOutcome {
+    CONFIRMED,
+
+    /** The parent dismissed the prompt: do nothing, say nothing. */
+    CANCELLED,
+
+    /** Locked out, no prompt host, or the prompt failed: nothing happened. */
+    FAILED,
+}
+
+/**
+ * "Delete chat history now" (D-M7-8, D-M7-58): the app deletes every local message, read mark and cached blob before
+ * now, and this phone's own messages still waiting to upload (`core/database`'s purge use case), then asks the server
+ * to delete them too (`pruneMessages` with the explicit instant). Other phones are not told: they keep their copies
+ * until their own chat retention removes them (a synced purge is M8). Called only after the typed confirmation and
+ * [ParentConfirmation].
+ */
+fun interface ChatHistoryPurger {
+    suspend fun purgeAll(): ChatPurgeOutcome
+}
+
+enum class ChatPurgeOutcome {
+    /**
+     * Deleted on this phone and on the server. Other phones keep their copies until their chat retention removes
+     * them; nothing tells them to delete now (D-M7-58).
+     */
+    PURGED,
+
+    /** Deleted on this phone; the server could not be reached (the app retries the server prune later). */
+    PURGED_ON_THIS_PHONE,
+
+    /** Nothing was deleted. */
+    FAILED,
+}
+
+/**
+ * The readable chat for the household export (M7 §3, D-M7-9). The app adapts `core/database`'s `ChatExportReader`
+ * (`threads`/`read` and `exportMedia`), which decodes this phone's stored messages and decrypts the cached media;
+ * nothing here goes to the server. Personal data: never log it.
+ */
+interface ChatExportSource {
+    /** Every thread with a visible message, each oldest message first. Throws when the chat cannot be read. */
+    suspend fun threads(): List<ChatExportThread>
+
+    /**
+     * Writes [thread]'s photos and voice notes to [sink] under their [ChatExportMessage.media] names (fetching ones
+     * that are not cached, best effort) and returns those it could not write.
+     */
+    suspend fun media(thread: ChatExportThread, sink: ChatMediaSink): List<ChatMissingMedia>
+}
+
+/** Receives one decrypted media file. The caller may wipe [bytes] once this returns: keep a copy. */
+fun interface ChatMediaSink {
+    suspend fun write(fileName: String, bytes: ByteArray)
+}
+
+/** A media file the export could not include; [reason] is the reader's (`NOT_AVAILABLE`, `LOCKED`, `INVALID`). */
+data class ChatMissingMedia(val fileName: String, val reason: String)
+
+/** One kid's thread ([threadId] for the adapter; the zip names the file after [kidId]). [toString] omits messages. */
+class ChatExportThread(val threadId: ThreadId, val kidId: KidId, val messages: List<ChatExportMessage>) {
+    override fun toString(): String = "ChatExportThread(threadId=$threadId, kidId=$kidId, messages=${messages.size})"
+}
+
+/**
+ * One decoded message, as `core/database`'s `ExportedMessage`: [text] for a text message (or a photo's caption),
+ * [presetId] and [emoji] for a preset, [durationMs] for a voice note, [media] the photo's or voice note's file name
+ * (`<blobId>.jpg`, `<blobId>.m4a`). A [locked] message (no key on this phone yet) has no content. [toString] omits
+ * the content.
+ */
+@Suppress("LongParameterList") // One field per exported fact.
+class ChatExportMessage(
+    val sentAt: Instant,
+    val author: Role,
+    val kind: MessageKind,
+    val text: String? = null,
+    val presetId: String? = null,
+    val emoji: String? = null,
+    val durationMs: Long? = null,
+    val media: String? = null,
+    val locked: Boolean = false,
+) {
+    override fun toString(): String = "ChatExportMessage(sentAt=$sentAt, author=$author, kind=$kind, locked=$locked)"
 }

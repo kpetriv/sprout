@@ -5,38 +5,186 @@ import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonArray
+import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.longOrNull
+import kotlinx.serialization.json.put
 import java.io.ByteArrayOutputStream
 import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
 import kotlin.time.Instant
 
 /**
+ * The readable chat part of the export (M7 §3, D-M7-9): every thread, decoded on this phone, the media files that could
+ * be had ([media], by their source file name) and those that could not ([missing]).
+ */
+internal class ChatExportContent(
+    val threads: List<ChatExportThread>,
+    val media: Map<String, ByteArray>,
+    val missing: List<ChatMissingMedia>,
+) {
+    override fun toString(): String =
+        "ChatExportContent(threads=${threads.size}, media=${media.size}, missing=${missing.size})"
+}
+
+/**
  * The household export (D-M3-7): the `exportHousehold` JSON bundle and a `ledger.csv` derived from its events, in one
- * zip the parent saves through the system file picker.
+ * zip the parent saves through the system file picker. Export v2 (M7 §3) adds the readable chat when given one:
+ * `chat/<kidId>.json` per thread, `chat/media/<file>` per photo or voice note, and `chat/missing.json` listing the
+ * media that could not be had. Ids from the database become file names only through [safeName].
  */
 internal object HouseholdExport {
     const val JSON_NAME: String = "household.json"
     const val CSV_NAME: String = "ledger.csv"
+    const val CHAT_DIR: String = "chat/"
+    const val MEDIA_DIR: String = "media/"
+    const val MISSING_NAME: String = "chat/missing.json"
 
     val CSV_COLUMNS: List<String> =
         listOf("eventId", "lamport", "createdAt", "type", "kidId", "accountId", "amount", "currency")
 
     private val prettyJson = Json { prettyPrint = true }
 
-    /** The zip with [JSON_NAME] and [CSV_NAME]. */
-    fun zip(bundle: JsonObject): ByteArray {
-        val bytes = ByteArrayOutputStream()
-        ZipOutputStream(bytes).use { zip ->
-            zip.putNextEntry(ZipEntry(JSON_NAME))
-            zip.write(prettyJson.encodeToString(JsonObject.serializer(), bundle).encodeToByteArray())
-            zip.closeEntry()
-            zip.putNextEntry(ZipEntry(CSV_NAME))
-            zip.write(ledgerCsv(bundle).encodeToByteArray())
-            zip.closeEntry()
+    /**
+     * The zip with [JSON_NAME] and [CSV_NAME], and the chat entries when [chat] is given. The buffer starts at about
+     * the size the media need (so it rarely grows and leaves copies behind) and is wiped once the zip is copied out:
+     * it holds plaintext chat.
+     */
+    fun zip(bundle: JsonObject, chat: ChatExportContent? = null): ByteArray {
+        val expected = (chat?.media?.values?.sumOf { it.size.toLong() } ?: 0L) + BUFFER_HEADROOM
+        val bytes = WipingOutputStream(expected.coerceAtMost(Int.MAX_VALUE.toLong() - BUFFER_HEADROOM).toInt())
+        try {
+            ZipOutputStream(bytes).use { zip ->
+                zip.entry(JSON_NAME, prettyJson.encodeToString(JsonObject.serializer(), bundle).encodeToByteArray())
+                zip.entry(CSV_NAME, ledgerCsv(bundle).encodeToByteArray())
+                if (chat != null) writeChat(zip, chat)
+            }
+            return bytes.toByteArray()
+        } finally {
+            bytes.wipe()
         }
-        return bytes.toByteArray()
     }
+
+    /** A [ByteArrayOutputStream] whose buffer can be zeroed. */
+    private class WipingOutputStream(size: Int) : ByteArrayOutputStream(size) {
+        fun wipe() = buf.fill(0)
+    }
+
+    private fun writeChat(zip: ZipOutputStream, chat: ChatExportContent) {
+        val names = mediaFileNames(chat.threads, chat.media.keys + chat.missing.map { it.fileName })
+        val threadNames = UniqueNames()
+        // `chat/missing.json` is taken; a kid id that sanitises to "missing" becomes "kid-missing" (review L5).
+        threadNames.claim(MISSING_BASE, ".json")
+        chat.threads.forEach { thread ->
+            val json = threadJson(thread, names)
+            val base = safeName(thread.kidId.value).let { if (it == MISSING_BASE) "kid-$it" else it }
+            zip.entry(CHAT_DIR + threadNames.claim(base, ".json"), json)
+        }
+        chat.media.forEach { (fileName, bytes) -> zip.entry(CHAT_DIR + MEDIA_DIR + names.getValue(fileName), bytes) }
+        // Missing: what the reader reported, plus anything referenced that neither arrived nor was reported.
+        val reported = chat.missing.associate { it.fileName to it.reason }
+        val missing = names.keys.filter { it !in chat.media }.map { it to (reported[it] ?: NOT_AVAILABLE) }
+        val missingJson = buildJsonObject {
+            put(
+                "missing",
+                buildJsonArray {
+                    missing.forEach { (fileName, reason) ->
+                        add(
+                            buildJsonObject {
+                                put("file", MEDIA_DIR + names.getValue(fileName))
+                                put("reason", reason)
+                            },
+                        )
+                    }
+                },
+            )
+        }
+        zip.entry(MISSING_NAME, prettyJson.encodeToString(JsonObject.serializer(), missingJson).encodeToByteArray())
+    }
+
+    /**
+     * Every distinct media file name of [threads] (in message order), then [others], each with its unique, sanitised
+     * name in the zip: the base and the extension are sanitised separately ([safeName]).
+     */
+    fun mediaFileNames(threads: List<ChatExportThread>, others: Collection<String> = emptyList()): Map<String, String> {
+        val names = UniqueNames()
+        val result = LinkedHashMap<String, String>()
+        (threads.flatMap { it.messages }.mapNotNull { it.media } + others).forEach { fileName ->
+            if (fileName !in result) {
+                val dot = fileName.lastIndexOf('.')
+                val base = if (dot > 0) fileName.substring(0, dot) else fileName
+                val extension = if (dot > 0) fileName.substring(dot + 1) else ""
+                val safeExtension = extension.lowercase().filter { it in 'a'..'z' || it in '0'..'9' }
+                    .take(MAX_EXTENSION).ifEmpty { "bin" }
+                result[fileName] = names.claim(safeName(base), ".$safeExtension")
+            }
+        }
+        return result
+    }
+
+    private fun threadJson(thread: ChatExportThread, mediaNames: Map<String, String>): ByteArray {
+        val json = buildJsonObject {
+            put("kidId", thread.kidId.value)
+            put(
+                "messages",
+                buildJsonArray {
+                    thread.messages.forEach { message ->
+                        add(
+                            buildJsonObject {
+                                put("sentAt", message.sentAt.toString())
+                                put("author", message.author.name)
+                                put("kind", message.kind.name.lowercase())
+                                if (message.locked) put("locked", true)
+                                message.text?.let { put("text", it) }
+                                message.presetId?.let { put("presetId", it) }
+                                message.emoji?.let { put("emoji", it) }
+                                message.durationMs?.let { put("durationMs", it) }
+                                message.media?.let { put("media", MEDIA_DIR + mediaNames.getValue(it)) }
+                            },
+                        )
+                    }
+                },
+            )
+        }
+        return prettyJson.encodeToString(JsonObject.serializer(), json).encodeToByteArray()
+    }
+
+    /**
+     * [raw] as a file name that cannot leave its directory: letters, digits, `-` and `_` only (anything else becomes
+     * `_`), at most [MAX_NAME] characters, never empty.
+     */
+    fun safeName(raw: String): String =
+        raw.map { if (it.isSafe()) it else '_' }.joinToString("").take(MAX_NAME).ifEmpty { "_" }
+
+    private fun Char.isSafe(): Boolean = this in 'a'..'z' || this in 'A'..'Z' || this in '0'..'9' || this == '-' ||
+        this == '_'
+
+    /** Hands out names once: a repeat (two ids that sanitise alike) gets `-2`, `-3`, ... before [suffix]. */
+    private class UniqueNames {
+        private val used = mutableSetOf<String>()
+
+        fun claim(base: String, suffix: String = ""): String {
+            var candidate = base
+            var n = 1
+            while (!used.add(candidate + suffix)) {
+                n += 1
+                candidate = "$base-$n"
+            }
+            return candidate + suffix
+        }
+    }
+
+    private fun ZipOutputStream.entry(name: String, content: ByteArray) {
+        putNextEntry(ZipEntry(name))
+        write(content)
+        closeEntry()
+    }
+
+    private const val MAX_NAME = 64
+    private const val MISSING_BASE = "missing"
+    private const val BUFFER_HEADROOM = 1024 * 1024
+    private const val NOT_AVAILABLE = "NOT_AVAILABLE"
+    private const val MAX_EXTENSION = 5
 
     /**
      * One row per event of `bundle.events` (stored with the envelope fields at the top level), in lamport order:

@@ -11,6 +11,7 @@ import kotlinx.serialization.json.JsonObject
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlin.io.encoding.Base64
+import kotlin.time.Instant
 
 /**
  * Typed wrappers for the household callables (M3 §1, `server/src/index.ts`), at [FirebaseConfig.functionsEndpoint].
@@ -191,6 +192,29 @@ class HouseholdFunctions @Inject constructor(private val invoker: CallableInvoke
     ).map { }
 
     /**
+     * Asks the server to delete the household's chat messages and chat blob chunks it stored before [before] (M7 §2,
+     * D-M7-8, D-M7-52: the server's own stamp decides, not the author's date): the retention cut, which must be no
+     * later than `now − chatRetentionDays` plus five minutes of clock skew (`invalid-argument` otherwise, D-M7-51; any
+     * earlier cut is accepted, so a phone that just shortened the retention pushes the policy first), or with [purge]
+     * any instant up to now ("Delete chat history now"). [signature] is [callerDeviceId]'s (an ACTIVE parent device)
+     * signature over [DeviceProof.pruneMessagesPayload]. `failed-precondition` when the household keeps messages and
+     * [purge] is false; [PrunedMessages.more] asks for another call. The server then raises the household's chat prune
+     * watermark, which the transport pulls ([PullPage.chatPrunedBefore][dev.kpetriv.sprout.core.sync.PullPage]).
+     */
+    suspend fun pruneMessages(
+        before: Instant,
+        purge: Boolean,
+        callerDeviceId: DeviceId,
+        signature: ByteArray,
+    ): Result<PrunedMessages> = call(
+        PRUNE_MESSAGES,
+        PruneMessagesRequest(before.toEpochMilliseconds(), purge, callerDeviceId, Base64.Default.encode(signature)),
+        PruneMessagesRequest.serializer(),
+        PrunedMessages.serializer(),
+        BULK_TIMEOUT_MS,
+    )
+
+    /**
      * Registers a parent authorisation key with the server (D-M3-34; clients cannot write `parentKeys`): [publicKey]
      * is its X.509 SPKI DER, [attestationChain] its Keystore attestation (leaf first; null where the key has none,
      * accepted only by a backend that allows unattested keys), [deviceId] this ACTIVE parent device and [signature]
@@ -281,10 +305,11 @@ class HouseholdFunctions @Inject constructor(private val invoker: CallableInvoke
         const val EXPORT_HOUSEHOLD: String = "exportHousehold"
         const val DELETE_HOUSEHOLD: String = "deleteHousehold"
         const val DEVICE_STATUS: String = "deviceStatus"
+        const val PRUNE_MESSAGES: String = "pruneMessages"
 
         private const val DEFAULT_TIMEOUT_MS = 30_000L
 
-        /** exportHousehold and deleteHousehold run up to 300 s on the server. */
+        /** exportHousehold, deleteHousehold and pruneMessages run up to 300 s on the server. */
         private const val BULK_TIMEOUT_MS = 300_000L
 
         private val json = Json {

@@ -4,11 +4,12 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import dev.kpetriv.sprout.core.testing.screenshot.ScreenshotTest
+import dev.kpetriv.sprout.core.testing.screenshot.ScreenshotWindow
 import org.junit.Test
 import org.robolectric.annotation.Config
 
 /** Goldens in src/test/screenshots; see docs/SCREENSHOT_TESTS.md. */
-class ParentHomeScreenshotTest : ScreenshotTest() {
+class ParentHomeScreenshotTest : ScreenshotTest(checkAccessibility = true) {
     @Test
     fun `empty household`() = screenshot.captureLightDark("parent_home_empty") {
         ParentHomeScreen(ParentHomePreviewData.empty(), onEvent = {}, onSignNow = {}, links = ParentHomeLinks())
@@ -28,6 +29,21 @@ class ParentHomeScreenshotTest : ScreenshotTest() {
     @Test
     @Config(qualifiers = "+h1700dp") // Every card of a busy dashboard in one image.
     fun `busy household`() = screenshot.captureLightDark("parent_home_busy") {
+        ParentHomeScreen(ParentHomePreviewData.busy(), onEvent = {}, onSignNow = {}, links = ParentHomeLinks())
+    }
+
+    // Two dashboard columns on a wider window (D-M7-2).
+    @Test
+    fun `busy household on a tablet`() = screenshot.captureWidthClasses(
+        name = "parent_home_busy",
+        windows = listOf(ScreenshotWindow.TABLET),
+    ) {
+        ParentHomeScreen(ParentHomePreviewData.busy(), onEvent = {}, onSignNow = {}, links = ParentHomeLinks())
+    }
+
+    // The first screenful at twice the text size (the whole dashboard would pass the 300 KB golden budget).
+    @Test
+    fun `busy household at font scale 2`() = screenshot.captureFontScale("parent_home_busy") {
         ParentHomeScreen(ParentHomePreviewData.busy(), onEvent = {}, onSignNow = {}, links = ParentHomeLinks())
     }
 

@@ -3,15 +3,16 @@ package dev.kpetriv.sprout.core.domainledger
 /**
  * Household-tunable limits the ledger enforces.
  *
- * **Device-local for now.** A policy is configured on each device and is not yet part of the event stream, so two
- * devices with different settings can project the same events differently (most visibly for [dailyGameCap]).
- * The household registers its policy (and parent keys) with the device registry in M3; until then keep the
- * defaults or configure every device of a household identically. This matters most for [requireParentSignature]:
- * a device that requires it reports unsigned parent-only events as [LedgerAnomaly.InvalidEvent], while one that does
- * not applies them.
+ * **Where the values come from.** The data layer builds the policy from the household's synced `household_policy`
+ * document: [requireParentSignature] (M3) and, since M7, [dailyGameCap] (`dailyGameCapMinor`, D-M5-4, D-M7-10), so
+ * every device of a household projects the same events the same way. The other limits are these defaults on every
+ * device. Two devices with different values would project differently (most visibly for [dailyGameCap], and for
+ * [requireParentSignature]: a device that requires it reports unsigned parent-only events as
+ * [LedgerAnomaly.InvalidEvent], while one that does not applies them).
  *
  * @property dailyGameCap the most [GamePlayed] may credit per kid, per [GamePlayed.playedOn] date, per currency,
- *   in that currency's minor units (pence for GBP). Games credit a fiat currency only
+ *   in that currency's minor units (pence for GBP). One value for every date: a changed cap re-decides past days too
+ *   (D-M7-11). Games credit a fiat currency only
  *   ([Violation.GameCurrencyNotAllowed]). A game that would go over the cap is rejected at validation and excluded
  *   (not clamped) when projecting merged streams.
  * @property dailyGameCapOverrides per-currency caps that replace [dailyGameCap] for that currency.

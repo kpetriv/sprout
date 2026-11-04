@@ -20,6 +20,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
@@ -34,6 +35,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.isTraversalGroup
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontStyle
@@ -158,8 +160,10 @@ private fun MessageBubble(
     val colors = MaterialTheme.colorScheme
     val spoken = spokenText(message)
     val speak = onSpeak?.takeIf { spoken != null }
+    // One traversal group per message: the bubble, its notes and its footer are read together, and two identical
+    // bubbles (say, two locked messages) are separate items rather than look-alike buttons side by side (M7 §8).
     Column(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier.fillMaxWidth().semantics { isTraversalGroup = true },
         horizontalAlignment = if (mine) Alignment.End else Alignment.Start,
     ) {
         if (!mine && message.authorName != null) {
@@ -170,15 +174,30 @@ private fun MessageBubble(
                 modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp).clearAndSetSemantics { },
             )
         }
-        Surface(
-            color = if (mine) colors.primaryContainer else colors.surfaceVariant,
-            contentColor = if (mine) colors.onPrimaryContainer else colors.onSurfaceVariant,
-            shape = MaterialTheme.shapes.large,
-            onClick = { if (speak != null && spoken != null) speak(spoken) },
-            enabled = speak != null,
-            modifier = Modifier.widthIn(max = MAX_BUBBLE_WIDTH_DP.dp),
-        ) {
+        val bubbleColor = if (mine) colors.primaryContainer else colors.surfaceVariant
+        val bubbleContentColor = if (mine) colors.onPrimaryContainer else colors.onSurfaceVariant
+        val bubble: @Composable () -> Unit = {
             Box(modifier = Modifier.padding(12.dp)) { BubbleContent(message, playing, onEvent) }
+        }
+        if (speak != null && spoken != null) {
+            Surface(
+                color = bubbleColor,
+                contentColor = bubbleContentColor,
+                shape = MaterialTheme.shapes.large,
+                onClick = { speak(spoken) },
+                modifier = Modifier.widthIn(max = MAX_BUBBLE_WIDTH_DP.dp),
+                content = bubble,
+            )
+        } else {
+            // Not a button when there is nothing to read aloud (M7 §8: TalkBack said "disabled" on every message).
+            // Same size as the clickable bubble, which reserves the minimum interactive size.
+            Surface(
+                color = bubbleColor,
+                contentColor = bubbleContentColor,
+                shape = MaterialTheme.shapes.large,
+                modifier = Modifier.widthIn(max = MAX_BUBBLE_WIDTH_DP.dp).minimumInteractiveComponentSize(),
+                content = bubble,
+            )
         }
         if (message.fromParentPhone) {
             Text(

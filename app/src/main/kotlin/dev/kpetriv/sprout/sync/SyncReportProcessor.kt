@@ -1,5 +1,6 @@
 package dev.kpetriv.sprout.sync
 
+import dev.kpetriv.sprout.core.database.ChatPruneScheduler
 import dev.kpetriv.sprout.core.database.SessionStore
 import dev.kpetriv.sprout.core.database.entity.RegistrationStatus
 import dev.kpetriv.sprout.core.model.HouseholdId
@@ -9,6 +10,7 @@ import dev.kpetriv.sprout.core.sync.SyncError
 import dev.kpetriv.sprout.core.sync.SyncReport
 import dev.kpetriv.sprout.core.sync.SyncReportHandler
 import dev.kpetriv.sprout.core.time.Clock
+import dev.kpetriv.sprout.widget.WidgetRefresher
 import dev.kpetriv.sprout.work.ScheduledActionsPlanner
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -57,7 +59,9 @@ fun interface RejectionAuditor {
  *   planner waits for it) and plans allowance and interest up to today once per process (planning before the first
  *   pull could queue payments another parent device already made);
  * - every successful sync runs the [SyncUpkeep] (M4: the encryption key registration, a parent's thread key upkeep,
- *   the time bank reconcile and the chore photo upload).
+ *   the time bank reconcile and the chore photo upload), then asks for the chat retention prune
+ *   ([ChatPruneScheduler.pruneSoon], M7 §2: the policy or older messages may just have arrived) and redraws the home
+ *   screen widget ([WidgetRefresher], M7 §4).
  *
  * Runs under the engine's sync mutex: nothing here syncs. Failures are dropped unlogged.
  */
@@ -72,6 +76,8 @@ class SyncReportProcessor @Inject constructor(
     private val credentials: CredentialCheck,
     private val clock: Clock,
     private val upkeep: SyncUpkeep = SyncUpkeep.None,
+    private val prunes: ChatPruneScheduler = NoPrunes,
+    private val widgets: WidgetRefresher = WidgetRefresher.None,
 ) : SyncReportHandler {
     private val mutableStatus = MutableStateFlow(SyncStatus())
     private val planned: MutableSet<HouseholdId> = ConcurrentHashMap.newKeySet()
@@ -94,6 +100,8 @@ class SyncReportProcessor @Inject constructor(
             report.error == null -> {
                 guarded { afterSuccess() }
                 guarded { upkeep.afterSync() }
+                guarded { prunes.pruneSoon() }
+                guarded { widgets.refresh() }
             }
         }
     }
@@ -111,6 +119,12 @@ class SyncReportProcessor @Inject constructor(
         val householdId = session.householdId
         if (!preferences.firstPullDone(householdId)) preferences.recordFirstPull(householdId)
         if (planned.add(householdId)) planner.planUpToToday()
+    }
+
+    private object NoPrunes : ChatPruneScheduler {
+        override fun scheduleDaily() = Unit
+
+        override fun pruneSoon() = Unit
     }
 
     @Suppress("TooGenericExceptionCaught", "SwallowedException") // A failing store only skips this step.
