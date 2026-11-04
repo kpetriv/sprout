@@ -19,7 +19,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.painterResource
-import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.clearAndSetSemantics
@@ -145,28 +144,26 @@ internal fun gameGlyph(kind: GameKind): String = when (kind) {
 }
 
 /**
- * Game credit for [tier]: Seedling counts minor units as coins with no decimals ("23 coins"); Sprout and Sapling get
- * the currency format ("£0.23").
+ * Game credit for [tier]: Seedling counts minor units named for the currency ("23 pennies", D-M5-10), so a few pence
+ * never read as the wallet's whole-pound "coins"; Sprout and Sapling get the currency format ("£0.23").
  */
 @Composable
 internal fun creditAmount(money: Money, currency: Currency.Fiat, tier: KidUiTier, formatter: MoneyFormatter): String {
-    val minor = money.minorUnits.coerceAtLeast(0)
+    val minor = Money(money.minorUnits.coerceAtLeast(0))
     return if (tier == KidUiTier.SEEDLING) {
-        pluralStringResource(R.plurals.feature_games_coins, minor.toQuantity(), minor)
+        formatter.formatMinorUnits(minor, currency)
     } else {
-        formatter.format(Money(minor), currency)
+        formatter.format(minor, currency)
     }
 }
 
-/** A credit just earned for [tier]: "+8 coins" (Seedling) or "+£0.08". */
+/** A credit just earned for [tier]: "+8 pennies" (Seedling, D-M5-10) or "+£0.08". */
 @Composable
 internal fun creditEarned(money: Money, currency: Currency.Fiat, tier: KidUiTier, formatter: MoneyFormatter): String {
-    val minor = money.minorUnits.coerceAtLeast(0)
+    val minor = Money(money.minorUnits.coerceAtLeast(0))
     return if (tier == KidUiTier.SEEDLING) {
-        pluralStringResource(R.plurals.feature_games_coins_won, minor.toQuantity(), minor)
+        formatter.formatMinorUnits(minor, currency, signed = true)
     } else {
-        formatter.format(Money(minor), currency, signed = true)
+        formatter.format(minor, currency, signed = true)
     }
 }
-
-private fun Long.toQuantity(): Int = coerceIn(0, Int.MAX_VALUE.toLong()).toInt()

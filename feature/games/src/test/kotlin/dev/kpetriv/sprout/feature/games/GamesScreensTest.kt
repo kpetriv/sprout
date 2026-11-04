@@ -150,7 +150,7 @@ class GamesScreensTest {
     }
 
     @Test
-    fun `seedling hub shows coins without decimals and reads them aloud`() {
+    fun `seedling hub counts pennies and reads them aloud`() {
         compose.setContent {
             SproutTheme {
                 GamesHubScreen(
@@ -164,7 +164,7 @@ class GamesScreensTest {
 
         compose.onNodeWithText("Word scramble").assertDoesNotExist()
         compose.onNodeWithContentDescription("Read this to me").performClick()
-        assertEquals(listOf("You can still win 23 coins today"), spoken)
+        assertEquals(listOf("You can still win 23 pennies today"), spoken)
     }
 
     @Test
@@ -192,14 +192,14 @@ class GamesScreensTest {
     }
 
     @Test
-    fun `credited result in coins for seedling and money for sprout`() {
+    fun `credited result in pennies for seedling and money for sprout`() {
         var state: GamePlayUiState by mutableStateOf(
             GamesPreviewData.resultCredited(KidUiTier.SEEDLING),
         )
         compose.setContent { SproutTheme { GamePlayScreen(state = state, onEvent = {}, onFinished = {}) } }
 
         compose.onNodeWithText("You got 4 of 5!").assertIsDisplayed()
-        compose.onNodeWithText("+4 coins").assertIsDisplayed()
+        compose.onNodeWithText("+4 pennies").assertIsDisplayed()
 
         state = GamesPreviewData.resultCredited(KidUiTier.SPROUT).copy(
             credit = CreditUi.Credited(Money(7), Money(15), clamped = false),

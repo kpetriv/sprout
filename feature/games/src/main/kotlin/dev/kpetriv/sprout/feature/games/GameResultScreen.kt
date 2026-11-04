@@ -40,10 +40,10 @@ import dev.kpetriv.sprout.core.ui.TierTextRole
 import dev.kpetriv.sprout.core.ui.rememberMoneyFormatter
 
 /**
- * The end of a play: the score ("You got 7 of 8!"), what it earned in tier language ("+8 coins" / "You earned
+ * The end of a play: the score ("You got 7 of 8!"), what it earned in tier language ("+8 pennies" / "You earned
  * +£0.08"), and "Play again" / "Done". [Confetti] plays for a perfect play or any credit, never when the cap was
  * already reached (that play was "for fun", D-M5-7). A clamped credit says the daily limit was reached; a refused one
- * offers a retry. Seedling hears the score and the coins once they are known.
+ * offers a retry. Seedling hears the score and the credit once they are known.
  */
 @Composable
 internal fun GameResultContent(

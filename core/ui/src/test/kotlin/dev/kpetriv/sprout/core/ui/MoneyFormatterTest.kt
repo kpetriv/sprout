@@ -134,4 +134,33 @@ class MoneyFormatterTest {
         assertEquals("30 min", formatter.formatPriceForTier(Money(30), Currency.Minutes, KidUiTier.SEEDLING))
         assertEquals(1_200L, MoneyFormatter.priceCoins(Money(1_200), Currency.Fiat("JPY")), "no minor units in yen")
     }
+
+    @Test
+    fun `minor units are named per currency, with a coins fallback`() {
+        assertEquals("8 pennies", uk.formatMinorUnits(Money(8), gbp))
+        assertEquals("1 penny", uk.formatMinorUnits(Money(1), gbp))
+        assertEquals("+8 pennies", uk.formatMinorUnits(Money(8), gbp, signed = true))
+        assertEquals("0 pennies", uk.formatMinorUnits(Money.ZERO, gbp, signed = true))
+        assertEquals("0 pennies", uk.formatMinorUnits(Money(-3), gbp), "never negative")
+        assertEquals("1 cent", uk.formatMinorUnits(Money(1), eur))
+        assertEquals("+15 cents", uk.formatMinorUnits(Money(15), Currency.Fiat("USD"), signed = true))
+        assertEquals("12 coins", uk.formatMinorUnits(Money(12), jpy))
+        assertEquals("1 coin", uk.formatMinorUnits(Money(1), kwd))
+        assertEquals("1,500 pennies", uk.formatMinorUnits(Money(1_500), gbp))
+    }
+
+    @Test
+    fun `a custom MoneyLabels without minor unit names falls back to coins`() {
+        val labels = object : MoneyLabels {
+            override fun minutes(minutes: String) = minutes
+
+            override fun hours(hours: String) = hours
+
+            override fun hoursAndMinutes(hours: String, minutes: String) = hours + minutes
+
+            override fun coins(count: Long, formattedCount: String) = "$formattedCount tokens"
+        }
+        assertEquals("8 tokens", MoneyFormatter(Locale.UK, labels).formatMinorUnits(Money(8), gbp))
+        assertEquals(MoneyLabels.MinorUnitName.COIN, MoneyLabels.MinorUnitName.of(Currency.Fiat("CHF")))
+    }
 }

@@ -71,9 +71,10 @@
   <string name="gate_erase_locked_out">Too many wrong PINs. Try again later.</string>
   <string name="gate_erase_unavailable">The PIN can’t be checked on this phone right now.</string>
 
-  <!-- Home shortcuts (M4) -->
-  <string name="home_chat">💬 Chat</string>
-  <string name="home_screen_time">⏳ Screen time</string>
+  <!-- Home shortcuts (M4, M5). A no-break space keeps each emoji on the line of its first word when a label wraps. -->
+  <string name="home_chat">💬\u00A0Chat</string>
+  <string name="home_screen_time">⏳\u00A0Screen time</string>
+  <string name="home_games">🧩\u00A0Games</string>
 
   <!-- Time bank notification (M4 §5.3) -->
   <string name="timebank_channel_name">Screen time</string>

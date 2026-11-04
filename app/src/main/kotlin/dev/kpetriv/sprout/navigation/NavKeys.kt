@@ -1,6 +1,7 @@
 package dev.kpetriv.sprout.navigation
 
 import androidx.navigation3.runtime.NavKey
+import dev.kpetriv.sprout.core.games.GameKind
 import dev.kpetriv.sprout.core.model.ChoreId
 import dev.kpetriv.sprout.core.model.DeviceId
 import dev.kpetriv.sprout.core.model.KidId
@@ -71,3 +72,13 @@ data class ChatThreadKey(val kidId: KidId) : NavKey
 /** [kidId]'s screen time (time bank), kid mode only. */
 @Serializable
 data class TimeBankKey(val kidId: KidId) : NavKey
+
+// Brain games (M5), kid mode only.
+
+/** [kidId]'s games hub, in the kid's [tier]. */
+@Serializable
+data class KidGamesKey(val kidId: KidId, val tier: KidUiTier) : NavKey
+
+/** One play of [kind] by [kidId] in [tier]: start card, rounds and result in one entry. */
+@Serializable
+data class GamePlayKey(val kidId: KidId, val tier: KidUiTier, val kind: GameKind) : NavKey

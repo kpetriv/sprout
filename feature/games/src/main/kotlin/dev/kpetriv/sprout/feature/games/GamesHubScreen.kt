@@ -70,8 +70,9 @@ fun GamesHubRoute(
 }
 
 /**
- * The games hub inside [ProvideKidTier]: what the kid can still earn today (Seedling: a coin jar with whole coins and
- * read-aloud; Sprout and Sapling: an amount), or the cap-reached note, and one big tile per game of the tier.
+ * The games hub inside [ProvideKidTier]: what the kid can still earn today (Seedling: a jar counting named minor
+ * units, "23 pennies", with read-aloud; Sprout and Sapling: an amount), or the cap-reached note, and one big tile per
+ * game of the tier.
  */
 @Composable
 fun GamesHubScreen(
@@ -122,17 +123,17 @@ private fun HubContent(state: GamesHubUiState.Ready, onPlay: (GameKind) -> Unit,
 private fun SeedlingRemaining(state: GamesHubUiState.Ready, readAloud: ReadAloud) {
     val tier = KidUiTier.SEEDLING
     val formatter = rememberMoneyFormatter()
-    val coins = creditAmount(state.remaining, state.currency, tier, formatter)
+    val count = creditAmount(state.remaining, state.currency, tier, formatter)
     val text = if (state.capReached) {
         stringResource(R.string.feature_games_cap_reached_seedling)
     } else {
         stringResource(R.string.feature_games_remaining_seedling)
     }
-    val spoken = if (state.capReached) text else stringResource(R.string.feature_games_remaining_seedling_spoken, coins)
+    val spoken = if (state.capReached) text else stringResource(R.string.feature_games_remaining_seedling_spoken, count)
     Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp)) {
         BalanceJar(
             level = BalanceJarDefaults.levelFor(state.remaining.minorUnits),
-            countLabel = coins,
+            countLabel = count,
             tier = tier,
             contentDescription = spoken,
             jarSize = 120.dp,

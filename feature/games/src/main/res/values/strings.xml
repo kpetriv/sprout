@@ -8,16 +8,6 @@
   <!-- Content description of the Seedling read-aloud button. -->
   <string name="feature_games_read_aloud">Read this to me</string>
 
-  <!-- Seedling coins: game credit counted in minor units ("+8 coins"). -->
-  <plurals name="feature_games_coins">
-    <item quantity="one">%1$d coin</item>
-    <item quantity="other">%1$d coins</item>
-  </plurals>
-  <plurals name="feature_games_coins_won">
-    <item quantity="one">+%1$d coin</item>
-    <item quantity="other">+%1$d coins</item>
-  </plurals>
-
   <!-- Games -->
   <string name="feature_games_kind_arithmetic">Numbers</string>
   <string name="feature_games_kind_memory">Memory</string>
@@ -32,11 +22,11 @@
 
   <!-- Hub. %1$s is an amount ("23p"). -->
   <string name="feature_games_remaining">You can still earn %1$s today</string>
-  <string name="feature_games_remaining_seedling">Coins you can still win today</string>
-  <!-- %1$s is a coin count ("23 coins"). -->
+  <string name="feature_games_remaining_seedling">Still to win today</string>
+  <!-- %1$s is a count of minor units named for the currency ("23 pennies", D-M5-10). -->
   <string name="feature_games_remaining_seedling_spoken">You can still win %1$s today</string>
   <string name="feature_games_cap_reached">Come back tomorrow, you can still play for fun</string>
-  <string name="feature_games_cap_reached_seedling">No more coins today. You can still play for fun!</string>
+  <string name="feature_games_cap_reached_seedling">Nothing more to win today. You can still play for fun!</string>
 
   <!-- Start card -->
   <plurals name="feature_games_rounds">
@@ -88,9 +78,9 @@
   <!-- %1$s is a signed amount ("+8p"). -->
   <string name="feature_games_credited">You earned %1$s</string>
   <string name="feature_games_clamped">You reached today\'s limit, so this game earned %1$s</string>
-  <string name="feature_games_clamped_seedling">That\'s all the coins for today!</string>
+  <string name="feature_games_clamped_seedling">That\'s all you can win today!</string>
   <string name="feature_games_capped">You\'ve earned all you can today. This one was for fun!</string>
-  <string name="feature_games_capped_seedling">No more coins today. This one was for fun!</string>
+  <string name="feature_games_capped_seedling">Nothing more to win today. This one was for fun!</string>
   <string name="feature_games_no_account">Ask a parent to set up your money. This one was for fun.</string>
   <string name="feature_games_refused">We couldn\'t save what you earned.</string>
   <string name="feature_games_saving">Saving…</string>

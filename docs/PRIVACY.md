@@ -37,7 +37,7 @@ Sprout's Play audience is adults (18+). Kid mode is a feature the parent configu
 | Chores and rewards | The core of the app: what needs doing, what it earns, what can be bought | Titles and amounts the parent writes |
 | Ledger events | Every credit and debit of pocket money and screen-time minutes, with who made it, from which device, and when | Signed, so tampering is detectable |
 | Free text in ledger events | A parent's reason for a manual adjustment, and an optional note when covering an overdraft | Up to 200 characters each. **Not end-to-end encrypted**: like the rest of the ledger, readable by the household's cloud backend from M3. Please don't put sensitive details in these notes. |
-| Game results | Score and credit for each brain game played | Subject to a daily cap |
+| Game results | Score and credit for each brain game played | One signed ledger event per play (from M5): which game and difficulty, how many rounds were right, the credit and the day played. The questions, answers and timings stay on the phone and are not stored. Credit is subject to a daily cap. |
 | Time bank sessions | When screen time was started and stopped | Recorded only; the app does not control the device |
 
 ### Chat and photos (end-to-end encrypted)

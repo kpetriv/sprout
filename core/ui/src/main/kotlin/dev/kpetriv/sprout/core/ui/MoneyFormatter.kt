@@ -14,7 +14,8 @@ import java.util.Locale
  *
  * - Fiat: the locale's currency format with exactly [Currency.Fiat.fractionDigits] decimals ("£12.50", "¥1,200").
  * - Minutes: "45 min", "2 h", "1 h 20 min".
- * - Seedling: whole "coins" (minor units dropped, never negative) for fiat; minutes as above.
+ * - Seedling: whole "coins" (minor units dropped, never negative) for fiat; minutes as above. Game credits, a few
+ *   minor units each, are counted in named minor units instead ("8 pennies", [formatMinorUnits]).
  *
  * Thread-safe: a fresh [NumberFormat] is created per call.
  */
@@ -63,6 +64,17 @@ class MoneyFormatter(
     fun formatCoins(money: Money, currency: Currency.Fiat): String {
         val coins = wholeCoins(money, currency)
         return labels.coins(coins, integerFormat().format(coins))
+    }
+
+    /**
+     * "8 pennies", "1 cent": [money] counted in minor units, named for [currency] ([MoneyLabels.minorUnits]), never
+     * negative. Seedling game credits (D-M5-10): a game earns a few minor units, which whole [formatCoins] would show
+     * as nothing. With [signed], a positive count gets a leading "+" ("+8 pennies"); zero is never signed.
+     */
+    fun formatMinorUnits(money: Money, currency: Currency.Fiat, signed: Boolean = false): String {
+        val count = money.minorUnits.coerceAtLeast(0)
+        val text = labels.minorUnits(currency, count, integerFormat().format(count))
+        return if (signed && count > 0) PLUS + text else text
     }
 
     /** "45 min", "2 h", "1 h 20 min". With [signed], a leading "+" or "-" like [format]. */
@@ -147,6 +159,29 @@ interface MoneyLabels {
 
     fun coins(count: Long, formattedCount: String): String
 
+    /**
+     * [count] minor units of [currency]: pennies for GBP, cents for EUR and USD, and [coins] for any other currency
+     * (the default, so existing implementations keep working).
+     */
+    fun minorUnits(currency: Currency.Fiat, count: Long, formattedCount: String): String = coins(count, formattedCount)
+
+    /** How a currency's minor unit is named. */
+    enum class MinorUnitName {
+        PENNY,
+        CENT,
+        COIN,
+        ;
+
+        companion object {
+            /** [MinorUnitName] of [currency]'s minor unit: [COIN] for currencies without a name of their own here. */
+            fun of(currency: Currency.Fiat): MinorUnitName = when (currency.isoCode) {
+                "GBP" -> PENNY
+                "EUR", "USD" -> CENT
+                else -> COIN
+            }
+        }
+    }
+
     companion object {
         /** English words with English plural rules; the default for tests and before resources are available. */
         val English: MoneyLabels = object : MoneyLabels {
@@ -158,6 +193,13 @@ interface MoneyLabels {
 
             override fun coins(count: Long, formattedCount: String) =
                 if (count == 1L) "$formattedCount coin" else "$formattedCount coins"
+
+            override fun minorUnits(currency: Currency.Fiat, count: Long, formattedCount: String) =
+                when (MinorUnitName.of(currency)) {
+                    MinorUnitName.PENNY -> if (count == 1L) "$formattedCount penny" else "$formattedCount pennies"
+                    MinorUnitName.CENT -> if (count == 1L) "$formattedCount cent" else "$formattedCount cents"
+                    MinorUnitName.COIN -> coins(count, formattedCount)
+                }
         }
 
         /** Labels from this module's string and plural resources. */
@@ -174,6 +216,16 @@ interface MoneyLabels {
                 count.coerceIn(0, Int.MAX_VALUE.toLong()).toInt(),
                 formattedCount,
             )
+
+            override fun minorUnits(currency: Currency.Fiat, count: Long, formattedCount: String): String {
+                val plural = when (MinorUnitName.of(currency)) {
+                    MinorUnitName.PENNY -> R.plurals.core_ui_pennies
+                    MinorUnitName.CENT -> R.plurals.core_ui_cents
+                    MinorUnitName.COIN -> R.plurals.core_ui_coins
+                }
+                val quantity = count.coerceIn(0, Int.MAX_VALUE.toLong()).toInt()
+                return resources.getQuantityString(plural, quantity, formattedCount)
+            }
         }
     }
 }
