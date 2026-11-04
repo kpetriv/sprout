@@ -29,7 +29,11 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
@@ -109,7 +113,10 @@ internal fun DataRoute(onBack: () -> Unit, modifier: Modifier = Modifier) {
     DataScreen(state, viewModel::onEvent, onBack, modifier)
 }
 
-/** Settings → Household data: export (zip of JSON + ledger.csv) and deletion with a typed confirmation. */
+/**
+ * Settings → Household data: chat retention and "Delete chat history now" (M7 §2), export (zip of JSON, ledger.csv
+ * and the readable chat, M7 §3) with its progress, and deletion with a typed confirmation.
+ */
 @Composable
 fun DataScreen(state: DataUiState, onEvent: (DataEvent) -> Unit, onBack: () -> Unit, modifier: Modifier = Modifier) {
     val snackbar = remember { SnackbarHostState() }
@@ -123,15 +130,9 @@ fun DataScreen(state: DataUiState, onEvent: (DataEvent) -> Unit, onBack: () -> U
             modifier = Modifier.padding(it).verticalScroll(rememberScrollState()).sectionPadding(),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            SectionHeading(stringResource(R.string.feature_settings_data_export_title))
-            Text(
-                stringResource(R.string.feature_settings_data_export_text),
-                style = MaterialTheme.typography.bodyMedium,
-            )
-            Button(onClick = { onEvent(DataEvent.Export) }, enabled = !state.exporting && state.pendingExport == null) {
-                Text(stringResource(R.string.feature_settings_data_export))
-            }
-            if (state.exporting) LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+            ChatDataSection(state, onEvent)
+            HorizontalDivider()
+            ExportSection(state, onEvent)
             HorizontalDivider()
             SectionHeading(stringResource(R.string.feature_settings_data_delete_title))
             Text(
@@ -145,6 +146,8 @@ fun DataScreen(state: DataUiState, onEvent: (DataEvent) -> Unit, onBack: () -> U
     }
     DataMessageEffect(state.message, snackbar) { onEvent(DataEvent.MessageShown) }
     state.reauth?.let { ReauthDialog(it, onEvent) }
+    state.retention?.let { row -> row.pending?.let { RetentionConfirmDialog(it, row.saving, onEvent) } }
+    if (state.chatDeleteTyped != null) DeleteChatDialog(state, onEvent)
     if (state.deleteTyped != null) {
         AlertDialog(
             onDismissRequest = { onEvent(DataEvent.DismissDelete) },
@@ -169,42 +172,21 @@ fun DataScreen(state: DataUiState, onEvent: (DataEvent) -> Unit, onBack: () -> U
 /** "Sign in again to confirm": the server wants a recent sign-in before it deletes the household (D-M3-34). */
 @Composable
 internal fun ReauthDialog(reauth: ReauthUi, onEvent: (DataEvent) -> Unit) {
+    SettingsDialog(onDismissRequest = { onEvent(DataEvent.DismissReauth) }) { ReauthCard(reauth, onEvent) }
+}
+
+@Composable
+internal fun ReauthCard(reauth: ReauthUi, onEvent: (DataEvent) -> Unit, modifier: Modifier = Modifier) {
     val context = LocalContext.current
     // Not saveable: a password never goes into saved instance state.
     var password by remember { mutableStateOf("") }
-    AlertDialog(
-        onDismissRequest = { onEvent(DataEvent.DismissReauth) },
-        title = { Text(stringResource(R.string.feature_settings_data_reauth_title)) },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                Text(stringResource(R.string.feature_settings_data_reauth_text))
-                reauth.problem?.let { problem ->
-                    Text(
-                        stringResource(
-                            when (problem) {
-                                ReauthProblem.WRONG_ACCOUNT -> R.string.feature_settings_data_reauth_wrong_account
-                                ReauthProblem.SIGN_IN_FAILED -> R.string.feature_settings_data_reauth_failed
-                                ReauthProblem.NETWORK -> R.string.feature_settings_data_message_network
-                            },
-                        ),
-                        color = MaterialTheme.colorScheme.error,
-                    )
-                }
-                if (reauth.usesPassword) {
-                    OutlinedTextField(
-                        value = password,
-                        onValueChange = { password = it },
-                        label = { Text(stringResource(R.string.feature_settings_data_reauth_password)) },
-                        singleLine = true,
-                        enabled = !reauth.busy,
-                        visualTransformation = PasswordVisualTransformation(),
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                }
-                if (reauth.busy) LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+    SettingsDialogCard(
+        title = stringResource(R.string.feature_settings_data_reauth_title),
+        modifier = modifier,
+        buttons = {
+            TextButton(onClick = { onEvent(DataEvent.DismissReauth) }, enabled = !reauth.busy) {
+                Text(stringResource(R.string.feature_settings_cancel))
             }
-        },
-        confirmButton = {
             Button(
                 onClick = { onEvent(DataEvent.SignInAgain(context, password.takeIf { reauth.usesPassword })) },
                 enabled = !reauth.busy && (!reauth.usesPassword || password.isNotEmpty()),
@@ -220,12 +202,34 @@ internal fun ReauthDialog(reauth: ReauthUi, onEvent: (DataEvent) -> Unit) {
                 )
             }
         },
-        dismissButton = {
-            TextButton(onClick = { onEvent(DataEvent.DismissReauth) }, enabled = !reauth.busy) {
-                Text(stringResource(R.string.feature_settings_cancel))
-            }
-        },
-    )
+    ) {
+        Text(stringResource(R.string.feature_settings_data_reauth_text), style = MaterialTheme.typography.bodyMedium)
+        reauth.problem?.let { problem ->
+            Text(
+                stringResource(
+                    when (problem) {
+                        ReauthProblem.WRONG_ACCOUNT -> R.string.feature_settings_data_reauth_wrong_account
+                        ReauthProblem.SIGN_IN_FAILED -> R.string.feature_settings_data_reauth_failed
+                        ReauthProblem.NETWORK -> R.string.feature_settings_data_message_network
+                    },
+                ),
+                color = MaterialTheme.colorScheme.error,
+                style = MaterialTheme.typography.bodyMedium,
+            )
+        }
+        if (reauth.usesPassword) {
+            OutlinedTextField(
+                value = password,
+                onValueChange = { password = it },
+                label = { Text(stringResource(R.string.feature_settings_data_reauth_password)) },
+                singleLine = true,
+                enabled = !reauth.busy,
+                visualTransformation = PasswordVisualTransformation(),
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
+        if (reauth.busy) LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+    }
 }
 
 /** The delete dialog's body: what to type, the field, progress. */
@@ -256,6 +260,12 @@ private fun DataMessageEffect(message: DataMessage?, snackbar: SnackbarHostState
                 DataMessage.EXPORT_TOO_LARGE -> R.string.feature_settings_data_message_too_large
                 DataMessage.DELETE_FAILED -> R.string.feature_settings_data_message_delete_failed
                 DataMessage.NETWORK -> R.string.feature_settings_data_message_network
+                DataMessage.NOT_CONFIRMED -> R.string.feature_settings_data_message_not_confirmed
+                DataMessage.RETENTION_SAVED -> R.string.feature_settings_data_message_retention_saved
+                DataMessage.RETENTION_FAILED -> R.string.feature_settings_data_message_retention_failed
+                DataMessage.CHAT_DELETED -> R.string.feature_settings_data_message_chat_deleted
+                DataMessage.CHAT_DELETED_ON_THIS_PHONE -> R.string.feature_settings_data_message_chat_deleted_here
+                DataMessage.CHAT_DELETE_FAILED -> R.string.feature_settings_data_message_chat_delete_failed
             },
         )
     }

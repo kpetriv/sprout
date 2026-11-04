@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.DatePicker
@@ -41,6 +42,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import dev.kpetriv.sprout.core.domainledger.Money
 import dev.kpetriv.sprout.core.model.AllowanceCadence
 import dev.kpetriv.sprout.core.model.CalendarDate
 import dev.kpetriv.sprout.core.model.DayOfWeek
@@ -85,12 +87,97 @@ fun AllowanceSettingsScreen(
                         style = MaterialTheme.typography.bodySmall,
                         modifier = Modifier.sectionPadding(),
                     )
+                    state.gameCap?.let { cap ->
+                        HorizontalDivider()
+                        SectionHeading(
+                            stringResource(R.string.feature_settings_allowance_games_title),
+                            modifier = Modifier.sectionPadding(),
+                        )
+                        GameCapRow(cap, onClick = { onEvent(AllowanceSettingsEvent.EditGameCap) })
+                    }
                 }
             }
         }
     }
     MessageEffect(state.message, snackbar) { onEvent(AllowanceSettingsEvent.MessageShown) }
     state.editor?.let { AllowanceEditorSheet(it, onEvent) }
+    state.gameCapEditor?.let { GameCapDialog(it, onEvent) }
+}
+
+/** "Daily game limit" with the household's value (D-M5-4). */
+@Composable
+internal fun GameCapRow(cap: GameCapUi, onClick: () -> Unit, modifier: Modifier = Modifier) {
+    val amount = formatSmallAmount(cap.capMinor, cap.currency)
+    ListItem(
+        headlineContent = { Text(stringResource(R.string.feature_settings_game_cap_title)) },
+        supportingContent = {
+            Text(
+                stringResource(
+                    if (cap.isDefault) {
+                        R.string.feature_settings_game_cap_summary_default
+                    } else {
+                        R.string.feature_settings_game_cap_summary
+                    },
+                    amount,
+                ),
+            )
+        },
+        modifier = modifier.fillMaxWidth().clickable(role = Role.Button, onClick = onClick),
+    )
+}
+
+/** The game limit dialog. */
+@Composable
+internal fun GameCapDialog(editor: GameCapEditorUi, onEvent: (AllowanceSettingsEvent) -> Unit) {
+    SettingsDialog(onDismissRequest = { onEvent(AllowanceSettingsEvent.DismissGameCap) }) {
+        GameCapDialogCard(editor, onEvent)
+    }
+}
+
+/** The game limit dialog's card: the amount (0 allowed), "Use the default", save and cancel. */
+@Composable
+internal fun GameCapDialogCard(
+    editor: GameCapEditorUi,
+    onEvent: (AllowanceSettingsEvent) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val formatter = rememberMoneyFormatter()
+    SettingsDialogCard(
+        title = stringResource(R.string.feature_settings_game_cap_title),
+        modifier = modifier,
+        buttons = {
+            TextButton(onClick = { onEvent(AllowanceSettingsEvent.DismissGameCap) }, enabled = !editor.isSaving) {
+                Text(stringResource(R.string.feature_settings_cancel))
+            }
+            SaveButton(editor.isSaving, enabled = true, onClick = { onEvent(AllowanceSettingsEvent.SaveGameCap) })
+        },
+    ) {
+        Text(stringResource(R.string.feature_settings_game_cap_text), style = MaterialTheme.typography.bodyMedium)
+        val error = if (editor.error == AmountError.TOO_LARGE) {
+            val max = formatter.format(Money(HouseholdRulesState.MAX_DAILY_GAME_CAP_MINOR), editor.currency)
+            stringResource(R.string.feature_settings_game_cap_too_large, max)
+        } else {
+            amountErrorText(editor.error)
+        }
+        OutlinedTextField(
+            value = editor.text,
+            onValueChange = { onEvent(AllowanceSettingsEvent.GameCapChanged(it)) },
+            label = { Text(stringResource(R.string.feature_settings_game_cap_amount, editor.currency.isoCode)) },
+            isError = error != null,
+            supportingText = error?.let { { Text(it) } },
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+            singleLine = true,
+            enabled = !editor.isSaving,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        val default = formatSmallAmount(HouseholdRulesState.DEFAULT_DAILY_GAME_CAP_MINOR, editor.currency)
+        TextButton(onClick = { onEvent(AllowanceSettingsEvent.ResetGameCap) }, enabled = !editor.isSaving) {
+            Text(stringResource(R.string.feature_settings_game_cap_reset, default))
+        }
+        if (editor.saveFailed) {
+            Text(stringResource(R.string.feature_settings_save_failed), color = MaterialTheme.colorScheme.error)
+        }
+    }
 }
 
 @Composable
@@ -212,9 +299,16 @@ internal fun AllowanceEditorForm(
                 Text(stringResource(R.string.feature_settings_allowance_change_date))
             }
         }
-        Row(verticalAlignment = Alignment.CenterVertically) {
+        Row(
+            modifier = Modifier.fillMaxWidth().toggleable(
+                value = editor.active,
+                role = Role.Switch,
+                onValueChange = { onEvent(AllowanceSettingsEvent.ActiveChanged(it)) },
+            ),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
             Text(stringResource(R.string.feature_settings_allowance_active), modifier = Modifier.weight(1f))
-            Switch(checked = editor.active, onCheckedChange = { onEvent(AllowanceSettingsEvent.ActiveChanged(it)) })
+            Switch(checked = editor.active, onCheckedChange = null)
         }
         editor.nextDue?.let {
             Text(

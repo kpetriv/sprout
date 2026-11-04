@@ -232,7 +232,7 @@ class DataViewModelTest {
     private val calendar = HouseholdCalendar(FakeClock(Instant.parse("2026-11-03T10:00:00Z"))) { ZoneOffset.UTC }
 
     private fun TestScope.dataViewModel(data: FakeHouseholdData) =
-        DataViewModel(data, FakeExportWriter(), calendar, FakeAccountControl(), UnconfinedTestDispatcher(testScheduler))
+        newDataViewModel(data, calendar = calendar, dispatcher = UnconfinedTestDispatcher(testScheduler))
     private val bundle = Json.parseToJsonElement(
         """
         {"exportedAt":"2026-11-03T10:00:00Z","household":{"id":"hh7f3k2q9xabc","fiatCurrency":"EUR"},
@@ -273,18 +273,17 @@ class DataViewModelTest {
     @Test
     fun `export offers one zip with the json and the csv, and writes it where the parent picked`() = runTest {
         val writer = FakeExportWriter()
-        val viewModel = DataViewModel(
+        val viewModel = newDataViewModel(
             FakeHouseholdData(Result.success(bundle)),
-            writer,
-            calendar,
-            FakeAccountControl(),
-            UnconfinedTestDispatcher(testScheduler),
+            writer = writer,
+            calendar = calendar,
+            dispatcher = UnconfinedTestDispatcher(testScheduler),
         )
         viewModel.onEvent(DataEvent.Export)
         val pending = assertNotNull(viewModel.state.value.pendingExport)
         assertEquals("sprout-export-2026-11-03.zip", pending.fileName)
         val entries = unzip(pending.bytes)
-        assertEquals(setOf("household.json", "ledger.csv"), entries.keys)
+        assertEquals(setOf("household.json", "ledger.csv", "chat/missing.json"), entries.keys)
         assertEquals(bundle, Json.parseToJsonElement(entries.getValue("household.json").decodeToString()))
         assertEquals(HouseholdExport.ledgerCsv(bundle), entries.getValue("ledger.csv").decodeToString())
 

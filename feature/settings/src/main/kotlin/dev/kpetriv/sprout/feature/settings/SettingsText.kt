@@ -5,8 +5,12 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
+import dev.kpetriv.sprout.core.domainledger.Currency
+import dev.kpetriv.sprout.core.domainledger.Money
 import dev.kpetriv.sprout.core.model.CalendarDate
 import dev.kpetriv.sprout.core.model.KidUiTier
+import dev.kpetriv.sprout.core.ui.MoneyFormatter
+import dev.kpetriv.sprout.core.ui.rememberMoneyFormatter
 import java.time.LocalDate
 import java.time.format.DateTimeFormatter
 import java.time.format.FormatStyle
@@ -46,3 +50,31 @@ internal fun formatDate(date: CalendarDate): String {
             .format(DateTimeFormatter.ofLocalizedDate(FormatStyle.MEDIUM).withLocale(locale))
     }
 }
+
+/**
+ * [minorUnits] of [currency] the way a parent says a small amount: "50p", "50¢", "50c" below one major unit in the
+ * currencies that have such a short form, else [MoneyFormatter.format] ("£1.20"). The game limit's default is 50
+ * minor units, which "£0.50" reads worse than "50p".
+ */
+@Composable
+internal fun formatSmallAmount(minorUnits: Long, currency: Currency.Fiat): String {
+    val formatter = rememberMoneyFormatter()
+    val suffix = MINOR_UNIT_SUFFIX[currency.isoCode]
+    val oneMajor = (1..currency.fractionDigits).fold(1L) { acc, _ -> acc * DECIMAL_RADIX }
+    return if (suffix != null && minorUnits in 0 until oneMajor) {
+        "$minorUnits$suffix"
+    } else {
+        formatter.format(Money(minorUnits), currency)
+    }
+}
+
+private const val DECIMAL_RADIX = 10L
+
+private val MINOR_UNIT_SUFFIX = mapOf(
+    "GBP" to "p",
+    "EUR" to "c",
+    "USD" to "¢",
+    "CAD" to "¢",
+    "AUD" to "c",
+    "NZD" to "c",
+)

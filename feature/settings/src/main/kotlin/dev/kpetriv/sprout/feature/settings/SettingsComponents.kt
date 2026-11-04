@@ -8,9 +8,11 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
@@ -24,6 +26,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
@@ -40,13 +43,16 @@ import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
 import dev.kpetriv.sprout.core.model.CalendarDate
 import dev.kpetriv.sprout.core.model.Kid
 import dev.kpetriv.sprout.core.model.KidId
 import dev.kpetriv.sprout.core.model.KidUiTier
+import dev.kpetriv.sprout.core.ui.ContentWidth
 import java.time.LocalDate
 import java.time.format.DateTimeFormatter
 import java.time.format.FormatStyle
@@ -77,7 +83,8 @@ internal fun SettingsScaffold(
             )
         },
         snackbarHost = { SnackbarHost(snackbarHostState) },
-        content = content,
+        // Capped at a reading width on tablets (M7 §5); the full width on a phone.
+        content = { padding -> ContentWidth(modifier = Modifier.fillMaxSize()) { content(padding) } },
     )
 }
 
@@ -103,6 +110,7 @@ private fun SettingsMessage.textRes(): Int = when (this) {
     SettingsMessage.KEY_REGISTERED -> R.string.feature_settings_message_key_registered
     SettingsMessage.KEY_NOT_SHARED -> R.string.feature_settings_message_key_not_shared
     SettingsMessage.SAVE_FAILED -> R.string.feature_settings_message_save_failed
+    SettingsMessage.NOT_CONFIRMED -> R.string.feature_settings_data_message_not_confirmed
 }
 
 /** Loading spinner or load error, shared by the sections. Returns true when it drew something. */
@@ -155,13 +163,20 @@ internal fun <T> ChoiceDropdown(
     optionLabel: @Composable (T) -> String,
     onSelect: (T) -> Unit,
     modifier: Modifier = Modifier,
+    enabled: Boolean = true,
 ) {
     var expanded by remember { mutableStateOf(false) }
     Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(4.dp)) {
         Text(label, style = MaterialTheme.typography.labelMedium)
         Box {
-            OutlinedButton(onClick = { expanded = true }, modifier = Modifier.fillMaxWidth()) {
-                Text(optionLabel(selected))
+            val value = optionLabel(selected)
+            OutlinedButton(
+                onClick = { expanded = true },
+                enabled = enabled,
+                // Read as "Birth month, March": the label above is a separate node.
+                modifier = Modifier.fillMaxWidth().semantics { contentDescription = "$label, $value" },
+            ) {
+                Text(value)
             }
             DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
                 options.forEach { option ->

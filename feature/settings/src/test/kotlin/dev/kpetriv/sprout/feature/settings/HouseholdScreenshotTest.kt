@@ -10,8 +10,11 @@ import dev.kpetriv.sprout.core.testing.screenshot.ScreenshotTest
 import org.junit.Test
 import org.robolectric.annotation.Config
 
-/** Goldens for the household sections (M3 §6), in src/test/screenshots; see docs/SCREENSHOT_TESTS.md. */
-class HouseholdScreenshotTest : ScreenshotTest() {
+/**
+ * Goldens for the household sections (M3 §6, M7 §2–§3), in src/test/screenshots; see docs/SCREENSHOT_TESTS.md. Every
+ * variant is also checked with the accessibility rule (D-M7-5).
+ */
+class HouseholdScreenshotTest : ScreenshotTest(checkAccessibility = true) {
     private val rows = listOf(
         DeviceRowUi(
             SECOND_PHONE,
@@ -72,8 +75,93 @@ class HouseholdScreenshotTest : ScreenshotTest() {
     }
 
     @Test
-    fun `household data`() = screenshot.captureLightDark("settings_data") {
-        DataScreen(DataUiState(householdId = HouseholdId("hh7f3k2q9xabc")), onEvent = {}, onBack = {})
+    @Config(qualifiers = "+h1100dp")
+    fun `household data, keeping chat for 90 days`() = screenshot.captureLightDark("settings_data") {
+        DataScreen(SettingsPreviewData.data(), onEvent = {}, onBack = {})
+    }
+
+    @Test
+    @Config(qualifiers = "+h1100dp")
+    fun `export in progress`() = screenshot.captureLightDark("settings_data_exporting") {
+        DataScreen(
+            SettingsPreviewData.data().copy(exportProgress = ExportProgress(ExportStage.MEDIA, done = 3, total = 8)),
+            onEvent = {},
+            onBack = {},
+        )
+    }
+
+    @Test
+    fun `shorter chat retention confirmation`() = screenshot.captureScreenLightDark("settings_data_retention") {
+        DataScreen(
+            SettingsPreviewData.data(retentionDays = null).let {
+                it.copy(retention = it.retention?.copy(pending = RetentionChoice(30)))
+            },
+            onEvent = {},
+            onBack = {},
+        )
+    }
+
+    @Test
+    fun `delete chat history dialog`() = screenshot.captureLightDark("settings_data_delete_chat") {
+        DeleteChatCard(
+            SettingsPreviewData.data().copy(chatDeleteTyped = "DEL"),
+            onEvent = {},
+            modifier = Modifier.padding(24.dp),
+        )
+    }
+
+    @Test
+    fun `sign in again to confirm, wrong account`() = screenshot.captureLightDark("settings_data_reauth") {
+        ReauthCard(
+            ReauthUi(usesPassword = true, problem = ReauthProblem.WRONG_ACCOUNT),
+            onEvent = {},
+            modifier = Modifier.padding(24.dp),
+        )
+    }
+
+    @Test
+    fun `remove a phone dialog`() = screenshot.captureScreenLightDark("settings_devices_revoke") {
+        DevicesScreen(
+            DevicesUiState(isLoading = false, devices = rows, revoking = rows[2]),
+            onEvent = {},
+            onBack = {},
+        )
+    }
+
+    @Test
+    fun `sign out dialog`() = screenshot.captureScreenLightDark("settings_account_sign_out") {
+        AccountScreen(
+            AccountUiState(
+                email = "parent@example.com",
+                householdId = HouseholdId("hh7f3k2q9xabc"),
+                confirmingSignOut = true,
+            ),
+            onEvent = {},
+            onBack = {},
+        )
+    }
+
+    @Test
+    fun `link a device, creating the code`() = screenshot.captureLightDark("settings_link_loading") {
+        LinkDeviceScreen(LinkDeviceUiState(kidName = "Leo", loading = true), onEvent = {}, onBack = {})
+    }
+
+    @Test
+    fun `link a device, code expired`() = screenshot.captureLightDark("settings_link_expired") {
+        LinkDeviceScreen(
+            LinkDeviceUiState(kidName = "Leo", code = "K7QM2X9P", remainingSeconds = 0),
+            onEvent = {},
+            onBack = {},
+        )
+    }
+
+    @Test
+    fun `link a device, too many codes`() = screenshot.captureLightDark("settings_link_rate_limited") {
+        LinkDeviceScreen(
+            LinkDeviceUiState(kidName = "Leo", failure = AdminFailure.RATE_LIMITED),
+            onEvent = {},
+            onBack = {},
+        )
     }
 
     @Test

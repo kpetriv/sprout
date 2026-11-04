@@ -71,6 +71,9 @@ enum class SettingsMessage {
     /** The key works on this device, but the household's server did not take it (offline): retry later. */
     KEY_NOT_SHARED,
     SAVE_FAILED,
+
+    /** The parent's fingerprint or PIN check failed: nothing changed. */
+    NOT_CONFIRMED,
 }
 
 /** How long a section's state flow keeps its upstream after the screen stops collecting (rotation survives). */

@@ -14,7 +14,7 @@
   <string name="feature_settings_section_kids">Kids</string>
   <string name="feature_settings_section_kids_summary">Names, birth months and screen styles</string>
   <string name="feature_settings_section_allowance">Allowance</string>
-  <string name="feature_settings_section_allowance_summary">Pocket money per kid, weekly or monthly</string>
+  <string name="feature_settings_section_allowance_summary">Pocket money per kid, and the daily game limit</string>
   <string name="feature_settings_section_goals">Savings goals</string>
   <string name="feature_settings_section_goals_summary">What each kid is saving towards</string>
   <string name="feature_settings_section_interest">Interest</string>
@@ -163,7 +163,7 @@
   <string name="feature_settings_section_account">Account</string>
   <string name="feature_settings_section_account_summary">Who is signed in, and signing out</string>
   <string name="feature_settings_section_data">Household data</string>
-  <string name="feature_settings_section_data_summary">Export everything, or delete the household</string>
+  <string name="feature_settings_section_data_summary">Chat history, export, or delete the household</string>
 
   <!-- Devices -->
   <string name="feature_settings_devices_empty">No devices yet. Devices appear after the first sync.</string>
@@ -254,4 +254,43 @@
   <string name="feature_settings_ai_uses_title">What it is used for</string>
   <string name="feature_settings_ai_uses">• Chat: a gentle nudge when a kid\'s message may be unkind.\n• Chores: ideas that suit each kid\'s age.\n• Dashboard: a short summary of the week.\n• Wallet: reading the total on a receipt (Google Play services\' text recognition, no model; Play services records that the scanner was used, not the receipt).</string>
   <string name="feature_settings_ai_privacy">Your messages, chores and photos are never sent to the internet for AI. What the model writes is never saved, and you always review it before anything reaches the ledger.</string>
+  <!-- M7: chat retention, delete chat history now, export v2 (D-M7-8, D-M7-9). -->
+  <string name="feature_settings_data_chat_title">Chat</string>
+  <string name="feature_settings_data_retention_label">Keep chat messages for</string>
+  <string name="feature_settings_data_retention_text">Older messages, photos and voice notes are deleted on every phone and from Sprout’s server.</string>
+  <string name="feature_settings_data_retention_forever">Forever</string>
+  <plurals name="feature_settings_data_retention_days">
+    <item quantity="one">%1$d day</item>
+    <item quantity="other">%1$d days</item>
+  </plurals>
+  <string name="feature_settings_data_retention_confirm_title">Keep chat messages for %1$s?</string>
+  <string name="feature_settings_data_retention_confirm_text">Messages older than that are deleted on every phone and from Sprout’s server. This can’t be undone.</string>
+  <string name="feature_settings_data_retention_confirm">Delete older messages</string>
+  <string name="feature_settings_data_chat_delete">Delete chat history now</string>
+  <string name="feature_settings_data_chat_delete_title">Delete all chat history?</string>
+  <string name="feature_settings_data_chat_delete_text">Deletes every message, photo and voice note in every chat, on every phone and on Sprout’s server. This can’t be undone. You’ll confirm with your fingerprint or PIN.</string>
+  <string name="feature_settings_data_chat_delete_confirm">Delete chat history</string>
+  <string name="feature_settings_data_export_chat_text">Chats are included as readable text with their photos and voice notes (the chat folder), decrypted on this phone. Keep the file somewhere safe. You’ll confirm with your fingerprint or PIN.</string>
+  <string name="feature_settings_data_export_confirming">Waiting for your fingerprint or PIN…</string>
+  <string name="feature_settings_data_export_household">Fetching the household…</string>
+  <string name="feature_settings_data_export_chat">Reading chats on this phone…</string>
+  <string name="feature_settings_data_export_media">Adding photos and voice notes (%1$d of %2$d)…</string>
+  <string name="feature_settings_data_export_packing">Building the zip file…</string>
+  <string name="feature_settings_data_message_not_confirmed">Couldn’t confirm it’s you. Nothing changed.</string>
+  <string name="feature_settings_data_message_retention_saved">Chat retention saved</string>
+  <string name="feature_settings_data_message_retention_failed">Couldn’t save chat retention. Try again.</string>
+  <string name="feature_settings_data_message_chat_deleted">Chat history deleted</string>
+  <string name="feature_settings_data_message_chat_deleted_here">Chat history deleted on this phone. Sprout’s server will follow when it’s reachable.</string>
+  <string name="feature_settings_data_message_chat_delete_failed">Couldn’t delete chat history. Try again.</string>
+  <!-- M7: the parent-configurable daily game cap (D-M5-4, D-M7-10). -->
+  <string name="feature_settings_allowance_games_title">Games</string>
+  <string name="feature_settings_game_cap_title">Daily game limit</string>
+  <string name="feature_settings_game_cap_summary">Brain games can earn each kid up to %1$s a day</string>
+  <string name="feature_settings_game_cap_summary_default">Brain games can earn each kid up to %1$s a day (the default)</string>
+  <string name="feature_settings_game_cap_text">The most brain games can add to each kid’s pocket money in a day. 0 turns game rewards off. Applies on every phone, to earlier days too: lowering it marks plays over the new limit “Not counted”.</string>
+  <string name="feature_settings_game_cap_amount">Limit (%1$s)</string>
+  <string name="feature_settings_game_cap_reset">Use the default (%1$s)</string>
+  <string name="feature_settings_game_cap_too_large">At most %1$s</string>
+  <!-- M7: the settings hub beside a section on wide screens. -->
+  <string name="feature_settings_pick_section">Choose a section</string>
 </resources>

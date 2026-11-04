@@ -6,6 +6,7 @@ import dev.kpetriv.sprout.core.model.DeviceId
 import dev.kpetriv.sprout.core.model.HouseholdId
 import dev.kpetriv.sprout.core.model.KidId
 import dev.kpetriv.sprout.core.model.Role
+import dev.kpetriv.sprout.core.model.ThreadId
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.filterNotNull
@@ -112,7 +113,12 @@ class FakeHouseholdData(var bundle: Result<JsonObject>) : HouseholdData {
     var signInResult: Result<Unit> = Result.success(Unit)
     val passwords = mutableListOf<String?>()
 
-    override suspend fun export(): Result<JsonObject> = bundle
+    var exports = 0
+
+    override suspend fun export(): Result<JsonObject> {
+        exports += 1
+        return bundle
+    }
 
     override suspend fun deleteHousehold(): Result<Unit> {
         deletes += 1
@@ -136,5 +142,76 @@ class FakeExportWriter : ExportWriter {
 
     override suspend fun write(destination: String, bytes: ByteArray) {
         written[destination] = bytes
+    }
+}
+
+/** The household policy's retention and game cap; [failWrites] makes every write throw. */
+class FakeHouseholdRules(initial: HouseholdRulesState = HouseholdRulesState(null, null)) : HouseholdRules {
+    val state = MutableStateFlow(initial)
+    val retentionWrites = mutableListOf<Int?>()
+    val capWrites = mutableListOf<Long?>()
+    var failWrites = false
+
+    override fun observe(): Flow<HouseholdRulesState> = state
+
+    override suspend fun setChatRetentionDays(days: Int?) {
+        check(!failWrites) { "write failed" }
+        retentionWrites += days
+        state.value = state.value.copy(chatRetentionDays = days)
+    }
+
+    override suspend fun setDailyGameCap(minorUnits: Long?) {
+        check(!failWrites) { "write failed" }
+        capWrites += minorUnits
+        state.value = state.value.copy(dailyGameCapMinor = minorUnits)
+    }
+}
+
+class FakeChatHistoryPurger(var outcome: ChatPurgeOutcome = ChatPurgeOutcome.PURGED) : ChatHistoryPurger {
+    var purges = 0
+
+    override suspend fun purgeAll(): ChatPurgeOutcome {
+        purges += 1
+        return outcome
+    }
+}
+
+/** Answers every confirmation with [outcome] and records what was asked. */
+class FakeParentConfirmation(var outcome: ConfirmationOutcome = ConfirmationOutcome.CONFIRMED) : ParentConfirmation {
+    val asked = mutableListOf<ConfirmationPurpose>()
+
+    override suspend fun confirm(purpose: ConfirmationPurpose): ConfirmationOutcome {
+        asked += purpose
+        return outcome
+    }
+}
+
+/** [threads] and the bytes of each media file by name; a file missing from [media] is reported NOT_AVAILABLE. */
+class FakeChatExportSource(
+    var threads: List<ChatExportThread> = emptyList(),
+    val media: MutableMap<String, ByteArray> = mutableMapOf(),
+) : ChatExportSource {
+    var failThreads = false
+    val mediaRequests = mutableListOf<ThreadId>()
+
+    override suspend fun threads(): List<ChatExportThread> {
+        check(!failThreads) { "cannot read chat" }
+        return threads
+    }
+
+    override suspend fun media(thread: ChatExportThread, sink: ChatMediaSink): List<ChatMissingMedia> {
+        mediaRequests += thread.threadId
+        val missing = mutableListOf<ChatMissingMedia>()
+        thread.messages.mapNotNull { it.media }.distinct().forEach { name ->
+            val bytes = media[name]
+            if (bytes == null) {
+                missing += ChatMissingMedia(name, "NOT_AVAILABLE")
+            } else {
+                val buffer = bytes.copyOf()
+                sink.write(name, buffer)
+                buffer.fill(0) // As the real reader does: the sink must have copied.
+            }
+        }
+        return missing
     }
 }

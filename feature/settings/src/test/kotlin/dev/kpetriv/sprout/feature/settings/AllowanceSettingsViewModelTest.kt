@@ -33,6 +33,8 @@ class AllowanceSettingsViewModelTest {
     private val kids = FakeKidRepository(leo, mia)
     private val accounts = FakeAccountRepository()
     private val allowances = FakeAllowanceRepository()
+    private val rules = FakeHouseholdRules()
+    private val confirmation = FakeParentConfirmation()
 
     private val leoWeekly = AllowanceSchedule(
         id = ScheduleId("leo-weekly"),
@@ -45,7 +47,16 @@ class AllowanceSettingsViewModelTest {
     )
 
     private fun TestScope.viewModel(): AllowanceSettingsViewModel {
-        val vm = AllowanceSettingsViewModel(kids, accounts, allowances, householdContext(), fixedToday())
+        val vm =
+            AllowanceSettingsViewModel(
+                kids,
+                accounts,
+                allowances,
+                householdContext(),
+                fixedToday(),
+                rules,
+                confirmation,
+            )
         backgroundScope.launch(main.dispatcher) { vm.state.collect {} }
         return vm
     }
@@ -179,5 +190,78 @@ class AllowanceSettingsViewModelTest {
         vm.onEvent(AllowanceSettingsEvent.Save)
 
         assertTrue(vm.state.value.editor?.saveFailed == true)
+    }
+
+    @Test
+    fun `the game limit shows the default until the policy sets one`() = test {
+        val vm = viewModel()
+        assertEquals(GameCapUi(capMinor = 50, isDefault = true, currency = GBP), vm.state.value.gameCap)
+        rules.state.value = HouseholdRulesState(chatRetentionDays = null, dailyGameCapMinor = 120)
+        assertEquals(GameCapUi(capMinor = 120, isDefault = false, currency = GBP), vm.state.value.gameCap)
+    }
+
+    @Test
+    fun `the game limit dialog parses minor units, allows zero, refuses too much and resets to the default`() = test {
+        val vm = viewModel()
+        vm.onEvent(AllowanceSettingsEvent.EditGameCap)
+        assertEquals(GameCapEditorUi("0.50", GBP), vm.state.value.gameCapEditor)
+
+        vm.onEvent(AllowanceSettingsEvent.GameCapChanged("100.01"))
+        vm.onEvent(AllowanceSettingsEvent.SaveGameCap)
+        assertEquals(AmountError.TOO_LARGE, vm.state.value.gameCapEditor?.error)
+        vm.onEvent(AllowanceSettingsEvent.GameCapChanged("0.123"))
+        vm.onEvent(AllowanceSettingsEvent.SaveGameCap)
+        assertEquals(AmountError.TOO_MANY_DECIMALS, vm.state.value.gameCapEditor?.error)
+        vm.onEvent(AllowanceSettingsEvent.GameCapChanged(""))
+        vm.onEvent(AllowanceSettingsEvent.SaveGameCap)
+        assertEquals(AmountError.REQUIRED, vm.state.value.gameCapEditor?.error)
+        assertTrue(rules.capWrites.isEmpty())
+
+        vm.onEvent(AllowanceSettingsEvent.GameCapChanged("0"))
+        vm.onEvent(AllowanceSettingsEvent.SaveGameCap)
+        assertEquals(listOf<Long?>(0), rules.capWrites)
+        assertNull(vm.state.value.gameCapEditor)
+        assertEquals(SettingsMessage.SAVED, vm.state.value.message)
+        assertEquals(GameCapUi(capMinor = 0, isDefault = false, currency = GBP), vm.state.value.gameCap)
+
+        vm.onEvent(AllowanceSettingsEvent.EditGameCap)
+        vm.onEvent(AllowanceSettingsEvent.ResetGameCap)
+        assertEquals(listOf<Long?>(0, null), rules.capWrites)
+        assertEquals(GameCapUi(capMinor = 50, isDefault = true, currency = GBP), vm.state.value.gameCap)
+    }
+
+    @Test
+    fun `a failed game limit write keeps the dialog open and says so`() = test {
+        val vm = viewModel()
+        rules.failWrites = true
+        vm.onEvent(AllowanceSettingsEvent.EditGameCap)
+        vm.onEvent(AllowanceSettingsEvent.GameCapChanged("1.00"))
+        vm.onEvent(AllowanceSettingsEvent.SaveGameCap)
+        val editor = assertNotNull(vm.state.value.gameCapEditor)
+        assertTrue(editor.saveFailed)
+        assertEquals(false, editor.isSaving)
+        vm.onEvent(AllowanceSettingsEvent.DismissGameCap)
+        assertNull(vm.state.value.gameCapEditor)
+    }
+
+    @Test
+    fun `the game limit is written only after the parent confirms`() = test {
+        val vm = viewModel()
+        confirmation.outcome = ConfirmationOutcome.CANCELLED
+        vm.onEvent(AllowanceSettingsEvent.EditGameCap)
+        vm.onEvent(AllowanceSettingsEvent.GameCapChanged("0.20"))
+        vm.onEvent(AllowanceSettingsEvent.SaveGameCap)
+        assertTrue(rules.capWrites.isEmpty())
+        assertEquals(GameCapEditorUi("0.20", GBP), vm.state.value.gameCapEditor, "dismissed: the dialog stays")
+
+        confirmation.outcome = ConfirmationOutcome.FAILED
+        vm.onEvent(AllowanceSettingsEvent.SaveGameCap)
+        assertTrue(rules.capWrites.isEmpty())
+        assertEquals(SettingsMessage.NOT_CONFIRMED, vm.state.value.message)
+
+        confirmation.outcome = ConfirmationOutcome.CONFIRMED
+        vm.onEvent(AllowanceSettingsEvent.SaveGameCap)
+        assertEquals(listOf<Long?>(20), rules.capWrites)
+        assertEquals(List(3) { ConfirmationPurpose.CHANGE_GAME_CAP }, confirmation.asked)
     }
 }
