@@ -53,6 +53,19 @@ class HiltConventionPlugin : Plugin<Project> {
                 }
             }
         }
+
+        // Lint's analysis tasks read the module's generated sources, including the Hilt sources KSP writes for the
+        // other variants: in one build `lintAnalyzeDebugUnitTest` has read `generated/ksp/release` while
+        // `kspReleaseKotlin` was deleting and rewriting it, and failed on a vanished file (M7 fix pass 2, D-V1-21).
+        // Lint never feeds KSP or Hilt, so every lint task of a Hilt module runs after every KSP and Hilt task of
+        // the same module that is in the task graph (all variants; ordering only, nothing is added to the graph).
+        val generators = tasks.matching { task ->
+            task.name.startsWith("ksp") || task.name.startsWith("hiltAggregateDeps") ||
+                task.name.startsWith("hiltJavaCompile")
+        }
+        tasks.matching { it.name.startsWith("lint") && it.name != "lint" }.configureEach {
+            mustRunAfter(generators)
+        }
     }
 }
 

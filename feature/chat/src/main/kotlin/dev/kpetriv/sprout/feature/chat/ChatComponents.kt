@@ -42,6 +42,7 @@ import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import dev.kpetriv.sprout.core.designsystem.theme.SproutTheme
+import dev.kpetriv.sprout.core.ui.withGutters
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.time.format.FormatStyle
@@ -80,7 +81,7 @@ internal fun WaitingBanner(mode: ChatMode, keyState: ThreadKeyState, modifier: M
 
 /**
  * The thread, newest at the bottom. [onSpeak], when set (Seedling with read-aloud), makes each bubble tappable to
- * hear it.
+ * hear it. [gutters] (from `ContentWidth`) pad the list inside its full width, so a drag beside the bubbles scrolls.
  */
 @Composable
 internal fun MessageList(
@@ -89,9 +90,10 @@ internal fun MessageList(
     modifier: Modifier = Modifier,
     emptyText: String = stringResource(R.string.feature_chat_empty),
     onSpeak: ((String) -> Unit)? = null,
+    gutters: PaddingValues = PaddingValues(),
 ) {
     if (state.messages.isEmpty()) {
-        Box(modifier = modifier.fillMaxWidth().padding(24.dp), contentAlignment = Alignment.Center) {
+        Box(modifier = modifier.fillMaxWidth().padding(gutters).padding(24.dp), contentAlignment = Alignment.Center) {
             Text(
                 text = emptyText,
                 style = MaterialTheme.typography.bodyLarge,
@@ -105,7 +107,7 @@ internal fun MessageList(
         modifier = modifier.fillMaxWidth(),
         reverseLayout = true,
         verticalArrangement = Arrangement.spacedBy(8.dp),
-        contentPadding = PaddingValues(12.dp),
+        contentPadding = PaddingValues(12.dp).withGutters(gutters),
     ) {
         items(state.messages.asReversed(), key = { it.id }) { message ->
             MessageBubble(

@@ -4,6 +4,8 @@ Sprout is an Android app for running a small "family economy". Kids earn credits
 
 It is one app with two roles. The parent area sits behind a PIN or biometric gate. Kid mode runs on the kid's own device with a UI that adapts to the kid's age. Devices sync through Firebase, chat and chore photos are end-to-end encrypted, and all AI features run on the device. The project is a portfolio piece built to the standard of a production app: multi-module, tested, threat-modelled, and aimed at a Play Store release.
 
+**Status:** v1 is feature-complete: milestones M0 to M8 are done (see [Roadmap](#roadmap)). What is left before the Play internal track is the owner's console, real-project and device work, step by step in the [release checklist](docs/RELEASE_CHECKLIST.md).
+
 ## Features
 
 ### Parent mode
@@ -172,10 +174,12 @@ Each milestone ends with green CI and a tagged build.
 | M5 Games | Three games, tier difficulty, daily cap, signed scoring events | Done |
 | M6 AI | Gemini Nano integration, fallbacks, kindness check, suggestions, weekly summary, receipt prefill ([spec and as built](docs/milestones/M6.md), [ADR-0010](docs/adr/0010-on-device-ai.md)) | Done |
 | M7 Showcase polish | Glance widget, adaptive layouts, Baseline Profiles, full screenshot coverage, accessibility, chat retention, readable export, structural `FLAG_SECURE` ([spec and as built](docs/milestones/M7.md)) | Done |
-| M8 Play release | Published privacy and disclosure policies, data-safety answers checked against the build, security review, release signing and workflow, store listing, operator script ([spec and as built](docs/milestones/M8.md), [release checklist](docs/RELEASE_CHECKLIST.md)) | In review |
+| M8 Play release | Published privacy and disclosure policies, data-safety answers checked against the build, security review, release signing and workflow, store listing, operator script ([spec and as built](docs/milestones/M8.md), [release checklist](docs/RELEASE_CHECKLIST.md)) | Done |
 
 ## Documentation
 
+- [Project plan](docs/PLAN.md): architecture, security design and the milestones
+- [Pending decisions](docs/DECISIONS-PENDING.md): defaults taken during the build, for the owner to confirm
 - [Architecture decision records](docs/adr/README.md)
   - [ADR-0001 Architecture](docs/adr/0001-architecture.md)
   - [ADR-0002 Ledger as events](docs/adr/0002-ledger-as-events.md)
@@ -197,6 +201,7 @@ Each milestone ends with green CI and a tagged build.
 - [Play data-safety answers](docs/DATA_SAFETY.md), [security review](docs/SECURITY_REVIEW.md) and the owner's [release checklist](docs/RELEASE_CHECKLIST.md)
 - [Play store listing](play/listing/README.md)
 - [Screenshot tests](docs/SCREENSHOT_TESTS.md) (the screen × tier × state matrix) and the [accessibility checklist](docs/ACCESSIBILITY.md)
+- [M2 milestone spec and as-built notes](docs/milestones/M2.md)
 - [M3 milestone spec and as-built notes](docs/milestones/M3.md)
 - [M4 milestone spec and as-built notes](docs/milestones/M4.md)
 - [M5 milestone spec and as-built notes](docs/milestones/M5.md) and [ADR-0009: games scoring and credit](docs/adr/0009-games-scoring-and-credit.md)

@@ -26,6 +26,7 @@ import dev.kpetriv.sprout.core.model.KidUiTier
 import dev.kpetriv.sprout.core.ui.ContentWidth
 import dev.kpetriv.sprout.core.ui.TierScaledText
 import dev.kpetriv.sprout.core.ui.TierTextRole
+import dev.kpetriv.sprout.core.ui.withGutters
 import java.text.DateFormat
 import java.util.Date
 
@@ -45,10 +46,10 @@ internal fun SaplingWalletContent(
     val tier = KidUiTier.SAPLING
     val locale = LocalConfiguration.current.locales[0]
     val dateFormat = remember(locale) { DateFormat.getDateInstance(DateFormat.MEDIUM, locale) }
-    ContentWidth(modifier = modifier.fillMaxSize()) {
+    ContentWidth(modifier = modifier.fillMaxSize()) { gutters ->
         LazyColumn(
             modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(16.dp),
+            contentPadding = PaddingValues(16.dp).withGutters(gutters),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             item { SectionHeading(stringResource(R.string.feature_wallet_accounts), tier) }

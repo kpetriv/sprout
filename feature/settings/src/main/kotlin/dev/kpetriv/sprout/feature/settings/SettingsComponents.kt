@@ -53,7 +53,7 @@ import dev.kpetriv.sprout.core.model.CalendarDate
 import dev.kpetriv.sprout.core.model.Kid
 import dev.kpetriv.sprout.core.model.KidId
 import dev.kpetriv.sprout.core.model.KidUiTier
-import dev.kpetriv.sprout.core.ui.ContentWidth
+import dev.kpetriv.sprout.core.ui.contentWidth
 import java.time.LocalDate
 import java.time.format.DateTimeFormatter
 import java.time.format.FormatStyle
@@ -92,8 +92,10 @@ internal fun SettingsScaffold(
             )
         },
         snackbarHost = { SnackbarHost(snackbarHostState) },
-        // Capped at a reading width on tablets (M7 §5); the full width on a phone.
-        content = { padding -> ContentWidth(modifier = Modifier.fillMaxSize()) { content(padding) } },
+        // Each page caps itself at a reading width on tablets (M7 §5) inside its own scroll container, so the side
+        // gutters scroll with it (M7 review L10): `verticalScroll(...).contentWidth()`, or `ContentWidth` gutters as
+        // a lazy list's content padding. The full width on a phone.
+        content = content,
     )
 }
 
@@ -128,7 +130,7 @@ private fun SettingsMessage.textRes(): Int = when (this) {
 @Composable
 internal fun loadStatus(isLoading: Boolean, loadFailed: Boolean, modifier: Modifier = Modifier): Boolean {
     if (!isLoading && !loadFailed) return false
-    Box(modifier = modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+    Box(modifier = modifier.contentWidth().fillMaxSize(), contentAlignment = Alignment.Center) {
         if (loadFailed) {
             Text(stringResource(R.string.feature_settings_load_failed), style = MaterialTheme.typography.bodyLarge)
         } else {

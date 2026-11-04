@@ -33,6 +33,7 @@ import dev.kpetriv.sprout.core.ui.TierScaledText
 import dev.kpetriv.sprout.core.ui.TierTextRole
 import dev.kpetriv.sprout.core.ui.rememberMoneyFormatter
 import dev.kpetriv.sprout.core.ui.tierTextStyle
+import dev.kpetriv.sprout.core.ui.withGutters
 
 /**
  * Sprout (8 to 11) and Sapling (12+): today's chores with rewards and an "I did it" button that opens the
@@ -46,10 +47,10 @@ internal fun ListTodayContent(
 ) {
     val tier = state.tier
     val formatter = rememberMoneyFormatter()
-    ContentWidth(modifier = modifier.fillMaxSize()) {
+    ContentWidth(modifier = modifier.fillMaxSize()) { gutters ->
         LazyColumn(
             modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(16.dp),
+            contentPadding = PaddingValues(16.dp).withGutters(gutters),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             item(key = "today") { Heading(stringResource(R.string.feature_chores_today), tier) }

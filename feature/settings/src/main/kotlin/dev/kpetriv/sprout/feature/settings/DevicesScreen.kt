@@ -36,6 +36,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.kpetriv.sprout.core.database.entity.RegistrationStatus
 import dev.kpetriv.sprout.core.model.DeviceId
 import dev.kpetriv.sprout.core.model.Role
+import dev.kpetriv.sprout.core.ui.contentWidth
 
 @Composable
 internal fun DevicesRoute(onBack: () -> Unit, reviewDeviceId: DeviceId?, modifier: Modifier = Modifier) {
@@ -63,7 +64,7 @@ fun DevicesScreen(
     ) { padding ->
         Column(modifier = Modifier.padding(padding).fillMaxSize()) {
             if (!loadStatus(state.isLoading, state.loadFailed)) {
-                Column(modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
+                Column(modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).contentWidth()) {
                     if (state.devices.isEmpty()) {
                         Text(stringResource(R.string.feature_settings_devices_empty), Modifier.sectionPadding())
                     }

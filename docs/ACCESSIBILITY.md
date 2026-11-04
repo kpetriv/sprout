@@ -34,7 +34,7 @@ It runs in two places:
 - [ ] Kid-mode UI sits inside `ProvideKidTier`, which raises both Material's minimum interactive size and the view configuration's minimum touch target to the tier's. A dialog or bottom sheet is a new window that resets the view configuration: keep its controls at the tier size and leave out Material's 48 dp sheet drag handle in kid sheets.
 - [ ] Status that changes while the screen is open (errors, "Reading the receipt…", the recording countdown, the time bank's remaining time) is a polite live region, and announces at most every few seconds; nothing announces on every recomposition.
 - [ ] Text scales: no fixed heights around text; check the font-scale 2.0 golden if the screen has one.
-- [ ] Scrolling screens cap their content width (`ContentWidth` / `Modifier.contentWidth()`, 640 dp) so lines stay readable on a tablet.
+- [ ] Scrolling screens cap their content width (640 dp) so lines stay readable on a tablet, and the side gutters scroll with the content: a lazy list fills the width and adds the `ContentWidth` gutters to its `contentPadding` (`PaddingValues(16.dp).withGutters(gutters)`); a scrolling column puts `Modifier.contentWidth()` after `verticalScroll` (D-V1-22).
 - [ ] The screen's screenshot test has `checkAccessibility = true`, and its screen test (if any) has the `AccessibilityRule`.
 
 ## Live regions reviewed (M7)

@@ -29,6 +29,8 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import dev.kpetriv.sprout.core.ui.ContentWidth
+import dev.kpetriv.sprout.core.ui.contentWidth
 
 /**
  * Settings → About, with its open-source licences page (M8 §1): the policy rows open the hosted pages in the browser,
@@ -77,7 +79,7 @@ fun AboutScreen(
         modifier = modifier,
         snackbarHostState = snackbarHostState,
     ) {
-        Column(modifier = Modifier.padding(it).fillMaxSize().verticalScroll(rememberScrollState())) {
+        Column(modifier = Modifier.padding(it).fillMaxSize().verticalScroll(rememberScrollState()).contentWidth()) {
             Column(modifier = Modifier.sectionPadding(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 Text(
                     stringResource(R.string.feature_settings_about_app),
@@ -149,23 +151,25 @@ fun OpenSourceLicencesScreen(
                 Text(
                     stringResource(R.string.feature_settings_licences_failed),
                     style = MaterialTheme.typography.bodyLarge,
-                    modifier = Modifier.padding(padding).sectionPadding(),
+                    modifier = Modifier.padding(padding).contentWidth().sectionPadding(),
                 )
             } else {
                 loadStatus(isLoading = true, loadFailed = false, modifier = Modifier.padding(padding))
             }
             return@SettingsScaffold
         }
-        LazyColumn(modifier = Modifier.padding(padding).fillMaxSize()) {
-            items(libraries, key = { it.module + ":" + it.version }) { library ->
-                val licences = library.licences.joinToString { it.name }
-                    .ifEmpty { stringResource(R.string.feature_settings_licences_no_licence) }
-                AboutRow(
-                    title = library.name,
-                    summary = "${library.module} ${library.version}\n$licences",
-                    onClick = library.link?.let { { onEvent(AboutEvent.OpenLibrary(library)) } },
-                )
-                HorizontalDivider()
+        ContentWidth(modifier = Modifier.padding(padding).fillMaxSize()) { gutters ->
+            LazyColumn(modifier = Modifier.fillMaxSize(), contentPadding = gutters) {
+                items(libraries, key = { it.module + ":" + it.version }) { library ->
+                    val licences = library.licences.joinToString { it.name }
+                        .ifEmpty { stringResource(R.string.feature_settings_licences_no_licence) }
+                    AboutRow(
+                        title = library.name,
+                        summary = "${library.module} ${library.version}\n$licences",
+                        onClick = library.link?.let { { onEvent(AboutEvent.OpenLibrary(library)) } },
+                    )
+                    HorizontalDivider()
+                }
             }
         }
     }

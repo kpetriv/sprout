@@ -40,6 +40,7 @@ import dev.kpetriv.sprout.core.model.ChoreId
 import dev.kpetriv.sprout.core.model.ChoreState
 import dev.kpetriv.sprout.core.ui.ContentWidth
 import dev.kpetriv.sprout.core.ui.rememberMoneyFormatter
+import dev.kpetriv.sprout.core.ui.withGutters
 
 /**
  * Navigation entry for the parent's chore list.
@@ -153,9 +154,10 @@ private fun ReadyList(
         )
         return
     }
-    ContentWidth(modifier = Modifier.fillMaxSize()) {
+    ContentWidth(modifier = Modifier.fillMaxSize()) { gutters ->
         LazyColumn(
-            contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 96.dp),
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 96.dp).withGutters(gutters),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             item(key = "toggle") {

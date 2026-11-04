@@ -12,6 +12,7 @@ import dev.kpetriv.sprout.core.domainledger.Money
 import dev.kpetriv.sprout.core.model.AgeBand
 import dev.kpetriv.sprout.core.model.MAX_DESCRIPTION_LENGTH
 import dev.kpetriv.sprout.core.model.MAX_TITLE_LENGTH
+import java.text.Normalizer
 
 /**
  * Hard bounds on model output (M6 §1, ADR-0010). Model text is untrusted: anything that fails here is replaced by the
@@ -229,8 +230,25 @@ object AiOutputRules {
         val foreignDigit = text.codePoints().anyMatch { Character.isDigit(it) && it !in ASCII_DIGITS }
         val quantityWord = Regex("\\p{L}+").findAll(text.lowercase()).any { it.value in quantityWords }
         val allowed = numbersOf(facts)
-        return !foreignDigit && !quantityWord && numbersIn(text).all { readings -> readings.any { it in allowed } }
+        return !foreignDigit && !quantityWord && !hasForeignNumberWord(text, facts) &&
+            numbersIn(text).all { readings -> readings.any { it in allowed } }
     }
+
+    /**
+     * Whether [text] has a number word of another common device language ([foreignNumberWords]: German, French,
+     * Spanish, Italian, Portuguese, Dutch; one to twenty, hundred, thousand), so a model that slips out of English
+     * falls back to the template (D-M6-35 residual). Accents are ignored ("zwölf", "zwolf"); a word that is part of
+     * a kid's first name ("Otto", "Elf") is not one, since the names are in the summary's facts.
+     */
+    fun hasForeignNumberWord(text: String, facts: WeeklyFacts): Boolean {
+        val names = facts.kids.flatMapTo(mutableSetOf()) { words(it.firstName) }
+        return words(text).any { it in foreignNumberWords && it !in names }
+    }
+
+    /** The letter runs of [text], lower case, accents removed. */
+    private fun words(text: String): Sequence<String> =
+        Regex("\\p{L}+").findAll(Normalizer.normalize(text.lowercase(), Normalizer.Form.NFD).replace(MARKS, ""))
+            .map { it.value }
 
     /**
      * When [facts] have ledger anomalies, whether [text] still says "N ledger warning(s)" with their number: the
@@ -325,6 +343,35 @@ object AiOutputRules {
         "hundred", "hundreds", "thousand", "thousands", "million", "millions", "billion", "billions", "dozen",
         "dozens", "half", "halves", "once", "twice", "thrice",
     )
+
+    private val MARKS = Regex("\\p{M}+")
+
+    /**
+     * Number words of the device languages Sprout is most likely to meet besides English (one to twenty, hundred,
+     * thousand; lower case, accents removed; common spellings of both Portuguese standards and the transliterated
+     * German umlauts). Left out because they are ordinary English words a summary may use: "six" (an English number,
+     * checked as one), "sept" (September), "seize", "cent", "due", "doze", and "once" (refused as an English quantity
+     * word anyway).
+     */
+    private val foreignNumberWords: Set<String> = (
+        // German
+        "ein eins eine zwei drei vier funf fuenf sechs sieben acht neun zehn elf zwolf zwoelf dreizehn vierzehn " +
+            "funfzehn fuenfzehn sechzehn siebzehn achtzehn neunzehn zwanzig hundert tausend " +
+            // French
+            "un une deux trois quatre cinq huit neuf dix onze douze treize quatorze quinze vingt mille " +
+            // Spanish
+            "uno una dos tres cuatro cinco seis siete ocho nueve diez doce trece catorce quince dieciseis " +
+            "diecisiete dieciocho diecinueve veinte cien ciento mil " +
+            // Italian
+            "tre quattro cinque sei sette otto nove dieci undici dodici tredici quattordici quindici sedici " +
+            "diciassette diciotto diciannove venti cento " +
+            // Portuguese
+            "um uma dois duas quatro sete oito dez treze catorze quatorze dezesseis dezasseis dezessete dezassete " +
+            "dezoito dezenove dezanove vinte cem " +
+            // Dutch
+            "een twee drie vijf zes zeven negen tien twaalf dertien veertien vijftien zestien zeventien achttien " +
+            "negentien twintig honderd duizend"
+        ).split(' ').toSet()
 
     private val spelledNumbers: Map<String, Int> =
         UNITS_AND_TEENS.split(' ').mapIndexed { index, word -> word to index + FIRST_SPELLED }.toMap() +

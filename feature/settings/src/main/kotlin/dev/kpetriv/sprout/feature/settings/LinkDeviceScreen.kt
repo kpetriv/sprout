@@ -28,6 +28,7 @@ import androidx.compose.ui.unit.sp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.kpetriv.sprout.core.model.KidId
+import dev.kpetriv.sprout.core.ui.contentWidth
 
 @Composable
 internal fun LinkDeviceRoute(kidId: KidId, kidName: String, onBack: () -> Unit, modifier: Modifier = Modifier) {
@@ -51,7 +52,12 @@ fun LinkDeviceScreen(
         modifier = modifier,
     ) { padding ->
         Column(
-            modifier = Modifier.padding(padding).fillMaxSize().verticalScroll(rememberScrollState()).padding(24.dp),
+            modifier = Modifier
+                .padding(padding)
+                .fillMaxSize()
+                .verticalScroll(rememberScrollState())
+                .contentWidth()
+                .padding(24.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
