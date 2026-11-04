@@ -70,6 +70,7 @@ class SchemaTest {
                 "thread_keys",
                 "blobs",
                 "read_marks",
+                "time_bank_clocks",
             ),
             entities().map { it.getValue("tableName").jsonPrimitive.content }.toSet(),
         )
@@ -111,6 +112,8 @@ class SchemaTest {
                 "authorDeviceId",
                 "signature",
                 "deleted",
+                "chatRetentionDays",
+                "dailyGameCapMinor",
             ),
             columns("household_policy"),
         )

@@ -1,8 +1,11 @@
 package dev.kpetriv.sprout.core.database
 
 import dev.kpetriv.sprout.core.crypto.JceEcdsaVerifier
+import dev.kpetriv.sprout.core.database.entity.TimeBankClockEntity
 import dev.kpetriv.sprout.core.database.usecase.ReconcileTimeBankUseCase
+import dev.kpetriv.sprout.core.database.usecase.StartTimeBankUseCase
 import dev.kpetriv.sprout.core.database.usecase.StopTimeBankUseCase
+import dev.kpetriv.sprout.core.database.usecase.TimeBankClocks
 import dev.kpetriv.sprout.core.database.usecase.TimeBankRefusal
 import dev.kpetriv.sprout.core.database.usecase.TimeBankResult
 import dev.kpetriv.sprout.core.database.usecase.TimeBankStatusReader
@@ -94,10 +97,73 @@ class TimeBankUseCasesTest {
         val ledger = RoomLedgerRepository(household.database, household.clock, household.signer, JceEcdsaVerifier())
         val writer = RoomLedgerWriter(household.database, ledger, household.signer, household.authors, household.clock)
         val reader = TimeBankStatusReader(ledger, household.accounts)
-        val stop = StopTimeBankUseCase(reader, writer, household.clock)
+        val clocks = TimeBankClocks(household.database, household.monotonic)
+        val stop = StopTimeBankUseCase(reader, writer, household.clock, clocks)
 
         assertEquals(12, assertIs<TimeBankResult.Stopped>(stop(kid)).minutesUsed)
         assertEquals(18, household.balance(kid))
+    }
+
+    @Test
+    fun aWallClockSetBackDuringTheSessionDoesNotShortenIt() = runTest {
+        val kid = household.kidWithMinutes(60)
+        household.startTimeBank(kid)
+        // 20 real minutes pass, but the kid set the wall clock back by 15 of them (D-M4-24).
+        household.clock.advanceBy(5.minutes)
+        household.monotonic.advance(15.minutes)
+
+        assertEquals(20, assertIs<TimeBankResult.Stopped>(household.stopTimeBank(kid)).minutesUsed)
+        assertEquals(40, household.balance(kid))
+        assertEquals(0, household.database.timeBankClockDao().count(), "the reading goes with the session")
+    }
+
+    @Test
+    fun aWallClockSetForwardDuringTheSessionDoesNotLengthenIt() = runTest {
+        val kid = household.kidWithMinutes(60)
+        household.startTimeBank(kid)
+        // 10 real minutes pass while the wall clock jumps 30 minutes ahead.
+        household.clock.advanceBy(40.minutes)
+        household.monotonic.advance((-30).minutes)
+
+        assertEquals(10, assertIs<TimeBankResult.Stopped>(household.stopTimeBank(kid)).minutesUsed)
+    }
+
+    @Test
+    fun afterARestartTheWallClockDecides() = runTest {
+        val kid = household.kidWithMinutes(60)
+        household.startTimeBank(kid)
+        household.clock.advanceBy(12.minutes)
+        household.monotonic.reboot(uptime = 3.minutes)
+
+        assertEquals(12, assertIs<TimeBankResult.Stopped>(household.stopTimeBank(kid)).minutesUsed)
+    }
+
+    @Test
+    fun withoutABootCountTheWallClockDecides() = runTest {
+        val monotonic = FakeMonotonicClock(household.clock, boot = null)
+        val clocks = TimeBankClocks(household.database, monotonic)
+        val start = StartTimeBankUseCase(household.timeBankStatus, household.writer, clocks)
+        val stop = StopTimeBankUseCase(household.timeBankStatus, household.writer, household.clock, clocks)
+        val kid = household.kidWithMinutes(60)
+        start(kid)
+        household.clock.advanceBy(9.minutes)
+        monotonic.advance(30.minutes)
+
+        assertEquals(9, assertIs<TimeBankResult.Stopped>(stop(kid)).minutesUsed)
+    }
+
+    @Test
+    fun aNewSessionReplacesTheKidsOlderReading() = runTest {
+        val kid = household.kidWithMinutes(60)
+        household.startTimeBank(kid)
+        household.clock.advanceBy(2.minutes)
+        household.stopTimeBank(kid)
+        // A stale reading (a session another path stopped) never outlives the kid's next start.
+        household.database.timeBankClockDao().upsert(
+            TimeBankClockEntity("stale", kid.value, 0, 1),
+        )
+        household.startTimeBank(kid)
+        assertEquals(1, household.database.timeBankClockDao().count())
     }
 
     @Test

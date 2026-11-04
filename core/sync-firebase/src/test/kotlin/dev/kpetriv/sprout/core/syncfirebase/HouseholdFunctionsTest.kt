@@ -10,6 +10,7 @@ import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
+import kotlin.time.Instant
 
 class HouseholdFunctionsTest {
     private class RecordingInvoker(private val respond: (String, Map<String, Any?>) -> Any?) : CallableInvoker {
@@ -98,6 +99,31 @@ class HouseholdFunctionsTest {
             ),
             data,
         )
+    }
+
+    @Test
+    fun `pruneMessages sends the cut, the purge flag and the proof, and reads the counts`() = runTest {
+        val invoker = RecordingInvoker { _, _ ->
+            mapOf("messages" to 12.0, "blobChunks" to 3, "more" to false, "before" to 1.7936064E12)
+        }
+
+        val pruned = HouseholdFunctions(invoker)
+            .pruneMessages(Instant.fromEpochMilliseconds(1_793_606_400_000), purge = true, device, byteArrayOf(5))
+            .getOrThrow()
+
+        assertEquals(PrunedMessages(messages = 12, blobChunks = 3, more = false, before = 1_793_606_400_000), pruned)
+        val (name, data, timeout) = invoker.calls.single()
+        assertEquals("pruneMessages", name)
+        assertEquals(
+            mapOf(
+                "before" to 1_793_606_400_000L,
+                "purge" to true,
+                "callerDeviceId" to device.value,
+                "signature" to "BQ==",
+            ),
+            data,
+        )
+        assertEquals(300_000, timeout)
     }
 
     @Test

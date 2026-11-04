@@ -117,6 +117,12 @@ enum class AuditAction {
      * anything was sent with it (review H2): thread, epoch.
      */
     THREAD_KEY_WITHDRAWN,
+
+    /**
+     * The chat retention or "Delete chat history now" removed chat rows from this device (M7 §2): the reason
+     * (`retention` or `purge`), the cut and counts only.
+     */
+    CHAT_PRUNED,
 }
 
 /**

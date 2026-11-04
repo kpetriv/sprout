@@ -75,6 +75,10 @@ interface OutboxDao {
     @Query("DELETE FROM outbox WHERE kind = :kind AND refId = :refId")
     suspend fun deleteRef(kind: OutboxKind, refId: String): Int
 
+    /** Queued chunks of [blobId] (not uploaded yet). */
+    @Query("SELECT COUNT(*) FROM outbox WHERE kind = 'BLOB_CHUNK' AND refId LIKE :blobId || '.%'")
+    suspend fun countBlobChunks(blobId: String): Int
+
     /** Removes the queued chunks of blob [blobId] (their `refId`s are `"<blobId>.<chunk>"`). */
     @Query("DELETE FROM outbox WHERE kind = 'BLOB_CHUNK' AND refId LIKE :blobId || '.%'")
     suspend fun deleteBlobChunks(blobId: String): Int

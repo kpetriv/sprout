@@ -13,6 +13,7 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.longOrNull
 import kotlinx.serialization.json.put
 import java.security.MessageDigest
+import kotlin.time.Instant
 
 /**
  * The bytes a device signs to prove a privileged request (D-M3-34, T7/T8), exactly as the backend rebuilds them
@@ -44,6 +45,7 @@ object DeviceProof {
         HouseholdFunctions.REVOKE_DEVICE to "sprout/revoke-device/v2",
         HouseholdFunctions.EXPORT_HOUSEHOLD to "sprout/export-household/v2",
         HouseholdFunctions.DELETE_HOUSEHOLD to "sprout/delete-household/v2",
+        HouseholdFunctions.PRUNE_MESSAGES to "sprout/prune-messages/v2",
     )
 
     /** Domain of the `registerParentKey` signature (`REGISTER_PARENT_KEY_DOMAIN`). */
@@ -111,6 +113,18 @@ object DeviceProof {
     fun deleteHouseholdPayload(hid: HouseholdId, idTokenHash: ByteArray): ByteArray {
         val args = buildJsonObject { put("confirmation", hid.value) }
         return payload(HouseholdFunctions.DELETE_HOUSEHOLD, hid, idTokenHash, args)
+    }
+
+    /**
+     * [payload] for `pruneMessages(before, purge)`: the signed arguments are `{ before, purge }`, [before] in epoch
+     * milliseconds.
+     */
+    fun pruneMessagesPayload(hid: HouseholdId, idTokenHash: ByteArray, before: Instant, purge: Boolean): ByteArray {
+        val args = buildJsonObject {
+            put("before", before.toEpochMilliseconds())
+            put("purge", purge)
+        }
+        return payload(HouseholdFunctions.PRUNE_MESSAGES, hid, idTokenHash, args)
     }
 
     /**

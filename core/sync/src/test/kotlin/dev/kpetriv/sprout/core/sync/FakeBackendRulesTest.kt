@@ -18,6 +18,8 @@ import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import kotlin.time.Duration.Companion.days
+import kotlin.time.Instant
 
 /**
  * The fake server refuses what `firestore/firestore.rules` refuses: registry collections, and the chat collections
@@ -56,6 +58,20 @@ class FakeBackendRulesTest {
         },
         deleted = deleted,
     )
+
+    /** A `household_policy` document by the parent: the v1 keys plus [extra]. */
+    private fun policy(extra: JsonObject, lamport: Long = 2): DocumentEnvelope = parent.signed(
+        DocTypes.HOUSEHOLD_POLICY,
+        HOUSEHOLD.value,
+        lamport,
+        payload = JsonObject(
+            buildJsonObject {
+                put("fiatCurrency", "GBP")
+                put("requireParentSignature", true)
+            } + extra,
+        ),
+    )
+
     private val transport = FakeSyncTransport(backend, parent.deviceId, parent.uid, parent.role)
     private val kidTransport = FakeSyncTransport(backend, kid.deviceId, kid.uid, kid.role)
     private val otherKidTransport = FakeSyncTransport(backend, otherKid.deviceId, otherKid.uid, otherKid.role)
@@ -90,7 +106,11 @@ class FakeBackendRulesTest {
     @Test
     fun everyClientTypeIsWritableByAParent() = runTest {
         val documents = DocTypes.all.map {
-            if (it == DocTypes.THREAD_KEY) threadKey(parent) else parent.signed(it, "doc-1", lamport = 2)
+            when (it) {
+                DocTypes.THREAD_KEY -> threadKey(parent)
+                DocTypes.HOUSEHOLD_POLICY -> policy(buildJsonObject {})
+                else -> parent.signed(it, "doc-1", lamport = 2)
+            }
         }
 
         val result = transport.push(emptyList(), documents)
@@ -472,5 +492,77 @@ class FakeBackendRulesTest {
             backend.registerEncryptionKey(otherKid.deviceId, bound(otherKid, key), SoftwareSignatureCheck),
         )
         assertNull(transport.pull(SyncCursor.START).devices.single { it.deviceId == kid.deviceId }.encryptionKey)
+    }
+
+    @Test
+    fun theHouseholdPolicyTakesTheV2SettingsWithinTheirBounds() = runTest {
+        val good = policy(
+            buildJsonObject {
+                put("chatRetentionDays", 30)
+                put("dailyGameCapMinor", 0)
+            },
+        )
+        assertEquals(emptyList(), transport.push(emptyList(), listOf(good)).rejected)
+        val nulls = policy(
+            buildJsonObject {
+                put("chatRetentionDays", JsonNull)
+                put("dailyGameCapMinor", 10_000)
+            },
+            lamport = 3,
+        )
+        assertEquals(emptyList(), transport.push(emptyList(), listOf(nulls)).rejected)
+
+        val bad = listOf(
+            buildJsonObject { put("chatRetentionDays", 0) },
+            buildJsonObject { put("chatRetentionDays", 3651) },
+            buildJsonObject { put("chatRetentionDays", "30") },
+            buildJsonObject { put("dailyGameCapMinor", -1) },
+            buildJsonObject { put("dailyGameCapMinor", 10_001) },
+            buildJsonObject { put("purgeChatAt", 1) },
+        ).mapIndexed { index, extra -> policy(extra, lamport = 10L + index) }
+        for (document in bad) {
+            assertEquals(denied, codes(transport.push(emptyList(), listOf(document))), document.payload.toString())
+        }
+        assertEquals(3L, backend.document(DocTypes.HOUSEHOLD_POLICY, HOUSEHOLD.value)?.lamport)
+        // A kid never writes the policy.
+        val kidPolicy = kid.signed(DocTypes.HOUSEHOLD_POLICY, HOUSEHOLD.value, lamport = 50)
+        assertEquals(denied, codes(kidTransport.push(emptyList(), listOf(kidPolicy))))
+    }
+
+    @Test
+    fun pruneMessagesDeletesWhatIsOlderThanTheCutAndOnlyForAParent() = runTest {
+        val day = 86_400_000L
+        val created = CREATED_AT.toEpochMilliseconds()
+        // Stored 50 days before the messages' signed date: the server's own stamp decides.
+        backend.nowEpochMs = { created - 50 * day }
+        transport.pushMessages(parent.message("m-old", seq = 1))
+        transport.pushChunks(parent.blobChunk("b-orphan"), parent.blobChunk("blob-m-new"))
+        transport.pushChunks(parent.blobChunk("p-photo", thread = null, kid = KID_1, submission = "sub-1"))
+        backend.nowEpochMs = { created }
+        transport.pushMessages(parent.message("m-new", seq = 2, kind = MessageKind.PHOTO))
+        backend.nowEpochMs = { created + day }
+        val now = Instant.fromEpochMilliseconds(created + day)
+
+        fun refusal(result: Result<FakeBackend.PruneCounts>) =
+            (result.exceptionOrNull() as? FakeBackend.CallableRefusedException)?.code
+
+        assertEquals("failed-precondition", refusal(backend.pruneMessages(parent.deviceId, now - 30.days, false)))
+        transport.push(emptyList(), listOf(policy(buildJsonObject { put("chatRetentionDays", 30) })))
+        assertEquals(FakeBackend.PERMISSION_DENIED, refusal(backend.pruneMessages(kid.deviceId, now, true)))
+        assertEquals("invalid-argument", refusal(backend.pruneMessages(parent.deviceId, now - 31.days, false)))
+        assertEquals("invalid-argument", refusal(backend.pruneMessages(parent.deviceId, now + 1.days, true)))
+
+        val counts = backend.pruneMessages(parent.deviceId, now - 30.days, false).getOrThrow()
+
+        assertEquals(FakeBackend.PruneCounts(messages = 1, blobChunks = 1), counts)
+        assertEquals(listOf("m-new"), backend.messages().map { it.string("messageId") })
+        assertEquals(
+            setOf("blob-m-new.0", "p-photo.0"),
+            backend.blobs().map { it.docId }.toSet(),
+            "a chunk a kept message names, and chore photos, stay",
+        )
+        // A purge takes everything before now; pulls after it simply never see the deleted rows.
+        assertEquals(1, backend.pruneMessages(parent.deviceId, now, true).getOrThrow().messages)
+        assertTrue(backend.messages().isEmpty())
     }
 }

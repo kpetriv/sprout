@@ -10,7 +10,9 @@ import dev.kpetriv.sprout.core.domainledger.EventAuthor
 import dev.kpetriv.sprout.core.domainledger.JvmSha256Hasher
 import dev.kpetriv.sprout.core.domainledger.LedgerJson
 import dev.kpetriv.sprout.core.domainledger.LedgerPolicy
+import dev.kpetriv.sprout.core.domainledger.Money
 import dev.kpetriv.sprout.core.domainledger.toHex
+import dev.kpetriv.sprout.core.model.Role
 import dev.kpetriv.sprout.core.sync.DocTypes
 import dev.kpetriv.sprout.core.time.Clock
 import kotlinx.coroutines.flow.Flow
@@ -33,6 +35,10 @@ import kotlin.time.Instant
  *   [parentPublicKey].
  * @property parentSignatureFromLamport the signature is required from this lamport on (the registration point).
  * @property fiatCurrency the household's money currency.
+ * @property chatRetentionDays chat messages are kept this many days ([HouseholdPolicyLimits.CHAT_RETENTION_DAYS]);
+ *   null keeps them (D-M7-8, D-M7-10).
+ * @property dailyGameCapMinor the daily game cap in minor units ([HouseholdPolicyLimits.DAILY_GAME_CAP_MINOR]); null
+ *   is the ledger default, [LedgerPolicy.DEFAULT_DAILY_GAME_CAP] (D-M5-4).
  */
 class HouseholdPolicy(
     val requireParentSignature: Boolean,
@@ -40,6 +46,8 @@ class HouseholdPolicy(
     parentPublicKey: ByteArray?,
     val fiatCurrency: Currency.Fiat,
     val createdAt: Instant,
+    val chatRetentionDays: Int? = null,
+    val dailyGameCapMinor: Long? = null,
 ) {
     private val key: ByteArray? = parentPublicKey?.copyOf()
 
@@ -54,8 +62,12 @@ class HouseholdPolicy(
      */
     val parentSignaturesOff: Boolean get() = !requireParentSignature
 
+    /** The daily game cap in force: [dailyGameCapMinor], or the ledger default. */
+    val dailyGameCap: Money get() = dailyGameCapMinor?.let(::Money) ?: LedgerPolicy.DEFAULT_DAILY_GAME_CAP
+
     /** The [LedgerPolicy] this policy configures. */
     fun toLedgerPolicy(): LedgerPolicy = LedgerPolicy(
+        dailyGameCap = dailyGameCap,
         requireParentSignature = requireParentSignature,
         parentSignatureRequiredFromLamport = parentSignatureFromLamport,
     )
@@ -64,13 +76,14 @@ class HouseholdPolicy(
         requireParentSignature == other.requireParentSignature &&
         parentSignatureFromLamport == other.parentSignatureFromLamport &&
         (key?.contentEquals(other.key) ?: (other.key == null)) &&
-        fiatCurrency == other.fiatCurrency && createdAt == other.createdAt
+        fiatCurrency == other.fiatCurrency && createdAt == other.createdAt &&
+        chatRetentionDays == other.chatRetentionDays && dailyGameCapMinor == other.dailyGameCapMinor
 
     override fun hashCode(): Int = listOf(requireParentSignature, parentSignatureFromLamport, fiatCurrency).hashCode()
 
     override fun toString(): String = "HouseholdPolicy(requireParentSignature=$requireParentSignature, " +
         "parentSignatureFromLamport=$parentSignatureFromLamport, hasParentKey=$hasParentKey, " +
-        "fiatCurrency=$fiatCurrency)"
+        "fiatCurrency=$fiatCurrency, chatRetentionDays=$chatRetentionDays, dailyGameCapMinor=$dailyGameCapMinor)"
 }
 
 /** The household policy row. Every change is audited (no key bytes in the audit row). */
@@ -117,12 +130,35 @@ interface HouseholdPolicyRepository {
      * `PARENT_KEY_REGISTERED` audit rows with `server: true`.
      */
     fun observeServerRegistrationPending(): Flow<Boolean> = flowOf(false)
+
+    /**
+     * Sets how long chat messages are kept (M7 §2, D-M7-10): [days] within [HouseholdPolicyLimits.CHAT_RETENTION_DAYS],
+     * or null to keep them. Parent sessions only ([IllegalStateException] otherwise; the UI asks for parent
+     * authorisation first). Republishes the synced `household_policy` document, audited `HOUSEHOLD_POLICY_UPDATED`.
+     *
+     * @throws IllegalArgumentException for [days] outside the bounds.
+     */
+    suspend fun setChatRetention(days: Int?): HouseholdPolicy =
+        throw UnsupportedOperationException("this repository cannot change the chat retention")
+
+    /**
+     * Sets the daily game cap (D-M5-4, D-M7-10): [minor] units within [HouseholdPolicyLimits.DAILY_GAME_CAP_MINOR], or
+     * null for the ledger default. Parent sessions only, like [setChatRetention]. The cap is synced household policy,
+     * so every device projects the same exclusions (ADR-0009); it applies to every day's plays, past days included, and
+     * the balances are recomputed at once.
+     *
+     * @throws IllegalArgumentException for [minor] outside the bounds.
+     */
+    suspend fun setDailyGameCap(minor: Long?): HouseholdPolicy =
+        throw UnsupportedOperationException("this repository cannot change the game cap")
 }
 
 /**
- * [HouseholdPolicyRepository] on Room. The fiat currency and `requireParentSignature` are the synced
- * `household_policy` document (docId = household id); the registered parent key is this device's own and reaches
- * other devices through the server registry (`registerParentKey`, D-M3-34), never as a document.
+ * [HouseholdPolicyRepository] on Room. The fiat currency, `requireParentSignature`, the chat retention and the game
+ * cap are the synced `household_policy` document (docId = household id); the registered parent key is this device's
+ * own and reaches other devices through the server registry (`registerParentKey`, D-M3-34), never as a document.
+ * Every write keeps the settings it does not change. A changed game cap rebuilds the ledger's balance caches through
+ * [ledger].
  */
 class RoomHouseholdPolicyRepository @Inject constructor(
     private val database: SproutDatabase,
@@ -130,6 +166,7 @@ class RoomHouseholdPolicyRepository @Inject constructor(
     private val currency: FiatCurrencyProvider,
     private val clock: Clock,
     signer: DeviceSigner,
+    private val ledger: RoomLedgerRepository,
 ) : HouseholdPolicyRepository {
     private val policies = database.householdPolicyDao()
     private val writes = DocumentWrites(database, clock, signer)
@@ -176,6 +213,8 @@ class RoomHouseholdPolicyRepository @Inject constructor(
                     parentPublicKey = publicKeyDer.copyOf(),
                     fiatCurrency = current.fiatCurrency,
                     createdAtEpochMs = current.createdAt.toEpochMilliseconds(),
+                    chatRetentionDays = current.chatRetentionDays,
+                    dailyGameCapMinor = current.dailyGameCapMinor,
                 ),
             ).toDomain()
         }
@@ -218,6 +257,36 @@ class RoomHouseholdPolicyRepository @Inject constructor(
         }
     }
 
+    override suspend fun setChatRetention(days: Int?): HouseholdPolicy {
+        require(days == null || days in HouseholdPolicyLimits.CHAT_RETENTION_DAYS) { "chat retention out of range" }
+        return update { it.copy(chatRetentionDays = days) }
+    }
+
+    override suspend fun setDailyGameCap(minor: Long?): HouseholdPolicy {
+        require(minor == null || minor in HouseholdPolicyLimits.DAILY_GAME_CAP_MINOR) { "game cap out of range" }
+        val before = get()?.dailyGameCapMinor
+        val updated = update { it.copy(dailyGameCapMinor = minor) }
+        // The cap decides which plays count on every day: the cached balances follow it at once.
+        if (before != minor) ledger.rebuildCaches()
+        return updated
+    }
+
+    /** Rewrites the policy row (created first if missing) with [change] applied; parent sessions only. */
+    private suspend fun update(change: (HouseholdPolicyEntity) -> HouseholdPolicyEntity): HouseholdPolicy {
+        val author = authors.currentAuthor()
+        check(author.role == Role.PARENT) { "only a parent changes the household policy" }
+        return writes.transaction {
+            val current = policies.get() ?: HouseholdPolicyEntity(
+                requireParentSignature = false,
+                parentSignatureFromLamport = null,
+                parentPublicKey = null,
+                fiatCurrency = currency.fiatCurrency(),
+                createdAtEpochMs = clock.now().toEpochMilliseconds(),
+            )
+            write(author, change(current)).toDomain()
+        }
+    }
+
     private suspend fun create(author: EventAuthor, fiatCurrency: Currency.Fiat): HouseholdPolicy = write(
         author,
         HouseholdPolicyEntity(
@@ -238,11 +307,18 @@ class RoomHouseholdPolicyRepository @Inject constructor(
             DocTypes.HOUSEHOLD_POLICY,
             author.householdId.value,
             lamport,
-            DocumentPayloads.householdPolicy(fiat, row.requireParentSignature),
+            DocumentPayloads.householdPolicy(
+                fiat,
+                row.requireParentSignature,
+                row.chatRetentionDays,
+                row.dailyGameCapMinor,
+            ),
             AuditAction.HOUSEHOLD_POLICY_UPDATED,
         ) {
             put("fiatCurrency", fiat.isoCode)
             put("requireParentSignature", row.requireParentSignature)
+            put("chatRetentionDays", row.chatRetentionDays)
+            put("dailyGameCapMinor", row.dailyGameCapMinor)
         }
         return row.copy(lamport = lamport, stamp = stamp).also { policies.upsert(it) }
     }
@@ -264,4 +340,6 @@ internal fun HouseholdPolicyEntity.toDomain() = HouseholdPolicy(
     parentPublicKey = parentPublicKey,
     fiatCurrency = fiatCurrency as? Currency.Fiat ?: error("household currency must be fiat"),
     createdAt = Instant.fromEpochMilliseconds(createdAtEpochMs),
+    chatRetentionDays = chatRetentionDays,
+    dailyGameCapMinor = dailyGameCapMinor,
 )

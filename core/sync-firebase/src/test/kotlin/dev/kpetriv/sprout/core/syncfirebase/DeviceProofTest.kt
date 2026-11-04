@@ -12,6 +12,7 @@ import kotlinx.serialization.json.put
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.time.Instant
 
 /**
  * Golden bytes for the device-proof payloads. The expected values were produced by the backend's own functions
@@ -70,6 +71,21 @@ class DeviceProofTest {
             "7370726f75742f64656c6574652d686f757365686f6c642f763200686f6d652d3100" + tokenHex +
                 "007b22636f6e6669726d6174696f6e223a22686f6d652d31227d",
             DeviceProof.deleteHouseholdPayload(hid, tokenHash).hex(),
+        )
+    }
+
+    @Test
+    fun `pruneMessages signs the cut and whether it is a purge`() {
+        assertEquals(
+            "7370726f75742f7072756e652d6d657373616765732f763200686f6d652d3100" + tokenHex +
+                "007b226265666f7265223a313739333630363430303030302c227075726765223a66616c73657d",
+            DeviceProof.pruneMessagesPayload(hid, tokenHash, Instant.fromEpochMilliseconds(1_793_606_400_000), false)
+                .hex(),
+        )
+        assertEquals(
+            "7370726f75742f7072756e652d6d657373616765732f763200686f6d652d3100" + tokenHex +
+                "007b226265666f7265223a352c227075726765223a747275657d",
+            DeviceProof.pruneMessagesPayload(hid, tokenHash, Instant.fromEpochMilliseconds(5), true).hex(),
         )
     }
 

@@ -1,13 +1,14 @@
 /**
- * The Sprout server (docs/milestones/M3.md §1 and §7, M4.md §3, docs/FIREBASE.md, D-M3-29): the household identity,
- * device registry (with the devices' encryption keys), linking, export and deletion callables, served over the
- * Firebase callable protocol (src/callable.ts).
+ * The Sprout server (docs/milestones/M3.md §1 and §7, M4.md §3, M7.md §2, docs/FIREBASE.md, D-M3-29): the household
+ * identity, device registry (with the devices' encryption keys), linking, export, deletion and chat pruning
+ * callables, served over the Firebase callable protocol (src/callable.ts).
  * Every callable requires App Check outside the emulator (D-M3-6), is rate limited per uid (deviceStatus: per
  * device) and per IP (src/rateLimit.ts), answers with HttpsError codes whose messages carry no household content, and
  * logs ids and counts only.
  */
 import type { Hono } from 'hono';
 import { callable, createCallableApp, type CallableAppOptions } from './callable.js';
+import * as chat from './handlers/chat.js';
 import * as devices from './handlers/devices.js';
 import * as encryptionKeys from './handlers/encryptionKeys.js';
 import * as household from './handlers/household.js';
@@ -25,6 +26,7 @@ export const redeemLinkCode = callable('redeemLinkCode', linking.redeemLinkCode)
 export const revokeDevice = callable('revokeDevice', devices.revokeDevice);
 export const exportHousehold = callable('exportHousehold', household.exportHousehold);
 export const deleteHousehold = callable('deleteHousehold', household.deleteHousehold);
+export const pruneMessages = callable('pruneMessages', chat.pruneMessages);
 /** The only callable without an ID token: a device asks for its own status with its key's signature. */
 export const deviceStatus = callable('deviceStatus', devices.deviceStatus, { authentication: 'none' });
 
@@ -41,6 +43,7 @@ export const callables = [
   revokeDevice,
   exportHousehold,
   deleteHousehold,
+  pruneMessages,
   deviceStatus,
 ] as const;
 

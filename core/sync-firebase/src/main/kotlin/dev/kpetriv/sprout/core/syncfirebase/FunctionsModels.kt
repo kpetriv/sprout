@@ -102,6 +102,22 @@ internal data class DeleteHouseholdRequest(
     val signature: String,
 )
 
+/** `pruneMessages`: the cut ([before], epoch ms) and whether it is a purge, with the device proof. */
+@Serializable
+internal data class PruneMessagesRequest(
+    val before: Long,
+    val purge: Boolean,
+    val callerDeviceId: DeviceId,
+    val signature: String,
+)
+
+/**
+ * What the server's `pruneMessages` deleted (M7 §2): [messages] and chat [blobChunks] stored before [before] (epoch
+ * ms, the cut the server applied). [more] is true when it stopped at its per-call limit: call again.
+ */
+@Serializable
+data class PrunedMessages(val messages: Int, val blobChunks: Int, val more: Boolean, val before: Long)
+
 @Serializable
 internal data class DeviceStatusRequest(val hid: HouseholdId, val deviceId: DeviceId, val signature: String) {
     /** Says which fields are set, never their values (ids and a replayable signature). */

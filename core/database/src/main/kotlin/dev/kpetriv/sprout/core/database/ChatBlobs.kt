@@ -150,6 +150,15 @@ class BlobCache(
     /** Whether [blobId] is in the index. */
     suspend fun contains(blobId: BlobId): Boolean = blobs.get(blobId.value) != null
 
+    /**
+     * Deletes the files [fileNames] whose index rows were already removed (the chat prune removes the rows inside its
+     * transaction and the files once it committed). A file that is already gone is skipped.
+     */
+    internal suspend fun deleteFiles(fileNames: Collection<String>) {
+        if (fileNames.isEmpty()) return
+        withContext(dispatcher) { fileNames.forEach { fileOf(it).delete() } }
+    }
+
     /** Drops [blobId] from the cache (index row and file), if it is there. */
     suspend fun remove(blobId: BlobId) {
         blobs.get(blobId.value)?.let { drop(it) }

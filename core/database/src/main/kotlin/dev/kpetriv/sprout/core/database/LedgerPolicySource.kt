@@ -4,6 +4,7 @@ import dev.kpetriv.sprout.core.crypto.PublicKeyBytes
 import dev.kpetriv.sprout.core.crypto.Verifier
 import dev.kpetriv.sprout.core.crypto.verifyParentSignature
 import dev.kpetriv.sprout.core.domainledger.LedgerPolicy
+import dev.kpetriv.sprout.core.domainledger.Money
 
 /** Checks a parent signature against the household's registered parent key. Never throws. */
 internal fun interface ParentSignatureVerifier {
@@ -26,9 +27,14 @@ internal fun interface LedgerPolicySource {
 }
 
 /**
- * The production [LedgerPolicySource]: [LedgerPolicy] defaults, with `requireParentSignature` and
- * `parentSignatureRequiredFromLamport` from `household_policy`, and the stored parent public key for verifying parent
- * signatures on events appended on this device. Without a policy row nothing requires a parent signature.
+ * The production [LedgerPolicySource]: [LedgerPolicy] defaults, with `requireParentSignature`,
+ * `parentSignatureRequiredFromLamport` and the daily game cap from `household_policy`, and the stored parent public key
+ * for verifying parent signatures on events appended on this device. Without a policy row nothing requires a parent
+ * signature and the cap is the default.
+ *
+ * The cap is the household's **synced** setting (`dailyGameCapMinor`, D-M5-4, D-M7-10), so every device folds the
+ * same games under the same cap and projects the same exclusions (ADR-0009). It applies to every `playedOn` date:
+ * changing it re-decides past days too (the caches are rebuilt when it changes, D-M7-11).
  *
  * Remote events never use this key: `RemoteEventVerifier` checks their parent signatures against every registered
  * parent key in the registry (`parent_keys`), with no from-lamport exemption (M3 §2). [ActivePolicy.roles] comes
@@ -43,6 +49,7 @@ internal class HouseholdPolicySource(private val database: SproutDatabase, priva
         val roles = registry.roleLookup()
         val row = database.householdPolicyDao().get() ?: return ActivePolicy(LedgerPolicy(), null, roles)
         val policy = LedgerPolicy(
+            dailyGameCap = row.dailyGameCapMinor?.let(::Money) ?: LedgerPolicy.DEFAULT_DAILY_GAME_CAP,
             requireParentSignature = row.requireParentSignature,
             parentSignatureRequiredFromLamport = row.parentSignatureFromLamport,
         )

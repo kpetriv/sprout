@@ -1,8 +1,12 @@
 package dev.kpetriv.sprout.core.database.usecase
 
+import androidx.room.withTransaction
 import dev.kpetriv.sprout.core.database.AccountRepository
+import dev.kpetriv.sprout.core.database.MonotonicClock
 import dev.kpetriv.sprout.core.database.RoomLedgerRepository
 import dev.kpetriv.sprout.core.database.SessionStore
+import dev.kpetriv.sprout.core.database.SproutDatabase
+import dev.kpetriv.sprout.core.database.entity.TimeBankClockEntity
 import dev.kpetriv.sprout.core.domainledger.Account
 import dev.kpetriv.sprout.core.domainledger.AppendResult
 import dev.kpetriv.sprout.core.domainledger.Currency
@@ -20,6 +24,7 @@ import kotlinx.coroutines.flow.first
 import java.util.UUID
 import javax.inject.Inject
 import kotlin.time.Duration
+import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Instant
 
 /**
@@ -39,6 +44,53 @@ data class TimeBankStatus(val kidId: KidId, val account: Account, val state: Tim
 
     /** What stopping at [now] debits: `min(elapsed whole minutes, balance)`, never negative. */
     fun minutesToDebit(now: Instant): Long = minOf(elapsedMinutes(now), balance.minorUnits.coerceAtLeast(0))
+
+    /**
+     * What stopping debits when the session's [monotonic] elapsed time is known (D-M4-24): `min(monotonic whole
+     * minutes, balance)`; the wall clock's [minutesToDebit] at [now] when it is not (null).
+     */
+    fun minutesToDebit(now: Instant, monotonic: Duration?): Long = if (monotonic == null || !running) {
+        minutesToDebit(now)
+    } else {
+        minOf(monotonic.coerceAtLeast(Duration.ZERO).inWholeMinutes, balance.minorUnits.coerceAtLeast(0))
+    }
+}
+
+/**
+ * The monotonic clock readings of the time bank sessions this device starts (D-M4-24, `time_bank_clocks`): the
+ * device's elapsed realtime and boot count at the start. A session stopped in the same boot is measured with them,
+ * so moving the wall clock back (or forward) during a session changes nothing; after a restart, or for a session
+ * another device started, the wall clock decides as before. Device-local, never synced.
+ */
+class TimeBankClocks @Inject constructor(private val database: SproutDatabase, private val monotonic: MonotonicClock) {
+    private val clocks = database.timeBankClockDao()
+
+    /** Records the start of [sessionId] for [kidId] now; the kid's older readings go (one session runs per kid). */
+    suspend fun recordStart(kidId: KidId, sessionId: String) {
+        database.withTransaction {
+            clocks.deleteForKid(kidId.value)
+            clocks.upsert(
+                TimeBankClockEntity(sessionId, kidId.value, monotonic.elapsedRealtimeMs(), monotonic.bootCount()),
+            )
+        }
+    }
+
+    /**
+     * The time elapsed since [sessionId] started, by the monotonic clock; null when this device holds no reading for
+     * it, the boot count is unknown, or the device restarted since (the elapsed realtime starts again from zero).
+     */
+    suspend fun elapsedSince(sessionId: String): Duration? {
+        val start = clocks.get(sessionId) ?: return null
+        val boot = monotonic.bootCount()
+        val now = monotonic.elapsedRealtimeMs()
+        val sameBoot = start.bootCount != null && boot == start.bootCount && now >= start.elapsedRealtimeMs
+        return if (sameBoot) (now - start.elapsedRealtimeMs).milliseconds else null
+    }
+
+    /** Forgets [sessionId]'s reading (the session stopped). */
+    suspend fun forget(sessionId: String) {
+        clocks.delete(sessionId)
+    }
 }
 
 /** Why a time bank use case refused. */
@@ -88,11 +140,12 @@ class TimeBankStatusReader @Inject constructor(
 /**
  * Opens a time bank session for [KidId] (M4 §4): a kid-authored `TimeBankStarted` (fresh session id) on the kid's
  * minutes account. Refused when a session is running or the balance is zero or less; the ledger checks the same rules
- * again when it appends.
+ * again when it appends. The monotonic clock is read at the start ([TimeBankClocks], D-M4-24).
  */
 class StartTimeBankUseCase @Inject constructor(
     private val reader: TimeBankStatusReader,
     private val writer: LedgerWriter,
+    private val clocks: TimeBankClocks,
 ) {
     suspend operator fun invoke(kidId: KidId): TimeBankResult {
         val status = reader.status(kidId) ?: return TimeBankResult.Refused(TimeBankRefusal.NO_ACCOUNT)
@@ -109,6 +162,7 @@ class StartTimeBankUseCase @Inject constructor(
                     TimeBankStarted(envelope, sessionId)
                 }
                 if (result is AppendResult.Accepted) {
+                    clocks.recordStart(kidId, sessionId)
                     TimeBankResult.Started(sessionId, requireNotNull(startedAt))
                 } else {
                     TimeBankResult.Rejected(result)
@@ -120,18 +174,26 @@ class StartTimeBankUseCase @Inject constructor(
 
 /**
  * Closes [KidId]'s running session (M4 §4): a kid-authored `TimeBankStopped` debiting `min(elapsed whole minutes,
- * balance)`, elapsed being `now - TimeBankState.startedAt` (the start event's `createdAt`), never a process timer.
+ * balance)`, never a process timer. Elapsed is the monotonic clock's time since the start when this device started the
+ * session and has not restarted since ([TimeBankClocks], D-M4-24): a wall clock moved back during the session does not
+ * shorten it, and one moved forward does not lengthen it. Otherwise it is `now - TimeBankState.startedAt` (the start
+ * event's `createdAt`) on the wall clock, as in M4.
  */
 class StopTimeBankUseCase @Inject constructor(
     private val reader: TimeBankStatusReader,
     private val writer: LedgerWriter,
     private val clock: Clock,
+    private val clocks: TimeBankClocks,
 ) {
     @Suppress("ReturnCount") // One early return per refusal.
     suspend operator fun invoke(kidId: KidId): TimeBankResult {
         val status = reader.status(kidId) ?: return TimeBankResult.Refused(TimeBankRefusal.NO_ACCOUNT)
         if (!status.running) return TimeBankResult.Refused(TimeBankRefusal.NOT_RUNNING)
-        return stop(writer, status, status.minutesToDebit(clock.now()))
+        val sessionId = requireNotNull(status.state?.sessionId)
+        val monotonic = clocks.elapsedSince(sessionId)
+        val result = stop(writer, status, status.minutesToDebit(clock.now(), monotonic))
+        if (result is TimeBankResult.Stopped) clocks.forget(sessionId)
+        return result
     }
 }
 

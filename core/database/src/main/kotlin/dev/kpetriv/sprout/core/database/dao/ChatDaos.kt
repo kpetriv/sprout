@@ -133,6 +133,58 @@ interface MessageDao {
     @Query("SELECT * FROM messages ORDER BY lamport")
     suspend fun all(): List<MessageEntity>
 
+    /** Every thread that has a stored message (any status). */
+    @Query("SELECT DISTINCT threadId FROM messages ORDER BY threadId")
+    suspend fun threadIds(): List<String>
+
+    /**
+     * The messages of [threadId] the chat retention removes at [cut] (M7 §2): any status, dated before [cut] by their
+     * signed `createdAt` or, when that is later (a clock ahead, or a forged date), by when this device received them;
+     * except this device's own messages still queued for upload (they are not on the server yet).
+     */
+    @Query(
+        """
+        SELECT messageId, blobId FROM messages WHERE threadId = :threadId
+        AND MIN(createdAtEpochMs, receivedAtEpochMs) < :cut
+        AND messageId NOT IN (SELECT refId FROM outbox WHERE kind = 'MESSAGE')
+        """,
+    )
+    suspend fun prunable(threadId: String, cut: Long): List<PrunableMessage>
+
+    /** How many messages of [threadId] are dated before [cut] as [prunable] dates them, queued ones included. */
+    @Query(
+        "SELECT COUNT(*) FROM messages WHERE threadId = :threadId AND MIN(createdAtEpochMs, receivedAtEpochMs) < :cut",
+    )
+    suspend fun countOlderThan(threadId: String, cut: Long): Int
+
+    @Query("DELETE FROM messages WHERE messageId IN (:messageIds)")
+    suspend fun deleteIds(messageIds: List<String>): Int
+
+    /** How many stored messages name [blobId]. */
+    @Query("SELECT COUNT(*) FROM messages WHERE blobId = :blobId")
+    suspend fun countNaming(blobId: String): Int
+
+    /** The read mark of [threadId] when it is older than [cut]. */
+    @Query("DELETE FROM read_marks WHERE threadId = :threadId AND lastReadAtEpochMs < :cut")
+    suspend fun deleteReadMarkBefore(threadId: String, cut: Long): Int
+
+    /** Threads with a visible message (RECEIVED, LOCKED, SENT_LOCAL). */
+    @Query(
+        """
+        SELECT DISTINCT threadId FROM messages WHERE status IN ('RECEIVED', 'LOCKED', 'SENT_LOCAL') ORDER BY threadId
+        """,
+    )
+    suspend fun visibleThreadIds(): List<String>
+
+    /** The visible messages of [threadId], oldest first (lamport, then author device and seq). */
+    @Query(
+        """
+        SELECT * FROM messages WHERE threadId = :threadId AND status IN ('RECEIVED', 'LOCKED', 'SENT_LOCAL')
+        ORDER BY lamport, authorDeviceId, seq
+        """,
+    )
+    suspend fun visibleIn(threadId: String): List<MessageEntity>
+
     @Query("DELETE FROM messages WHERE householdId = :householdId")
     suspend fun deleteFor(householdId: String): Int
 
@@ -148,6 +200,9 @@ interface MessageDao {
 
 /** One row of [MessageDao.observeUnread]. */
 data class UnreadCount(val threadId: String, val unread: Int)
+
+/** One row of [MessageDao.prunable]: ids only. */
+data class PrunableMessage(val messageId: String, val blobId: String?)
 
 /** Thread keys this device verified (M4 §1.2). */
 @Dao

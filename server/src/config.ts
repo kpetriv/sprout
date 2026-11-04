@@ -78,6 +78,25 @@ export const MAX_EXPORT_BYTES = 4 * 1024 * 1024;
 export const EXPORT_PAGE_SIZE = 500;
 export const MAX_EXPORT_MESSAGES = 5_000;
 
+/**
+ * Household policy v2 (M7 §1, D-M7-10): the bounds of the synced `householdPolicy` settings, as the Firestore rules
+ * (`householdPolicyPayload`) and core/database `HouseholdPolicyLimits` enforce them. `chatRetentionDays` absent or
+ * null keeps chat messages; `dailyGameCapMinor` absent or null is the ledger default (50).
+ */
+export const CHAT_RETENTION_DAYS = { min: 1, max: 3650 } as const;
+export const DAILY_GAME_CAP_MINOR = { min: 0, max: 10_000 } as const;
+
+/**
+ * pruneMessages (M7 §2, D-M7-8): deletes in batches of [PRUNE_BATCH_SIZE] (Firestore allows 500 writes per batch) and
+ * at most [MAX_PRUNE_DOCUMENTS] documents per call (it answers `more: true` then, and the device calls again), so a
+ * long history never runs into the host's time limit. A requested cut may be up to [PRUNE_CLOCK_SKEW_MS] ahead of the
+ * server clock (it is clamped to now), and a retention cut up to that much earlier than the policy allows: device
+ * clocks drift.
+ */
+export const PRUNE_BATCH_SIZE = 400;
+export const MAX_PRUNE_DOCUMENTS = 5_000;
+export const PRUNE_CLOCK_SKEW_MS = 5 * 60 * 1000;
+
 /** The document collections under households/{hid}, keyed by collection with their docType (M3 §5). */
 export const DOCUMENT_COLLECTIONS: Readonly<Record<string, string>> = {
   kids: 'kid',

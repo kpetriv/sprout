@@ -83,7 +83,8 @@ import javax.inject.Inject
  *   envelope are ignored and audited the same way; there is no `parent_key` document type (the
  *   verifier refuses one as an unknown type). At most [MAX_HELD_PER_AUTHOR] held
  *   documents per author device are kept. Kept device-local: an allowance schedule's `lastPaidOn`, an account's
- *   `lastAccruedOn`, this device's parent key.
+ *   `lastAccruedOn`, this device's parent key. A pulled `household_policy` that changes the daily game cap rebuilds
+ *   the ledger's balance caches once the documents are applied (D-M7-11).
  * - [applyEvents] is [RoomLedgerRepository.ingest]; [retryHeld] retries held documents, then
  *   [RoomLedgerRepository.retryHeld].
  * - [cursor] and [saveCursor] use `sync_cursor`, keyed by the session's household.
@@ -222,15 +223,29 @@ class RoomRemoteApplier internal constructor(
         return if (stored == null || claimed == null) stored ?: claimed else minOf(stored, claimed)
     }
 
-    override suspend fun applyDocuments(documents: List<DocumentEnvelope>): DocumentApplyReport = deviceClock.withLock {
-        database.withTransaction {
-            val session = database.sessionDao().get()?.toDomain()
-            if (session == null) {
-                DocumentApplyReport(ignored = documents.size)
-            } else {
-                applyAll(documents.sortedBy { DocTypes.applyOrder(it.docType) }, session, fromInbox = false)
+    override suspend fun applyDocuments(documents: List<DocumentEnvelope>): DocumentApplyReport =
+        rebuildingOnCapChange {
+            deviceClock.withLock {
+                database.withTransaction {
+                    val session = database.sessionDao().get()?.toDomain()
+                    if (session == null) {
+                        DocumentApplyReport(ignored = documents.size)
+                    } else {
+                        applyAll(documents.sortedBy { DocTypes.applyOrder(it.docType) }, session, fromInbox = false)
+                    }
+                }
             }
         }
+
+    /**
+     * Runs [apply] and then, when it changed the household's synced daily game cap, rebuilds the ledger's caches
+     * (D-M7-11): the cap decides which plays count, so the balances follow a pulled policy at once.
+     */
+    private suspend fun <T> rebuildingOnCapChange(apply: suspend () -> T): T {
+        val before = database.householdPolicyDao().get()?.dailyGameCapMinor
+        val result = apply()
+        if (database.householdPolicyDao().get()?.dailyGameCapMinor != before) ledger.rebuildCaches()
+        return result
     }
 
     /**
@@ -375,7 +390,9 @@ class RoomRemoteApplier internal constructor(
      * Verifies the documents kept in `document_inbox` again (the registry or this device's clock may have caught
      * up) and applies those that now pass, in [DocTypes.applyOrder]. A row that no longer decodes is dropped.
      */
-    private suspend fun retryHeldDocuments(): DocumentApplyReport = deviceClock.withLock {
+    private suspend fun retryHeldDocuments(): DocumentApplyReport = rebuildingOnCapChange { retryHeldDocumentsLocked() }
+
+    private suspend fun retryHeldDocumentsLocked(): DocumentApplyReport = deviceClock.withLock {
         database.withTransaction {
             val session = database.sessionDao().get()?.toDomain()
             val inbox = database.documentInboxDao()
@@ -535,14 +552,20 @@ class RoomRemoteApplier internal constructor(
             database.householdPolicyDao().get(),
             { storedOf(it.lamport, it.stamp, fallback) },
             { decoded, row ->
-                row?.copy(fiatCurrency = decoded.fiatCurrency, requireParentSignature = decoded.requireParentSignature)
-                    ?: HouseholdPolicyEntity(
-                        requireParentSignature = decoded.requireParentSignature,
-                        parentSignatureFromLamport = null,
-                        parentPublicKey = null,
-                        fiatCurrency = decoded.fiatCurrency,
-                        createdAtEpochMs = clock.now().toEpochMilliseconds(),
-                    )
+                row?.copy(
+                    fiatCurrency = decoded.fiatCurrency,
+                    requireParentSignature = decoded.requireParentSignature,
+                    chatRetentionDays = decoded.chatRetentionDays,
+                    dailyGameCapMinor = decoded.dailyGameCapMinor,
+                ) ?: HouseholdPolicyEntity(
+                    requireParentSignature = decoded.requireParentSignature,
+                    parentSignatureFromLamport = null,
+                    parentPublicKey = null,
+                    fiatCurrency = decoded.fiatCurrency,
+                    createdAtEpochMs = clock.now().toEpochMilliseconds(),
+                    chatRetentionDays = decoded.chatRetentionDays,
+                    dailyGameCapMinor = decoded.dailyGameCapMinor,
+                )
             },
             { row, lamport, stamp -> row.copy(lamport = lamport, stamp = stamp) },
             { database.householdPolicyDao().upsert(it) },

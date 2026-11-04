@@ -31,6 +31,7 @@ import dev.kpetriv.sprout.core.database.dao.SavingsGoalDao
 import dev.kpetriv.sprout.core.database.dao.SessionDao
 import dev.kpetriv.sprout.core.database.dao.SyncCursorDao
 import dev.kpetriv.sprout.core.database.dao.ThreadKeyDao
+import dev.kpetriv.sprout.core.database.dao.TimeBankClockDao
 import dev.kpetriv.sprout.core.database.entity.AccountEntity
 import dev.kpetriv.sprout.core.database.entity.AllowanceScheduleEntity
 import dev.kpetriv.sprout.core.database.entity.AnomalyEntity
@@ -59,6 +60,7 @@ import dev.kpetriv.sprout.core.database.entity.SavingsGoalEntity
 import dev.kpetriv.sprout.core.database.entity.SessionEntity
 import dev.kpetriv.sprout.core.database.entity.SyncCursorEntity
 import dev.kpetriv.sprout.core.database.entity.ThreadKeyEntity
+import dev.kpetriv.sprout.core.database.entity.TimeBankClockEntity
 
 /**
  * Sprout's local database. Encrypted with SQLCipher in production (see [DatabaseFactory]). The schema is exported
@@ -94,6 +96,7 @@ import dev.kpetriv.sprout.core.database.entity.ThreadKeyEntity
         ThreadKeyEntity::class,
         BlobEntity::class,
         ReadMarkEntity::class,
+        TimeBankClockEntity::class,
     ],
     version = SproutDatabase.VERSION,
     exportSchema = true,
@@ -157,6 +160,8 @@ abstract class SproutDatabase : RoomDatabase() {
 
     abstract fun chatHouseholdDao(): ChatHouseholdDao
 
+    abstract fun timeBankClockDao(): TimeBankClockDao
+
     companion object {
         /**
          * 2 (M2): chores, submissions, rewards, allowance, savings, interest, pending parent actions, photos and the
@@ -178,7 +183,10 @@ abstract class SproutDatabase : RoomDatabase() {
          *
          * 7 (M5): `ledger_events.serverReceivedAtEpochMs` and `ledger_inbox.serverReceivedAtEpochMs`, the server
          * stamp of pulled events for the games' played-on window (D-M5-5). See [Migrations.MIGRATION_6_7].
+         *
+         * 8 (M7): household policy v2 (`household_policy.chatRetentionDays`, `dailyGameCapMinor`, D-M7-10) and the
+         * time bank's monotonic start readings (`time_bank_clocks`, D-M4-24). See [Migrations.MIGRATION_7_8].
          */
-        const val VERSION: Int = 7
+        const val VERSION: Int = 8
     }
 }

@@ -13,6 +13,7 @@ import dev.kpetriv.sprout.core.crypto.Aead
 import dev.kpetriv.sprout.core.crypto.SecretStore
 import dev.kpetriv.sprout.core.database.AccountRepository
 import dev.kpetriv.sprout.core.database.AllowanceRepository
+import dev.kpetriv.sprout.core.database.AndroidMonotonicClock
 import dev.kpetriv.sprout.core.database.BlobCache
 import dev.kpetriv.sprout.core.database.ChoreRepository
 import dev.kpetriv.sprout.core.database.DatabaseFactory
@@ -24,6 +25,7 @@ import dev.kpetriv.sprout.core.database.InterestPolicyRepository
 import dev.kpetriv.sprout.core.database.KidRepository
 import dev.kpetriv.sprout.core.database.LocalDataFiles
 import dev.kpetriv.sprout.core.database.LocaleFiatCurrencyProvider
+import dev.kpetriv.sprout.core.database.MonotonicClock
 import dev.kpetriv.sprout.core.database.PendingActionDescriber
 import dev.kpetriv.sprout.core.database.PendingParentActionRepository
 import dev.kpetriv.sprout.core.database.PhotoStore
@@ -130,6 +132,10 @@ internal abstract class DatabaseModule {
     /** ECDSA P-256 checks for the ledger and document verifiers, over core/crypto's `Verifier`. */
     @Binds
     abstract fun signatureCheck(impl: VerifierSignatureCheck): SignatureCheck
+
+    /** The device's elapsed realtime and boot count, for the time bank's cross-check (D-M4-24). */
+    @Binds
+    abstract fun monotonicClock(impl: AndroidMonotonicClock): MonotonicClock
 
     @Suppress("TooManyFunctions") // One provider per DAO.
     companion object {

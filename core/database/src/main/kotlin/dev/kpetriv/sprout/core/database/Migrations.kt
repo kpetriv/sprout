@@ -85,8 +85,35 @@ object Migrations {
         }
     }
 
-    val ALL: Array<Migration> =
-        arrayOf(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7)
+    /**
+     * 7 to 8 (M7): household policy v2 and the time bank's monotonic clock. Purely additive:
+     * `household_policy.chatRetentionDays` and `dailyGameCapMinor` are null for the existing row (keep chat messages,
+     * the default game cap of 50) until a parent sets them or a pulled policy document carries them (D-M7-10);
+     * `time_bank_clocks` starts empty, so a session running across the upgrade is measured by the wall clock as before
+     * (D-M4-24).
+     */
+    val MIGRATION_7_8: Migration = object : Migration(7, 8) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            VERSION_8_STATEMENTS.forEach(db::execSQL)
+        }
+    }
+
+    val ALL: Array<Migration> = arrayOf(
+        MIGRATION_1_2,
+        MIGRATION_2_3,
+        MIGRATION_3_4,
+        MIGRATION_4_5,
+        MIGRATION_5_6,
+        MIGRATION_6_7,
+        MIGRATION_7_8,
+    )
+
+    private val VERSION_8_STATEMENTS: List<String> = listOf(
+        "ALTER TABLE `household_policy` ADD COLUMN `chatRetentionDays` INTEGER",
+        "ALTER TABLE `household_policy` ADD COLUMN `dailyGameCapMinor` INTEGER",
+        "CREATE TABLE IF NOT EXISTS `time_bank_clocks` (`sessionId` TEXT NOT NULL, `kidId` TEXT NOT NULL, " +
+            "`elapsedRealtimeMs` INTEGER NOT NULL, `bootCount` INTEGER, PRIMARY KEY(`sessionId`))",
+    )
 
     private val VERSION_7_STATEMENTS: List<String> = listOf(
         "ALTER TABLE `ledger_events` ADD COLUMN `serverReceivedAtEpochMs` INTEGER",

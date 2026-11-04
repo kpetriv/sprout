@@ -2,6 +2,7 @@ package dev.kpetriv.sprout.core.database
 
 import dev.kpetriv.sprout.core.crypto.DeviceSigner
 import dev.kpetriv.sprout.core.crypto.InMemoryDeviceKeyStore
+import dev.kpetriv.sprout.core.crypto.JceEcdsaVerifier
 import dev.kpetriv.sprout.core.database.entity.AuditAction
 import dev.kpetriv.sprout.core.domainledger.AccountKind
 import dev.kpetriv.sprout.core.domainledger.Currency
@@ -46,7 +47,14 @@ class KidAndAccountRepositoryTest {
         rewards = RoomRewardRepository(database, authors, clock, signer),
         allowances = RoomAllowanceRepository(database, authors, clock, signer),
         goals = RoomSavingsGoalRepository(database, authors, clock, signer),
-        policies = RoomHouseholdPolicyRepository(database, authors, { gbp }, clock, signer),
+        policies = RoomHouseholdPolicyRepository(
+            database,
+            authors,
+            { gbp },
+            clock,
+            signer,
+            RoomLedgerRepository(database, clock, signer, JceEcdsaVerifier()),
+        ),
     )
     private val bootstrap = HouseholdBootstrap(
         database,
