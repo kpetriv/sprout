@@ -149,7 +149,7 @@ Goldens must come out byte-identical on every run. `ScreenshotTest` and `Screens
 
 ### macOS and Linux
 
-The committed goldens were recorded on macOS (Apple silicon), and CI verifies on Linux x86_64. Robolectric's native graphics use the same rendering code and bundled fonts on both, but anti-aliasing can still differ by a few pixels between platforms. The comparison tolerance above covers that noise for now.
+The committed goldens have been recorded on Linux x86_64 through the `Record screenshots` workflow since M7 (D-M7-4), and CI verifies on Linux x86_64; a local `verifyRoborazziDebug` on macOS can report edge-noise differences that CI does not. Robolectric's native graphics use the same rendering code and bundled fonts on both, but anti-aliasing can still differ by a few pixels between platforms. The comparison tolerance above covers that noise for now.
 
 To get Linux goldens, run the **`Record screenshots`** workflow (`workflow_dispatch`, from the Actions tab or `gh workflow run "Record screenshots" --ref <branch>`). It runs `recordRoborazziDebug` on a Linux x86_64 runner and uploads the full set as an artifact. Download it, check in the PR diff that the differences from the macOS set are only edge noise, and commit it. The CI job's `screenshots-linux` artifact (recorded on the runner when the unit and screenshot test step fails; a lint or Detekt failure does not trigger it) is the same set and can be used the same way.
 
