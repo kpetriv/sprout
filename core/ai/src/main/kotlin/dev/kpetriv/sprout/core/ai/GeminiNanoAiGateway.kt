@@ -27,7 +27,9 @@ internal sealed interface NanoAnswer<out T> {
  * ([timeouts]) or an answer that fails validation gives the [rules] result instead. Receipts never use the model.
  *
  * Kindness combines both paths: the message is nudged when the rules or the model find it unkind, and the suggestion
- * is the model's when it passes [AiOutputRules.isValidSuggestion], otherwise the rules one (D-M6-12, D-M6-36).
+ * is the model's when it passes [AiOutputRules.isValidSuggestion], otherwise the rules one (D-M6-12, D-M6-36). A
+ * message the rules let through as a report or a plea for help ([KindnessRules.isReportOrPlea]) never reaches the
+ * model (D-M6-52).
  *
  * The weekly summary is asked of the model only when [locale] is English, the one language [AiOutputRules] reads
  * numbers in (D-M6-35); otherwise the template is the answer.
@@ -61,9 +63,12 @@ internal class GeminiNanoAiGateway(
     override suspend fun receiptPrefill(jpeg: ByteArray, currency: Currency.Fiat): ReceiptPrefill? =
         rules.receiptPrefill(jpeg, currency)
 
+    @Suppress("ReturnCount") // Blank, then a report or plea for help: both answered before the model.
     internal suspend fun tryKindness(text: String, tier: KidUiTier): NanoAnswer<KindnessVerdict> {
         if (text.isBlank()) return NanoAnswer.Answered(KindnessVerdict.Ok)
         val ruled = rules.kindness(text, tier)
+        // A plea for help or a report of what someone else said is never the model's to nudge (D-M6-52).
+        if (ruled == KindnessVerdict.Ok && KindnessRules.isReportOrPlea(text)) return NanoAnswer.Answered(ruled)
         return call(Prompts.kindness(text, tier), KindnessOutput::class, timeouts.kindness) { output ->
             val suggestion = output.suggestion.trim().takeIf { AiOutputRules.isValidSuggestion(it, text) }
             when {

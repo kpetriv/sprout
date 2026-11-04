@@ -77,6 +77,41 @@ class AiOutputRulesTest {
     }
 
     @Test
+    fun audit2DotLookAlikesAndSpelledDotsAreLinks() {
+        listOf(
+            "evil\u2024com",
+            "evil\uFE52com",
+            "evil\u00B7com",
+            "evil\u2027com",
+            "evil\u30FBcom",
+            "evil dot shop",
+            "go to evil DOT store now",
+        ).forEach { assertTrue(AiOutputRules.hasUrl(it), it) }
+        listOf("Wear the polka dot socks", "Join the dots on the page").forEach {
+            assertFalse(AiOutputRules.hasUrl(it), it)
+        }
+    }
+
+    @Test
+    fun audit2LetterOsCountAsZerosInAPhoneNumber() {
+        listOf("call 07946 OOO OOO", "ring 0794 6OO OOOO", "OOOO OOOO", "o7946 ooo ooo").forEach {
+            assertTrue(AiOutputRules.hasPhoneNumber(it), it)
+        }
+        listOf("Ooooooooh nice", "Good food, cool zoo", "Leo earned £10.00 and 100 points", "No no no no").forEach {
+            assertFalse(AiOutputRules.hasPhoneNumber(it), it)
+        }
+    }
+
+    @Test
+    fun audit2InvisibleFillersAreRejected() {
+        listOf("\u034F", "\u3164", "\u2800", "\u115F", "\uFE0F", "\u1160", "\uFFA0").forEach { filler ->
+            assertTrue(AiOutputRules.hasControlCharacters("Tidy${filler}up"), filler)
+            assertFalse(AiOutputRules.isCleanText("Tidy${filler}up", 200), filler)
+        }
+        assertFalse(AiOutputRules.hasControlCharacters("Tidy up 👍🏽"))
+    }
+
+    @Test
     fun lineAndParagraphSeparatorsPrivateUseAndLoneSurrogatesAreRejected() {
         listOf("one\u2028two", "one\u2029two", "secret\uE000mark", "broken\uD800half", "tab\there").forEach {
             assertTrue(AiOutputRules.hasControlCharacters(it), it)

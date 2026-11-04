@@ -13,7 +13,9 @@ import dev.kpetriv.sprout.core.model.KidUiTier
  * [GeminiNanoAiGateway] answers the text tasks with Gemini Nano (ML Kit GenAI Prompt API on AICore) where the device
  * has it, and falls back to the rules result whenever the model is busy, missing, slow or wrong. [AiRouter] picks one
  * per call and is the only one the app can inject. Inference runs on the device and nothing Sprout gives it leaves the
- * phone; the usage-metrics uploader ML Kit ships is removed from the app's manifest (D-M6-33).
+ * phone; the usage-metrics uploader ML Kit ships is removed from the app's manifest (D-M6-33). Receipt text recognition
+ * is Google Play services code, which records one usage event per scan (never the picture or its text) that Sprout
+ * cannot switch off, so it runs only while the On-device AI switch is on (D-M6-51).
  *
  * Every call may take up to its budget ([AiTimeouts]); call it from a ViewModel while the app is in the foreground
  * (AICore refuses background inference). Results are never persisted (D-M6-7) and their `toString` never shows text.
@@ -59,8 +61,8 @@ interface AiGateway {
     /**
      * Reads a receipt photo ([jpeg]) with on-device text recognition and picks the largest amount on a "total" line
      * (in minor units of [currency]) and the merchant (the first line, at most [MAX_MERCHANT_LENGTH] characters).
-     * Never a model call. Null when the image could not be read or holds neither. The parent reviews and signs
-     * whatever it prefills (D-M6-5).
+     * Never a model call, and only while the On-device AI switch is on (D-M6-51). Null when the image could not be
+     * read or holds neither, or the switch is off. The parent reviews and signs whatever it prefills (D-M6-5).
      */
     suspend fun receiptPrefill(jpeg: ByteArray, currency: Currency.Fiat): ReceiptPrefill?
 

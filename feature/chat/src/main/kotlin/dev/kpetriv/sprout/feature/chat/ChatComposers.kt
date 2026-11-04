@@ -17,7 +17,6 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilledTonalIconButton
 import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.SuggestionChip
 import androidx.compose.material3.Text
@@ -32,6 +31,7 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 
 /**
@@ -117,8 +117,8 @@ internal fun PresetChips(state: ChatUiState.Ready, onEvent: (ChatEvent) -> Unit,
 }
 
 /**
- * The kindness nudge: never blocks. The kid can send anyway, take the suggestion, or go back and edit. The kid's own
- * text is not repeated here (it is still in the composer).
+ * The kindness nudge: never blocks. The kid can send anyway, take the suggestion (both filled, side by side), or go
+ * back and edit. The kid's own text is not repeated here (it is still in the composer).
  */
 @Composable
 internal fun NudgeCard(nudge: NudgeUi, onEvent: (ChatEvent) -> Unit, modifier: Modifier = Modifier) {
@@ -142,18 +142,24 @@ internal fun NudgeCard(nudge: NudgeUi, onEvent: (ChatEvent) -> Unit, modifier: M
                     style = MaterialTheme.typography.bodyLarge,
                 )
             }
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+            // "Send anyway" is a filled button first, never less prominent than the suggestion: a kid reporting
+            // something must not be steered into replacing it (D-M6-52).
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Button(onClick = { onEvent(ChatEvent.NudgeSendAnyway) }, modifier = Modifier.weight(1f)) {
+                    Text(stringResource(R.string.feature_chat_nudge_send_anyway), textAlign = TextAlign.Center)
+                }
                 if (nudge.suggestion != null) {
-                    Button(onClick = { onEvent(ChatEvent.NudgeUseSuggestion) }) {
-                        Text(stringResource(R.string.feature_chat_nudge_use))
+                    Button(onClick = { onEvent(ChatEvent.NudgeUseSuggestion) }, modifier = Modifier.weight(1f)) {
+                        Text(stringResource(R.string.feature_chat_nudge_use), textAlign = TextAlign.Center)
                     }
                 }
-                OutlinedButton(onClick = { onEvent(ChatEvent.NudgeDismiss) }) {
-                    Text(stringResource(R.string.feature_chat_nudge_edit))
-                }
-                TextButton(onClick = { onEvent(ChatEvent.NudgeSendAnyway) }) {
-                    Text(stringResource(R.string.feature_chat_nudge_send_anyway))
-                }
+            }
+            TextButton(onClick = { onEvent(ChatEvent.NudgeDismiss) }) {
+                Text(stringResource(R.string.feature_chat_nudge_edit))
             }
         }
     }

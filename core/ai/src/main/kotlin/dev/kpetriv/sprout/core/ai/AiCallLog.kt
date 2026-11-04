@@ -67,7 +67,7 @@ fun interface AiCallLog {
     }
 }
 
-/** [AiCallLog] at DEBUG through Timber; the release tree drops everything below WARN, so nothing ships. */
+/** [AiCallLog] at DEBUG through Timber; release builds plant no tree, so nothing is logged there. */
 object TimberAiCallLog : AiCallLog {
     override fun record(task: AiTask, path: AiPath, latency: LatencyBucket, failure: AiFailure?) {
         Timber.tag("SproutAi").d("task=%s path=%s latency=%s failure=%s", task, path, latency, failure)

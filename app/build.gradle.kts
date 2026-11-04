@@ -63,14 +63,17 @@ val checkReleaseConfiguration = tasks.register("checkReleaseConfiguration") {
     }
 }
 tasks.configureEach {
-    if (name == "bundleRelease") dependsOn(checkReleaseConfiguration)
+    // A local Play bundle runs the release checks too, not only CI's `check` (audit 2 I-a).
+    if (name == "bundleRelease") dependsOn(checkReleaseConfiguration, "checkMergedManifestForTelemetryRelease")
 }
 
 /**
  * D-M6-33 (audit H1): ML Kit pulls in Google's usage-metrics uploader (`transport-backend-cct`), whose only network
  * backend is registered as a `backend:...CctBackendFactory` meta-data of `TransportBackendDiscovery`. The app manifest
- * removes it; this fails the build if a merged manifest still registers it (or any other datatransport CCT backend),
- * for example after a dependency update or a new SDK. Only attributes are read, so the manifest's comments do not count.
+ * removes it; this fails the build if a merged manifest still registers it, or any other datatransport backend (any
+ * `backend:` meta-data under `TransportBackendDiscovery`, or a `backend:com.google.android.datatransport` one anywhere;
+ * audit 2 I-a), for example after a dependency update or a new SDK. Only attributes are read, so the manifest's
+ * comments do not count. CI runs it through `check`, and `bundleRelease` depends on the release one.
  */
 abstract class CheckMergedManifestForTelemetry : DefaultTask() {
     @get:InputFile
@@ -87,22 +90,27 @@ abstract class CheckMergedManifestForTelemetry : DefaultTask() {
         }
         val document = factory.newDocumentBuilder().parse(mergedManifest.get().asFile)
         val elements = document.getElementsByTagName("*")
-        val cctBackend = "backend:com.google.android.datatransport.cct"
+        val datatransportBackend = "backend:com.google.android.datatransport"
+        fun values(node: org.w3c.dom.Node?): List<String> = node?.attributes?.let { attributes ->
+            (0 until attributes.length).map { attributes.item(it).nodeValue }
+        }.orEmpty()
         val found = (0 until elements.length).flatMap { index ->
             val element = elements.item(index)
-            val attributes = element.attributes
             val isMetaData = element.nodeName == "meta-data"
-            (0 until attributes.length).map { attributes.item(it).nodeValue }.filter { value ->
-                "CctBackendFactory" in value || (isMetaData && value.startsWith(cctBackend))
+            val inDiscovery = isMetaData && values(element.parentNode).any { "TransportBackendDiscovery" in it }
+            values(element).filter { value ->
+                "CctBackendFactory" in value ||
+                    (isMetaData && value.startsWith(datatransportBackend)) ||
+                    (inDiscovery && value.startsWith("backend:"))
             }
         }
         if (found.isNotEmpty()) {
             throw GradleException(
-                "The merged manifest registers Google's datatransport CCT uploader (D-M6-33): " +
+                "The merged manifest registers a Google datatransport uploader backend (D-M6-33): " +
                     found.distinct().joinToString() + ". Remove it in app/src/main/AndroidManifest.xml.",
             )
         }
-        report.get().asFile.writeText("No datatransport CCT backend in the merged manifest.\n")
+        report.get().asFile.writeText("No datatransport backend in the merged manifest.\n")
     }
 }
 

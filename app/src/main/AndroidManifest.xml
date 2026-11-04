@@ -51,9 +51,11 @@
     </provider>
 
     <!-- D-M6-33 (audit H1): ML Kit bundles Google's usage-metrics uploader (datatransport/Firelog over CCT). Removing
-         its only network backend means no ML Kit metrics leave the app; :app:checkMergedManifestForTelemetry fails the
-         build if it comes back (a new dependency, or a future Crashlytics, would need a decision first). The class is
-         on the runtime classpath only (through core/ai), hence MissingClass. -->
+         its only network backend means the SDKs' own metrics never leave the app; :app:checkMergedManifestForTelemetry
+         fails the build if any datatransport backend comes back (a new dependency, or a future Crashlytics, would need
+         a decision first). Receipt text recognition still reports one usage event per scan through Google Play
+         services, which this cannot remove (D-M6-51). The class is on the runtime classpath only (through core/ai),
+         hence MissingClass. -->
     <service
       android:name="com.google.android.datatransport.runtime.backends.TransportBackendDiscovery"
       tools:ignore="MissingClass"

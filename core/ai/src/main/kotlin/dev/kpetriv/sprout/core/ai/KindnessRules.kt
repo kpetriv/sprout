@@ -30,15 +30,18 @@ internal object KindnessText {
         part.split(separator).mapNotNull { token(it, clause) }
     }
 
-    /** Runs of at least [KindnessLexicon.MIN_SPELLED_LETTERS] single-letter words, joined ("s t u p i d"). */
-    fun spelledOut(tokens: List<KindnessToken>): List<String> {
-        val runs = mutableListOf<String>()
+    /**
+     * Runs of at least [KindnessLexicon.MIN_SPELLED_LETTERS] single-letter words, joined ("s t u p i d"), keyed by the
+     * index of their first token.
+     */
+    fun spelledOut(tokens: List<KindnessToken>): List<Pair<Int, String>> {
+        val runs = mutableListOf<Pair<Int, String>>()
         var run = StringBuilder()
-        for (token in tokens + KindnessToken("", emptySet())) {
+        (tokens + KindnessToken("", emptySet())).forEachIndexed { index, token ->
             if (token.key.length == 1) {
                 run.append(token.key)
             } else {
-                if (run.length >= KindnessLexicon.MIN_SPELLED_LETTERS) runs += run.toString()
+                if (run.length >= KindnessLexicon.MIN_SPELLED_LETTERS) runs += (index - run.length) to run.toString()
                 run = StringBuilder()
             }
         }
@@ -99,6 +102,11 @@ internal data class KindnessFinding(val categories: Set<Category>, val words: Se
  * The deterministic kindness check ([KindnessLexicon]) and its suggestions. A finding never blocks a message: the kid
  * sees a nudge and may send anyway (M4). Suggestions are fixed sentences per category and tier, so they can never
  * repeat the words that were flagged; shouting alone gets the kid's own message, calmed down.
+ *
+ * A kid's message that asks for help or says they are unsafe ([KindnessLexicon.helpPhrases]) is never nudged, and
+ * neither is anything after a word that reports what someone else said or did ([KindnessLexicon.reportingPhrases],
+ * "Jake called me an idiot") or in a message that says where it was written ([KindnessLexicon.reportPlaces]):
+ * those are the messages a parent most needs to get unchanged (D-M6-52).
  */
 internal object KindnessRules {
     private const val MAX_MASK_STARS = 2
@@ -110,29 +118,69 @@ internal object KindnessRules {
     private val marks = Regex("[!?]{${KindnessLexicon.SHOUT_MIN_MARKS},}")
     private const val MIN_CALMED_LETTERS = 2
 
-    fun check(text: String): KindnessFinding {
+    /**
+     * What is unkind in [text]. A kid's message ([allowReports], the default) gets the help and report carve-outs
+     * (D-M6-52); model output checked by [AiOutputRules] does not, since a suggestion or a chore that quotes an
+     * insult is never acceptable.
+     */
+    @Suppress("ReturnCount") // Blank, then a plea for help: both kind before any matching.
+    fun check(text: String, allowReports: Boolean = true): KindnessFinding {
         if (text.isBlank()) return KindnessFinding.KIND
         val tokens = KindnessText.tokens(text)
+        if (allowReports && asksForHelp(tokens)) return KindnessFinding.KIND
+        // Matches after this token index are reported speech; NONE when nothing reports.
+        return matches(text, tokens, reportedAfter = if (allowReports) reportStart(tokens) else NONE)
+    }
+
+    /** Every match in [tokens] up to the token index [reportedAfter] (shouting only when nothing reports). */
+    private fun matches(text: String, tokens: List<KindnessToken>, reportedAfter: Int): KindnessFinding {
         val categories = mutableSetOf<Category>()
         val words = mutableSetOf<String>()
-        fun flag(category: Category, word: String) {
+        fun flag(category: Category, word: String, at: Int) {
+            if (at > reportedAfter) return
             categories += category
             words += word
         }
         tokens.forEachIndexed { index, token ->
-            wordCategory(token)?.let { flag(it, token.key) }
-            if (putDownAt(tokens, index)) flag(Category.PUT_DOWN, token.key)
+            wordCategory(token)?.let { flag(it, token.key, index) }
+            if (putDownAt(tokens, index)) flag(Category.PUT_DOWN, token.key, index)
         }
-        KindnessText.spelledOut(tokens).forEach { word ->
+        KindnessText.spelledOut(tokens).forEach { (start, word) ->
             val spelled = KindnessToken(word, setOf(word))
             (wordCategory(spelled) ?: Category.PUT_DOWN.takeIf { word in KindnessLexicon.negative })
-                ?.let { flag(it, word) }
+                ?.let { flag(it, word, start) }
         }
-        hostilePhrases(tokens).forEach { flag(Category.HOSTILE, it) }
-        phrases(tokens, KindnessLexicon.profanePhrases).forEach { flag(Category.PROFANITY, it) }
-        if (isShouting(text)) categories += Category.SHOUTING
+        hostilePhrases(tokens).forEach { (start, phrase) -> flag(Category.HOSTILE, phrase, start) }
+        phrases(tokens, KindnessLexicon.profanePhrases).forEach { (start, phrase) ->
+            flag(Category.PROFANITY, phrase, start)
+        }
+        if (reportedAfter == NONE && isShouting(text)) categories += Category.SHOUTING
         return KindnessFinding(categories, words)
     }
+
+    /**
+     * Whether [text] asks for help, says the kid is unsafe, or reports what someone else said or did anywhere: the
+     * model path never nudges such a message on its own (D-M6-52).
+     */
+    fun isReportOrPlea(text: String): Boolean {
+        val tokens = KindnessText.tokens(text)
+        return asksForHelp(tokens) || reportStart(tokens) != NONE
+    }
+
+    /** Whether [tokens] hold one of [KindnessLexicon.helpPhrases]. */
+    private fun asksForHelp(tokens: List<KindnessToken>): Boolean =
+        phrases(tokens, KindnessLexicon.helpPhrases).isNotEmpty()
+
+    /**
+     * The index of the first [KindnessLexicon.reportingPhrases] word, -1 when the message names a
+     * [KindnessLexicon.reportPlaces] place (all of it is a report), or [NONE].
+     */
+    private fun reportStart(tokens: List<KindnessToken>): Int = when {
+        phrases(tokens, KindnessLexicon.reportPlaces).isNotEmpty() -> -1
+        else -> phrases(tokens, KindnessLexicon.reportingPhrases).minOfOrNull { it.first } ?: NONE
+    }
+
+    private const val NONE = Int.MAX_VALUE
 
     /**
      * A kinder message for [finding] in [tier]'s register, or null when [finding] is kind. Never contains a flagged
@@ -259,7 +307,7 @@ internal object KindnessRules {
      * The [KindnessLexicon.hostilePhrases] in [tokens], unless a [KindnessLexicon.phraseNegators] word comes up to
      * [PHRASE_NEGATION_WINDOW] words before it in the same clause, or it is "hit you up" slang.
      */
-    private fun hostilePhrases(tokens: List<KindnessToken>): List<String> =
+    private fun hostilePhrases(tokens: List<KindnessToken>): List<Pair<Int, String>> =
         phrases(tokens, KindnessLexicon.hostilePhrases) { start, phrase ->
             val clause = tokens[start].clause
             val negated = (1..PHRASE_NEGATION_WINDOW).any { back ->
@@ -270,17 +318,22 @@ internal object KindnessRules {
             negated || slang
         }
 
-    /** Every match of one of [phrases] in [tokens] (each word compared with its variants), except [skip]ped ones. */
+    /**
+     * Every match of one of [phrases] in [tokens] (each word compared with its variants), except [skip]ped ones, with
+     * the index of its first token.
+     */
     private fun phrases(
         tokens: List<KindnessToken>,
         phrases: List<List<String>>,
         skip: (start: Int, phrase: List<String>) -> Boolean = { _, _ -> false },
-    ): List<String> = buildList {
+    ): List<Pair<Int, String>> = buildList {
         val keys = tokens.map { it.key }
         for (phrase in phrases) {
             for (start in 0..keys.size - phrase.size) {
                 val matches = phrase.indices.all { offset -> phrase[offset] in tokens[start + offset].variants }
-                if (matches && !skip(start, phrase)) add(keys.subList(start, start + phrase.size).joinToString(" "))
+                if (matches && !skip(start, phrase)) {
+                    add(start to keys.subList(start, start + phrase.size).joinToString(" "))
+                }
             }
         }
     }

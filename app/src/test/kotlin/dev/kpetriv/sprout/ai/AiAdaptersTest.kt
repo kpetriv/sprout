@@ -99,6 +99,7 @@ class AiAdaptersTest {
                 jpeg
             },
             gateway,
+            { true },
         ) { eur }
         gateway.receiptLines = listOf(
             RecognizedLine("Corner Shop", top = 0, bottom = 10, left = 0),
@@ -116,17 +117,41 @@ class AiAdaptersTest {
 
     @Test
     fun `an unreadable image or a receipt with nothing on it prefills nothing`() = runTest {
-        assertNull(GatewayReceiptScanner({ null }, gateway) { eur }.scan("content://x"))
+        assertNull(GatewayReceiptScanner({ null }, gateway, { true }) { eur }.scan("content://x"))
         assertTrue(gateway.receiptCalls.isEmpty(), "nothing to recognise without an image")
 
         gateway.receiptAnswer = { null }
-        assertNull(GatewayReceiptScanner({ byteArrayOf(1) }, gateway) { eur }.scan("content://x"))
+        assertNull(GatewayReceiptScanner({ byteArrayOf(1) }, gateway, { true }) { eur }.scan("content://x"))
 
         gateway.receiptAnswer = { ReceiptPrefill(amount = null, merchant = "Corner Shop") }
         assertEquals(
             AdjustmentPrefill(null, "Corner Shop"),
-            GatewayReceiptScanner({ byteArrayOf(1) }, gateway) { eur }.scan("content://x"),
+            GatewayReceiptScanner({ byteArrayOf(1) }, gateway, { true }) { eur }.scan("content://x"),
         )
+    }
+
+    @Test
+    fun `with the AI switch off the scanner is not offered and reads nothing (D-M6-51)`() = runTest {
+        val preferences = FakeAiPreferences(AiSettings(enabled = false))
+        var reads = 0
+        val scanner = GatewayReceiptScanner(
+            { _ ->
+                reads++
+                byteArrayOf(1)
+            },
+            gateway,
+            { preferences.current().enabled },
+        ) { eur }
+        gateway.receiptAnswer = { ReceiptPrefill(Money(100), "Corner Shop") }
+
+        assertFalse(scanner.isAvailable())
+        assertNull(scanner.scan("content://x"))
+        assertEquals(0, reads)
+        assertTrue(gateway.receiptCalls.isEmpty())
+
+        preferences.setEnabled(true)
+        assertTrue(scanner.isAvailable())
+        assertEquals(AdjustmentPrefill(Money(100), "Corner Shop"), scanner.scan("content://x"))
     }
 
     @Test

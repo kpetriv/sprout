@@ -154,6 +154,54 @@ class WalletReceiptViewModelTest {
     }
 
     @Test
+    fun `a slow first scan says the scanner is being prepared and still lands within the budget (D-M6-54)`() = runTest {
+        TestData.seed(source, repository, KidUiTier.SPROUT)
+        scanner.result = AdjustmentPrefill(Money(1_249), "Corner Shop")
+        scanner.delayMillis = 13_000 // The emulator walk's first scan.
+        val viewModel = viewModel()
+
+        viewModel.state.test {
+            awaitReady()
+            viewModel.onEvent(WalletEvent.OpenAdjust)
+            viewModel.onEvent(WalletEvent.ReceiptPicked("content://a"))
+            testScheduler.advanceTimeBy(WalletViewModel.SCAN_SLOW_MILLIS - 1)
+            var sheet = assertNotNull((expectMostRecentItem() as WalletUiState.Ready).adjustment)
+            assertTrue(sheet.scanning)
+            assertFalse(sheet.scanSlow)
+
+            testScheduler.advanceTimeBy(2)
+            sheet = assertNotNull((expectMostRecentItem() as WalletUiState.Ready).adjustment)
+            assertTrue(sheet.scanning)
+            assertTrue(sheet.scanSlow)
+
+            testScheduler.advanceTimeBy(13_000)
+            sheet = assertNotNull((expectMostRecentItem() as WalletUiState.Ready).adjustment)
+            assertFalse(sheet.scanning)
+            assertFalse(sheet.scanSlow)
+            assertFalse(sheet.scanFailed)
+            assertEquals(AdjustmentPrefill(Money(1_249), "Corner Shop"), sheet.prefill)
+        }
+        assertEquals(25_000L, WalletViewModel.SCAN_TIMEOUT_MILLIS)
+    }
+
+    @Test
+    fun `with the On-device AI switch off the sheet offers no scan and ignores a picked image (D-M6-51)`() = runTest {
+        TestData.seed(source, repository, KidUiTier.SPROUT)
+        scanner.available = false
+        val viewModel = viewModel()
+
+        viewModel.state.test {
+            awaitReady()
+            viewModel.onEvent(WalletEvent.OpenAdjust)
+            val sheet = assertNotNull((expectMostRecentItem() as WalletUiState.Ready).adjustment)
+            assertFalse(sheet.canScan)
+            viewModel.onEvent(WalletEvent.ReceiptPicked("content://a"))
+            assertFalse(assertNotNull((viewModel.state.value as WalletUiState.Ready).adjustment).scanning)
+        }
+        assertTrue(scanner.scanned.isEmpty())
+    }
+
+    @Test
     fun `nothing is saved while a receipt is being read (audit L5)`() = runTest {
         TestData.seed(source, repository, KidUiTier.SPROUT)
         val gate = CompletableDeferred<Unit>()

@@ -80,11 +80,17 @@ internal class AiRouter(
             nano.tryWeeklySummary(facts)
         }
 
-    /** Always the rules path (text recognition, no model), whatever the switch says. */
+    /**
+     * Always the rules path (text recognition, no model), and only while [AiSettings.enabled]: the recognizer is
+     * Google Play services code that records one usage event per scan, so the parent's switch turns it off (D-M6-51).
+     * Null with the switch off or unreadable.
+     */
     override suspend fun receiptPrefill(jpeg: ByteArray, currency: Currency.Fiat): ReceiptPrefill? {
         val start = timeSource.markNow()
-        val result = guarded { rules.receiptPrefill(jpeg, currency) }
-        log.record(AiTask.RECEIPT, AiPath.RULES, LatencyBucket.of(start.elapsedNow()), null)
+        val enabled = settings()?.enabled == true
+        val result = if (enabled) guarded { rules.receiptPrefill(jpeg, currency) } else null
+        val failure = if (enabled) null else AiFailure.DISABLED
+        log.record(AiTask.RECEIPT, AiPath.RULES, LatencyBucket.of(start.elapsedNow()), failure)
         return result
     }
 

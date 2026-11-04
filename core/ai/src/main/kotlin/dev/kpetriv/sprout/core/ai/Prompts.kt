@@ -66,7 +66,9 @@ internal object Prompts {
     fun kindness(text: String, tier: KidUiTier): PromptRequest = PromptRequest(
         instructions = "You help a child write kind messages in a family chat app. Decide whether the child's " +
             "message is unkind: insults, name-calling, swearing, threats, put-downs, telling someone to go away, or " +
-            "shouting. Mild feelings about things (\"I hate broccoli\") and praise are not unkind. If it is unkind, " +
+            "shouting. Mild feelings about things (\"I hate broccoli\") and praise are not unkind. Messages that " +
+            "report what someone else said or did, ask for help, or say the child is hurt, scared or unsafe are " +
+            "never unkind, whatever words they quote. If it is unkind, " +
             "write one short message (at most 25 words) the child could send instead: same meaning and language as " +
             "the original, calm and honest about their feelings, ${register(tier)}, without any of the unkind words, " +
             "no links, no names. If it is kind, unkind is false and suggestion is empty. $DATA_RULE",

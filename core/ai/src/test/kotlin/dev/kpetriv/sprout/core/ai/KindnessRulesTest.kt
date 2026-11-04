@@ -165,6 +165,60 @@ class KindnessRulesTest {
         "   ",
     )
 
+    /**
+     * Audit 2 N2 (D-M6-52): a kid reporting what someone else said or did, or asking for help, is never nudged, even
+     * when the report quotes the words.
+     */
+    private val reportsAndPleas = listOf(
+        // Reports that the first fix pass started to nudge.
+        "Someone wrote kill yourself on my locker",
+        "a girl in my class told me kill yourself",
+        "Someone said you suck at football",
+        // The audit's nine still-nudged reports and pleas.
+        "my teacher said he will hit you if you tell",
+        "he said he is going to hurt you",
+        "they said they want to hurt you",
+        "a boy showed me his dick",
+        "they said kys to me",
+        "Jake called me an idiot",
+        "they keep saying you are ugly to me",
+        "HELP ME PLEASE",
+        "help!!!",
+        // More of the same shape.
+        "he texted me shut up loser",
+        "She posted that I'm an idiot",
+        "they called me a moron",
+        "I'm scared, he said he'll kill you",
+        "please don't tell, he said he'll punch you",
+        "some kids are bullying me and say I'm a weirdo",
+        "it hurts and I'm afraid",
+        "he touched me and said shut up",
+        "I feel unsafe at school",
+    )
+
+    @Test
+    fun reportsAndPleasForHelpAreNeverNudged() = runTest {
+        reportsAndPleas.forEach { text ->
+            assertTrue(KindnessRules.check(text).isKind, "\"$text\" was flagged: ${KindnessRules.check(text)}")
+            assertTrue(KindnessRules.isReportOrPlea(text), text)
+            KidUiTier.entries.forEach { assertEquals(KindnessVerdict.Ok, gateway.kindness(text, it), text) }
+        }
+    }
+
+    @Test
+    fun aReportOnlyCoversWhatComesAfterIt() {
+        assertEquals(Category.INSULT, KindnessRules.check("you idiot, Jake said hi").worst)
+        assertEquals(Category.HOSTILE, KindnessRules.check("shut up, she said it first").worst)
+    }
+
+    @Test
+    fun modelOutputGetsNoCarveOut() {
+        reportsAndPleas.filter { it != "I feel unsafe at school" && it != "it hurts and I'm afraid" }.forEach { text ->
+            assertTrue(!KindnessRules.check(text, allowReports = false).isKind, text)
+        }
+        assertTrue(!AiOutputRules.isValidSuggestion("Jake called me an idiot", "you idiot"))
+    }
+
     @Test
     fun unkindMessagesAreNudgedWithTheirCategory() {
         (unkind + adversarial).forEach { (text, category) ->
@@ -173,6 +227,7 @@ class KindnessRulesTest {
                 return@forEach
             }
             assertEquals(category, finding.worst, "\"$text\" found ${finding.categories}")
+            assertTrue(!KindnessRules.isReportOrPlea(text), text)
         }
     }
 

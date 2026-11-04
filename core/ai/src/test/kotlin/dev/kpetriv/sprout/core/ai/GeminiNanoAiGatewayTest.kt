@@ -70,6 +70,14 @@ class GeminiNanoAiGatewayTest {
     }
 
     @Test
+    fun reportsAndPleasForHelpNeverReachTheModel() = runTest {
+        model.answer = { PromptResult.Success(KindnessOutput(true, "Can we talk about it later?")) }
+        val messages = listOf("Jake called me an idiot", "they said kys to me", "HELP ME PLEASE", "I'm scared")
+        messages.forEach { assertEquals(KindnessVerdict.Ok, nano.kindness(it, KidUiTier.SPROUT), it) }
+        assertTrue(model.requests.isEmpty())
+    }
+
+    @Test
     fun busyUnavailableTimeoutAndErrorsGiveTheRulesResult() = runTest {
         val expected = rules.kindness("you are so dumb", KidUiTier.SPROUT)
         val failures = listOf<Pair<PromptResult<Any>, AiFailure>>(

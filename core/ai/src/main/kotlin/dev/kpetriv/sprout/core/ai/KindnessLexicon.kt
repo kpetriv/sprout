@@ -156,6 +156,27 @@ internal object KindnessLexicon {
     /** Verbs whose hostile phrase is slang for "get in touch" when "up" follows ("I'll hit you up later"). */
     val upSlang: Set<String> = setOf("hit")
 
+    /**
+     * Words that report what someone else said or did: a match after one is the kid telling a parent about it, not
+     * being unkind ("Jake called me an idiot", "a girl told me kill yourself"), so it is never nudged (D-M6-52).
+     */
+    val reportingPhrases: List<List<String>> = listOf(
+        "said", "says", "saying", "told me", "wrote", "writes", "called me", "texted", "messaged", "posted",
+        "showed me",
+    ).map { it.split(' ') }
+
+    /** Places that make the whole message a report, wherever they appear ("kill yourself on my locker"). */
+    val reportPlaces: List<List<String>> = listOf("on my locker").map { it.split(' ') }
+
+    /**
+     * Words of a kid asking for help or saying they are hurt or unsafe: a message with one is never nudged, whatever
+     * else it says (D-M6-52).
+     */
+    val helpPhrases: List<List<String>> = listOf(
+        "help", "scared", "afraid", "hurt me", "hurts", "secret", "if i tell", "if you tell", "dont tell", "bully",
+        "bullying", "bullied", "bullies", "touched me", "unsafe",
+    ).map { it.split(' ') }
+
     /** Oaths that are swearing rather than hostility ("what the hell", "bloody hell"). */
     val profanePhrases: List<List<String>> = listOf("the hell", "bloody hell").map { it.split(' ') }
 }

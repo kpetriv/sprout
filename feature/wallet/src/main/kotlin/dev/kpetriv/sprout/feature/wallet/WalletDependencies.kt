@@ -26,11 +26,15 @@ fun interface AdjustmentPromptText {
 /**
  * "Scan a receipt" in the manual adjustment sheet (M6 §3.4, D-M6-5). The sheet launches the system photo picker and
  * passes the picked image's content URI; the app reads it (the shared `PickedImageReader`) and runs the on-device
- * AI gateway's `receiptPrefill` (on-device text recognition plus rules parsing, no model call, nothing leaves the
- * phone). Returns null when nothing usable was found. Implementations must not log the image or the text read from it.
+ * AI gateway's `receiptPrefill` (on-device text recognition plus rules parsing, no model call; the image and its text
+ * stay on the phone, though Google Play services records that the scanner was used, D-M6-51). Returns null when
+ * nothing usable was found. Implementations must not log the image or the text read from it.
  */
 fun interface ReceiptScanner {
     suspend fun scan(imageUri: String): AdjustmentPrefill?
+
+    /** Whether the sheet offers scanning at all (the app's: while the On-device AI switch is on, D-M6-51). */
+    suspend fun isAvailable(): Boolean = true
 }
 
 /**

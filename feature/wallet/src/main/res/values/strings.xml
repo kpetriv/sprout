@@ -101,7 +101,10 @@
   <!-- "Scan a receipt" (parent only, M6): on-device text recognition fills the amount and the reason. -->
   <string name="feature_wallet_receipt_scan">Scan a receipt</string>
   <string name="feature_wallet_receipt_scanning">Reading the receipt…</string>
-  <string name="feature_wallet_receipt_note">The receipt is read on this phone. The shop\'s name goes into the reason, which is saved in the ledger as plain text; check both before you save.</string>
+  <!-- Shown under "Scan a receipt" when a read takes more than 5 s (the first scan on a phone loads the scanner). -->
+  <string name="feature_wallet_receipt_preparing">Preparing the scanner…</string>
+  <!-- D-M6-51: Google Play services' text recognition records each use (never the picture or its text). -->
+  <string name="feature_wallet_receipt_note">The receipt is read on this phone. Google Play services records that the scanner was used (not the receipt). The shop\'s name goes into the reason, which is saved in the ledger as plain text; check both before you save.</string>
   <string name="feature_wallet_receipt_failed">No total found on that receipt. Type the amount instead.</string>
   <string name="feature_wallet_receipt_reason">Receipt: %1$s</string>
   <string name="feature_wallet_receipt_reason_no_merchant">Receipt</string>

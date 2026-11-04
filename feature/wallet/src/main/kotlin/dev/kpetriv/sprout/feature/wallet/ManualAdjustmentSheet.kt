@@ -69,8 +69,11 @@ internal fun ManualAdjustmentSheet(
             onSubmit = onSubmit,
             onCancel = onDismiss,
             modifier = Modifier.padding(start = 24.dp, end = 24.dp, bottom = 24.dp),
-            onScanReceipt = {
-                pickReceipt.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+            // D-M6-51: no scan button while the On-device AI switch is off.
+            onScanReceipt = if (adjustment.canScan) {
+                { pickReceipt.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) }
+            } else {
+                null
             },
             onPrefillApplied = onPrefillApplied,
         )
@@ -269,6 +272,14 @@ private fun ScanReceipt(adjustment: AdjustmentUi, onScan: (() -> Unit)?) {
                 )
             }
             Text(stringResource(R.string.feature_wallet_receipt_scan))
+        }
+        if (adjustment.scanning && adjustment.scanSlow) {
+            // D-M6-54: the first scan on a device waits for Play services to load its text recognition.
+            Text(
+                text = stringResource(R.string.feature_wallet_receipt_preparing),
+                style = MaterialTheme.typography.bodyMedium,
+                modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
+            )
         }
         Text(
             text = stringResource(R.string.feature_wallet_receipt_note),

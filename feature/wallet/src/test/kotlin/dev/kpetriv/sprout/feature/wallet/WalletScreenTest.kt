@@ -151,6 +151,33 @@ class WalletScreenTest {
         show(WalletPreviewData.ready(KidUiTier.SPROUT, adjustment = WalletPreviewData.adjustment))
         compose.onNodeWithText("Scan a receipt").assertIsDisplayed()
         compose.onNodeWithText("saved in the ledger as plain text", substring = true).assertIsDisplayed()
+        compose.onNodeWithText("Google Play services records that the scanner was used", substring = true)
+            .assertIsDisplayed()
+    }
+
+    @Test
+    fun `with the On-device AI switch off the sheet has no receipt scan (D-M6-51)`() {
+        show(WalletPreviewData.ready(KidUiTier.SPROUT, adjustment = WalletPreviewData.adjustment.copy(canScan = false)))
+        compose.onNodeWithText("Save").assertExists()
+        compose.onNodeWithText("Scan a receipt").assertDoesNotExist()
+    }
+
+    @Test
+    fun `a slow first scan says the scanner is being prepared (D-M6-54)`() {
+        compose.setContent {
+            SproutTheme {
+                ManualAdjustmentForm(
+                    adjustment = WalletPreviewData.adjustment.copy(scanning = true, scanSlow = true),
+                    onSubmit = { _, _, _ -> },
+                    onCancel = {},
+                    onScanReceipt = {},
+                )
+            }
+        }
+        compose.onNodeWithText("Preparing the scanner…")
+            .assertIsDisplayed()
+            .assert(SemanticsMatcher.expectValue(SemanticsProperties.LiveRegion, LiveRegionMode.Polite))
+        compose.onNodeWithContentDescription("Reading the receipt…").assertIsDisplayed()
     }
 
     @Test

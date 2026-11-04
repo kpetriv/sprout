@@ -15,15 +15,20 @@ import kotlin.coroutines.cancellation.CancellationException
 
 /**
  * [ReceiptTextReader] on ML Kit's on-device Latin text recognition (`play-services-mlkit-text-recognition`, the model
- * Google Play services downloads at install; see the module manifest). Recognition runs in Play services on the
- * device; nothing is kept.
+ * Google Play services downloads at install; see the module manifest). Recognition runs on the device, in Play services
+ * code loaded into Sprout's process; nothing is kept.
  *
- * The photo's size is read first: one over [MAX_PIXELS] is refused before anything is decoded, and the rest are
- * decoded at most [TARGET_PIXELS] (a power-of-two sample size), enough for receipt text (audit L4). The bitmap and the
- * recognizer are released only when the recognition task completes, which it also does after a timeout cancels the
- * caller: Play services may still be reading them then (review L7).
+ * In the app the JPEG comes from `PickedImageReader` with its receipt limits: already decoded with the EXIF rotation
+ * applied, at most 2048 px on the long side (about 4 MP), and with no EXIF left. The picked photo's own pixel cap
+ * (250 MP, before any decode) lives there (D-M6-53). This reader's checks guard any other caller: the JPEG's size is
+ * read first, one over [MAX_PIXELS] is refused before its pixels are decoded, and the rest are decoded at most
+ * [TARGET_PIXELS] (a power-of-two sample size), enough for receipt text (audit L4); a JPEG over [MAX_BYTES] is not read
+ * at all. The bitmap and the recognizer are released only when the recognition task completes, which it also does
+ * after a timeout cancels the caller: Play services may still be reading them then (review L7).
  *
- * Known limit: EXIF rotation is not applied, so a sideways photo may read badly (the parent then types the amount).
+ * The recognizer is Google Play services code loaded into Sprout's process; Play services records one usage event per
+ * scan (an event id, an error code and timings, never the picture or its text), which Sprout cannot switch off. The
+ * wallet only scans while the On-device AI switch is on (D-M6-51).
  */
 internal class MlKitReceiptTextReader(private val decodeDispatcher: CoroutineDispatcher) : ReceiptTextReader {
     @Suppress("TooGenericExceptionCaught", "SwallowedException") // A failure only means "no prefill".

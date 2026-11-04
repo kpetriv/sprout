@@ -207,6 +207,11 @@ class FakeReceiptScanner : ReceiptScanner {
     var delayMillis: Long = 0
     val scanned = mutableListOf<String>()
 
+    /** What [isAvailable] answers (the app's On-device AI switch). */
+    var available: Boolean = true
+
+    override suspend fun isAvailable(): Boolean = available
+
     override suspend fun scan(imageUri: String): AdjustmentPrefill? {
         scanned += imageUri
         gate?.await()

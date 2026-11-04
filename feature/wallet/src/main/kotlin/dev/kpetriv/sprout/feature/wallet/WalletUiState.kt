@@ -147,8 +147,12 @@ enum class EventCategory {
  * @property prefill a scanned receipt's suggestion, until the form has taken it ([WalletEvent.PrefillApplied]): the
  *   amount as a debit and "Receipt: <merchant>" as the reason (M6 §3.4).
  * @property scanning a picked receipt is being read.
+ * @property scanSlow the read has taken more than [WalletViewModel.SCAN_SLOW_MILLIS] (the first scan on a device waits
+ *   for Play services to load its text recognition, D-M6-54); the sheet says "Preparing the scanner…".
  * @property scanFailed the last receipt gave no total (nothing usable, or only a merchant: review L14); the sheet says
  *   "No total found" until the next scan.
+ * @property canScan the sheet offers "Scan a receipt" ([ReceiptScanner.isAvailable]: off with the On-device AI switch,
+ *   D-M6-51).
  */
 data class AdjustmentUi(
     val currency: Currency.Fiat,
@@ -157,7 +161,9 @@ data class AdjustmentUi(
     val unsignedWarning: Boolean = false,
     val prefill: AdjustmentPrefill? = null,
     val scanning: Boolean = false,
+    val scanSlow: Boolean = false,
     val scanFailed: Boolean = false,
+    val canScan: Boolean = true,
 )
 
 /** Why an adjustment was not saved; shown in the sheet. */

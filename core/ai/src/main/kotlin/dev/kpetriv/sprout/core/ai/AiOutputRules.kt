@@ -25,10 +25,17 @@ object AiOutputRules {
     /** Top-level domains a "dot" spelled out in words is checked against. */
     private const val COMMON_TLDS = "com|net|org|io|co|uk|ai|app|me|gg|tv|us|info|xyz"
 
-    /** A dot as written in a domain: ASCII, full-width, ideographic or half-width ideographic. */
-    private const val DOT = "[.\\uFF0E\\u3002\\uFF61]"
+    /**
+     * A dot as written in a domain: ASCII, full-width, ideographic, half-width ideographic, and the look-alikes one dot
+     * leader (U+2024), small full stop (U+FE52), middle dot (U+00B7), hyphenation point (U+2027) and katakana middle
+     * dot (U+30FB) (audit 2 N5).
+     */
+    private const val DOT = "[.\\uFF0E\\u3002\\uFF61\\u2024\\uFE52\\u00B7\\u2027\\u30FB]"
 
-    /** Domain-like words: "evil.ai", "bit.do/x", "evil . com", "evil[.]com", "evil。com", "evil dot com". */
+    /**
+     * Domain-like words: "evil.ai", "bit.do/x", "evil . com", "evil[.]com", "evil。com", "evil·com", "evil dot com",
+     * "evil dot shop".
+     */
     private val url = listOf(
         // A scheme, or "www.".
         Regex("(?i)\\b[a-z][a-z0-9+.-]*://|\\bwww$DOT"),
@@ -38,6 +45,8 @@ object AiOutputRules {
         Regex("(?i)[\\p{L}\\p{N}-]{2,}(?:\\s+$DOT\\s*|\\s*[\\[(]\\s*$DOT\\s*[\\])]\\s*)[a-z]{2,}\\b"),
         // "evil dot com", "evil (dot) com".
         Regex("(?i)\\b[\\p{L}\\p{N}-]{2,}\\s*[\\[(]?\\s*dot\\s*[\\])]?\\s*(?:$COMMON_TLDS)\\b"),
+        // "evil dot shop": "dot" between spaces before any word of two or more letters ("polka dot" excepted).
+        Regex("(?i)\\b(?!polka\\s)[\\p{L}\\p{N}-]{2,}\\s+dot\\s+[a-z]{2,}\\b"),
     )
     private val email = Regex(
         "[\\p{L}\\p{N}._%+-]+\\s*[@\\uFF20]\\s*[\\p{L}\\p{N}-]+(?:$DOT[\\p{L}\\p{N}-]+)+",
@@ -45,6 +54,15 @@ object AiOutputRules {
 
     /** Digits (any script) with phone punctuation, slashes included ("0794/600/0000"). */
     private val phoneLike = Regex("\\+?\\p{Nd}[\\p{Nd}\\s()./-]{6,}\\p{Nd}")
+
+    /**
+     * A standalone run of digits and letter O's with phone punctuation ("07946 OOO OOO"); its O's count as digits only
+     * when the run has at least [MIN_ZEROS] O's and zeros (audit 2 N5), so words are never read as numbers.
+     */
+    private val phoneWithOs = Regex(
+        "(?<![\\p{L}\\p{N}])\\+?[\\p{Nd}oO][\\p{Nd}oO\\s()./-]{6,}[\\p{Nd}oO](?![\\p{L}\\p{N}])",
+    )
+    private const val MIN_ZEROS = 7
 
     /** A date, which has eight digits and slashes too but is not a phone number. */
     private val date = Regex("\\p{Nd}{1,4}([/.-])\\p{Nd}{1,2}\\1\\p{Nd}{1,4}")
@@ -59,6 +77,12 @@ object AiOutputRules {
         Character.UNASSIGNED,
         Character.SURROGATE,
     ).map(Byte::toInt).toSet()
+
+    /**
+     * Blank characters of visible types: combining grapheme joiner, Hangul fillers, braille blank and variation
+     * selector 16 (audit 2 N5).
+     */
+    private val fillers: Set<Int> = setOf(0x034F, 0x115F, 0x1160, 0x3164, 0xFFA0, 0x2800, 0xFE0F)
 
     /** Phrases that read as instructions, role markers or markup rather than an answer to the task. */
     private val injection = listOf(
@@ -82,20 +106,28 @@ object AiOutputRules {
 
     /**
      * A run of at least eight digits, in any script, with phone-number punctuation ("+44 20 7946 0000",
-     * "0794/600/0000"); a date ("12/03/2026") is not one.
+     * "0794/600/0000"); a date ("12/03/2026") is not one. Letter O's count as zeros in a run with at least [MIN_ZEROS]
+     * of them and zeros ("07946 OOO OOO").
      */
-    fun hasPhoneNumber(text: String): Boolean = phoneLike.findAll(text).any { match ->
-        match.value.count(Char::isDigit) >= MIN_PHONE_DIGITS && !date.matches(match.value.trim())
+    fun hasPhoneNumber(text: String): Boolean {
+        val digits = phoneLike.findAll(text).any { match ->
+            match.value.count(Char::isDigit) >= MIN_PHONE_DIGITS && !date.matches(match.value.trim())
+        }
+        return digits || phoneWithOs.findAll(text).any { match ->
+            val zeros = match.value.count { it == '0' || it == 'o' || it == 'O' }
+            val digitsAndOs = match.value.count { it.isDigit() || it == 'o' || it == 'O' }
+            zeros >= MIN_ZEROS && digitsAndOs >= MIN_PHONE_DIGITS
+        }
     }
 
     fun looksLikeInjection(text: String): Boolean = injection.any { it.containsMatchIn(text) }
 
     /**
      * Control, format and other invisible characters: newlines, bidi overrides, zero-width marks, the Unicode line and
-     * paragraph separators, private-use and unassigned code points, and unpaired surrogates.
+     * paragraph separators, private-use and unassigned code points, unpaired surrogates, and blank [fillers].
      */
     fun hasControlCharacters(text: String): Boolean = text.codePoints().anyMatch { codePoint ->
-        Character.isISOControl(codePoint) || Character.getType(codePoint) in invisibleTypes
+        Character.isISOControl(codePoint) || Character.getType(codePoint) in invisibleTypes || codePoint in fillers
     }
 
     /**
@@ -112,10 +144,10 @@ object AiOutputRules {
      * not [original] again.
      */
     fun isValidSuggestion(suggestion: String, original: String): Boolean {
-        val flagged = KindnessRules.check(original).words
+        val flagged = KindnessRules.check(original, allowReports = false).words
         return isCleanText(suggestion, AiGateway.MAX_SUGGESTION_LENGTH) &&
             !suggestion.trim().equals(original.trim(), ignoreCase = true) &&
-            KindnessRules.check(suggestion).isKind &&
+            KindnessRules.check(suggestion, allowReports = false).isKind &&
             KindnessText.tokens(suggestion).none { token -> token.variants.any { it in flagged } }
     }
 
@@ -145,7 +177,7 @@ object AiOutputRules {
             suggestion.description.length <= MAX_DESCRIPTION_LENGTH &&
             (money == null || (money.isPositive && money <= maxMoney)) &&
             (minutes == null || minutes in 1..ChoreCatalogue.MAX_MINUTES) &&
-            KindnessRules.check(suggestion.title + " " + suggestion.description).isKind &&
+            KindnessRules.check(suggestion.title + " " + suggestion.description, allowReports = false).isKind &&
             titleKey(suggestion.title) !in taken
     }
 

@@ -28,6 +28,7 @@ import dev.kpetriv.sprout.core.ui.MoneyFormatter
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -169,19 +170,27 @@ class WalletViewModel @Inject constructor(
         if (mode != WalletMode.PARENT) return
         viewModelScope.launch {
             val currency = mainAccount()?.currency as? Currency.Fiat ?: return@launch
-            local.update { it.copy(adjustment = AdjustmentUi(currency)) }
+            local.update { it.copy(adjustment = AdjustmentUi(currency, canScan = scanAvailable())) }
         }
     }
 
     private fun scanReceipt(uri: String) {
         if (mode != WalletMode.PARENT) return
-        val sheet = local.value.adjustment?.takeIf { !it.scanning && !it.isSubmitting } ?: return
-        setAdjustment(sheet.copy(scanning = true, scanFailed = false, prefill = null))
+        val sheet = local.value.adjustment?.takeIf { it.canScan && !it.scanning && !it.isSubmitting } ?: return
+        setAdjustment(sheet.copy(scanning = true, scanSlow = false, scanFailed = false, prefill = null))
         viewModelScope.launch {
             var found: AdjustmentPrefill? = null
+            // D-M6-54: the first scan on a device can take over 10 s while Play services loads text recognition.
+            val slow = launch {
+                delay(SCAN_SLOW_MILLIS.milliseconds)
+                local.update { state ->
+                    state.copy(adjustment = state.adjustment?.takeIf { it.scanning }?.copy(scanSlow = true))
+                }
+            }
             try {
                 found = scanned(uri)
             } finally {
+                slow.cancel()
                 // Review M6: however the scan ends (even with this coroutine cancelled), the sheet stops scanning.
                 // "No total found" (scanFailed) also when only a merchant was read (review L14); a merchant still
                 // prefills the reason.
@@ -189,7 +198,8 @@ class WalletViewModel @Inject constructor(
                 val noTotal = usable?.hasTotal() != true
                 local.update { state ->
                     val open = state.adjustment ?: return@update state // The sheet was dismissed meanwhile.
-                    state.copy(adjustment = open.copy(scanning = false, scanFailed = noTotal, prefill = usable))
+                    val done = open.copy(scanning = false, scanSlow = false, scanFailed = noTotal, prefill = usable)
+                    state.copy(adjustment = done)
                 }
             }
         }
@@ -208,6 +218,16 @@ class WalletViewModel @Inject constructor(
         null
     } catch (e: Exception) {
         null // An unreadable image or a recogniser failure.
+    }
+
+    /** [ReceiptScanner.isAvailable]; false when it fails (the sheet then just has no scan button). */
+    @Suppress("TooGenericExceptionCaught", "SwallowedException") // Not offering a scan is the safe answer.
+    private suspend fun scanAvailable(): Boolean = try {
+        receiptScanner.isAvailable()
+    } catch (e: CancellationException) {
+        throw e
+    } catch (e: Exception) {
+        false
     }
 
     private fun AdjustmentPrefill.hasTotal(): Boolean = (amount?.minorUnits ?: 0) > 0
@@ -352,8 +372,14 @@ class WalletViewModel @Inject constructor(
         /** [SavedStateHandle] key of the [WalletMode] name. */
         const val MODE_KEY = "walletMode"
 
-        /** How long reading a receipt may take before the sheet says it found nothing. */
-        const val SCAN_TIMEOUT_MILLIS = 10_000L
+        /**
+         * How long reading a receipt may take before the sheet says it found nothing: the first scan on a device waits
+         * for Play services to load its text recognition (about 13 s on the emulator walk, D-M6-54).
+         */
+        const val SCAN_TIMEOUT_MILLIS = 25_000L
+
+        /** After this long the sheet says "Preparing the scanner…" ([AdjustmentUi.scanSlow], D-M6-54). */
+        const val SCAN_SLOW_MILLIS = 5_000L
 
         private const val STOP_TIMEOUT_MILLIS = 5_000L
     }

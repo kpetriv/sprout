@@ -144,10 +144,27 @@ class AiRouterTest {
     }
 
     @Test
-    fun receiptsAlwaysTakeTheRulesPath() = runTest {
+    fun receiptsTakeTheRulesPathOnlyWhileTheSwitchIsOn() = runTest {
+        var reads = 0
+        val reader = ReceiptTextReader {
+            reads++
+            listOf(RecognizedLine("Corner Shop", 0, 20, 0), RecognizedLine("TOTAL 12.50", 100, 120, 0))
+        }
+        val scanning = AiRouter(nano, RulesAiGateway(reader, { Locale.UK }), preferences, context, log)
+
+        assertEquals("Corner Shop", scanning.receiptPrefill(byteArrayOf(1), gbp)?.merchant)
+        assertTrue(model.requests.isEmpty(), "receipts never use the model")
+        // D-M6-51: Play services records each scan, so the switch turns scanning off.
         preferences.setEnabled(false)
-        assertEquals(null, router.receiptPrefill(byteArrayOf(1), gbp))
-        assertEquals(Triple(AiTask.RECEIPT, AiPath.RULES, null), calls.single())
+        assertEquals(null, scanning.receiptPrefill(byteArrayOf(1), gbp))
+        assertEquals(1, reads)
+        assertEquals(
+            listOf(
+                Triple(AiTask.RECEIPT, AiPath.RULES, null),
+                Triple(AiTask.RECEIPT, AiPath.RULES, AiFailure.DISABLED),
+            ),
+            calls,
+        )
     }
 
     @Test

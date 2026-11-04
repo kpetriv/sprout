@@ -175,14 +175,19 @@ class GatewayWeeklySummarySource @Inject constructor(
 
 /**
  * The manual adjustment sheet's "Scan a receipt" ([ReceiptScanner], D-M6-21): the picked image read through `core/ui`'s
- * [PickedImageReader] ([PickedImageReader.Limits.RECEIPT], EXIF rotation applied, EXIF dropped), then
- * [AiGateway.receiptPrefill] in the household's fiat currency (on-device text recognition plus rules, never the model,
- * nothing leaves the phone). Null when the image cannot be read or nothing was found; the parent reviews and signs
- * whatever is prefilled (D-M6-5).
+ * [PickedImageReader] ([PickedImageReader.Limits.RECEIPT], EXIF rotation applied, EXIF dropped, sources over 250 MP
+ * refused before decoding), then [AiGateway.receiptPrefill] in the household's fiat currency (on-device text
+ * recognition plus rules, never the model; the image and its text stay on the phone). Null when the image cannot be
+ * read or nothing was found; the parent reviews and signs whatever is prefilled (D-M6-5).
+ *
+ * Offered only while the On-device AI switch is on ([scanAllowed]): the recognizer is Google Play services code that
+ * records one usage event per scan, so the switch is how a parent turns it off (D-M6-51). The router checks the
+ * switch again.
  */
 class GatewayReceiptScanner internal constructor(
     private val readImage: suspend (uri: String) -> ByteArray?,
     private val gateway: AiGateway,
+    private val scanAllowed: suspend () -> Boolean,
     private val currency: FiatCurrencyProvider,
 ) : ReceiptScanner {
     @Inject
@@ -190,6 +195,7 @@ class GatewayReceiptScanner internal constructor(
         @ApplicationContext context: Context,
         @Dispatcher(SproutDispatchers.IO) io: CoroutineDispatcher,
         gateway: AiGateway,
+        preferences: AiPreferences,
         currency: FiatCurrencyProvider,
     ) : this(
         readImage = { uri ->
@@ -198,12 +204,19 @@ class GatewayReceiptScanner internal constructor(
             }
         },
         gateway = gateway,
+        scanAllowed = { preferences.current().enabled },
         currency = currency,
     )
 
-    override suspend fun scan(imageUri: String): AdjustmentPrefill? = readImage(imageUri)
-        ?.let { jpeg -> gateway.receiptPrefill(jpeg, currency.fiatCurrency()) }
-        ?.let { prefill -> AdjustmentPrefill(amount = prefill.amount, merchant = prefill.merchant) }
+    override suspend fun isAvailable(): Boolean = scanAllowed()
+
+    override suspend fun scan(imageUri: String): AdjustmentPrefill? = if (!scanAllowed()) {
+        null
+    } else {
+        readImage(imageUri)
+            ?.let { jpeg -> gateway.receiptPrefill(jpeg, currency.fiatCurrency()) }
+            ?.let { prefill -> AdjustmentPrefill(amount = prefill.amount, merchant = prefill.merchant) }
+    }
 }
 
 /**
