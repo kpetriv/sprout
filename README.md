@@ -80,7 +80,8 @@ The reasoning behind this layout is in [ADR-0001](docs/adr/0001-architecture.md)
 - **Keystore-backed keys.** Each device holds a P-256 key pair in Android Keystore (StrongBox where available). Kid devices get their own Firebase identity; they never see parent credentials.
 - **Server-side enforcement.** Firestore rules check household membership, author identity, role, an active registered device, the conflict order, and ledger immutability. Identity changes (households, device registration and approval, link codes, parent keys, revocation, export, deletion) go through the Sprout server, which verifies key attestation, device-signed requests and App Check, and rate-limits every call. See [ADR-0006](docs/adr/0006-sync-protocol-and-document-envelope.md) and [ADR-0007](docs/adr/0007-identity-linking-and-device-registry.md).
 - **Encrypted at rest.** Room runs on SQLCipher with a Keystore-wrapped passphrase. The parent PIN is hashed with Argon2id (PBKDF2 fallback) and protected by exponential lockout. Parent and chat screens use `FLAG_SECURE`.
-- **No analytics, no ads.** No third-party analytics SDKs. Crashlytics is opt-in with PII scrubbing. Kids are a first name, an avatar, and a birth month and year.
+- **No analytics, no ads.** No analytics, advertising or crash-reporting SDKs ship in v1 (the release classpath is checked against the [data-safety inventory](docs/DATA_SAFETY.md) in CI). Kids are a first name, an avatar, and a birth month and year.
+- **Published policies.** The [privacy policy](docs/PRIVACY.md) and the [security and disclosure policy](docs/SECURITY.md) are rendered from this repository to static pages the server hosts (`/privacy`, `/security`, `/.well-known/security.txt`); CI fails when the pages drift from the Markdown.
 
 The full design is in [ADR-0003](docs/adr/0003-security-model.md) and the [threat model](docs/THREAT_MODEL.md).
 
@@ -116,7 +117,19 @@ npx --no-install --prefix firestore firebase emulators:start --only auth,firesto
 npm --prefix server run dev        # http://127.0.0.1:8787, reached from an Android emulator as 10.0.2.2:8787
 ```
 
-Backend tests: `cd firestore && npm test` (rules) and `cd server && npm test` (every callable over HTTP against the emulators). Production setup, deployment and the rules summary are in [docs/FIREBASE.md](docs/FIREBASE.md). A release build needs your own `app/google-services.json`; it is not committed. Keystores, service-account files, `.env` files and `local.properties` are never committed either.
+Backend tests: `cd firestore && npm test` (rules) and `cd server && npm test` (every callable over HTTP against the emulators). Production setup, deployment and the rules summary are in [docs/FIREBASE.md](docs/FIREBASE.md). A release build needs your own `app/google-services.json` and signing key (see [Release](#release)); neither is committed. Keystores, service-account files, `.env` files and `local.properties` are never committed either.
+
+## Release
+
+A Play release is built from a `v*` tag; nothing secret is in the repository (M8, [release checklist](docs/RELEASE_CHECKLIST.md)).
+
+- **Version:** `versionName` from the latest `v*` tag (`0.1.0-dev` without one), `versionCode` from the commit count, or `-PversionCode=<n>` (D-M8-4).
+- **Signing:** the upload key comes from the environment (`SPROUT_UPLOAD_KEYSTORE`, `SPROUT_UPLOAD_KEYSTORE_PASSWORD`, `SPROUT_UPLOAD_KEY_ALIAS`, `SPROUT_UPLOAD_KEY_PASSWORD`) or the same values as `sprout.upload.*` properties in `~/.gradle/gradle.properties`. The owner creates it once with `tools/release/create-upload-keystore.sh`, which prints the SHA-1 and SHA-256 to register in Firebase; Play App Signing holds the app signing key (D-M8-3).
+- **Configuration:** `sprout.functionsBaseUrl` (the server's `https://` URL), `sprout.googleServerClientId` (the OAuth web client id for Google sign-in), `sprout.privacyUrl` (the hosted privacy page, by default `<functionsBaseUrl>/privacy`), and `app/google-services.json`. `./gradlew :app:bundleRelease` runs `checkReleaseConfiguration` first and fails with a list of whatever is missing; CI's builds are never shipped and waive it with `-Psprout.allowUnconfiguredRelease=true`.
+- **Build:** `./gradlew :app:bundleRelease` locally, or the manual `release.yml` workflow on a tag with the values as repository secrets; it uploads the AAB and the R8 mapping as artifacts, and publishes to the internal track only when a Play service-account secret is set (D-M8-5).
+- **Privacy page:** `python3 tools/privacy/render.py` renders `docs/PRIVACY.md` and `docs/SECURITY.md` into `server/public/`; the committed pages carry example values, and the owner renders the real ones from `docs/privacy.properties` (gitignored) just before deploying the server.
+- **Play listing:** the data-safety answers are in [docs/DATA_SAFETY.md](docs/DATA_SAFETY.md); the store text and images are generated from the screenshot goldens by `tools/store/compose.py` into [play/listing](play/listing/README.md).
+- **Before production:** the device and real-project checks in the [security review](docs/SECURITY_REVIEW.md) (network capture including a receipt scan, Play Integrity and App Check, Google sign-in, attestation, Gemini Nano).
 
 ## Performance
 
@@ -158,8 +171,8 @@ Each milestone ends with green CI and a tagged build.
 | M4 Chat and time bank | E2EE threads, key rotation, Seedling presets and voice notes, chore photo upload, time bank with an ongoing notification | Done |
 | M5 Games | Three games, tier difficulty, daily cap, signed scoring events | Done |
 | M6 AI | Gemini Nano integration, fallbacks, kindness check, suggestions, weekly summary, receipt prefill ([spec and as built](docs/milestones/M6.md), [ADR-0010](docs/adr/0010-on-device-ai.md)) | Done |
-| M7 Showcase polish | Glance widget, adaptive layouts, Baseline Profiles, full screenshot coverage, accessibility, chat retention, readable export, structural `FLAG_SECURE` ([spec and as built](docs/milestones/M7.md)) | In review |
-| M8 Play release | Privacy policy, data-safety form, security review, app signing, staged tracks | In progress |
+| M7 Showcase polish | Glance widget, adaptive layouts, Baseline Profiles, full screenshot coverage, accessibility, chat retention, readable export, structural `FLAG_SECURE` ([spec and as built](docs/milestones/M7.md)) | Done |
+| M8 Play release | Published privacy and disclosure policies, data-safety answers checked against the build, security review, release signing and workflow, store listing, operator script ([spec and as built](docs/milestones/M8.md), [release checklist](docs/RELEASE_CHECKLIST.md)) | In review |
 
 ## Documentation
 
@@ -180,13 +193,16 @@ Each milestone ends with green CI and a tagged build.
 - [Controls matrix (SOC 2 criteria)](docs/CONTROLS.md)
 - [Incident runbook](docs/RUNBOOK.md)
 - [Firebase backend and the Sprout server](docs/FIREBASE.md)
-- [Privacy policy draft](docs/PRIVACY.md)
+- [Privacy policy](docs/PRIVACY.md) (published page: `server/public/privacy`), [security and disclosure policy](docs/SECURITY.md)
+- [Play data-safety answers](docs/DATA_SAFETY.md), [security review](docs/SECURITY_REVIEW.md) and the owner's [release checklist](docs/RELEASE_CHECKLIST.md)
+- [Play store listing](play/listing/README.md)
 - [Screenshot tests](docs/SCREENSHOT_TESTS.md) (the screen × tier × state matrix) and the [accessibility checklist](docs/ACCESSIBILITY.md)
 - [M3 milestone spec and as-built notes](docs/milestones/M3.md)
 - [M4 milestone spec and as-built notes](docs/milestones/M4.md)
 - [M5 milestone spec and as-built notes](docs/milestones/M5.md) and [ADR-0009: games scoring and credit](docs/adr/0009-games-scoring-and-credit.md)
 - [M6 milestone spec and as-built notes](docs/milestones/M6.md) and [ADR-0010: on-device AI](docs/adr/0010-on-device-ai.md)
 - [M7 milestone spec and as-built notes](docs/milestones/M7.md)
+- [M8 milestone spec and as-built notes](docs/milestones/M8.md)
 
 ## Engineering practices
 
@@ -195,7 +211,7 @@ Each milestone ends with green CI and a tagged build.
 - **Renovate** with grouped update PRs against a single version catalog; a workflow refreshes the verification metadata on Renovate branches.
 - **Screenshot tests** with Roborazzi on Robolectric for every screen: kid screens in every tier, parent screens light and dark, phone and tablet widths and a 200 % font scale for a subset, the widget too; diffed in CI, recorded on Linux only ([docs/SCREENSHOT_TESTS.md](docs/SCREENSHOT_TESTS.md)). Every screen test also runs an accessibility rule (labels, unique sibling labels, tier touch targets; [docs/ACCESSIBILITY.md](docs/ACCESSIBILITY.md)).
 - **Baseline Profiles and Macrobenchmark** for startup and scroll performance: profiles generated on an emulator and committed, journeys in `benchmark/`, numbers in [Performance](#performance).
-- **CI** on GitHub Actions (pinned by SHA): build, unit and screenshot tests, Android Lint, Detekt, ktlint; a `backend` job runs the Firestore rules and server tests against the emulators (not a required check yet). Secret scanning with push protection is enabled. A branch ruleset on `main` requires pull requests and the build check, and blocks force pushes and deletion.
+- **CI** on GitHub Actions (pinned by SHA): build, unit and screenshot tests, Android Lint, Detekt, ktlint; the build job also checks that the published privacy pages match their Markdown and that the data-safety inventory matches the release build's permissions and SDKs; a `backend` job runs the Firestore rules and server tests against the emulators and `npm audit` at high severity (not a required check yet). Secret scanning with push protection is enabled. A branch ruleset on `main` requires pull requests and the build check, and blocks force pushes and deletion.
 
 ## Licence
 

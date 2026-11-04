@@ -1,0 +1,37 @@
+# Values for the published privacy policy, security page and security.txt (docs/PRIVACY.md, docs/SECURITY.md).
+#
+# Copy this file to docs/privacy.properties (gitignored), fill in the real values, and render:
+#   cp docs/privacy.properties.example docs/privacy.properties
+#   python3 tools/privacy/render.py --properties docs/privacy.properties --strict   # privacy and security pages
+#   npm --prefix server run build:static                                           # security.txt (both copies)
+# --strict refuses example.invalid addresses and "(to be filled)" values. The committed files in server/public are
+# always rendered from this example file (`python3 tools/privacy/render.py` and
+# `npm --prefix server run build:static -- --example`), which CI checks (`python3 tools/privacy/check.py`,
+# `npm --prefix server run check:static`). docs/RELEASE_CHECKLIST.md item 4 has the publishing steps.
+#
+# Format: KEY=value, one per line, UTF-8; lines starting with # are comments. No quoting or escaping is needed.
+
+# Where people write about privacy and data requests (shown on the page and used for mailto: links).
+CONTACT_EMAIL=privacy@example.invalid
+
+# The developer's legal name as shown on the Play listing.
+DEVELOPER_NAME=Developer name (to be filled)
+
+# The postal address Google Play requires for the developer (one line, comma-separated).
+POSTAL_ADDRESS=Postal address (to be filled)
+
+# The date this version of the policy takes effect, ISO 8601 (YYYY-MM-DD). Shown as "Last updated"; security.txt's
+# Expires is this date plus one year unless SECURITY_TXT_EXPIRES is set.
+EFFECTIVE_DATE=2026-11-04
+
+# Where vulnerability reports go (an e-mail address, or an https:// URL). security.txt's Contact.
+SECURITY_CONTACT=security@example.invalid
+
+# The production URL of the hosted privacy page (the app's sprout.privacyUrl Gradle property must match). The
+# security page is its sibling /security and security.txt lives at /.well-known/security.txt on the same host.
+PRIVACY_URL=https://sprout.example.invalid/privacy
+
+# Optional, read by `npm run build:static` only (server/scripts/build-static.ts):
+# CANONICAL_HOST=sprout.example.invalid        (default: the host of PRIVACY_URL)
+# SECURITY_TXT_EXPIRES=2027-11-04             (default: EFFECTIVE_DATE plus one year)
+# SECURITY_POLICY_URL=https://sprout.example.invalid/security   (default: https://<host>/security)
