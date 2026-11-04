@@ -7,7 +7,9 @@ process.env.METADATA_SERVER_DETECTION = 'none';
 // production behaviour clear it for their duration.
 process.env.SPROUT_EMULATOR = 'true';
 delete process.env.ALLOW_UNATTESTED;
-delete process.env.LINK_CODE_HMAC_KEY;
+// A configured server's key (44 characters, as `openssl rand -base64 32` gives): the rate limiter derives its id key
+// from it on every callable (D-M8-44), so the production-behaviour tests need one. Tests of the key itself clear it.
+process.env.LINK_CODE_HMAC_KEY = 'test-only-link-code-hmac-key-not-a-secret-44';
 delete process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
 
 if (!process.env.FIRESTORE_EMULATOR_HOST || !process.env.FIREBASE_AUTH_EMULATOR_HOST) {

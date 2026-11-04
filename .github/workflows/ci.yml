@@ -37,8 +37,10 @@ jobs:
           cache-read-only: ${{ github.ref != 'refs/heads/main' }}
 
       # Everything but the unit tests (`-x test` drops every module's test tasks), so a lint or Detekt failure is told
-      # apart from a test or screenshot failure below. CI has no server URL or google-services.json, so the release
-      # configuration check is waived here: CI builds are never shipped.
+      # apart from a test or screenshot failure below. `build` runs assembleRelease (R8) and `check` the release checks
+      # on its output (checkReleaseMapping, checkReleaseAppCheck, checkMergedManifestForTelemetry), so a release
+      # regression shows on every PR. CI builds no Play bundle, so checkReleaseConfiguration (secrets, a v* tag) does
+      # not run here; the release workflow runs it.
       - name: Build, Detekt, Lint
         id: static
         run: ./gradlew build detekt lint -x test --no-daemon
@@ -65,6 +67,18 @@ jobs:
         id: gate
         if: ${{ !cancelled() && (steps.static.outcome == 'success' || steps.static.outcome == 'failure') }}
         run: ./gradlew test verifyRoborazziDebug --no-daemon
+
+      # check:privacy (M8 §1, D-M8-1): the committed privacy and security pages in server/public are what
+      # docs/PRIVACY.md and docs/SECURITY.md render to with the example values. Python standard library only.
+      - name: Privacy pages up to date
+        if: ${{ !cancelled() }}
+        run: python3 tools/privacy/check.py
+
+      # checkDataSafetyInventory (M8 §2, D-M8-2): every permission of the merged release manifest and every SDK on the
+      # release runtime classpath has an entry in docs/DATA_SAFETY.md, and every entry is still in the build.
+      - name: Data-safety inventory
+        if: ${{ !cancelled() && (steps.static.outcome == 'success' || steps.static.outcome == 'failure') }}
+        run: python3 tools/privacy/inventory.py --check --gradle-arg=--no-daemon
 
       - name: Upload reports
         if: failure()
@@ -145,12 +159,13 @@ jobs:
           path: ~/.cache/firebase/emulators
           key: firebase-emulators-${{ runner.os }}-${{ steps.firebase-tools.outputs.version }}
 
-      - name: Server (install, lint, build, test)
+      - name: Server (install, lint, build, static pages, test)
         working-directory: server
         run: |
           npm ci
           npm run lint
           npm run build
+          npm run check:static
           npm test
 
       - name: Firestore rules (install, lint, test)
@@ -159,3 +174,16 @@ jobs:
           npm ci
           npm run lint
           npm test
+
+      # npm audit at high severity (SC-4, D-M8-10) with the reviewed exceptions in each package's
+      # audit-exceptions.json (server/scripts/audit.mjs, docs/FIREBASE.md "Dependency audit"). After the tests, so a
+      # new advisory never hides a test result; it still fails the job.
+      - name: Dependency audit (server)
+        if: ${{ !cancelled() }}
+        working-directory: server
+        run: npm run audit
+
+      - name: Dependency audit (firestore)
+        if: ${{ !cancelled() }}
+        working-directory: firestore
+        run: npm run audit

@@ -1,6 +1,8 @@
+import { createHmac, hkdfSync } from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { Timestamp } from 'firebase-admin/firestore';
 import { linkCodeKey } from '../src/config.js';
+import { rateLimitBucket } from '../src/rateLimit.js';
 import { LINK_CODE_ALPHABET, linkCodeId as hmacId, sha256Hex } from '../src/crypto.js';
 import {
   addKid,
@@ -23,6 +25,13 @@ beforeEach(async () => {
 });
 
 const linkCodeId = (code: string) => hmacId(code, linkCodeKey());
+
+/** The rate-limit id digest, computed independently of src/rateLimit.ts. */
+const rateLimitHmac = (secret: string, message: string) =>
+  createHmac('sha256', Buffer.from(hkdfSync('sha256', secret, Buffer.alloc(0), 'sprout/rate-limit/v1', 32)))
+    .update(message)
+    .digest('hex')
+    .slice(0, 32);
 
 const CODE = new RegExp(`^[${LINK_CODE_ALPHABET}]{8}$`);
 
@@ -178,6 +187,9 @@ describe('redeemLinkCode', () => {
 });
 
 describe('link code ids are HMACs under LINK_CODE_HMAC_KEY', () => {
+  beforeEach(() => {
+    delete process.env.LINK_CODE_HMAC_KEY;
+  });
   afterEach(() => {
     process.env.SPROUT_EMULATOR = 'true';
     delete process.env.LINK_CODE_HMAC_KEY;
@@ -190,10 +202,25 @@ describe('link code ids are HMACs under LINK_CODE_HMAC_KEY', () => {
     const ids = (await db.collection('linkCodes').get()).docs.map((d) => d.id);
     expect(ids).toEqual([hmacId(code, 'sprout-emulator-only-link-code-key-not-a-secret')]);
     expect(ids).not.toContain(sha256Hex(code));
-    // The per-code rate-limit bucket keys on the HMAC as well.
+    // The per-code rate-limit bucket keys on the HMAC as well, and its id is itself keyed (audit L4).
     await call(fns.redeemLinkCode, req(await kidCaller(), { code, devicePublicKey: newDevice().publicKey }));
-    const bucket = `redeemLinkCode_code_${sha256Hex(`redeemLinkCode|code|${ids[0]}`).slice(0, 32)}`;
+    const bucket = `redeemLinkCode_code_${rateLimitHmac('sprout-emulator-only-link-code-key-not-a-secret', `redeemLinkCode|code|${ids[0]}`)}`;
+    expect(rateLimitBucket('redeemLinkCode', 'code', ids[0])).toBe(bucket);
     expect((await db.doc(`rateLimits/${bucket}`).get()).exists).toBe(true);
+    const unkeyed = `redeemLinkCode_code_${sha256Hex(`redeemLinkCode|code|${ids[0]}`).slice(0, 32)}`;
+    expect((await db.doc(`rateLimits/${unkeyed}`).get()).exists).toBe(false);
+  });
+
+  it('keys rate-limit ids with HKDF(LINK_CODE_HMAC_KEY, "sprout/rate-limit/v1"), so an IP cannot be enumerated back', () => {
+    const ip = '203.0.113.7';
+    expect(rateLimitBucket('createHousehold', 'ip', ip)).toBe(
+      `createHousehold_ip_${rateLimitHmac('sprout-emulator-only-link-code-key-not-a-secret', `createHousehold|ip|${ip}`)}`,
+    );
+    process.env.LINK_CODE_HMAC_KEY = 'r'.repeat(44);
+    expect(rateLimitBucket('createHousehold', 'ip', ip)).toBe(
+      `createHousehold_ip_${rateLimitHmac('r'.repeat(44), `createHousehold|ip|${ip}`)}`,
+    );
+    expect(rateLimitBucket('createHousehold', 'ip', ip)).not.toContain(sha256Hex(`createHousehold|ip|${ip}`).slice(0, 32));
   });
 
   it('outside the emulator uses the secret, and refuses to run without one', async () => {

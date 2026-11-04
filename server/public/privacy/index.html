@@ -1,0 +1,255 @@
+<!doctype html>
+<html lang="en-GB">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<meta name="referrer" content="no-referrer">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'sha256-CTh1eaHPbyq7Go8A1AXzBVE4huUegy5JsPfVpBv9DP8='; img-src 'none'; base-uri 'none'; form-action 'none'">
+<title>Sprout privacy policy</title>
+<link rel="canonical" href="https://sprout.example.invalid/privacy">
+<style>
+:root{color-scheme:light dark;--bg:#fbfdf7;--fg:#1a1c19;--muted:#43483f;--line:#c3c8bb;--accent:#2e7d32;--quote:#eef3e6}
+@media (prefers-color-scheme:dark){:root{--bg:#121411;--fg:#e2e3dc;--muted:#c3c8bb;--line:#43483f;--accent:#9ad795;--quote:#1e211c}}
+*{box-sizing:border-box}
+html{-webkit-text-size-adjust:100%;text-size-adjust:100%}
+body{margin:0;background:var(--bg);color:var(--fg);font:1rem/1.6 system-ui,-apple-system,"Segoe UI",Roboto,"Noto Sans",sans-serif}
+main,footer{max-width:46rem;margin:0 auto;padding:0 1rem}
+main{padding-top:2rem}
+h1{font-size:1.9rem;line-height:1.25;margin:0 0 .25rem}
+h2{font-size:1.35rem;margin:2.25rem 0 .5rem;padding-top:.5rem;border-top:1px solid var(--line)}
+h3{font-size:1.1rem;margin:1.5rem 0 .5rem}
+a{color:var(--accent)}
+a:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:.9em;overflow-wrap:anywhere}
+.updated{color:var(--muted);margin:0 0 1.5rem}
+.table{overflow-x:auto;margin:1rem 0}
+table{border-collapse:collapse;width:100%;font-size:.95rem}
+th,td{text-align:left;vertical-align:top;padding:.5rem .6rem;border-bottom:1px solid var(--line)}
+th{font-weight:600}
+blockquote{margin:1rem 0;padding:.5rem 1rem;background:var(--quote);border-left:4px solid var(--accent)}
+footer{margin-top:3rem;padding-top:1rem;padding-bottom:2rem;border-top:1px solid var(--line);color:var(--muted);font-size:.9rem}
+footer ul{list-style:none;padding:0;margin:0;display:flex;flex-wrap:wrap;gap:.5rem 1.5rem}
+</style>
+</head>
+<body>
+<main>
+<article>
+<h1 id="sprout-privacy-policy">Sprout privacy policy</h1>
+<p class="updated">Last updated: <time datetime="2026-11-04">4 November 2026</time></p>
+<ul>
+<li><strong>Effective date:</strong> 2026-11-04</li>
+<li><strong>Applies to:</strong> the Sprout Android app (<code>dev.kpetriv.sprout</code>) and the Sprout server it talks to</li>
+<li><strong>Who we are:</strong> Developer name (to be filled), Postal address (to be filled), the developer of Sprout (&quot;we&quot;, &quot;us&quot;)</li>
+<li><strong>Contact:</strong> <a href="mailto:privacy@example.invalid">privacy@example.invalid</a></li>
+</ul>
+<h2 id="the-short-version">The short version</h2>
+<ul>
+<li>Sprout is for parents. A parent sets up the household and decides what goes into it about each child.</li>
+<li>We collect the minimum the app needs to work: a first name, an avatar, a birth month and year, and the household's chores, rewards and pocket-money ledger.</li>
+<li>Chat messages, voice notes and photos are end-to-end encrypted. We cannot read them.</li>
+<li>No ads, no analytics, no crash reporting. No location, no contacts, no advertising ID.</li>
+<li>All AI features run on your phone. What you type and photograph is never sent anywhere for AI. One exception to &quot;no metrics&quot;: when a parent scans a receipt, Google Play services records that its scanner was used (never the receipt), and receipt scanning is off whenever the On-device AI switch is off.</li>
+<li>You can export or delete your household's data at any time, from the app.</li>
+</ul>
+<h2 id="who-this-is-for">Who this is for</h2>
+<p>Sprout's Play audience is adults (18+). Kid mode is a feature the parent configures on a child's phone. Children do not create accounts, do not sign in, and do not give us information directly; everything about a child is entered or chosen by the parent, apart from what the child creates while using kid mode (chore submissions, game results, purchases from the parent's catalogue, chat messages).</p>
+<h2 id="what-we-collect">What we collect</h2>
+<h3 id="about-the-household-and-each-child-chosen-by-the-parent">About the household and each child (chosen by the parent)</h3>
+<div class="table"><table>
+<thead><tr>
+<th scope="col">Data</th>
+<th scope="col">Why</th>
+<th scope="col">Notes</th>
+</tr></thead><tbody>
+<tr><td>Child's first name</td><td>Shown in the app</td><td>No surname, no e-mail address, no phone number</td></tr>
+<tr><td>Avatar</td><td>Shown in the app</td><td>An id for one of the app's built-in avatars, not a photo</td></tr>
+<tr><td>Birth month and year</td><td>Suggests an age-appropriate kid UI</td><td>No day of birth</td></tr>
+<tr><td>Kid UI tier</td><td>Picks the kid-mode layout</td><td>Suggested from age; the parent can change it</td></tr>
+</tbody></table></div>
+<h3 id="household-activity">Household activity</h3>
+<div class="table"><table>
+<thead><tr>
+<th scope="col">Data</th>
+<th scope="col">Why</th>
+<th scope="col">Notes</th>
+</tr></thead><tbody>
+<tr><td>Chores, rewards and savings goals</td><td>The core of the app: what needs doing, what it earns, what can be bought</td><td>Titles and amounts the parent writes</td></tr>
+<tr><td>Ledger entries</td><td>Every credit and debit of pocket money and screen-time minutes, with who made it, from which household phone, and when</td><td>Signed, so tampering is detectable. These are household pocket-money records, not payments: Sprout never handles real money or card details.</td></tr>
+<tr><td>Free text in ledger entries</td><td>A parent's reason for a manual adjustment (it may be prefilled from a receipt as &quot;Receipt: &lt;shop&gt;&quot;, which the parent reviews before signing), and an optional note when covering an overdraft</td><td>Up to 200 characters each. <strong>Not end-to-end encrypted</strong>: like the rest of the ledger, readable by our server. Please don't put sensitive details in these notes.</td></tr>
+<tr><td>Game results</td><td>Score and credit for each brain game played</td><td>One signed ledger entry per play: which game and difficulty, how many rounds were right, the credit and the day played. The questions, answers and timings stay on the phone and are not stored. Credit is subject to a daily cap.</td></tr>
+<tr><td>Time bank sessions</td><td>When screen time was started and stopped</td><td>Recorded only; the app does not control the phone</td></tr>
+</tbody></table></div>
+<h3 id="chat-and-photos-end-to-end-encrypted">Chat and photos (end-to-end encrypted)</h3>
+<div class="table"><table>
+<thead><tr>
+<th scope="col">Data</th>
+<th scope="col">Why</th>
+<th scope="col">Notes</th>
+</tr></thead><tbody>
+<tr><td>Chat messages (text and preset messages)</td><td>Parent and child talk in the app</td><td>Encrypted on the sending phone with a key only the household's current phones hold. We store ciphertext only and cannot read it. A phone removed from the household gets no key for messages written after its removal.</td></tr>
+<tr><td>Voice notes</td><td>Young children can talk instead of type</td><td>Recorded only while the child holds the record button, at most 30 seconds, compressed on the phone, then encrypted like messages. The microphone permission is asked for the first time a voice note is recorded. The recording's temporary file is deleted as soon as it is encrypted (and at the next start if the app was closed mid-recording); a voice note is played straight from memory, never written to a file.</td></tr>
+<tr><td>Photos in chat</td><td>A parent can share a photo from the phone's photo picker</td><td>Shrunk on the phone (at most 1280 pixels), location and other photo metadata removed, then encrypted like messages. Only the photo you pick is read.</td></tr>
+<tr><td>Chore photos</td><td>Optional proof a chore is done</td><td>Taken with the phone's own camera app, which hands Sprout the one photo taken: Sprout does not ask for the camera permission and cannot use the camera itself. Encrypted on the child's phone with the household keys and uploaded so a parent's phone can show it; deleted from the child's phone when the parent decides.</td></tr>
+<tr><td>Chat routing data</td><td>Delivering and ordering messages</td><td>Who sent a message to which child's thread, from which household phone, when, its kind (text, preset, voice, photo) and size, and which household phones can decrypt it. Visible to our server; the content is not.</td></tr>
+</tbody></table></div>
+<p>Encrypted photos and voice notes are stored as encrypted chunks in the household's Cloud Firestore database, next to the messages. Sprout does not use Cloud Storage.</p>
+<h3 id="about-the-parent">About the parent</h3>
+<div class="table"><table>
+<thead><tr>
+<th scope="col">Data</th>
+<th scope="col">Why</th>
+<th scope="col">Notes</th>
+</tr></thead><tbody>
+<tr><td>Google account e-mail address</td><td>Signing in with Google through Firebase Authentication, and showing which account is signed in</td><td>Held by Firebase Authentication and shown in Settings → Account. Not copied into the household's data. Sprout never sees or stores your Google password.</td></tr>
+<tr><td>Google account name and profile picture link</td><td>Not used by Sprout</td><td>Firebase Authentication copies them from your Google account into its sign-in record when you sign in with Google, as it does for every app. Sprout does not read, show or copy them. They are deleted with the sign-in account.</td></tr>
+<tr><td>Firebase user id (uid)</td><td>Identifies the parent's account inside the household: membership, role, and the author of each ledger entry and document</td><td>A random identifier, not derived from your e-mail address.</td></tr>
+</tbody></table></div>
+<h3 id="technical-data">Technical data</h3>
+<div class="table"><table>
+<thead><tr>
+<th scope="col">Data</th>
+<th scope="col">Why</th>
+<th scope="col">Notes</th>
+</tr></thead><tbody>
+<tr><td>Device id and device public key</td><td>Proving which household phone wrote what; listing the household's phones</td><td>The device id is the fingerprint (SHA-256) of the phone's public signing key. Private keys never leave the phone.</td></tr>
+<tr><td>Key attestation level</td><td>Showing whether a phone's key is protected by secure hardware (StrongBox, TEE, software)</td><td>Verified by our server from the certificate chain the phone's keystore produces at registration; the chain itself is not stored.</td></tr>
+<tr><td>Kid phone account id</td><td>A kid's phone gets its own anonymous Firebase account, so it never holds the parent's sign-in</td><td>No e-mail address, name or phone number. Disabled when the parent removes the phone; deleted with the household.</td></tr>
+<tr><td>IP address</td><td>Rate limiting the server's sign-up, linking and admin operations against abuse</td><td>Used transiently by our server. Stored only inside a rate-limit record id as a keyed hash (with the operation name; the key is a secret only our server holds, so the address cannot be worked back out from the record), never in clear, and deleted when the limit window ends (at most an hour). Our server does not log it; our host (Vercel) and Google record it as part of handling each request, under their terms (see &quot;Server logs&quot;).</td></tr>
+<tr><td>App integrity tokens (Firebase App Check with Play Integrity)</td><td>Rejecting modified apps and scripts</td><td>Each request to our server and to the database carries a short-lived token from Firebase App Check, which Google issues after a Play Integrity check of the app and the phone. Checked, not stored, not used for tracking.</td></tr>
+<tr><td>Firebase installation id and instance token</td><td>Not used by Sprout</td><td>The Firebase library Sprout uses to call our server includes Firebase Instance ID, which can create a Firebase installation id for the app on the phone, register it with Google, and attach an instance token to requests to our server. Sprout does not use push messages or these identifiers; our server neither stores nor logs the token. Google processes the installation id under its terms.</td></tr>
+<tr><td>Server logs</td><td>Operating and securing the server</td><td>Our server logs identifiers (household, account and phone ids), counts and outcome codes only: never names, e-mail addresses, link codes, keys, IP addresses or household content. Our host, Vercel, keeps these logs together with its own request records (time, path, status, the caller's IP address) for up to 30 days, unless Vercel's retention is longer: see <a href="https://vercel.com/legal/privacy-policy">Vercel's privacy policy</a>.</td></tr>
+<tr><td>Receipt-scan usage event</td><td>Recorded by Google Play services, not by Sprout</td><td>One event per receipt scan: an event id, an error code, and start and end times; never the picture or the text read from it. See &quot;On-device AI&quot;.</td></tr>
+</tbody></table></div>
+<h2 id="what-we-do-not-collect">What we do not collect</h2>
+<ul>
+<li>No advertising, no advertising ID, no ad SDKs.</li>
+<li>No analytics and no crash reporting, from us or from the libraries Sprout ships. Google's ML Kit libraries include a usage-metrics uploader, and Sprout removes it; the build fails if it comes back. Google Play services records each receipt scan (see &quot;On-device AI&quot;).</li>
+<li>No location.</li>
+<li>No contacts, calendar, call logs, SMS or files outside what you pick.</li>
+<li>No child's surname, e-mail address, phone number, school, or exact date of birth.</li>
+<li>No access to other apps or app usage. Sprout does not request Accessibility, usage stats, overlay or device-admin permissions.</li>
+<li>No message, chore, figure or photo is sent off the phone for AI.</li>
+</ul>
+<h2 id="permissions-sprout-asks-for">Permissions Sprout asks for</h2>
+<div class="table"><table>
+<thead><tr>
+<th scope="col">Permission</th>
+<th scope="col">What for</th>
+<th scope="col">When</th>
+</tr></thead><tbody>
+<tr><td>Internet and network state</td><td>Syncing the household and calling our server</td><td>Granted at install</td></tr>
+<tr><td>Microphone</td><td>Recording a voice note</td><td>Asked the first time a child records one; chat works without it</td></tr>
+<tr><td>Notifications</td><td>The &quot;screen time running&quot; notification of the time bank</td><td>Asked the first time the time bank is started; the timer works without it</td></tr>
+<tr><td>Biometric</td><td>Unlocking the parent area and signing money entries with the parent's fingerprint</td><td>Granted at install; used only when the parent chooses to</td></tr>
+<tr><td>Run at startup, wake lock, foreground service</td><td>Background sync and clean-up jobs (Android WorkManager), and keeping the home screen widget current</td><td>Granted at install</td></tr>
+<tr><td>AICore</td><td>Asking Android's on-device AI service (Gemini Nano) for an answer</td><td>Granted at install; used only while the On-device AI switch is on</td></tr>
+</tbody></table></div>
+<p>Some Google libraries Sprout includes declare further permissions of their own (for Firebase's messaging client and Google services configuration). Sprout does not use push messages, and none of those permissions gives Sprout access to your data.</p>
+<h2 id="google-services-sprout-relies-on">Google services Sprout relies on</h2>
+<p>Sprout runs on Google's infrastructure for sign-in, sync and a few phone features. Each one processes some data under Google's own terms:</p>
+<ul>
+<li><strong>Firebase Authentication</strong> holds the parent's sign-in account (Google sign-in) and each kid phone's anonymous account.</li>
+<li><strong>Cloud Firestore</strong> stores the household's data, in Europe (see &quot;Where your data is stored&quot;).</li>
+<li><strong>Firebase App Check and Google Play Integrity</strong> check that requests come from the genuine Sprout app on a genuine phone.</li>
+<li><strong>Credential Manager and Google sign-in</strong> (part of Android and Google Play services) show the Google account picker and hand Sprout a sign-in token for the account you choose.</li>
+<li><strong>Google Play services text recognition</strong> reads a receipt on the phone when a parent scans one, and records one usage event per scan.</li>
+<li><strong>AICore</strong> (Gemini Nano) runs the on-device model on supported phones.</li>
+<li><strong>Firebase Instance ID</strong>, included by the Firebase library Sprout uses to call our server, may register an installation id with Google.</li>
+</ul>
+<h2 id="on-device-ai">On-device AI</h2>
+<p>AI features (chore suggestions, the weekly parent summary, the &quot;kindness check&quot; before a child sends a message, and reading a receipt to prefill an adjustment) run entirely on your phone, using Gemini Nano where the phone supports it and simple built-in rules where it does not. The kindness check only ever nudges the child; it never blocks a message and never reports it to anyone, including the parent.</p>
+<ul>
+<li><strong>No content is sent to the network for AI,</strong> to us or anyone else: no message, chore, figure, name or photo. There is no cloud AI in Sprout.</li>
+<li><strong>ML Kit's own usage metrics are switched off; receipt scanning is the exception.</strong> Sprout uses Google's ML Kit libraries for Gemini Nano and for text recognition. They include an uploader that would send Google usage metrics (device and app details, identifiers, timings and input and output sizes, never the text or the photo). Sprout removes that uploader from the app, and the build fails if it comes back. Receipt text recognition, however, runs as part of Google Play services, which records one usage event per scan (an event id, an error code and start and end times; never the picture or the text read from it) and sends it to Google like its other services, under Google's terms. Sprout cannot switch that off, so receipt scanning runs only while the On-device AI switch is on, and the &quot;Scan a receipt&quot; note says so.</li>
+<li><strong>What each feature gives the on-device model.</strong> Kindness check: the message the child is about to send. Chore suggestions: the child's age band, the titles of their existing chores and the household currency. Weekly summary: that week's figures (amounts earned, spent and saved, chores done, games played) and each child's first name. Receipts never use the model: the photo is read by on-device text recognition and parsed by built-in rules.</li>
+<li><strong>The models.</strong> Gemini Nano runs inside AICore, a Google system service on the phone. Sprout asks for the model to be downloaded only after a parent agrees once in Settings → On-device AI; the system then downloads it in the background, usually on Wi-Fi (Sprout cannot guarantee Wi-Fi). Until then, and on phones without AICore, the built-in rules do everything. The text-recognition model for receipts is downloaded by Google Play services; it holds no user data, and the receipt picture is read on the phone. AICore and Google Play services are Google system components: they download and run the models under Google's own terms, outside Sprout's control.</li>
+<li><strong>The switch covers this phone only.</strong> AI can be switched off in Settings → On-device AI; the rules keep every feature working, and receipt scanning is off while it is. A child's own linked phone has no parent area, so it always uses the built-in rules for the kindness check. On a parent's phone in kid mode, the kindness check may run Gemini Nano on the child's message under that phone's own switch and download consent, both set by the parent in the parent area; it still runs only on that phone.</li>
+<li><strong>Nothing is kept.</strong> Suggestions, summaries and kindness results are worked out when shown and never stored or logged. A receipt prefill only fills the adjustment form: the amount and the shop's name (as &quot;Receipt: &lt;shop&gt;&quot;) enter the ledger only if the parent reviews and signs it, and then the reason is plain text like any other adjustment reason. The picked receipt photo is read in memory and not stored.</li>
+<li><strong>Settings stay on the phone.</strong> The AI switch and the download consent are stored on each phone, not synced, and excluded from backups.</li>
+</ul>
+<h2 id="reading-messages-aloud">Reading messages aloud</h2>
+<p>For young children Sprout can read chat messages aloud. The message text is handed to the phone's own text-to-speech engine (the one chosen in the phone's settings). Sprout asks for an installed voice that works without a network, but cannot see what the engine does: if the phone is set up with an engine that synthesises speech online, that engine's provider may receive the text. Nothing is sent to us.</p>
+<h2 id="where-your-data-is-stored">Where your data is stored</h2>
+<ul>
+<li><strong>On your phones.</strong> Everything is stored in an encrypted database (SQLCipher) whose key is protected by the phone's hardware-backed keystore. Sprout's data is excluded from Android cloud backup and phone-to-phone transfer.</li>
+<li><strong>In the cloud.</strong> Household data syncs between your family's phones through Google Firebase: <strong>Cloud Firestore in the <code>eur3</code> multi-region (Europe)</strong> holds the household's data, including the encrypted chat, photos and voice notes, and Firebase Authentication (a global Google service, not pinned to the EU) holds the sign-in accounts. Account and admin operations (creating a household, linking phones, export, deletion, chat clean-up) run on <strong>our server, hosted by Vercel in Frankfurt (<code>fra1</code>)</strong>, which processes requests and stores nothing of its own beyond logs. Data is encrypted in transit (TLS) and, by Google, at rest.</li>
+<li><strong>Before you set up sync, nothing leaves the phone.</strong> A household tried out on one phone stays there. When that phone joins a real household, the app tells you the trial data will be deleted, and deletes it; it is never uploaded.</li>
+</ul>
+<h2 id="who-can-see-your-data">Who can see your data</h2>
+<div class="table"><table>
+<thead><tr>
+<th scope="col">Who</th>
+<th scope="col">What they can see</th>
+</tr></thead><tbody>
+<tr><td>Parents in the household</td><td>Everything in the household, including the full ledger and audit log</td></tr>
+<tr><td>A child, in kid mode</td><td>Their own chores, balance, ledger entries, shop, and chat with the parent; never parent settings or other children's data</td></tr>
+<tr><td>Our server and its operator</td><td>Household data and the ledger, in order to sync it and to export or delete it. <strong>Not</strong> the content of chat messages, voice notes or photos. Allowance and interest are calculated on the parent's phone, not on the server.</td></tr>
+<tr><td>Google, as our cloud provider</td><td>Stores and processes the data on our behalf under its data processing terms, and runs the Google services listed above under its own terms</td></tr>
+<tr><td>Vercel, as host of our server</td><td>Processes requests to the server on our behalf; sees the request contents in transit and keeps request logs</td></tr>
+<tr><td>Anyone else</td><td>Nobody. We do not sell or share data, and there are no advertising or analytics partners.</td></tr>
+</tbody></table></div>
+<p>We will disclose data only if the law requires it, and then only what is required.</p>
+<h2 id="how-long-we-keep-it">How long we keep it</h2>
+<div class="table"><table>
+<thead><tr>
+<th scope="col">Data</th>
+<th scope="col">How long</th>
+<th scope="col">How it is enforced</th>
+</tr></thead><tbody>
+<tr><td>The household's data (profiles, chores, rewards, ledger, devices)</td><td>As long as the household exists</td><td>Deleted in full when a parent deletes the household</td></tr>
+<tr><td>Chat messages, voice notes and photos</td><td>As the household chooses: forever (the default), or 30, 90 or 365 days</td><td>Each phone deletes its own older messages daily and after it syncs; a parent's phone asks our server to delete its copy at most once a day. A phone that is never opened again keeps its copy.</td></tr>
+<tr><td>Records that chat was cleaned up</td><td>As long as the household exists</td><td>When and how many messages and file parts; never content</td></tr>
+<tr><td>Device-linking codes</td><td>10 minutes, single use</td><td>Refused after expiry by our server; stored only as a keyed hash</td></tr>
+<tr><td>Device registration challenges</td><td>10 minutes</td><td>Refused after expiry by our server</td></tr>
+<tr><td>Rate-limit records</td><td>The limit window (at most an hour)</td><td>Ignored after expiry by our server; removed by an automatic database clean-up</td></tr>
+<tr><td>Household deletion records</td><td>12 months</td><td>Removed by our operator's monthly clean-up</td></tr>
+<tr><td>Account recovery records</td><td>12 months, also after the household is deleted</td><td>Written only when we restore a parent's access to a household whose parent phones were all lost: a one-way hash of the household id, the phone ids involved, the time and our ticket reference. Removed by our operator's monthly clean-up</td></tr>
+<tr><td>Our server's logs</td><td>Up to 30 days, unless Vercel's retention is longer</td><td>Vercel's log retention</td></tr>
+<tr><td>Sign-in accounts</td><td>Until the household is deleted (kid phone accounts are disabled when the phone is removed)</td><td>Deleted with the household</td></tr>
+<tr><td>Data on a phone</td><td>Until the app is uninstalled, the parent signs out, or the phone is removed from the household</td><td>Erased by the app; uninstalling removes it too</td></tr>
+<tr><td>Export files</td><td>As long as you keep them</td><td>Saved where you choose; we never receive them</td></tr>
+</tbody></table></div>
+<p>Sprout keeps no backups of its own. Google's own retention of deleted data follows its data processing terms.</p>
+<h2 id="your-data-your-copy">Your data, your copy</h2>
+<p>A parent can download the household's data from Settings → Household data → Export household. The phone saves <strong>one zip file</strong> where the parent chooses:</p>
+<ul>
+<li><code>household.json</code>: the household, its members' roles, its phones and parent keys, every kid profile, chore, submission, reward, schedule, goal and policy, and every ledger entry, plus chat messages and photo and voice-note records in their encrypted form;</li>
+<li><code>ledger.csv</code>: the ledger as a spreadsheet, made on the phone;</li>
+<li><code>chat/</code>: after the parent confirms with their fingerprint or parent PIN, each child's chat in readable form (<code>chat/&lt;child&gt;.json</code>: time, who wrote it, the text, preset or voice-note length), the photos and voice notes the phone can decrypt (<code>chat/media/</code>), and a list of any it could not include (<code>chat/missing.json</code>).</li>
+</ul>
+<p>The readable chat is decrypted on the parent's phone from its own copy (voice notes and photos the phone has not cached are fetched from our server still encrypted and decrypted on the phone) and written straight into the file the parent chose; nothing readable is sent to us. Keep the file safe: it is no longer encrypted. Households above 4 MB of server data cannot be exported in one file yet; contact us and we will export it for you.</p>
+<h2 id="how-to-delete-your-account-and-data">How to delete your account and data</h2>
+<p><strong>In the app (recommended).</strong> A parent can delete the household from Settings → Household data → Delete household, after typing the household id and signing in again if the last sign-in is older than 5 minutes. This removes all of the household's cloud data, the sign-in accounts of every parent and kid phone linked to it, its link codes and registration records, and wipes the local data on every household phone the next time it connects. We keep one record that a deletion happened: a one-way hash of the household id, the time, and how many members, phones, entries and documents were deleted, with no household content, for 12 months. If we ever restored a parent's access to the household, the record of that recovery (a one-way hash of the household id, the phone ids and the time) is also kept for 12 months from the recovery.</p>
+<p><strong>Chat only.</strong> Settings → Household data → Delete chat history now (after typing DELETE and confirming with a fingerprint or the parent PIN) deletes every chat message up to that moment on that phone and on our server. Other household phones keep their own copy until their retention period removes it, they are wiped, or the household is deleted. If every household phone is lost, chat history cannot be recovered: we hold no keys.</p>
+<p><strong>Removing one phone.</strong> A parent can remove a lost or old phone in Settings → Devices; it loses access, and its copy is erased the next time it connects.</p>
+<p><strong>By e-mail.</strong> If you can no longer use the app (for example, every parent phone is lost), e-mail <a href="mailto:privacy@example.invalid">privacy@example.invalid</a> from the Google account that created the household, with the household id if you have it. We confirm the request and delete the household with the same steps as the app, usually within 30 days, and tell you when it is done.</p>
+<p><strong>Uninstalling</strong> the app removes all local data from that phone. Cloud data remains until the household is deleted.</p>
+<h2 id="childrens-data-and-your-rights">Children's data and your rights</h2>
+<p>The parent decides what Sprout holds about their child and can view, correct, export or delete it at any time from the app.</p>
+<p>Depending on where you live (for example under the GDPR or UK GDPR), you have the right to access, correct, export and erase your data, to object to or restrict processing, and to complain to your data protection authority. Most of these you can do yourself in the app; for anything else, contact us at <a href="mailto:privacy@example.invalid">privacy@example.invalid</a>.</p>
+<h2 id="security">Security</h2>
+<ul>
+<li>The local database is encrypted with a key held in the phone's hardware keystore.</li>
+<li>The parent area is behind a PIN or biometric; money entries are signed by the parent's biometric-bound key.</li>
+<li>Every ledger entry is signed and chained, so tampering is detectable.</li>
+<li>Chat, voice notes and photos are end-to-end encrypted.</li>
+<li>All network traffic uses TLS; modified apps are rejected by Firebase App Check on our server and on the database.</li>
+<li>New phones join only with a code or an approval from an existing parent phone, and a lost phone can be removed from another parent phone.</li>
+</ul>
+<p>To report a vulnerability, see our <a href="https://sprout.example.invalid/security">security and disclosure policy</a> and <a href="https://sprout.example.invalid/.well-known/security.txt"><code>security.txt</code></a>.</p>
+<h2 id="changes-to-this-policy">Changes to this policy</h2>
+<p>We will update this page when the app's handling of data changes and change the effective date at the top. Material changes will be announced in the app before they take effect.</p>
+<h2 id="contact">Contact</h2>
+<p>Developer name (to be filled), Postal address (to be filled). E-mail: <a href="mailto:privacy@example.invalid">privacy@example.invalid</a>.</p>
+</article>
+</main>
+<footer>
+<nav aria-label="Sprout policies"><ul>
+<li><a href="https://sprout.example.invalid/privacy">Privacy policy</a></li>
+<li><a href="https://sprout.example.invalid/security">Security and disclosure</a></li>
+<li><a href="https://sprout.example.invalid/.well-known/security.txt">security.txt</a></li>
+</ul></nav>
+</footer>
+</body>
+</html>

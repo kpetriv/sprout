@@ -7,7 +7,8 @@ firebase.json              emulator ports (Auth, Firestore), rules and indexes p
 .firebaserc                default project demo-sprout
 firestore/                 firestore.rules, firestore.indexes.json, rules tests (vitest + @firebase/rules-unit-testing)
 server/                    callables (src/handlers/), protocol adapter (src/callable.ts), tests (test/),
-                           Vercel entry (api/index.ts, vercel.json), embedded Google attestation roots (src/attestation.ts)
+                           Vercel entry (api/index.ts, vercel.json), embedded Google attestation roots (src/attestation.ts),
+                           static pages (public/, src/static.ts), owner scripts (scripts/: operator, build:static, audit)
 ```
 
 ## Architecture: why a server and not Cloud Functions (D-M3-29)
@@ -67,13 +68,15 @@ Emulator log files (`firebase-debug.log`, `firestore-debug.log`) land in the dir
 
 ```
 cd firestore && npm ci && npm run lint && npm test     # rules tests, Firestore emulator only
-cd server && npm ci && npm run lint && npm run build && npm test      # Auth + Firestore emulators
+cd server && npm ci && npm run lint && npm run build && npm run check:static && npm test      # Auth + Firestore emulators
+cd server && npm run audit && cd ../firestore && npm run audit     # dependency audit (below)
 ```
 
 Each `npm test` is `firebase emulators:exec --only … --project demo-sprout "vitest run"`: it starts the emulators, runs vitest against them and shuts them down. Test files run sequentially because they share one emulator and clear it between tests.
 
 - **Rules tests** (`firestore/test/*.test.ts`) use `initializeTestEnvironment` with `firestore.rules`, seed two households with `withSecurityRulesDisabled` and assert allowed and denied operations with `assertSucceeds`/`assertFails`.
 - **Server tests** (`server/test/*.test.ts`) call every callable **over HTTP, in process** (`app.request('/<name>', …)` on the Hono app), with an ID token **minted by the Auth emulator** for the caller (an anonymous account's refreshed session, or a custom-token sign-in carrying the test's claims), so the adapter's `verifyIdToken(…, checkRevoked)` runs on every call; the Admin SDK inside the handlers talks to the real Auth and Firestore emulators. The emulator signs nothing (`alg: none`), so where a test needs a token it cannot mint (an `auth_time` from minutes ago, claims the account no longer has) the helper restates the emulator's token with those claims (`test/helpers.ts` `idTokenFor`). The client address is the socket address `@hono/node-server` would pass. There is no App Check emulator: the tests give the app a verifier that accepts one test token, and check separately that the production verifier refuses it. `test/callable.test.ts` covers the adapter itself (status mapping, error shape, malformed bodies, token and App Check refusals, unknown routes).
+- **Static pages and scripts** (`server/test/static.test.ts`, `server/test/operator.test.ts`): the static routes and their headers through the app, `vercel.json`'s rewrites and headers against `src/static.ts`, the `security.txt` rendering and the production deploy check; every operator command against the emulators (dry run, `--confirm`, the target guard, what each writes).
 - The attestation parser is tested against a **self-generated** chain (fake root, fake intermediate, leaf with a hand-built key description extension; `server/test/attestationFixtures.ts`). No real attested chain can be produced offline: a chain recorded from a physical device is still needed as a fixture for the Google-rooted path.
 
 ## Firestore layout and document shapes
@@ -103,6 +106,8 @@ linkCodes/{hmac(code)}                 { hid, kidId, createdBy, createdAt, expir
 challenges/{uid}                       { hash, expiresAt }                                                       no client access
 userHouseholds/{uid}                   { hid }   one household per uid (createHousehold, redeemLinkCode)        no client access
 deletionRecords/{autoId}               { hidHash, at, counts: { members, devices, events, documents } }          no client access
+recoveries/{autoId}                    { hidHash, at, deviceId, revokedDevices: [{ deviceId,                     no client access
+                                         revokedAtLamport }], ticket }: operator recover-household (D-M8-14)
 rateLimits/{bucket}                    { callable, kind, hits[], expiresAt, updatedAt }                          no client access
 ```
 
@@ -225,13 +230,13 @@ Privileged callables carry a signature by one of the caller's **ACTIVE parent de
 
 ### Link-code key
 
-Link-code ids are `HMAC-SHA256(LINK_CODE_HMAC_KEY, code)` in hex (`server/src/config.ts` `linkCodeKey`). The key is the server's `LINK_CODE_HMAC_KEY` environment variable (a sensitive Vercel variable); outside the emulator a missing key or one shorter than 32 characters makes `createLinkCode` and `redeemLinkCode` answer `internal`. A plain hash would let anyone with a copy of the database recover live codes by hashing all 32⁸ codes; the HMAC id is useless without the key. Rotating the key invalidates the outstanding codes (at most 10 minutes' worth).
+Link-code ids are `HMAC-SHA256(LINK_CODE_HMAC_KEY, code)` in hex (`server/src/config.ts` `linkCodeKey`). The key is the server's `LINK_CODE_HMAC_KEY` environment variable (a sensitive Vercel variable); outside the emulator a missing key or one shorter than 32 characters makes `createLinkCode` and `redeemLinkCode` answer `internal`, and every rate-limited callable too, since the rate-limit ids are keyed from it (below, D-M8-44). A plain hash would let anyone with a copy of the database recover live codes by hashing all 32⁸ codes; the HMAC id is useless without the key. Rotating the key invalidates the outstanding codes (at most 10 minutes' worth).
 
 In the emulator (`SPROUT_EMULATOR=true` **and** a `demo-` project id) the server uses `LINK_CODE_HMAC_KEY` from the environment if set, else the fixed, public development key `sprout-emulator-only-link-code-key-not-a-secret`. It protects nothing and exists so the emulator needs no secret setup.
 
 ## Rate limits
 
-Sliding windows stored in `rateLimits/{bucket}` (`server/src/rateLimit.ts`). The bucket id is `<callable>_<kind>_<first 32 hex of sha256(callable|kind|key)>`, so uids, IP addresses and code ids are never stored in clear. A refused call is not recorded. Exceeding a limit answers `resource-exhausted`.
+Sliding windows stored in `rateLimits/{bucket}` (`server/src/rateLimit.ts`). The bucket id is `<callable>_<kind>_<first 32 hex of HMAC-SHA256(k, callable|kind|key)>` with `k = HKDF-SHA256(LINK_CODE_HMAC_KEY, salt empty, info "sprout/rate-limit/v1", 32 bytes)` (D-M8-44), so uids, IP addresses and code ids are never stored in clear, and without the server's key an IP address cannot be found again by trying every IPv4 address. Rotating `LINK_CODE_HMAC_KEY` starts every bucket afresh (at most an hour's worth of limits). A refused call is not recorded. Exceeding a limit answers `resource-exhausted`.
 
 | Callable | Per uid | Per IP | Other |
 |---|---|---|---|
@@ -311,7 +316,65 @@ openssl rand -base64 32 | tr -d '\n' | npx vercel@64.7.0 env add LINK_CODE_HMAC_
 npx vercel@64.7.0 --prod                                  # build (npm run build) and deploy
 ```
 
-`vercel.json` sets no framework (plain functions), `npm ci` and `npm run build`, region `fra1`, `maxDuration` 300 s for `api/index.ts`, and rewrites every path to it; `public/` holds only `robots.txt`, so no source file is served statically. The production URL (`https://<project>.vercel.app` or a custom domain) is the release build's functions base URL. Smoke check after a deploy: the `curl` above against the production URL answers `401 UNAUTHENTICATED` (no App Check token).
+`vercel.json` sets no framework (plain functions), `npm ci` and `npm run build && npm run check:deploy`, region `fra1`, `maxDuration` 300 s for `api/index.ts`, and rewrites every path to it except the static pages below; `public/` holds only those pages, so no source file is served statically. The production URL (`https://<project>.vercel.app` or a custom domain) is the release build's functions base URL. Smoke check after a deploy: the `curl` above against the production URL answers `401 UNAUTHENTICATED` (no App Check token), and the static pages answer as below.
+
+### Static pages (privacy policy, security policy, security.txt)
+
+Vercel's CDN serves `server/public/` directly (D-M8-1, D-M8-13); the rewrite to the function excludes these paths:
+
+| Path | File | Made by |
+|---|---|---|
+| `/privacy` (`/privacy/`) | `public/privacy/index.html` | `tools/privacy/render.py` from `docs/PRIVACY.md` |
+| `/security` (`/security/`) | `public/security/index.html` | `tools/privacy/render.py` from `docs/SECURITY.md` |
+| `/.well-known/security.txt`, `/security.txt` | `public/.well-known/security.txt`, `public/security.txt` (identical, RFC 9116) | `npm run build:static` in `server/` |
+| `/robots.txt` | `public/robots.txt` (`Disallow: /`) | committed |
+
+Every static response carries `Cache-Control: public, max-age=3600`, `Content-Security-Policy: default-src 'none'; style-src 'unsafe-inline'; img-src data:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'`, `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer` and an explicit `Content-Type` (`text/html; charset=utf-8` or `text/plain; charset=utf-8`), set in `vercel.json`'s `headers`. `server/src/static.ts` defines the same routes and headers and the Hono app serves them too (for `npm run dev` and the tests); `server/test/static.test.ts` checks `vercel.json` against it. The rendered pages add their own stricter meta CSP (the stylesheet by hash).
+
+`npm run build:static` reads `docs/privacy.properties` (gitignored), or `docs/privacy.properties.example` when it does not exist: `Contact` from `SECURITY_CONTACT` (else `CONTACT_EMAIL`), `Canonical` and `Policy` (`https://<host>/security`) from `CANONICAL_HOST` (else the host of `PRIVACY_URL`), `Expires` = `EFFECTIVE_DATE` plus one year (or `SECURITY_TXT_EXPIRES`). The repository commits the example rendering (`npm run build:static -- --example`); CI's `npm run check:static` fails when it is stale.
+
+**Publishing the real pages.** The committed pages carry the example values (`example.invalid`, "to be filled"). Before a production deploy: fill `docs/privacy.properties`, `python3 tools/privacy/render.py --properties docs/privacy.properties --strict`, `cd server && npm run build:static`, then `npx vercel@64.7.0 --prod` from that working tree (the CLI uploads the local files). `npm run check:deploy`, run by Vercel's build for every deployment except previews and development builds (`VERCEL_ENV` `preview` or `development`; a missing `VERCEL_ENV` is checked, D-M8-48; `-- --force` checks a preview too), refuses the deploy when a page is missing, has `{{…}}`, "(to be filled)" or an example domain (`example.com|org|net`, `.example`, `.invalid`, `.test`), or `security.txt` is missing, differs between its two paths or has expired, and warns when `security.txt` expires within 60 days (`security.txt` lists both paths as `Canonical`). Afterwards restore the committed example pages (`git checkout server/public`). Verify: `curl -sI https://<host>/privacy` (200, the headers above) and `curl -s https://<host>/.well-known/security.txt`.
+
+### Operator script
+
+`server/scripts/operator.ts` (D-M3-42, D-M8-7, D-M8-11, D-M8-12, D-M8-14, D-M8-43, D-M8-45) runs the household operations the app cannot do itself, with the Admin SDK. Run it from `server/` (`npm ci` first):
+
+```
+npm run operator -- recover-household --hid <hid> --new-parent-uid <uid> [--device <deviceId>] [--ticket <ref>] [--apply --device <deviceId> --confirm <hid>] [--production]
+npm run operator -- delete-household  --hid <hid> [--apply --confirm <hid>] [--production]
+npm run operator -- export-household  --hid <hid> --out <file> [--production]
+npm run operator -- prune-expired     [--apply] [--production]
+```
+
+- **Dry run by default.** Without `--apply` a command prints what it would change and writes nothing; `--apply` on a household command also needs `--confirm <hid>`. `export-household` only reads Firestore; it writes the bundle (as `exportHousehold`, without its 4 MB and 5,000-message limits) to a new file with mode 0600 and never overwrites one.
+- **Target.** Against the emulator when `SPROUT_EMULATOR=true`, a `demo-` project and both emulator host variables are set (`npm run dev`'s environment). Anything else is a real project, refused without `--production`; the first output line names the target and project.
+- **Credentials** (production): those of the server, `GOOGLE_APPLICATION_CREDENTIALS=<key file>` (simplest on a laptop) or `FIREBASE_SERVICE_ACCOUNT_JSON`, plus `FIREBASE_PROJECT_ID=sprout-3e1c7`. The `sprout-server` account's roles suffice. Create a key for the session and delete it afterwards (RUNBOOK §7's commands); never leave a key file in the repository.
+- **Output** is ids and counts only; errors from the libraries print their name and code, never their message. `--help` prints the usage and exits 0.
+- **`recover-household` safeguards** (D-M8-43, THREAT_MODEL T41): the dry run lists the household's parent devices with status and registration time; `--apply` needs the `--device` the dry run admits; a still-ACTIVE phone of the account is revoked only when the admitted phone registered 7 or more days ago (`--waiting-period-days` is for tests). With nothing PENDING it completes a session revocation an earlier run left unfinished.
+- **`delete-household`** prints the uids of Auth users it could not delete (D-M8-45): delete them in the console; a second run cannot find them.
+- What each command does: RUNBOOK §2 (`recover-household`) and §4 (`delete-household`, `export-household`, `prune-expired`).
+
+Against the emulators (from the repository root, emulators running as in "Local development"):
+
+```
+SPROUT_EMULATOR=true FIREBASE_PROJECT_ID=demo-sprout FIRESTORE_EMULATOR_HOST=127.0.0.1:8080 \
+  FIREBASE_AUTH_EMULATOR_HOST=127.0.0.1:9099 npm --prefix server run operator -- prune-expired
+```
+
+### Dependency audit
+
+`npm run audit` in `server/` and `firestore/` (CI backend job, SC-4, D-M8-10, D-M8-15) runs `npm audit` and fails on any **high or critical** advisory in the installed tree that is not excepted; moderate and low are reported only. Fix a finding by upgrading the dependency (regenerate the lockfile with `npm install`), or, when the fix is only in a transitive dependency that the direct one pins, with an exact `overrides` entry in `package.json` (as `firestore/` pins `@grpc/grpc-js`, D-M8-15), then run the tests.
+
+When neither is possible yet, add a reviewed exception to that package's `audit-exceptions.json`:
+
+```
+{ "exceptions": [
+  { "advisory": "GHSA-xxxx-xxxx-xxxx", "package": "<affected package>",
+    "reason": "why it cannot be exploited here (where the package runs, what input reaches it)",
+    "expires": "YYYY-MM-DD" } ] }
+```
+
+All four fields are required; `expires` at most 90 days ahead. An expired exception fails the audit again, and one no advisory matches is reported for removal. Each exception is a reviewed change (the PR says why), with a row in `docs/DECISIONS-PENDING.md`.
 
 ### Firestore rules and indexes
 
@@ -326,10 +389,23 @@ Deploy the indexes before relying on `revokeDevice` and kid chat: `revokeDevice`
 ## Production project checklist
 
 1. The Firebase project `sprout-3e1c7` stays on **Spark** (D-M3-29). Firestore location **`eur3`** (multi-region Europe), chosen when the database is created; it cannot be changed later (D-M3-8).
-2. Add the Android app `dev.kpetriv.sprout` (and the debug suffix if used), download `google-services.json` to `app/` (it is gitignored; never commit it; CI injects it from a secret). The app applies the `google-services` plugin only when the file exists.
+2. Add the Android app `dev.kpetriv.sprout` (and the debug suffix if used), download `google-services.json` to `app/` (it is gitignored; never commit it; CI's build job never has it, and the release workflow writes it from the `GOOGLE_SERVICES_JSON_B64` secret of the `release` environment). The app applies the `google-services` plugin only when the file exists.
 3. Enable Authentication providers: Google, and Anonymous (kid devices).
-4. App Check: register the app with the **Play Integrity** provider and **enforce** App Check for Firestore in the console; the server enforces it itself for the callables. Enforcement for Firestore is the second half of the blob budget (audit H2, D-M4-18): the rules cap a member at 60 chunks a day, App Check keeps clients that are not the app out.
+4. App Check: register the app with the **Play Integrity** provider (needs step 10's SHA-256 and step 11's link) and **enforce** App Check for Firestore in the console; the server enforces it itself for the callables. Enforcement for Firestore is the second half of the blob budget (audit H2, D-M4-18): the rules cap a member at 60 chunks a day, App Check keeps clients that are not the app out. Before enforcing, watch App Check → APIs → Cloud Firestore for a few days of internal-track use: nearly all requests should be *verified*. Smoke test after enforcing: a release build from the internal track still syncs (dashboard sync line), a debug build without a registered debug token no longer can (`PERMISSION_DENIED` in its sync line), and the rules tests still pass (`cd firestore && npm test`; enforcement is a console switch, the rules do not change).
 5. Create the server's service account (above), set the server environment in Vercel and deploy it; leave `ALLOW_UNATTESTED` unset.
-6. Firestore TTL policies: enable TTL on `expiresAt` for the collection groups `linkCodes`, `challenges` and `rateLimits`.
+6. Firestore TTL policies: enable TTL on `expiresAt` for the collection groups `linkCodes`, `challenges` and `rateLimits`:
+
+   ```
+   for c in linkCodes challenges rateLimits; do
+     gcloud firestore fields ttls update expiresAt --collection-group=$c --enable-ttl --project sprout-3e1c7
+   done
+   gcloud firestore fields ttls list --project sprout-3e1c7      # state ACTIVE once built
+   ```
+
+   TTL deletes run within about a day of expiry and count as document deletes against the free quota. `deletionRecords` and `recoveries` have no TTL field: they go after 12 months with `npm run operator -- prune-expired` (RUNBOOK §4), which also removes expired rows of the three TTL collections if TTL is not enabled.
 7. Deploy rules and indexes (above). Deploy credentials for CI, if rules ever deploy from CI, belong to a separate service account limited to rules and index administration (for example `roles/firebaserules.admin` and `roles/datastore.indexAdmin`) and live in GitHub Actions secrets, never in the repository.
-8. Set budget alerts and error alerting (Vercel's function logs and usage; T18, PLAN "Availability and operations"), and update `docs/PRIVACY.md` with the regions (Firestore `eur3`, server `fra1`).
+8. Usage and error alerting (T18, PLAN "Availability and operations"). Spark has no billing account, so it cannot overspend: quota exhaustion shows as `RESOURCE_EXHAUSTED` (sync backs off, RUNBOOK §6); watch Firebase console → Usage and billing. On Vercel: Settings → Billing → spend/usage notifications, and the function logs' error rate. If the project ever moves to Blaze, create a Cloud Billing budget (alerts at 50 %, 90 % and 100 %) **before** switching. `docs/PRIVACY.md` names the regions (Firestore `eur3`, server `fra1`).
+9. **Play App Signing.** Enrol when creating the app in the Play Console (the default): Google holds the **app signing key** and re-signs releases; we keep only the **upload key** (`tools/release/create-upload-keystore.sh`, D-M8-3). Play Console → Test and release → App integrity → App signing shows the app signing key's SHA-1 and SHA-256.
+10. **Register the SHA fingerprints** in Firebase console → Project settings → Your apps → `dev.kpetriv.sprout` → *Add fingerprint*: SHA-1 **and** SHA-256 of the **app signing key** (what users' installs are signed with), of the **upload key** (internal builds installed from a local AAB/APK) and of the **debug key** (`./gradlew :app:signingReport`). Google sign-in (Credential Manager) matches the installed signature's SHA-1 through the Android OAuth client that Firebase creates from these; Play Integrity's App Check provider needs the SHA-256. Download `google-services.json` again afterwards and update the release environment's secret: `base64 -i app/google-services.json | gh secret set GOOGLE_SERVICES_JSON_B64 --env release`.
+11. **Link the Play Console app to the Cloud project**: Play Console → App integrity → Play Integrity API → *Link a Cloud project* → `sprout-3e1c7`. Without the link, Play Integrity verdicts (and so App Check) fail for Play-installed builds.
+12. **OAuth web client id**: Google Cloud console → APIs & Services → Credentials → *Web client (auto created by Google Service)* (made when Google sign-in was enabled in step 3). Its client id is the server client id Credential Manager asks Google for: set it as `sprout.googleServerClientId` in `~/.gradle/gradle.properties` for local release builds and as the release workflow secret `SPROUT_GOOGLE_SERVER_CLIENT_ID`; the release configuration check refuses a release without it (D-M8-3). It is not a secret, but keep it out of the repository with the other per-project values.

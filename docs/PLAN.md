@@ -8,7 +8,7 @@ Kiril wants a Play-Store-ready Android app that demonstrates senior/lead-level e
 
 Decisions made:
 - **Concept:** a "family economy" app. Kids earn credits via chores and short brain games; credits convert to pocket money or screen time; parent runs budgets, allowances, savings goals, and a ledger. Parent↔kid chat. No device-locking in v1 (avoids Accessibility/UsageStats/overlay policy review).
-- **Backend:** Firebase (Auth, Firestore, Storage, App Check) on the free Spark plan, plus the Sprout server (`server/`, Hono on Vercel, speaking the Firebase callable protocol with the Admin SDK) for the privileged operations, because Spark has no Cloud Functions (D-M3-29, ADR-0007). Sync engine written against a `SyncTransport` interface so the transport can be swapped.
+- **Backend:** Firebase (Auth, Firestore, App Check; as built, encrypted media are Firestore chunks and Cloud Storage is not used, ADR-0008) on the free Spark plan, plus the Sprout server (`server/`, Hono on Vercel, speaking the Firebase callable protocol with the Admin SDK) for the privileged operations, because Spark has no Cloud Functions (D-M3-29, ADR-0007). Sync engine written against a `SyncTransport` interface so the transport can be swapped.
 - **App shape:** one app, two roles. Parent area behind PIN/biometric; kid mode on the kid's device, with an age-tiered UI.
 - **Play audience:** parents, 18+. Kid mode is a parent-configured feature. Keeps chat and generative AI outside the Families policy regime.
 - **Scope:** full showcase — Glance widget, Baseline Profiles + Macrobenchmark, screenshot tests, KMP-ready shared domain.
@@ -74,7 +74,7 @@ core/
   crypto/                    — Keystore-backed device keys, household key, signing, AES-GCM, Tink wrappers
   database/                  — Room (SQLCipher) entities, DAOs, projection cache, outbox, audit log
   sync/                      — JVM module: SyncEngine, DocumentEnvelope, ConflictResolver, SyncTransport interface (FakeSyncTransport in testFixtures)
-  sync-firebase/             — Firestore/Auth/AppCheck transport, callable client for the Sprout server (Storage from M4)
+  sync-firebase/             — Firestore/Auth/AppCheck transport, callable client for the Sprout server
   ai/                        — AiGateway interface + Gemini Nano impl + rules-based fallback
   designsystem/              — theme, tier-scaled tokens, components, previews
   ui/                        — shared composables (charts, balance jar/ring), window-size helpers
@@ -109,7 +109,7 @@ Documented in `docs/THREAT_MODEL.md` and `docs/CONTROLS.md` (controls mapped to 
 - Device linking: parent taps "link device" → the server's `createLinkCode` creates an 8-char code (crypto-random, 10-minute TTL, single use, rate-limited per uid and IP, stored as an HMAC). Kid device submits code + its attested device public key → the server validates, registers the key, sets claims. Code is never a URL and never logged.
 - Adding a second parent device requires approval on an existing parent device (public key fingerprint comparison and a signed approval; ADR-0007).
 - Firestore rules enforce: household membership, `authorUid == request.auth.uid` on every write, role-gated document types (kid cannot write approvals, rewards, allowance, kid profiles), immutable ledger events (no update/delete), schema validation of required fields. Rules tested in CI with the emulator.
-- App Check with Play Integrity on every Firebase call, enforced by the server on every callable and in Firestore/Storage from M8, so requests from repackaged or scripted clients are rejected.
+- App Check with Play Integrity on every Firebase call, enforced by the server on every callable and, once the owner switches it on before production, in Firestore (M8 release checklist), so requests from repackaged or scripted clients are rejected.
 
 **Anti-spoofing and tamper evidence**
 - Each device generates a P-256 key pair in Android Keystore (StrongBox when available, hardware-backed otherwise, `setUserAuthenticationRequired` for parent keys). Public key registered at link time; stored under the household's device list.
@@ -118,7 +118,7 @@ Documented in `docs/THREAT_MODEL.md` and `docs/CONTROLS.md` (controls mapped to 
 - Firestore rules reject writes whose `authorDeviceId` is not in the registered device list for that uid.
 
 **End-to-end encryption (chat + photos)**
-- Household chat key: X25519 agreement at link time between parent and kid device keys → HKDF → per-thread AES-256-GCM key; rotated on device removal. Messages and chore photos are encrypted on device; Firestore/Storage store ciphertext + routing metadata only.
+- Household chat key: X25519 agreement at link time between parent and kid device keys → HKDF → per-thread AES-256-GCM key; rotated on device removal. Messages and chore photos are encrypted on device; Firestore stores ciphertext (media as encrypted chunks) + routing metadata only.
 - Kindness check runs on plaintext on the kid's device before encryption; nothing leaves the device for AI.
 - Removing a device rotates keys; removed devices cannot read new messages.
 
@@ -130,7 +130,7 @@ Documented in `docs/THREAT_MODEL.md` and `docs/CONTROLS.md` (controls mapped to 
 **Transport and app hardening**
 - Firebase SDKs over TLS; Network Security Config forbids cleartext; no custom HTTP clients in v1.
 - R8 full mode, `debuggable=false`, no logging of PII (Timber release tree drops everything below WARN and a lint rule forbids logging models), StrictMode in debug.
-- No ads, no third-party analytics in v1. Crashlytics only with opt-in and PII scrubbing. Gemini Nano runs on device only.
+- No ads, no third-party analytics in v1. No crash reporting in v1 (Crashlytics was considered and not shipped; adding it needs a data-safety and privacy change, `docs/DATA_SAFETY.md`). Gemini Nano runs on device only.
 
 **Supply chain and change management**
 - Gradle dependency verification (`verification-metadata.xml`), Renovate with grouped PRs, OWASP Dependency-Check in CI, GitHub Actions pinned by SHA, branch protection with required CI, signed commits, CODEOWNERS.
@@ -140,7 +140,7 @@ Documented in `docs/THREAT_MODEL.md` and `docs/CONTROLS.md` (controls mapped to 
 **Privacy compliance (GDPR/UK GDPR, COPPA-adjacent)**
 - Data minimisation: kids are first name + avatar + birth month/year; no email, no location, no contacts, no advertising ID.
 - Lawful basis and consent captured at household creation; parent is the controller of the child's data in-app.
-- Right of access/portability: the server's `exportHousehold` returns a JSON bundle (a ledger CSV is derived on device). Right to erasure: `deleteHousehold` removes Firestore docs, Storage objects (from M4), Auth users, and writes a deletion audit record; local wipe on all devices on next sync.
+- Right of access/portability: the server's `exportHousehold` returns a JSON bundle (a ledger CSV is derived on device). Right to erasure: `deleteHousehold` removes Firestore docs (encrypted media chunks included), Auth users, and writes a deletion audit record; local wipe on all devices on next sync.
 - Retention policy: chat messages optional auto-delete after N days (parent setting); linking codes and audit logs with fixed TTL.
 - Privacy policy page + Play data-safety form generated from `docs/PRIVACY.md`; security.txt and a disclosure policy in the repo.
 
@@ -233,5 +233,6 @@ This session stays on Fable 5.1 as coordinator and quality gate. Implementation 
 
 - No Accessibility, UsageStats, overlay, or device-admin permissions in v1.
 - Target audience 18+; kid mode is a parent feature; no child accounts; kid mode collects first name/avatar/birth month only, chosen by the parent.
-- Camera permission only when attaching a chore photo; photos are E2EE in Storage under the household.
+- No camera permission: a chore photo is taken with the phone's camera app (`ActivityResultContracts.TakePicture`), and chat photos come from the system photo picker. Photos and voice notes are E2EE and stored as encrypted chunks in Firestore under the household (no Cloud Storage).
+- Permissions are checked against the Play data-safety answers in CI (`docs/DATA_SAFETY.md`, `tools/privacy/inventory.py`); the privacy policy is published from `docs/PRIVACY.md` (M8).
 - Device enforcement (v2, if ever) goes in an isolated module behind a feature flag and gets its own policy review.

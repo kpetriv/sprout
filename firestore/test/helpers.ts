@@ -78,6 +78,7 @@ export async function seed(env: RulesTestEnvironment): Promise<void> {
     await setDoc(doc(db, `challenges/${PARENT_UID}`), { hash: 'x' });
     await setDoc(doc(db, 'deletionRecords/r1'), { hidHash: 'x' });
     await setDoc(doc(db, 'rateLimits/b1'), { hits: [] });
+    await setDoc(doc(db, 'recoveries/r1'), { hidHash: 'x', deviceId: PENDING_DEVICE });
     await setDoc(doc(db, `userHouseholds/${PARENT_UID}`), { hid: HID });
   });
 }

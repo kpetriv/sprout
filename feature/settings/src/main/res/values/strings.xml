@@ -154,7 +154,17 @@
   <!-- About -->
   <string name="feature_settings_about_app">Sprout</string>
   <string name="feature_settings_about_tagline">A family economy: chores, pocket money, savings and screen time.</string>
-  <string name="feature_settings_about_version">Version %1$s</string>
+  <string name="feature_settings_about_version">Version</string>
+  <string name="feature_settings_about_version_value">%1$s (build %2$d)</string>
+  <string name="feature_settings_about_privacy_policy">Privacy policy</string>
+  <string name="feature_settings_about_privacy_policy_summary">What Sprout keeps, where, and for how long. Opens in your browser.</string>
+  <string name="feature_settings_about_security">Security and disclosure</string>
+  <string name="feature_settings_about_security_summary">How to report a security problem. Opens in your browser.</string>
+  <string name="feature_settings_about_licences">Open-source licences</string>
+  <string name="feature_settings_about_licences_summary">The libraries Sprout is built with</string>
+  <string name="feature_settings_licences_failed">The licence list couldn\'t be loaded.</string>
+  <string name="feature_settings_licences_no_licence">Licence not stated in the library\'s metadata</string>
+  <string name="feature_settings_message_link_not_opened">No app on this phone can open the link.</string>
   <string name="feature_settings_about_privacy">Kid profiles hold only a first name, an avatar and a birth month. Money is kept in a tamper-evident ledger on this device.</string>
 
   <!-- Household sections (M3) -->

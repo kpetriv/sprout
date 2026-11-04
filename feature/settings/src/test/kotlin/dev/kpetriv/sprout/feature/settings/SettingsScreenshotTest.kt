@@ -118,7 +118,12 @@ class SettingsScreenshotTest : ScreenshotTest(checkAccessibility = true) {
 
     @Test
     fun about() = screenshot.captureLightDark("settings_about") {
-        AboutScreen(appVersion = "1.0.0 (7)", onBack = {})
+        AboutScreen(SettingsPreviewData.about, onEvent = {}, onOpenLicences = {}, onBack = {})
+    }
+
+    @Test
+    fun `open-source licences`() = screenshot.captureLightDark("settings_about_licences") {
+        OpenSourceLicencesScreen(SettingsPreviewData.about, onEvent = {}, onBack = {})
     }
 
     @Test

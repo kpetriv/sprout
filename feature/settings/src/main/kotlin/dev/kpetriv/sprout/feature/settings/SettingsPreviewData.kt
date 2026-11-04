@@ -32,6 +32,37 @@ object SettingsPreviewData {
     val leo = Kid(KidId("kid-leo"), household, "Leo", "avatar-2", YearMonth(2017, 6), KidUiTier.SPROUT)
     val zoe = Kid(KidId("kid-zoe"), household, "Zoe", "avatar-3", YearMonth(2013, 9), KidUiTier.SPROUT)
 
+    /** About on a tagged release build, with a short licence list. */
+    val about: AboutUiState = AboutUiState(
+        versionName = "1.0.0",
+        versionCode = 128,
+        hasPrivacyPolicy = true,
+        hasSecurityPolicy = true,
+        libraries = listOf(
+            OpenSourceLibrary(
+                name = "Activity",
+                module = "androidx.activity:activity",
+                version = "1.13.0",
+                url = "https://developer.android.com/jetpack/androidx/releases/activity",
+                licences = listOf(LicenceLink("Apache-2.0", "https://www.apache.org/licenses/LICENSE-2.0")),
+            ),
+            OpenSourceLibrary(
+                name = "SQLCipher for Android",
+                module = "net.zetetic:sqlcipher-android",
+                version = "4.20.0",
+                url = "https://www.zetetic.net/sqlcipher/",
+                licences = listOf(LicenceLink("BSD-3-Clause", "https://www.zetetic.net/sqlcipher/license/")),
+            ),
+            OpenSourceLibrary(
+                name = "Timber",
+                module = "com.jakewharton.timber:timber",
+                version = "5.0.1",
+                url = null,
+                licences = emptyList(),
+            ),
+        ),
+    )
+
     /** A phone that supports Gemini Nano before the parent agreed to the download. */
     fun ai(status: AiModelStatus = AiModelStatus.DOWNLOADABLE): AiSettingsUiState = AiSettingsUiState(
         isLoading = false,
@@ -199,4 +230,10 @@ private fun ParentSecurityPreview() {
             onBack = {},
         )
     }
+}
+
+@Preview
+@Composable
+private fun AboutPreview() {
+    SproutTheme { AboutScreen(SettingsPreviewData.about, onEvent = {}, onOpenLicences = {}, onBack = {}) }
 }

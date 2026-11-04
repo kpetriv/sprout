@@ -85,14 +85,18 @@ class OutboxSyncTriggerTest {
 
     @Test
     fun aRowBehindAHeadInBackoffDoesNotJumpTheQueue() = runTest {
+        // A due row behind a head that is still backing off does not jump the queue: the wake-up follows the head's
+        // time. Both rows exist before the trigger subscribes, so the check does not depend on when Room delivers an
+        // invalidation (the insert-after-subscribe variant was timing-dependent under CI load).
         database.outboxDao().insert(row("e1:h1", nextAttemptAt = clock.now() + 30.minutes))
+        database.outboxDao().insert(row("e2:h2"))
         trigger.requests().test {
-            // A later row behind a head that is still backing off does not jump the queue.
-            database.outboxDao().insert(row("e2:h2"))
             awaitHeadRead()
             expectNoEvents()
+            advanceTimeBy(29.minutes)
+            expectNoEvents()
             clock.advanceBy(31.minutes)
-            database.outboxDao().insert(row("e3:h3"))
+            advanceTimeBy(2.minutes)
             awaitItem()
             cancelAndIgnoreRemainingEvents()
         }

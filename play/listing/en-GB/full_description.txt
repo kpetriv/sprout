@@ -1,0 +1,31 @@
+Sprout is a family economy for parents and kids. Kids earn credits by doing chores and playing short brain games, then spend them on pocket money, screen time or rewards you choose. You run the allowances, savings goals and rewards, and every credit and debit lands in a ledger that shows who did what, on which phone, and when.
+
+One app, two roles. The parent area sits behind a PIN or your fingerprint. Kid mode runs on your child's own phone with a layout that grows with them:
+• Seedling (about 5 to 7): a coin jar, picture chores, preset messages and voice notes, read aloud.
+• Sprout (about 8 to 11): real money, goals, due dates and a kindness check before sending a message.
+• Sapling (12 and up): the full ledger with filters, interest explained, proposing chores and a wishlist.
+
+FOR PARENTS
+• Chores, one-off or recurring, that earn money, screen time or both; approve submissions with an optional photo.
+• Weekly or monthly allowance, savings goals and optional interest to show how saving grows.
+• A dashboard of every child's balance, time and goals, with a weekly summary written on your phone.
+• A rewards catalogue: screen time, treats and outings, priced in credits.
+• Approve each money payment with your fingerprint, so nobody else can award credits from your phone.
+• Tablets and foldables: list and detail side by side.
+
+FOR KIDS
+• Today's chores and a big "Done!" button.
+• A wallet and a shop that show what they can afford and how long until they can.
+• Brain games (numbers, memory, word scramble) with a small daily credit.
+• A screen-time bank they start and stop themselves. Sprout records screen time; it does not lock the phone.
+• Chat with their parent, end-to-end encrypted.
+
+PRIVACY AND SECURITY
+• Made for parents (18+). Children do not create accounts; you decide what Sprout holds about them: a first name, an avatar, and a birth month and year.
+• Chat messages, voice notes and photos are end-to-end encrypted: we cannot read them.
+• Every ledger entry is signed and chained, so changes are detectable.
+• The data on each phone is encrypted, and the parent area is locked when you leave it.
+• AI features (chore ideas, the weekly summary, the kindness check, reading a receipt) run on your phone. Nothing you type or photograph is sent anywhere for AI.
+• No ads, no advertising ID, no tracking. Export everything as a zip file, or delete your household, at any time from the app.
+
+Sprout syncs your family's phones through Google Firebase in Europe. Read the privacy policy before you sign up.
