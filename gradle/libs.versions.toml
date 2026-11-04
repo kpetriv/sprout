@@ -59,6 +59,9 @@ kotlinxSerialization = "1.12.0"
 hilt = "2.60.1"
 firebaseBom = "35.1.0"
 googleServices = "4.5.0"
+# Gradle Play Publisher (M8, D-M8-5): the release workflow's optional upload to the internal track. Applied by app;
+# its tasks do nothing unless Play credentials are given (ANDROID_PUBLISHER_CREDENTIALS).
+playPublisher = "4.1.1"
 # Google sign-in for parents (core/sync-firebase FirebaseAuthSession): Credential Manager + the Google ID token option.
 androidxCredentials = "1.6.0"
 googleId = "1.2.1"
@@ -197,6 +200,7 @@ dependency-check = { id = "org.owasp.dependencycheck", version.ref = "dependency
 roborazzi = { id = "io.github.takahirom.roborazzi", version.ref = "roborazzi" }
 # Applied by app only when app/google-services.json exists (D-M3-1); never in CI.
 google-services = { id = "com.google.gms.google-services", version.ref = "googleServices" }
+play-publisher = { id = "com.github.triplet.play", version.ref = "playPublisher" }
 
 # Convention plugins (build-logic)
 sprout-android-application = { id = "sprout.android.application" }

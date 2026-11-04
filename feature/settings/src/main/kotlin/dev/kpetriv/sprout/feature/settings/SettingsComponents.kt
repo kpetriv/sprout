@@ -121,6 +121,7 @@ private fun SettingsMessage.textRes(): Int = when (this) {
     SettingsMessage.SAVE_FAILED -> R.string.feature_settings_message_save_failed
     SettingsMessage.NOT_CONFIRMED -> R.string.feature_settings_data_message_not_confirmed
     SettingsMessage.POLICY_NOT_SYNCED -> R.string.feature_settings_policy_not_synced
+    SettingsMessage.LINK_NOT_OPENED -> R.string.feature_settings_message_link_not_opened
 }
 
 /** Loading spinner or load error, shared by the sections. Returns true when it drew something. */

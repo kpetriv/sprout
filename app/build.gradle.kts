@@ -1,4 +1,6 @@
 import com.android.build.api.artifact.SingleArtifact
+import com.github.triplet.gradle.androidpublisher.ReleaseStatus
+import java.net.URI
 import javax.xml.parsers.DocumentBuilderFactory
 
 plugins {
@@ -8,6 +10,8 @@ plugins {
     alias(libs.plugins.baselineprofile)
     // Robolectric, Compose UI test and Roborazzi for the shell's goldens (M7 §7) and SecureAreaTest.
     alias(libs.plugins.sprout.android.screenshot)
+    // The release workflow's optional upload to the internal track (D-M8-5); off without Play credentials (below).
+    alias(libs.plugins.play.publisher)
 }
 
 /**
@@ -58,9 +62,47 @@ val functionsBaseUrl: String? = providers.gradleProperty("sprout.functionsBaseUr
 val googleServerClientId: String? = providers.gradleProperty("sprout.googleServerClientId").orNull
 
 /**
- * Release builds must be shippable (audit Low 5): an https callable base URL (`sprout.functionsBaseUrl`; release never
- * falls back to Cloud Functions) and `app/google-services.json`. `bundleRelease` (the Play artifact) fails without
- * them unless `-Psprout.allowUnconfiguredRelease=true`; `assembleRelease` (part of `build`, never shipped) does not.
+ * The hosted privacy policy (About → "Privacy policy", M8 §1): `sprout.privacyUrl`, by default the Sprout server's
+ * `/privacy` page (`<sprout.functionsBaseUrl>/privacy`, D-M8-1). Debug builds fall back to the local server's.
+ */
+val privacyUrl: String? = providers.gradleProperty("sprout.privacyUrl").orNull
+    ?: functionsBaseUrl?.let { it.trimEnd('/') + "/privacy" }
+
+/**
+ * The disclosure policy (About → "Security and disclosure"): `sprout.securityUrl`, by default the `/security` page on
+ * the privacy page's host (the Sprout server serves it next to `/privacy` and `/.well-known/security.txt`).
+ */
+val securityUrl: String? = providers.gradleProperty("sprout.securityUrl").orNull
+    ?: privacyUrl?.let { url -> runCatching { URI(url) }.getOrNull()?.let { "${it.scheme}://${it.rawAuthority}" } }
+        ?.let { "$it/security" }
+
+/**
+ * The upload key that signs release bundles (D-M8-3). Each value comes from its environment variable, else from its
+ * Gradle property (for example in `~/.gradle/gradle.properties`); nothing is committed. The keystore path may be
+ * absolute, start with `~/`, or be relative to the repository root. The owner creates the keystore with
+ * `tools/release/create-upload-keystore.sh`; the release workflow writes it from a secret to the runner.
+ */
+val uploadSigningVariables = listOf(
+    "SPROUT_UPLOAD_KEYSTORE" to "sprout.upload.keystore",
+    "SPROUT_UPLOAD_KEYSTORE_PASSWORD" to "sprout.upload.keystorePassword",
+    "SPROUT_UPLOAD_KEY_ALIAS" to "sprout.upload.keyAlias",
+    "SPROUT_UPLOAD_KEY_PASSWORD" to "sprout.upload.keyPassword",
+)
+val uploadSigning: Map<String, String?> = uploadSigningVariables.associate { (variable, property) ->
+    variable to (providers.environmentVariable(variable).orNull ?: providers.gradleProperty(property).orNull)
+        ?.takeIf(String::isNotBlank)
+}
+val uploadKeystore: File? = uploadSigning["SPROUT_UPLOAD_KEYSTORE"]?.let { path ->
+    if (path.startsWith("~/")) File(System.getProperty("user.home"), path.removePrefix("~/")) else rootDir.resolve(path)
+}
+val uploadSigningReady: Boolean = uploadSigning.values.all { it != null } && uploadKeystore?.isFile == true
+
+/**
+ * Release builds must be shippable (audit Low 5, D-M8-3): an https callable base URL (`sprout.functionsBaseUrl`;
+ * release never falls back to Cloud Functions), `app/google-services.json`, the OAuth web client id, https privacy and
+ * security URLs, and the upload key. `bundleRelease` (the Play artifact) fails without them unless
+ * `-Psprout.allowUnconfiguredRelease=true` (CI, never shipped); `assembleRelease` (part of `build`) does not check.
+ * Problems name the missing variable or property, never a value.
  */
 val allowUnconfiguredRelease: Boolean =
     providers.gradleProperty("sprout.allowUnconfiguredRelease").map(String::toBoolean).orElse(false).get()
@@ -69,6 +111,21 @@ val releaseConfigurationProblems: List<String> = buildList {
         add("sprout.functionsBaseUrl must be set to the server's https:// base URL")
     }
     if (!file("google-services.json").exists()) add("app/google-services.json is missing (docs/FIREBASE.md)")
+    if (googleServerClientId.isNullOrBlank()) {
+        add("sprout.googleServerClientId must be set to the OAuth web client id (docs/FIREBASE.md)")
+    }
+    if (privacyUrl?.startsWith("https://") != true) {
+        add("sprout.privacyUrl must be an https:// URL (default: <sprout.functionsBaseUrl>/privacy)")
+    }
+    if (securityUrl?.startsWith("https://") != true) {
+        add("sprout.securityUrl must be an https:// URL (default: /security on the privacy page's host)")
+    }
+    uploadSigningVariables.forEach { (variable, property) ->
+        if (uploadSigning[variable] == null) add("$variable (or -P$property) is not set")
+    }
+    if (uploadSigning["SPROUT_UPLOAD_KEYSTORE"] != null && uploadKeystore?.isFile != true) {
+        add("SPROUT_UPLOAD_KEYSTORE does not name an existing keystore file")
+    }
 }
 val checkReleaseConfiguration = tasks.register("checkReleaseConfiguration") {
     description = "Fails a release build that is not configured for the real backend."
@@ -85,6 +142,7 @@ val checkReleaseConfiguration = tasks.register("checkReleaseConfiguration") {
 }
 tasks.configureEach {
     // A local Play bundle runs the release checks too, not only CI's `check` (audit 2 I-a).
+    // checkReleaseMapping and checkReleaseAppCheck are wired by the application convention plugin (ReleaseChecks.kt).
     if (name == "bundleRelease") dependsOn(checkReleaseConfiguration, "checkMergedManifestForTelemetryRelease")
 }
 
@@ -162,8 +220,7 @@ android {
 
     defaultConfig {
         applicationId = "dev.kpetriv.sprout"
-        versionCode = 1
-        versionName = "0.1.0"
+        // versionName and versionCode come from git (build-logic Versioning.kt, D-M8-4).
         buildConfigField("String", "GOOGLE_SERVER_CLIENT_ID", googleServerClientId.asBuildConfigString())
         // True only in the benchmark build types (D-M7-3): BenchmarkSeed reads it.
         buildConfigField("boolean", "BENCHMARK", "false")
@@ -178,6 +235,17 @@ android {
     // Robolectric (PlanScheduledActionsWorkerTest) reads the merged resources.
     testOptions.unitTests.isIncludeAndroidResources = true
 
+    // Only when every upload-key value is present (D-M8-3); otherwise release bundles are unsigned and
+    // checkReleaseConfiguration stops bundleRelease.
+    if (uploadSigningReady) {
+        signingConfigs.create("release") {
+            storeFile = uploadKeystore
+            storePassword = uploadSigning["SPROUT_UPLOAD_KEYSTORE_PASSWORD"]
+            keyAlias = uploadSigning["SPROUT_UPLOAD_KEY_ALIAS"]
+            keyPassword = uploadSigning["SPROUT_UPLOAD_KEY_PASSWORD"]
+        }
+    }
+
     buildTypes {
         debug {
             // Debug builds talk to the local Firebase Emulator Suite only (cleartext allowed to it, src/debug).
@@ -187,10 +255,20 @@ android {
                 "FUNCTIONS_BASE_URL",
                 (functionsBaseUrl ?: "http://$firebaseEmulatorHost:8787").asBuildConfigString(),
             )
+            val localServer = "http://$firebaseEmulatorHost:8787"
+            buildConfigField("String", "PRIVACY_URL", (privacyUrl ?: "$localServer/privacy").asBuildConfigString())
+            buildConfigField(
+                "String",
+                "SECURITY_URL",
+                (securityUrl ?: "$localServer/security").asBuildConfigString(),
+            )
         }
         release {
             buildConfigField("String", "FIREBASE_EMULATOR_HOST", "null")
             buildConfigField("String", "FUNCTIONS_BASE_URL", functionsBaseUrl.asBuildConfigString())
+            buildConfigField("String", "PRIVACY_URL", privacyUrl.asBuildConfigString())
+            buildConfigField("String", "SECURITY_URL", securityUrl.asBuildConfigString())
+            if (uploadSigningReady) signingConfig = signingConfigs.getByName("release")
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(
@@ -214,6 +292,16 @@ android {
             }
         }
     }
+}
+
+// Gradle Play Publisher (D-M8-5): only the release workflow uses it, to upload the bundle it built to the internal
+// track as a draft (`publishReleaseBundle --artifact-dir`). Its tasks exist only when the Play service account's JSON
+// is in `ANDROID_PUBLISHER_CREDENTIALS`. Play takes the first upload of a new app only through the console.
+play {
+    enabled.set(providers.environmentVariable("ANDROID_PUBLISHER_CREDENTIALS").map(String::isNotBlank).orElse(false))
+    track.set("internal")
+    defaultToAppBundles.set(true)
+    releaseStatus.set(ReleaseStatus.DRAFT)
 }
 
 baselineProfile {

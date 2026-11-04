@@ -32,7 +32,6 @@ import androidx.navigation3.runtime.entryProvider
 import androidx.navigation3.runtime.rememberNavBackStack
 import androidx.navigation3.runtime.rememberSaveableStateHolderNavEntryDecorator
 import androidx.navigation3.ui.NavDisplay
-import dev.kpetriv.sprout.BuildConfig
 import dev.kpetriv.sprout.chat.rememberReadAloud
 import dev.kpetriv.sprout.core.domainledger.ParentAuthorizationRequester
 import dev.kpetriv.sprout.core.model.KidId
@@ -335,11 +334,10 @@ private fun EntryProviderScope<NavKey>.parentEntries(backStack: NavBackStack<Nav
     }
     entry<ShopKey> { key -> ShopRoute(kidId = key.kidId, mode = key.mode, onBack = pop) }
     entry<ApprovalsKey> { ApprovalsInboxRoute(onBack = pop) }
-    entry<SettingsKey> { SettingsRoute(onBack = pop, appVersion = BuildConfig.VERSION_NAME) }
+    entry<SettingsKey> { SettingsRoute(onBack = pop) }
     entry<DevicesKey> { key ->
         SettingsRoute(
             onBack = pop,
-            appVersion = BuildConfig.VERSION_NAME,
             initialSection = SettingsSection.DEVICES,
             reviewDeviceId = key.reviewDeviceId,
         )
@@ -347,14 +345,12 @@ private fun EntryProviderScope<NavKey>.parentEntries(backStack: NavBackStack<Nav
     entry<SecurityKey> {
         SettingsRoute(
             onBack = pop,
-            appVersion = BuildConfig.VERSION_NAME,
             initialSection = SettingsSection.PARENT_SECURITY,
         )
     }
     entry<AiSettingsKey> {
         SettingsRoute(
             onBack = pop,
-            appVersion = BuildConfig.VERSION_NAME,
             initialSection = SettingsSection.AI,
         )
     }

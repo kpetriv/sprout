@@ -43,9 +43,8 @@ import dev.kpetriv.sprout.core.ui.rememberWindowWidthClass
  * The settings feature: the hub and its sections, navigated inside this route (system back returns to the hub).
  * Must sit behind the parent lock. The app binds [PinChanger], [ParentKeyRegistrar], [LockPreferences],
  * [AiSettingsSource] and the household ports ([DeviceAdmin], [KidLinking], [AccountControl], [HouseholdData],
- * [ExportWriter]).
+ * [ExportWriter]) and About's ([AppBuildInfo], [UrlOpener], [OpenSourceLicences]).
  *
- * @param appVersion shown in About (the app's `versionName`).
  * @param onBack leaves settings from the hub (or from [initialSection] when settings opened straight on it).
  * @param initialSection open this section directly (the dashboard's "New device waiting" opens Devices, the summary
  *   card's "Download the on-device model" opens [SettingsSection.AI]).
@@ -58,7 +57,6 @@ import dev.kpetriv.sprout.core.ui.rememberWindowWidthClass
 fun SettingsRoute(
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
-    appVersion: String = "",
     initialSection: SettingsSection? = null,
     reviewDeviceId: DeviceId? = null,
 ) {
@@ -97,7 +95,7 @@ fun SettingsRoute(
         }
 
         current != null -> { paneModifier ->
-            SectionRoute(current, closeSection, appVersion, reviewDeviceId, onLinkDevice, paneModifier)
+            SectionRoute(current, closeSection, reviewDeviceId, onLinkDevice, paneModifier)
         }
 
         else -> null
@@ -167,11 +165,9 @@ fun SettingsListDetail(
 private val ListPaneWidth = 360.dp
 
 @Composable
-@Suppress("LongParameterList") // What the sections need from the route.
 private fun SectionRoute(
     section: SettingsSection,
     onBack: () -> Unit,
-    appVersion: String,
     reviewDeviceId: DeviceId?,
     onLinkDevice: ((KidId, String) -> Unit)?,
     modifier: Modifier,
@@ -186,7 +182,7 @@ private fun SectionRoute(
         SettingsSection.ACCOUNT -> AccountRoute(onBack = onBack, modifier = modifier)
         SettingsSection.DATA -> DataRoute(onBack = onBack, modifier = modifier)
         SettingsSection.AI -> AiSettingsRoute(onBack = onBack, modifier = modifier)
-        SettingsSection.ABOUT -> AboutScreen(appVersion = appVersion, onBack = onBack, modifier = modifier)
+        SettingsSection.ABOUT -> AboutRoute(onBack = onBack, modifier = modifier)
     }
 }
 
@@ -227,31 +223,6 @@ fun SettingsScreen(
                     ),
                 )
             }
-        }
-    }
-}
-
-/** Version and privacy notes. */
-@Composable
-fun AboutScreen(appVersion: String, onBack: () -> Unit, modifier: Modifier = Modifier) {
-    SettingsScaffold(
-        title = stringResource(R.string.feature_settings_section_about),
-        onBack = onBack,
-        modifier = modifier,
-    ) {
-        Column(
-            modifier = Modifier.padding(it).sectionPadding(),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            Text(stringResource(R.string.feature_settings_about_app), style = MaterialTheme.typography.headlineSmall)
-            Text(stringResource(R.string.feature_settings_about_tagline), style = MaterialTheme.typography.bodyLarge)
-            if (appVersion.isNotBlank()) {
-                Text(
-                    stringResource(R.string.feature_settings_about_version, appVersion),
-                    style = MaterialTheme.typography.bodyMedium,
-                )
-            }
-            Text(stringResource(R.string.feature_settings_about_privacy), style = MaterialTheme.typography.bodyMedium)
         }
     }
 }

@@ -97,6 +97,9 @@ enum class SettingsMessage {
 
     /** This phone has no household policy yet, so it does not write one (D-M7-57). */
     POLICY_NOT_SYNCED,
+
+    /** Nothing on this phone could open a web link (About). */
+    LINK_NOT_OPENED,
 }
 
 /** How long a section's state flow keeps its upstream after the screen stops collecting (rotation survives). */

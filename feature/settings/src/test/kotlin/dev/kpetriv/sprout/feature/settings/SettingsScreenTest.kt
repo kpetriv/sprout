@@ -423,16 +423,91 @@ class SettingsScreenTest {
                 selected = selected,
                 onOpen = { opened += it },
                 onBack = {},
-                detail = selected?.let { { modifier -> AboutScreen("1.0", onBack = {}, modifier = modifier) } },
+                detail = selected?.let {
+                    { modifier ->
+                        AboutScreen(
+                            SettingsPreviewData.about,
+                            onEvent = {},
+                            onOpenLicences = {},
+                            onBack = {},
+                            modifier = modifier,
+                        )
+                    }
+                },
             )
         }
 
         compose.onNodeWithText("Choose a section").assertIsDisplayed()
         compose.onNodeWithText("About").performScrollTo().performClick()
         selected = SettingsSection.ABOUT
-        compose.onNodeWithText("Version 1.0").assertIsDisplayed()
+        compose.onNodeWithText("1.0.0 (build 128)").assertIsDisplayed()
         compose.onNode(hasText("Version and privacy")).assertIsSelected()
         compose.onNodeWithText("Kids").assertIsNotSelected()
         assertEquals(listOf(SettingsSection.ABOUT), opened)
+    }
+
+    @Test
+    fun `About opens the policies and the licences and shows the build number`() {
+        val events = mutableListOf<AboutEvent>()
+        var licencesOpened = false
+        show {
+            AboutScreen(
+                SettingsPreviewData.about,
+                onEvent = { events += it },
+                onOpenLicences = { licencesOpened = true },
+                onBack = {},
+            )
+        }
+
+        compose.onNodeWithText("Privacy policy").performClick()
+        compose.onNodeWithText("Security and disclosure").performClick()
+        compose.onNodeWithText("Open-source licences").performClick()
+        compose.onNodeWithText("Version").assertIsDisplayed()
+        compose.onNodeWithText("1.0.0 (build 128)").assertIsDisplayed()
+        assertEquals(listOf(AboutEvent.OpenPrivacyPolicy, AboutEvent.OpenSecurityPolicy), events)
+        assertTrue(licencesOpened)
+    }
+
+    @Test
+    fun `About without configured policy pages shows no policy rows`() {
+        show {
+            AboutScreen(
+                SettingsPreviewData.about.copy(hasPrivacyPolicy = false, hasSecurityPolicy = false),
+                onEvent = {},
+                onOpenLicences = {},
+                onBack = {},
+            )
+        }
+
+        compose.onAllNodesWithText("Privacy policy").assertCountEquals(0)
+        compose.onAllNodesWithText("Security and disclosure").assertCountEquals(0)
+        compose.onNodeWithText("Open-source licences").assertIsDisplayed()
+    }
+
+    @Test
+    fun `the licences page lists each library and opens the ones with a link`() {
+        val events = mutableListOf<AboutEvent>()
+        val about = SettingsPreviewData.about
+        show { OpenSourceLicencesScreen(about, onEvent = { events += it }, onBack = {}) }
+
+        compose.onNodeWithText("androidx.activity:activity 1.13.0\nApache-2.0").assertIsDisplayed()
+        compose.onNodeWithText("Activity").performClick()
+        compose.onNodeWithText("Timber").performClick()
+        compose.onNodeWithText("com.jakewharton.timber:timber 5.0.1\nLicence not stated in the library's metadata")
+            .assertIsDisplayed()
+        assertEquals(listOf<AboutEvent>(AboutEvent.OpenLibrary(about.libraries!!.first())), events)
+    }
+
+    @Test
+    fun `the licences page says when the list could not be loaded`() {
+        show {
+            OpenSourceLicencesScreen(
+                AboutUiState(versionName = "1.0.0", licencesFailed = true),
+                onEvent = {},
+                onBack = {},
+            )
+        }
+
+        compose.onNodeWithText("The licence list couldn't be loaded.").assertIsDisplayed()
     }
 }
