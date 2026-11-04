@@ -2,15 +2,18 @@ package dev.kpetriv.sprout.feature.games
 
 import androidx.lifecycle.SavedStateHandle
 import dev.kpetriv.sprout.core.domainledger.Currency
+import dev.kpetriv.sprout.core.domainledger.GameCreditResult
 import dev.kpetriv.sprout.core.domainledger.Money
+import dev.kpetriv.sprout.core.games.GameCredit
 import dev.kpetriv.sprout.core.games.GameId
 import dev.kpetriv.sprout.core.games.GameKind
 import dev.kpetriv.sprout.core.games.Score
 import dev.kpetriv.sprout.core.model.KidId
 import dev.kpetriv.sprout.core.model.KidUiTier
-import dev.kpetriv.sprout.core.time.FakeClock
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.flow
@@ -20,7 +23,6 @@ import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.setMain
 import org.junit.rules.TestWatcher
 import org.junit.runner.Description
-import kotlin.time.Instant
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class MainDispatcherRule(val dispatcher: TestDispatcher = UnconfinedTestDispatcher()) : TestWatcher() {
@@ -32,9 +34,6 @@ class MainDispatcherRule(val dispatcher: TestDispatcher = UnconfinedTestDispatch
 object TestData {
     val gbp = Currency.Fiat("GBP")
     val kid = KidId("kid-leo")
-    val now: Instant = Instant.parse("2026-11-04T09:00:00Z")
-
-    fun clock() = FakeClock(now)
 
     fun handle(tier: KidUiTier, kind: GameKind) = SavedStateHandle(
         mapOf(
@@ -61,16 +60,31 @@ class FakeCreditSubmitter : GameCreditSubmitter {
 
     val calls = mutableListOf<Call>()
 
-    /** The next result; credits whatever was asked for with 20 left by default. */
-    var respond: suspend (GameId, Score) -> GameCreditResult = { _, score ->
-        GameCreditResult.Credited(Money(score.correct.toLong()), remainingAfter = Money(20))
+    /** Results that [submit] returned: a submit cancelled half-way never lands here. */
+    val completed = mutableListOf<GameCreditResult>()
+
+    /** The next result; credits what the score earns, in full, with 20 left by default. */
+    var respond: suspend (GameId, Score) -> GameCreditResult = { gameId, score ->
+        GameCreditResult.Credited(Money(checkNotNull(GameCredit.earned(gameId, score))), remainingAfter = Money(20))
     }
 
     override suspend fun submit(kidId: KidId, gameId: GameId, score: Score): GameCreditResult {
         calls += Call(kidId, gameId, score)
-        return respond(gameId, score)
+        return respond(gameId, score).also { completed += it }
     }
 }
+
+/** A [GameTimer] the test moves by hand. */
+class FakeGameTimer(var now: Long = 1_000L) : GameTimer {
+    override fun elapsedMillis(): Long = now
+
+    fun advanceBy(millis: Long) {
+        now += millis
+    }
+}
+
+/** The app's scope in tests: never cancelled by a ViewModel, runs on [dispatcher] (the test Main dispatcher). */
+fun creditScope(dispatcher: TestDispatcher) = GameCreditScope(CoroutineScope(SupervisorJob() + dispatcher))
 
 class FakeCapSource(initial: Money = Money(23)) : GameCapSource {
     val remaining = MutableStateFlow(initial)

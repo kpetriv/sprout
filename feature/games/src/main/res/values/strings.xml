@@ -54,7 +54,10 @@
 
   <string name="feature_games_memory_watch">Watch carefully!</string>
   <string name="feature_games_memory_tap">Now tap them in the same order</string>
-  <string name="feature_games_memory_hidden">Hidden</string>
+  <!-- The memory card while the sequence shows (one announcement, not one per symbol). -->
+  <string name="feature_games_memory_showing">Showing the order</string>
+  <!-- %1$s is the sequence, such as "cat, dog, sun". Announced once, when the sequence hides. -->
+  <string name="feature_games_memory_sequence">The order was %1$s</string>
   <plurals name="feature_games_memory_tapped">
     <item quantity="one">%1$d of %2$d tapped</item>
     <item quantity="other">%1$d of %2$d tapped</item>
@@ -81,6 +84,9 @@
   <string name="feature_games_clamped_seedling">That\'s all you can win today!</string>
   <string name="feature_games_capped">You\'ve earned all you can today. This one was for fun!</string>
   <string name="feature_games_capped_seedling">Nothing more to win today. This one was for fun!</string>
+  <string name="feature_games_nothing_earned">Nothing earned this time. This one was for fun!</string>
+  <string name="feature_games_nothing_earned_seedling">Nothing won this time. This one was for fun!</string>
+  <string name="feature_games_check_date">Check this phone\'s date, then try again.</string>
   <string name="feature_games_no_account">Ask a parent to set up your money. This one was for fun.</string>
   <string name="feature_games_refused">We couldn\'t save what you earned.</string>
   <string name="feature_games_saving">Saving…</string>

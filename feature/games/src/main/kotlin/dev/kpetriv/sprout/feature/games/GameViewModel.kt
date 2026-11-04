@@ -4,11 +4,13 @@ import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
+import dev.kpetriv.sprout.core.domainledger.AppendResult
+import dev.kpetriv.sprout.core.domainledger.GameCreditResult
 import dev.kpetriv.sprout.core.domainledger.Money
+import dev.kpetriv.sprout.core.domainledger.Violation
 import dev.kpetriv.sprout.core.games.ArithmeticRound
 import dev.kpetriv.sprout.core.games.Difficulty
 import dev.kpetriv.sprout.core.games.GameCatalogue
-import dev.kpetriv.sprout.core.games.GameCredit
 import dev.kpetriv.sprout.core.games.GameId
 import dev.kpetriv.sprout.core.games.GameKind
 import dev.kpetriv.sprout.core.games.GameScorer
@@ -20,8 +22,9 @@ import dev.kpetriv.sprout.core.games.Symbol
 import dev.kpetriv.sprout.core.games.WordRound
 import dev.kpetriv.sprout.core.model.KidId
 import dev.kpetriv.sprout.core.model.KidUiTier
-import dev.kpetriv.sprout.core.time.Clock
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -40,9 +43,11 @@ import javax.inject.Inject
  * session is regenerated from the seed, so rotation and process death resume the same round, never a re-rolled one;
  * an answer in progress (taps, letters) starts over, and a memory round shows its sequence again.
  *
- * When the last round is answered the score goes to [GameCreditSubmitter] once. Its result is saved in the handle;
- * if the app stops while the credit is being saved, the restored result says so ([CreditUi.Unknown]) instead of
- * submitting the same play twice. Elapsed time per round comes from [Clock] (timed mode and its bonus).
+ * When the last round is answered the score goes to [GameCreditSubmitter] once, on the [GameCreditScope]: leaving
+ * the screen stops waiting for the credit but never cancels it (M5 review M1). Its result is saved in the handle; if
+ * the app stops while the credit is being saved, the restored result says so ([CreditUi.Unknown]) instead of
+ * submitting the same play twice. Elapsed time per round comes from the monotonic [GameTimer] (timed mode and its
+ * bonus), never the wall clock (M5 audit I2).
  */
 @HiltViewModel
 @Suppress("TooManyFunctions") // One small handler per kind of answer keeps each rule readable.
@@ -51,7 +56,8 @@ class GameViewModel @Inject constructor(
     private val submitter: GameCreditSubmitter,
     private val seeds: GameSeedSource,
     private val currency: GameCurrencySource,
-    private val clock: Clock,
+    private val timer: GameTimer,
+    private val creditScope: GameCreditScope,
 ) : ViewModel() {
     private val kidId = KidId(checkNotNull(handle.get<String>(KID_ID_KEY)) { "kidId argument missing" })
     private val tier = handle.get<String>(TIER_KEY)?.let(KidUiTier::valueOf) ?: KidUiTier.SEEDLING
@@ -174,15 +180,24 @@ class GameViewModel @Inject constructor(
     }
 
     private fun markRoundStart() {
-        handle[ROUND_STARTED_KEY] = clock.now().toEpochMilliseconds()
+        handle[ROUND_STARTED_KEY] = timer.elapsedMillis()
+    }
+
+    /**
+     * How long the current round has taken. A start later than now means the device rebooted mid-round (the timer
+     * restarts at zero), so the time is unknown and counts as over every limit; no start at all counts as zero.
+     */
+    private fun roundElapsed(): Long {
+        val startedAt = handle.get<Long>(ROUND_STARTED_KEY) ?: return 0L
+        val now = timer.elapsedMillis()
+        return if (now < startedAt) ELAPSED_UNKNOWN else now - startedAt
     }
 
     /** Records the current round's outcome and moves to the next round or, after the last, the result. */
     private fun record(correct: Boolean) {
         val current = session ?: return
         reveal?.cancel()
-        val startedAt = handle.get<Long>(ROUND_STARTED_KEY)
-        val elapsed = if (startedAt == null) 0L else (clock.now().toEpochMilliseconds() - startedAt).coerceAtLeast(0)
+        val elapsed = roundElapsed()
         handle.remove<Long>(ROUND_STARTED_KEY)
         val outcomes = outcomes() + RoundOutcome(correct, elapsed)
         saveOutcomes(outcomes)
@@ -201,10 +216,14 @@ class GameViewModel @Inject constructor(
     private fun submit(session: GameSession, score: Score) {
         if (submitting?.isActive == true) return
         handle[SUBMITTING_KEY] = true
+        val gameId = session.gameId
+        // On the app's scope and not cancellable: a cleared ViewModel stops waiting, the credit still lands.
+        val pending = creditScope.scope.async(NonCancellable) {
+            attempt { submitter.submit(kidId, gameId, score) }
+                .getOrElse { GameCreditResult.Refused(AppendResult.Rejected(SUBMIT_FAILED)) }
+        }
         submitting = viewModelScope.launch {
-            val result = attempt { submitter.submit(kidId, session.gameId, score) }
-                .getOrElse { GameCreditResult.Refused(SUBMIT_FAILED) }
-            val credit = creditOf(session.gameId, score, result)
+            val credit = creditOf(pending.await())
             saveCredit(credit)
             handle.remove<Boolean>(SUBMITTING_KEY)
             mutableState.value = result(score, credit)
@@ -225,7 +244,7 @@ class GameViewModel @Inject constructor(
     private fun retryCredit() {
         val current = session ?: return
         val result = mutableState.value as? GamePlayUiState.Result ?: return
-        if (result.credit != CreditUi.Refused) return
+        if (!result.credit.retryable) return
         handle.remove<String>(RESULT_KEY)
         mutableState.value = result.copy(credit = CreditUi.Submitting)
         submit(current, result.score)
@@ -292,7 +311,7 @@ class GameViewModel @Inject constructor(
     /** Ends the round once the answer is as long as the word; otherwise shows the answer so far. */
     private fun checkWord(ui: RoundUi.Word) {
         if (ui.answer.length == ui.round.word.length) {
-            record(ui.answer.equals(ui.round.word, ignoreCase = true))
+            record(ui.round.accepts(ui.answer))
         } else {
             updateWord { ui }
         }
@@ -344,9 +363,13 @@ class GameViewModel @Inject constructor(
 
             CreditUi.CapReached -> handle[RESULT_KEY] = RESULT_CAP_REACHED
 
+            CreditUi.NothingEarned -> handle[RESULT_KEY] = RESULT_NOTHING_EARNED
+
             CreditUi.NoAccount -> handle[RESULT_KEY] = RESULT_NO_ACCOUNT
 
             CreditUi.Refused -> handle[RESULT_KEY] = RESULT_REFUSED
+
+            CreditUi.CheckDate -> handle[RESULT_KEY] = RESULT_CHECK_DATE
 
             CreditUi.Submitting, CreditUi.Unknown -> handle.remove<String>(RESULT_KEY)
         }
@@ -361,9 +384,13 @@ class GameViewModel @Inject constructor(
 
         RESULT_CAP_REACHED -> CreditUi.CapReached
 
+        RESULT_NOTHING_EARNED -> CreditUi.NothingEarned
+
         RESULT_NO_ACCOUNT -> CreditUi.NoAccount
 
         RESULT_REFUSED -> CreditUi.Refused
+
+        RESULT_CHECK_DATE -> CreditUi.CheckDate
 
         else -> null
     }
@@ -384,7 +411,7 @@ class GameViewModel @Inject constructor(
         const val CORRECT_KEY: String = "play.correct"
         const val ELAPSED_KEY: String = "play.elapsedMs"
 
-        /** When the current round started taking answers (epoch milliseconds). */
+        /** When the current round started taking answers ([GameTimer] milliseconds, monotonic). */
         const val ROUND_STARTED_KEY: String = "play.roundStartedAt"
 
         /** Set while the credit is being saved; with no [RESULT_KEY] on restore, the outcome is unknown. */
@@ -415,11 +442,16 @@ class GameViewModel @Inject constructor(
 
         private const val RESULT_CREDITED = "credited"
         private const val RESULT_CAP_REACHED = "capReached"
+        private const val RESULT_NOTHING_EARNED = "nothingEarned"
         private const val RESULT_NO_ACCOUNT = "noAccount"
         private const val RESULT_REFUSED = "refused"
+        private const val RESULT_CHECK_DATE = "checkDate"
         private const val SUBMIT_FAILED = "submit failed"
         private const val MAX_ANSWER_DIGITS = 5
         private const val MINUS = '-'
+
+        /** A round whose time is unknown (the device rebooted mid-round): over every limit, so no timed bonus. */
+        private const val ELAPSED_UNKNOWN = Long.MAX_VALUE
 
         /** Digits with an optional leading minus (also accepts U+2212), at most [MAX_ANSWER_DIGITS] digits. */
         internal fun sanitizeAnswer(text: String): String {
@@ -440,19 +472,33 @@ class GameViewModel @Inject constructor(
             return used
         }
 
-        /** The result screen's view of [result]: a credit is [CreditUi.Credited.clamped] below what [score] earned. */
-        internal fun creditOf(gameId: GameId, score: Score, result: GameCreditResult): CreditUi = when (result) {
-            is GameCreditResult.Credited -> CreditUi.Credited(
-                amount = result.amount,
-                remainingAfter = result.remainingAfter,
-                clamped = result.amount.minorUnits < (GameCredit.earned(gameId, score) ?: 0L),
-            )
+        /**
+         * The result screen's view of [result] (the mapping in [GameCreditSubmitter]'s KDoc): a credit is
+         * [CreditUi.Credited.clamped] when it is less than the play earned; a zero credit was a play "for fun"; a
+         * refusal for the played-on date asks to check the phone's date.
+         */
+        internal fun creditOf(result: GameCreditResult): CreditUi = when (result) {
+            is GameCreditResult.Credited -> when {
+                result.amount.isPositive -> CreditUi.Credited(
+                    amount = result.amount,
+                    remainingAfter = result.remainingAfter,
+                    clamped = result.amount < result.earned,
+                )
+
+                result.remainingAfter.isPositive -> CreditUi.NothingEarned
+
+                else -> CreditUi.CapReached
+            }
 
             GameCreditResult.CapReached -> CreditUi.CapReached
 
             GameCreditResult.NoAccount -> CreditUi.NoAccount
 
-            is GameCreditResult.Refused -> CreditUi.Refused
+            is GameCreditResult.Refused -> if (result.isDeviceDate()) CreditUi.CheckDate else CreditUi.Refused
         }
+
+        /** Refused for the played-on date: the device's date is outside the household's window (D-M5-13). */
+        private fun GameCreditResult.Refused.isDeviceDate(): Boolean =
+            (result as? AppendResult.Rejected)?.violations.orEmpty().any { it is Violation.PlayedOnOutOfRange }
     }
 }

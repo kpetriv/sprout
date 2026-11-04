@@ -1,9 +1,16 @@
 package dev.kpetriv.sprout.feature.games
 
+import androidx.activity.OnBackPressedDispatcher
+import androidx.activity.compose.LocalOnBackPressedDispatcherOwner
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.test.SemanticsMatcher
+import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.hasContentDescription
@@ -32,6 +39,7 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertTrue
 
@@ -58,7 +66,8 @@ class GamesScreensTest {
             submitter = FakeCreditSubmitter(),
             seeds = FixedSeeds(SEED),
             currency = { TestData.gbp },
-            clock = TestData.clock(),
+            timer = FakeGameTimer(),
+            creditScope = creditScope(main.dispatcher),
         )
         compose.setContent {
             SproutTheme {
@@ -112,11 +121,58 @@ class GamesScreensTest {
         compose.onNodeWithText("Now tap them in the same order").assertIsDisplayed()
 
         symbol(round.sequence[0].label).performClick()
-        compose.onNodeWithContentDescription("1 of ${round.sequence.size} tapped").assertIsDisplayed()
+        compose.onNodeWithContentDescription("1 of ${round.sequence.size} tapped").assert(politeLiveRegion)
         symbol(round.sequence[2].label).performClick()
 
         compose.onNodeWithContentDescription("Round 2 of 8").assertIsDisplayed()
         assertEquals(2, assertIs<GamePlayUiState.Playing>(vm.state.value).roundNumber)
+    }
+
+    @Test
+    fun `the memory card announces the whole sequence once, when it hides`() {
+        play(KidUiTier.SAPLING, GameKind.MEMORY)
+        val round = session(KidUiTier.SAPLING, GameKind.MEMORY).rounds[0] as MemoryRound
+
+        // While the symbols appear the card's description does not change, so nothing is announced every 700 ms.
+        compose.onNodeWithContentDescription("Showing the order").assert(politeLiveRegion)
+        main.dispatcher.scheduler.advanceTimeBy(GameViewModel.SYMBOL_SHOW_MILLIS * 2 + 1)
+        compose.onNodeWithContentDescription("Showing the order").assertExists()
+        main.dispatcher.scheduler.advanceTimeBy(GameViewModel.SYMBOL_SHOW_MILLIS * round.sequence.size)
+
+        val sequence = round.sequence.joinToString(", ") { it.label }
+        compose.onNodeWithContentDescription("The order was $sequence").assert(politeLiveRegion)
+        compose.onNodeWithContentDescription("Showing the order").assertDoesNotExist()
+    }
+
+    @Test
+    fun `counting dots are described by their number`() {
+        val state = GamesPreviewData.arithmetic(KidUiTier.SEEDLING)
+        val dots = checkNotNull((state.round as RoundUi.Arithmetic).round.dots)
+        compose.setContent { SproutTheme { GamePlayScreen(state = state, onEvent = {}, onFinished = {}) } }
+
+        compose.onNodeWithContentDescription(if (dots == 1) "1 dot" else "$dots dots").assertIsDisplayed()
+    }
+
+    @Test
+    fun `back is disabled while the credit is saved`() {
+        var state: GamePlayUiState by mutableStateOf(
+            GamesPreviewData.resultCredited(KidUiTier.SPROUT).copy(credit = CreditUi.Submitting),
+        )
+        var backs = 0
+        var dispatcher: OnBackPressedDispatcher? = null
+        compose.setContent {
+            dispatcher = LocalOnBackPressedDispatcherOwner.current?.onBackPressedDispatcher
+            SproutTheme { GamePlayScreen(state = state, onEvent = {}, onFinished = {}, onBack = { backs++ }) }
+        }
+
+        compose.onNodeWithContentDescription("Back").assertIsNotEnabled()
+        compose.onNodeWithText("Done").assertIsNotEnabled()
+        assertTrue(checkNotNull(dispatcher).hasEnabledCallbacks(), "system back is taken while saving")
+
+        state = GamesPreviewData.resultCredited(KidUiTier.SPROUT)
+        compose.onNodeWithContentDescription("Back").assertIsEnabled().performClick()
+        assertEquals(1, backs)
+        assertFalse(checkNotNull(dispatcher).hasEnabledCallbacks(), "system back goes to navigation again")
     }
 
     @Test
@@ -208,7 +264,36 @@ class GamesScreensTest {
         compose.onNodeWithText("You can still earn £0.15 today").assertIsDisplayed()
     }
 
+    @Test
+    fun `a play that earned nothing, a clamped one and a date refusal say so`() {
+        val events = mutableListOf<GamePlayEvent>()
+        var state: GamePlayUiState by mutableStateOf(
+            GamesPreviewData.resultCredited(KidUiTier.SPROUT).copy(credit = CreditUi.NothingEarned),
+        )
+        compose.setContent {
+            SproutTheme { GamePlayScreen(state = state, onEvent = { events += it }, onFinished = {}) }
+        }
+
+        compose.onNodeWithText("Nothing earned this time. This one was for fun!").assertIsDisplayed()
+        compose.onNodeWithText("+£0.00", substring = true).assertDoesNotExist()
+        compose.onNodeWithText("Try again").assertDoesNotExist()
+
+        state = GamesPreviewData.resultCredited(KidUiTier.SEEDLING).copy(credit = CreditUi.NothingEarned)
+        compose.onNodeWithText("Nothing won this time. This one was for fun!").assertIsDisplayed()
+        compose.onNodeWithText("pennies", substring = true).assertDoesNotExist()
+
+        state = GamesPreviewData.resultClamped(KidUiTier.SPROUT)
+        compose.onNodeWithText("You reached today's limit, so this game earned +£0.04").assertIsDisplayed()
+
+        state = GamesPreviewData.resultCredited(KidUiTier.SPROUT).copy(credit = CreditUi.CheckDate)
+        compose.onNodeWithText("Check this phone's date, then try again.").assertIsDisplayed()
+        compose.onNodeWithText("Try again").performClick()
+        assertEquals(listOf<GamePlayEvent>(GamePlayEvent.RetryCredit), events)
+    }
+
     private companion object {
         const val SEED = 42L
+
+        val politeLiveRegion = SemanticsMatcher.expectValue(SemanticsProperties.LiveRegion, LiveRegionMode.Polite)
     }
 }

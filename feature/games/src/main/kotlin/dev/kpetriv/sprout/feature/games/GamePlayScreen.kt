@@ -1,6 +1,7 @@
 package dev.kpetriv.sprout.feature.games
 
 import android.os.Bundle
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.tween
@@ -81,7 +82,8 @@ fun GamePlayRoute(
 
 /**
  * One play inside [ProvideKidTier]: the start card (Sapling's "Timed" switch), a round of [ArithmeticGame],
- * [MemoryGame] or [WordGame] under a "3 of 8" progress line (and a time bar in timed mode), or the result.
+ * [MemoryGame] or [WordGame] under a "3 of 8" progress line (and a time bar in timed mode), or the result. While the
+ * result says "Saving…" both the top bar's back and system back are disabled (M5 review M1).
  */
 @Composable
 fun GamePlayScreen(
@@ -92,9 +94,12 @@ fun GamePlayScreen(
     onBack: () -> Unit = {},
     readAloud: ReadAloud = ReadAloud.None,
 ) {
+    // Leaving cannot cancel the credit any more (it runs on the app's scope), but the result is only shown here.
+    val saving = (state as? GamePlayUiState.Result)?.credit == CreditUi.Submitting
+    BackHandler(enabled = saving) { /* Wait for the credit: system back does nothing while it is saved. */ }
     Scaffold(
         modifier = modifier,
-        topBar = { GamesTopBar(title = gameName(state.kind), onBack = onBack) },
+        topBar = { GamesTopBar(title = gameName(state.kind), onBack = onBack, backEnabled = !saving) },
     ) { padding ->
         Box(modifier = Modifier.padding(padding).fillMaxSize()) {
             ProvideKidTier(state.tier) {

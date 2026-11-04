@@ -80,10 +80,16 @@ sealed interface RoundUi {
 
 /** What the finished play earned, as the result screen shows it. */
 sealed interface CreditUi {
+    /** Nothing was credited and the kid can try again ("Try again" on the result). */
+    val retryable: Boolean get() = false
+
     data object Submitting : CreditUi
 
-    /** [amount] was credited; it is [clamped] when it is less than the score earned (the daily cap). */
+    /** [amount] (> 0) was credited; it is [clamped] when it is less than the score earned (the daily cap). */
     data class Credited(val amount: Money, val remainingAfter: Money, val clamped: Boolean) : CreditUi
+
+    /** The play earned nothing (no round right): nothing was appended, it was for fun. Never shown as "+0". */
+    data object NothingEarned : CreditUi
 
     /** The daily cap was already reached: the play was for fun (D-M5-7). */
     data object CapReached : CreditUi
@@ -91,7 +97,14 @@ sealed interface CreditUi {
     data object NoAccount : CreditUi
 
     /** Nothing was credited; the kid can try again. */
-    data object Refused : CreditUi
+    data object Refused : CreditUi {
+        override val retryable: Boolean get() = true
+    }
+
+    /** Refused because the phone's date is off (D-M5-13): check it, then try again. */
+    data object CheckDate : CreditUi {
+        override val retryable: Boolean get() = true
+    }
 
     /** The app stopped while the credit was being saved; the wallet shows whether it landed. */
     data object Unknown : CreditUi

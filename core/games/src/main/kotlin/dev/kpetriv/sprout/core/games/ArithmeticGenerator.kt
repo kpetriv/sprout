@@ -79,7 +79,8 @@ internal object ArithmeticGenerator {
                 spokenPrompt = COUNTING_PROMPT,
                 operands = emptyList(),
                 answer = count,
-                choices = choices(count, emptyList(), countingRange, random),
+                // Zero is a choice too (not a count): otherwise one dot always offers the smallest choice.
+                choices = choices(count, emptyList(), seedlingRange, random),
                 dots = count,
             )
         }
@@ -206,12 +207,20 @@ internal object ArithmeticGenerator {
     /**
      * Four distinct options in [range] including [answer]: three distractors drawn from the [plausible] mistakes
      * (wrong operation, off by a ten or a table row) and near misses (±1..3), shuffled.
+     *
+     * The distractors are spread around the answer (M5 review L9): the answer's rank among the four (smallest,
+     * second, third, largest) is drawn evenly from the ranks the pool allows, then that many distractors are taken
+     * from below the answer and the rest from above. Only an answer at the edge of [range] (0, or 10 at Seedling) is
+     * always the smallest or largest choice.
      */
     private fun choices(answer: Int, plausible: List<Int>, range: IntRange, random: Random): List<Int> {
         val near = (1..NEAR_SPREAD).flatMap { listOf(answer + it, answer - it) }
         val pool = (plausible + near).filter { it in range && it != answer }.distinct()
-        val distractors = pool.shuffled(random).take(CHOICE_COUNT - 1)
-        check(distractors.size == CHOICE_COUNT - 1) { "Not enough distractors for $answer in $range" }
-        return (distractors + answer).shuffled(random)
+        val (below, above) = pool.shuffled(random).partition { it < answer }
+        val distractorCount = CHOICE_COUNT - 1
+        val ranks = (0..distractorCount).filter { rank -> rank <= below.size && distractorCount - rank <= above.size }
+        check(ranks.isNotEmpty()) { "Not enough distractors for $answer in $range" }
+        val rank = ranks.random(random)
+        return (below.take(rank) + above.take(distractorCount - rank) + answer).shuffled(random)
     }
 }

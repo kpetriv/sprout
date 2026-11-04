@@ -6,7 +6,9 @@ data class WordEntry(val word: String, val hint: String?)
 /**
  * The built-in word list (written for the app, no third-party source): common everyday English words, lower-case
  * ASCII, no duplicates. Sprout words are 4–6 letters with a category hint; Sapling words are 6–9 letters and have no
- * hint. The two bands share no words. Seedling has no word game, so its band is empty.
+ * hint. The two bands share no words, and no two listed words are anagrams of each other (`melon` and `canoe` were
+ * dropped for `lemon` and `ocean`), so a scramble has one listed answer (M5 review M2). Seedling has no word game,
+ * so its band is empty.
  */
 object WordList {
     private val sproutByHint: Map<String, String> = mapOf(
@@ -16,7 +18,7 @@ object WordList {
         """,
         "food" to """
             bread apple pear plum rice soup cake milk honey lemon mango pizza pasta salad cheese butter carrot
-            banana cherry grape melon peach bean corn toast cookie juice berry onion olive
+            banana cherry grape peach bean corn toast cookie juice berry onion olive
         """,
         "home" to """
             door roof room sofa lamp desk chair table sink bath clock spoon fork plate bowl towel pillow window
@@ -42,7 +44,7 @@ object WordList {
             book paper ruler glue chalk class pencil lesson crayon letter number
         """,
         "vehicle" to """
-            train plane boat bike truck ship tram taxi canoe wagon
+            train plane boat bike truck ship tram taxi wagon
         """,
         "colour" to """
             blue green pink black white brown purple orange yellow grey silver golden

@@ -48,4 +48,14 @@ data class MemoryRound(val sequence: List<Symbol>, val choices: List<Symbol>) : 
  */
 data class WordRound(val word: String, val scrambled: String, val hint: String?) : Round {
     override val kind: GameKind get() = GameKind.WORDS
+
+    /**
+     * Whether [answer] (any case) solves the round: [word] itself, or another listed word spelled with the same
+     * letters. The list has no such pairs ([WordList]), so this is belt and braces against one being added.
+     */
+    fun accepts(answer: String): Boolean {
+        val candidate = answer.lowercase()
+        if (candidate == word) return true
+        return candidate.toList().sorted() == word.toList().sorted() && WordList.all.any { it.word == candidate }
+    }
 }

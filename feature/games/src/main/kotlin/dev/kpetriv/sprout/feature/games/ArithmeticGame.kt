@@ -25,6 +25,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
@@ -44,9 +45,9 @@ private const val MAX_CHOICE_DOTS = 10
 private const val CHOICE_COLUMNS = 2
 
 /**
- * An arithmetic round. Seedling: big picture choices (a numeral over that many dots), dots to count, and the prompt
- * read aloud when it appears and when tapped. Sprout: four numeric choices. Sapling: a typed answer (with a minus
- * button, answers can be negative) checked on IME done or "Check".
+ * An arithmetic round. Seedling: big picture choices (a numeral over that many dots), dots to count (described to
+ * screen readers by their number), and the prompt read aloud when it appears and when tapped. Sprout: four numeric
+ * choices. Sapling: a typed answer (with a minus button, answers can be negative) checked on IME done or "Check".
  */
 @Composable
 internal fun ArithmeticGame(
@@ -104,11 +105,12 @@ private fun PromptCard(ui: RoundUi.Arithmetic, tier: KidUiTier, spoken: String, 
             }
             val dots = round.dots
             if (dots != null) {
-                // Counting is the game, so the dots are not described (the prompt is).
+                // TalkBack cannot count drawn dots, so the group says how many there are ("5 dots", review L8).
+                val dotsDescription = pluralStringResource(R.plurals.feature_games_dots, dots, dots)
                 FlowRow(
                     horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
-                    modifier = Modifier.clearAndSetSemantics { },
+                    modifier = Modifier.clearAndSetSemantics { contentDescription = dotsDescription },
                 ) {
                     repeat(dots) {
                         Text(text = "🔵", style = MaterialTheme.typography.headlineLarge)

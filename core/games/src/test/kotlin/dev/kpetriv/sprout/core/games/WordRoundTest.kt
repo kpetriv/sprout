@@ -3,6 +3,7 @@ package dev.kpetriv.sprout.core.games
 import kotlin.random.Random
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNotEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
@@ -69,6 +70,26 @@ class WordRoundTest {
         assertTrue(sapling.all { it.hint == null })
         assertTrue(WordList.forDifficulty(Difficulty.SEEDLING).isEmpty())
         assertEquals(sprout + sapling, WordList.all)
+    }
+
+    @Test
+    fun noTwoListedWordsAreAnagrams() {
+        val byLetters = WordList.all.groupBy { it.word.toList().sorted().joinToString("") }
+        assertEquals(emptyList(), byLetters.values.filter { it.size > 1 }.map { group -> group.map { it.word } })
+    }
+
+    @Test
+    fun aRoundAcceptsItsWordInAnyCaseAndNothingElse() {
+        val round = WordRound(word = "lemon", scrambled = "nmleo", hint = "food")
+        assertTrue(round.accepts("lemon"))
+        assertTrue(round.accepts("LEMON"))
+        assertFalse(round.accepts("melon"), "not a listed word")
+        assertFalse(round.accepts("nmleo"))
+        assertFalse(round.accepts("lemo"))
+        // Another listed word with the same letters would be accepted too.
+        val listed = WordList.all.first { it.word == "ocean" }.word
+        assertTrue(WordRound(word = "acnoe", scrambled = "eonca", hint = null).accepts(listed))
+        assertFalse(WordRound(word = "acnoe", scrambled = "eonca", hint = null).accepts("canoe"))
     }
 
     @Test

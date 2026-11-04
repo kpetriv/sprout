@@ -39,8 +39,8 @@ import dev.kpetriv.sprout.core.ui.TierScaledText
 import dev.kpetriv.sprout.core.ui.TierTextRole
 
 /**
- * A memory round. While the sequence shows (one more symbol every 700 ms) the choices are disabled and the symbols
- * shown so far are announced through a live region; then the sequence hides and the kid taps it back in order. A
+ * A memory round. While the sequence shows (one more symbol every 700 ms) the choices are disabled; then the sequence
+ * hides, a live region announces it once by name (for TalkBack), and the kid taps it back in order. A
  * wrong tap ends the round. Seedling plays pictures with read-aloud instructions; Sprout colours and shapes; Sapling
  * the same plus two distractors among the choices.
  */
@@ -80,19 +80,26 @@ internal fun MemoryGame(
 private fun SequenceCard(ui: RoundUi.Memory, tier: KidUiTier) {
     val sequence = ui.round.sequence
     val visible = if (ui.showing) sequence.take(ui.shownCount) else ui.tapped
-    val description = if (ui.showing) {
-        visible.joinToString(", ") { it.label }
-    } else {
-        pluralStringResource(R.plurals.feature_games_memory_tapped, sequence.size, ui.tapped.size, sequence.size)
+    // The live region changes once while the sequence shows (one symbol every 700 ms would outrun speech, review
+    // L8): when it hides, the whole sequence is announced by name; then each tap's progress.
+    val description = when {
+        ui.showing -> stringResource(R.string.feature_games_memory_showing)
+
+        ui.tapped.isEmpty() ->
+            stringResource(R.string.feature_games_memory_sequence, sequence.joinToString(", ") { it.label })
+
+        else -> {
+            val tapped = ui.tapped.size
+            pluralStringResource(R.plurals.feature_games_memory_tapped, tapped, tapped, sequence.size)
+        }
     }
-    val hidden = stringResource(R.string.feature_games_memory_hidden)
     Card(modifier = Modifier.fillMaxWidth()) {
         FlowRow(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(16.dp)
                 .clearAndSetSemantics {
-                    contentDescription = description.ifEmpty { hidden }
+                    contentDescription = description
                     liveRegion = LiveRegionMode.Polite
                 },
             horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally),

@@ -52,6 +52,20 @@ class GamesHubViewModelTest {
     }
 
     @Test
+    fun `a game credited elsewhere lowers what is left`() = runTest {
+        viewModel(KidUiTier.SAPLING).state.test {
+            assertEquals(Money(23), assertIs<GamesHubUiState.Ready>(expectMostRecentItem()).remaining)
+            // The cap reader re-emits after a game from another device is ingested (or the day rolls over).
+            cap.remaining.value = Money(8)
+            val ready = assertIs<GamesHubUiState.Ready>(awaitItem())
+            assertEquals(Money(8), ready.remaining)
+            assertFalse(ready.capReached)
+            cap.remaining.value = Money(50)
+            assertEquals(Money(50), assertIs<GamesHubUiState.Ready>(awaitItem()).remaining)
+        }
+    }
+
+    @Test
     fun `a failure shows the error, and retry loads again`() = runTest {
         cap.fail = true
         val vm = viewModel(KidUiTier.SPROUT)

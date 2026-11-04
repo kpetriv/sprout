@@ -44,7 +44,8 @@ class ArithmeticRoundTest {
             assertEquals("How many?", round.prompt)
             assertTrue(round.dots in 1..10, round.toString())
             assertEquals(round.dots, round.answer)
-            assertTrue(round.choices!!.all { it in 1..10 }, round.toString())
+            // Zero is offered as a wrong count, so one dot is not always the smallest choice.
+            assertTrue(round.choices!!.all { it in 0..10 }, round.toString())
             assertTrue(round.operands.isEmpty())
         }
         sums.forEach { round ->
@@ -52,6 +53,30 @@ class ArithmeticRoundTest {
             assertTrue(round.operands.all { it in 0..10 }, round.prompt)
         }
         assertTrue(sums.any { "+" in it.prompt } && sums.any { MINUS in it.prompt })
+    }
+
+    @Test
+    fun distractorsAreSpreadAroundTheAnswer() {
+        listOf(Difficulty.SEEDLING, Difficulty.SPROUT).forEach { difficulty ->
+            val all = rounds(difficulty)
+            // How many choices are below the answer: 0 means the answer is the smallest.
+            val ranks = all.map { round -> round.choices!!.count { it < round.answer } }
+            assertEquals(setOf(0, 1, 2, 3), ranks.toSet(), "$difficulty: the answer takes every rank")
+            ranks.groupingBy { it }.eachCount().forEach { (rank, count) ->
+                assertTrue(count > all.size / 8, "$difficulty: rank $rank only $count of ${all.size}")
+            }
+        }
+        val seedling = rounds(Difficulty.SEEDLING, seeds = 1_000)
+        listOf(1, 2).forEach { answer ->
+            val counting = seedling.filter { it.dots == answer }
+            assertTrue(counting.isNotEmpty(), "counting $answer occurs")
+            assertTrue(counting.any { round -> round.choices!!.any { it < answer } }, "$answer is not always smallest")
+            val sums = seedling.filter { it.dots == null && it.answer == answer }
+            assertTrue(sums.any { round -> round.choices!!.any { it < answer } }, "sum $answer is not always smallest")
+        }
+        rounds(Difficulty.SPROUT, seeds = 1_000).filter { it.answer in 1..2 }.let { small ->
+            assertTrue(small.isNotEmpty() && small.any { round -> round.choices!!.any { it < round.answer } })
+        }
     }
 
     @Test

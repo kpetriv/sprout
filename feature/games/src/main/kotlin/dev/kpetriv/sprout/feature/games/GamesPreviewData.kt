@@ -15,11 +15,13 @@ import dev.kpetriv.sprout.core.games.WordRound
 import dev.kpetriv.sprout.core.model.KidUiTier
 
 /** Fixed states for previews and screenshot tests: sessions come from one seed, so every run renders the same. */
+@Suppress("TooManyFunctions") // One small builder per screen state with a golden.
 internal object GamesPreviewData {
     const val SEED: Long = 2026L
     val gbp: Currency.Fiat = Currency.Fiat("GBP")
     private const val REMAINING = 23L
     private const val REMAINING_AFTER = 15L
+    private const val CLAMPED = 4L
 
     fun hub(tier: KidUiTier, remaining: Money = Money(REMAINING)): GamesHubUiState.Ready =
         GamesHubUiState.Ready(tier, GameCatalogue.forTier(tier), remaining, gbp)
@@ -80,6 +82,36 @@ internal object GamesPreviewData {
             currency = gbp,
         )
     }
+
+    /** The Sapling start card with the Timed switch on. */
+    fun startTimed(): GamePlayUiState.Start = GamePlayUiState.Start(
+        tier = KidUiTier.SAPLING,
+        kind = GameKind.ARITHMETIC,
+        rounds = GameCatalogue.rounds(GameId(GameKind.ARITHMETIC, Difficulty.SAPLING)),
+        timedAvailable = true,
+        timed = true,
+    )
+
+    /** A timed Sapling round: the time bar runs above the sum. */
+    fun arithmeticTimed(): GamePlayUiState.Playing = arithmetic(KidUiTier.SAPLING).copy(timed = true)
+
+    /** A perfect play clamped to the little that was left of today's cap. */
+    fun resultClamped(tier: KidUiTier): GamePlayUiState.Result {
+        val rounds = GameCatalogue.rounds(GameId(GameKind.ARITHMETIC, Difficulty.forTier(tier)))
+        return GamePlayUiState.Result(
+            tier = tier,
+            kind = GameKind.ARITHMETIC,
+            score = Score(correct = rounds, total = rounds, perfect = true, timedBonus = false),
+            credit = CreditUi.Credited(Money(CLAMPED), remainingAfter = Money.ZERO, clamped = true),
+            currency = gbp,
+        )
+    }
+
+    /** The ledger refused the credit: nothing was saved, "Try again". */
+    fun resultRefused(tier: KidUiTier): GamePlayUiState.Result = resultCredited(tier).copy(credit = CreditUi.Refused)
+
+    /** The app stopped while the credit was saved: the wallet will tell. */
+    fun resultUnknown(tier: KidUiTier): GamePlayUiState.Result = resultCredited(tier).copy(credit = CreditUi.Unknown)
 
     /** A perfect play after today's cap was reached: for fun. */
     fun resultCapped(tier: KidUiTier): GamePlayUiState.Result {

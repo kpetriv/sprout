@@ -1,18 +1,28 @@
 package dev.kpetriv.sprout.feature.games
 
 import androidx.lifecycle.SavedStateHandle
+import androidx.lifecycle.ViewModelProvider
+import androidx.lifecycle.ViewModelStore
+import androidx.lifecycle.viewmodel.initializer
+import androidx.lifecycle.viewmodel.viewModelFactory
+import dev.kpetriv.sprout.core.domainledger.AppendResult
+import dev.kpetriv.sprout.core.domainledger.GameCreditResult
 import dev.kpetriv.sprout.core.domainledger.Money
+import dev.kpetriv.sprout.core.domainledger.Violation
 import dev.kpetriv.sprout.core.games.ArithmeticRound
 import dev.kpetriv.sprout.core.games.Difficulty
+import dev.kpetriv.sprout.core.games.GameCredit
 import dev.kpetriv.sprout.core.games.GameId
 import dev.kpetriv.sprout.core.games.GameKind
 import dev.kpetriv.sprout.core.games.GameSession
 import dev.kpetriv.sprout.core.games.MemoryRound
 import dev.kpetriv.sprout.core.games.Score
 import dev.kpetriv.sprout.core.games.WordRound
+import dev.kpetriv.sprout.core.model.CalendarDate
 import dev.kpetriv.sprout.core.model.KidUiTier
-import dev.kpetriv.sprout.core.time.FakeClock
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runTest
 import org.junit.Rule
@@ -21,27 +31,28 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertTrue
-import kotlin.time.Duration.Companion.milliseconds
-import kotlin.time.Duration.Companion.seconds
 
 class GameViewModelTest {
     @get:Rule
     val main = MainDispatcherRule()
 
     private val submitter = FakeCreditSubmitter()
-    private val clock: FakeClock = TestData.clock()
+    private val timer = FakeGameTimer()
 
     private fun viewModel(
         tier: KidUiTier = KidUiTier.SPROUT,
         kind: GameKind = GameKind.ARITHMETIC,
         handle: SavedStateHandle = TestData.handle(tier, kind),
         seeds: GameSeedSource = FixedSeeds(SEED, OTHER_SEED),
+        submitter: GameCreditSubmitter = this.submitter,
+        timer: GameTimer = this.timer,
     ) = GameViewModel(
         handle = handle,
         submitter = submitter,
         seeds = seeds,
         currency = { TestData.gbp },
-        clock = clock,
+        timer = timer,
+        creditScope = creditScope(main.dispatcher),
     )
 
     private fun session(tier: KidUiTier, kind: GameKind, seed: Long = SEED, timed: Boolean = false) =
@@ -175,7 +186,7 @@ class GameViewModelTest {
         assertEquals(8_000L, vm.playing().timeLimitMs)
 
         repeat(10) {
-            clock.advanceBy(8.seconds) // the limit itself still counts as in time
+            timer.advanceBy(8_000) // the limit itself still counts as in time
             vm.answer(correct = true)
         }
 
@@ -190,12 +201,53 @@ class GameViewModelTest {
         vm.onEvent(GamePlayEvent.Start)
 
         repeat(10) { index ->
-            clock.advanceBy(if (index == 4) 8_001.milliseconds else 1.seconds)
+            timer.advanceBy(if (index == 4) 8_001L else 1_000L)
             vm.answer(correct = true)
         }
 
         val score = assertIs<GamePlayUiState.Result>(vm.state.value).score
         assertEquals(Score(correct = 10, total = 10, perfect = true, timedBonus = false), score)
+    }
+
+    @Test
+    fun `timed memory is measured from when the sequence hides`() = runTest {
+        val virtual = GameTimer { testScheduler.currentTime }
+        val handle = TestData.handle(KidUiTier.SAPLING, GameKind.MEMORY)
+        val vm = viewModel(KidUiTier.SAPLING, GameKind.MEMORY, handle = handle, timer = virtual)
+        val round = session(KidUiTier.SAPLING, GameKind.MEMORY, timed = true).rounds[0] as MemoryRound
+        vm.onEvent(GamePlayEvent.TimedChanged(true))
+        vm.onEvent(GamePlayEvent.Start)
+        val showing = GameViewModel.SYMBOL_SHOW_MILLIS * round.sequence.size
+
+        advanceTimeBy(showing + 1) // the sequence hides at `showing`
+        assertFalse((vm.playing().round as RoundUi.Memory).showing)
+        advanceTimeBy(2_999)
+        round.sequence.forEach { vm.onEvent(GamePlayEvent.TapSymbol(it)) }
+
+        assertEquals(2, vm.playing().roundNumber)
+        assertEquals(3_000L, handle.get<LongArray>(GameViewModel.ELAPSED_KEY)?.single(), "not ${showing + 3_000}")
+    }
+
+    @Test
+    fun `a resumed timed round keeps its start, and a reboot loses the timed bonus`() {
+        val handle = TestData.handle(KidUiTier.SAPLING, GameKind.ARITHMETIC)
+        val vm = viewModel(KidUiTier.SAPLING, handle = handle)
+        vm.onEvent(GamePlayEvent.TimedChanged(true))
+        vm.onEvent(GamePlayEvent.Start)
+        timer.advanceBy(5_000)
+
+        val resumedHandle = handle.restored()
+        val resumed = viewModel(KidUiTier.SAPLING, handle = resumedHandle)
+        timer.advanceBy(2_000)
+        resumed.answer(correct = true)
+        assertEquals(7_000L, resumedHandle.get<LongArray>(GameViewModel.ELAPSED_KEY)?.single())
+
+        // The monotonic timer restarts at zero on a reboot: that round's time is unknown, so no bonus.
+        val rebooted = viewModel(KidUiTier.SAPLING, handle = handle.restored(), timer = FakeGameTimer(now = 0L))
+        repeat(10) { rebooted.answer(correct = true) }
+        val score = assertIs<GamePlayUiState.Result>(rebooted.state.value).score
+        assertTrue(score.perfect)
+        assertFalse(score.timedBonus)
     }
 
     @Test
@@ -307,13 +359,119 @@ class GameViewModelTest {
         assertEquals(CreditUi.NoAccount, playThrough().credit)
 
         // A perfect Sprout play earns 8 + 3 = 11; only 4 were left today.
-        submitter.respond = { _, _ -> GameCreditResult.Credited(Money(4), Money(0)) }
+        submitter.respond = { _, _ -> GameCreditResult.Credited(Money(4), Money(0), earned = Money(11)) }
         assertEquals(CreditUi.Credited(Money(4), Money(0), clamped = true), playThrough().credit)
+
+        // In full: earned is what was credited.
+        submitter.respond = { _, _ -> GameCreditResult.Credited(Money(11), Money(0)) }
+        assertEquals(CreditUi.Credited(Money(11), Money(0), clamped = false), playThrough().credit)
+    }
+
+    @Test
+    fun `a play that earned nothing is for fun, never a zero credit`() {
+        assertEquals(
+            CreditUi.NothingEarned,
+            GameViewModel.creditOf(GameCreditResult.Credited(Money.ZERO, Money(50), earned = Money.ZERO)),
+        )
+        assertEquals(
+            CreditUi.CapReached,
+            GameViewModel.creditOf(GameCreditResult.Credited(Money.ZERO, Money.ZERO, earned = Money.ZERO)),
+            "nothing earned with nothing left reads as the cap reached",
+        )
+
+        val handle = TestData.handle(KidUiTier.SPROUT, GameKind.ARITHMETIC)
+        submitter.respond = { _, _ -> GameCreditResult.Credited(Money.ZERO, Money(50), earned = Money.ZERO) }
+        val vm = viewModel(handle = handle)
+        vm.onEvent(GamePlayEvent.Start)
+        while (vm.state.value is GamePlayUiState.Playing) vm.answer(correct = false)
+        assertEquals(CreditUi.NothingEarned, assertIs<GamePlayUiState.Result>(vm.state.value).credit)
+        assertEquals(CreditUi.NothingEarned, assertIs<GamePlayUiState.Result>(restore(handle).state.value).credit)
+        vm.onEvent(GamePlayEvent.RetryCredit)
+        assertEquals(1, submitter.calls.size, "nothing to retry")
+    }
+
+    @Test
+    fun `a refusal for the phone's date asks to check it and can be retried`() {
+        val today = CalendarDate(2026, 10, 1)
+        val serverDate = CalendarDate(2026, 11, 4)
+        val deviceDate = GameCreditResult.Refused(
+            AppendResult.Rejected("device date", listOf(Violation.PlayedOnOutOfRange(today, serverDate))),
+        )
+        assertEquals(CreditUi.CheckDate, GameViewModel.creditOf(deviceDate))
+        assertEquals(CreditUi.Refused, GameViewModel.creditOf(GameCreditResult.Refused(AppendResult.Duplicate)))
+
+        val handle = TestData.handle(KidUiTier.SPROUT, GameKind.ARITHMETIC)
+        submitter.respond = { _, _ -> deviceDate }
+        val vm = viewModel(handle = handle)
+        playThrough(vm)
+        assertEquals(CreditUi.CheckDate, assertIs<GamePlayUiState.Result>(vm.state.value).credit)
+        assertEquals(CreditUi.CheckDate, assertIs<GamePlayUiState.Result>(restore(handle).state.value).credit)
+
+        submitter.respond = { _, _ -> GameCreditResult.Credited(Money(11), Money(9)) }
+        vm.onEvent(GamePlayEvent.RetryCredit)
+        val credited = assertIs<GamePlayUiState.Result>(vm.state.value).credit
+        assertEquals(CreditUi.Credited(Money(11), Money(9), clamped = false), credited)
+        assertEquals(2, submitter.calls.size)
+    }
+
+    @Test
+    fun `leaving while the credit is saved does not cancel it`() {
+        val pending = CompletableDeferred<GameCreditResult>()
+        submitter.respond = { _, _ -> pending.await() }
+        val store = ViewModelStore()
+        val vm = ViewModelProvider(store, viewModelFactory { initializer { viewModel() } })[GameViewModel::class.java]
+        playThrough(vm)
+        assertEquals(CreditUi.Submitting, assertIs<GamePlayUiState.Result>(vm.state.value).credit)
+
+        store.clear() // back pressed: the entry is popped and its ViewModel cleared mid-submit
+        pending.complete(GameCreditResult.Credited(Money(11), Money(39)))
+
+        assertEquals(listOf<GameCreditResult>(GameCreditResult.Credited(Money(11), Money(39))), submitter.completed)
+        assertEquals(1, submitter.calls.size)
+    }
+
+    @Test
+    fun `plays racing for the last of the cap get one in full, one clamped, then for fun`() {
+        val gate = CompletableDeferred<Unit>()
+        val lock = Mutex()
+        var remaining = 15L
+        val ledger = FakeCreditSubmitter().apply {
+            // Like PlayGameUseCase: plays are serialised, each clamps to what the one before it left.
+            respond = { gameId, score ->
+                gate.await()
+                lock.withLock {
+                    val earned = checkNotNull(GameCredit.earned(gameId, score))
+                    val amount = minOf(earned, remaining)
+                    remaining -= amount
+                    if (amount == 0L) {
+                        GameCreditResult.CapReached
+                    } else {
+                        GameCreditResult.Credited(Money(amount), Money(remaining), Money(earned))
+                    }
+                }
+            }
+        }
+        val plays = List(3) { viewModel(submitter = ledger) }
+        plays.forEach { playThrough(it) }
+        assertTrue(plays.all { (it.state.value as GamePlayUiState.Result).credit == CreditUi.Submitting })
+
+        gate.complete(Unit)
+
+        val credits = plays.map { assertIs<GamePlayUiState.Result>(it.state.value).credit }
+        assertEquals(
+            setOf(
+                CreditUi.Credited(Money(11), Money(4), clamped = false),
+                CreditUi.Credited(Money(4), Money.ZERO, clamped = true),
+                CreditUi.CapReached,
+            ),
+            credits.toSet(),
+        )
+        assertEquals(0L, remaining)
     }
 
     @Test
     fun `a refused or failed credit can be retried`() = runTest {
-        submitter.respond = { _, _ -> GameCreditResult.Refused("rejected") }
+        submitter.respond = { _, _ -> GameCreditResult.Refused(AppendResult.Rejected("rejected")) }
         val vm = viewModel()
         playThrough(vm)
         assertEquals(CreditUi.Refused, assertIs<GamePlayUiState.Result>(vm.state.value).credit)
@@ -341,8 +499,8 @@ class GameViewModelTest {
         val restored = viewModel(handle = handle.restored())
 
         val result = assertIs<GamePlayUiState.Result>(restored.state.value)
-        // The fake credits one per correct round, less than the 11 a perfect play earns.
-        assertEquals(CreditUi.Credited(Money(8), Money(20), clamped = true), result.credit)
+        // A perfect Sprout play earns 8 + 3 = 11, credited in full.
+        assertEquals(CreditUi.Credited(Money(11), Money(20), clamped = false), result.credit)
         assertEquals(1, submitter.calls.size)
     }
 
@@ -387,6 +545,8 @@ class GameViewModelTest {
         vm.onEvent(GamePlayEvent.Start)
         assertIs<GamePlayUiState.Unavailable>(vm.state.value)
     }
+
+    private fun restore(handle: SavedStateHandle) = viewModel(handle = handle.restored())
 
     /** Plays a Sprout arithmetic game, every answer right. */
     private fun playThrough(vm: GameViewModel = viewModel()): GamePlayUiState.Result {

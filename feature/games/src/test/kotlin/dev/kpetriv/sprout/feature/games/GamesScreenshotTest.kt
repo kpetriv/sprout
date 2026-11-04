@@ -26,6 +26,23 @@ class GamesScreenshotTest : ScreenshotTest() {
     }
 
     @Test
+    fun `start card, sapling with the timed switch`() = screenshot.captureTiers(
+        "games_start_timed",
+        tiers = listOf(KidUiTier.SAPLING),
+    ) { _ ->
+        GamePlayScreen(state = GamesPreviewData.startTimed(), onEvent = {}, onFinished = {})
+    }
+
+    @Test
+    fun `timed round with its time bar`() {
+        // Hold the clock so the time bar is captured full rather than drained.
+        screenshot.compose.mainClock.autoAdvance = false
+        screenshot.captureTiers("games_arithmetic_timed", tiers = listOf(KidUiTier.SAPLING)) { _ ->
+            GamePlayScreen(state = GamesPreviewData.arithmeticTimed(), onEvent = {}, onFinished = {})
+        }
+    }
+
+    @Test
     fun `memory, sequence showing`() = screenshot.captureTiers("games_memory_showing") { tier ->
         GamePlayScreen(state = GamesPreviewData.memoryShowing(tier), onEvent = {}, onFinished = {}, readAloud = speech)
     }
@@ -56,6 +73,21 @@ class GamesScreenshotTest : ScreenshotTest() {
     @Test
     fun `result, cap reached`() = screenshot.captureTiers("games_result_capped") { tier ->
         GamePlayScreen(state = GamesPreviewData.resultCapped(tier), onEvent = {}, onFinished = {})
+    }
+
+    @Test
+    fun `result, clamped to the cap`() = screenshot.captureTiers("games_result_clamped") { tier ->
+        GamePlayScreen(state = GamesPreviewData.resultClamped(tier), onEvent = {}, onFinished = {})
+    }
+
+    @Test
+    fun `result, refused`() = screenshot.captureTiers("games_result_refused") { tier ->
+        GamePlayScreen(state = GamesPreviewData.resultRefused(tier), onEvent = {}, onFinished = {})
+    }
+
+    @Test
+    fun `result, unknown after process death`() = screenshot.captureTiers("games_result_unknown") { tier ->
+        GamePlayScreen(state = GamesPreviewData.resultUnknown(tier), onEvent = {}, onFinished = {})
     }
 
     private companion object {

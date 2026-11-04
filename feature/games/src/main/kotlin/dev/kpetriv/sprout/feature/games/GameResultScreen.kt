@@ -42,8 +42,9 @@ import dev.kpetriv.sprout.core.ui.rememberMoneyFormatter
 /**
  * The end of a play: the score ("You got 7 of 8!"), what it earned in tier language ("+8 pennies" / "You earned
  * +£0.08"), and "Play again" / "Done". [Confetti] plays for a perfect play or any credit, never when the cap was
- * already reached (that play was "for fun", D-M5-7). A clamped credit says the daily limit was reached; a refused one
- * offers a retry. Seedling hears the score and the credit once they are known.
+ * already reached (that play was "for fun", D-M5-7). A clamped credit says the daily limit was reached; a play that
+ * earned nothing is "for fun" too, never "+£0.00"; a refused one offers a retry (asking to check the phone's date
+ * first when that was the reason). Seedling hears the score and the credit once they are known.
  */
 @Composable
 internal fun GameResultContent(
@@ -95,30 +96,15 @@ private fun creditLines(state: GamePlayUiState.Result, formatter: MoneyFormatter
     return when (val credit = state.credit) {
         CreditUi.Submitting -> listOf(CreditLine(stringResource(R.string.feature_games_saving)))
 
-        is CreditUi.Credited -> {
-            val earned = creditEarned(credit.amount, state.currency, tier, formatter)
-            when {
-                seedling && credit.clamped -> listOf(
-                    CreditLine(earned, emphasis = true),
-                    CreditLine(stringResource(R.string.feature_games_clamped_seedling)),
-                )
+        is CreditUi.Credited -> creditedLines(credit, state, formatter)
 
-                seedling -> listOf(CreditLine(earned, emphasis = true))
-
-                credit.clamped -> listOf(CreditLine(stringResource(R.string.feature_games_clamped, earned)))
-
-                credit.remainingAfter.isPositive -> listOf(
-                    CreditLine(stringResource(R.string.feature_games_credited, earned), emphasis = true),
-                    CreditLine(
-                        stringResource(
-                            R.string.feature_games_remaining,
-                            creditAmount(credit.remainingAfter, state.currency, tier, formatter),
-                        ),
-                    ),
-                )
-
-                else -> listOf(CreditLine(stringResource(R.string.feature_games_credited, earned), emphasis = true))
+        CreditUi.NothingEarned -> {
+            val text = if (seedling) {
+                R.string.feature_games_nothing_earned_seedling
+            } else {
+                R.string.feature_games_nothing_earned
             }
+            listOf(CreditLine(stringResource(text)))
         }
 
         CreditUi.CapReached -> listOf(
@@ -131,7 +117,43 @@ private fun creditLines(state: GamePlayUiState.Result, formatter: MoneyFormatter
 
         CreditUi.Refused -> listOf(CreditLine(stringResource(R.string.feature_games_refused)))
 
+        CreditUi.CheckDate -> listOf(CreditLine(stringResource(R.string.feature_games_check_date)))
+
         CreditUi.Unknown -> listOf(CreditLine(stringResource(R.string.feature_games_unknown)))
+    }
+}
+
+/** A positive credit: in full with what is left today, or clamped to the cap; Seedling counts minor units. */
+@Composable
+private fun creditedLines(
+    credit: CreditUi.Credited,
+    state: GamePlayUiState.Result,
+    formatter: MoneyFormatter,
+): List<CreditLine> {
+    val tier = state.tier
+    val seedling = tier == KidUiTier.SEEDLING
+    val earned = creditEarned(credit.amount, state.currency, tier, formatter)
+    return when {
+        seedling && credit.clamped -> listOf(
+            CreditLine(earned, emphasis = true),
+            CreditLine(stringResource(R.string.feature_games_clamped_seedling)),
+        )
+
+        seedling -> listOf(CreditLine(earned, emphasis = true))
+
+        credit.clamped -> listOf(CreditLine(stringResource(R.string.feature_games_clamped, earned)))
+
+        credit.remainingAfter.isPositive -> listOf(
+            CreditLine(stringResource(R.string.feature_games_credited, earned), emphasis = true),
+            CreditLine(
+                stringResource(
+                    R.string.feature_games_remaining,
+                    creditAmount(credit.remainingAfter, state.currency, tier, formatter),
+                ),
+            ),
+        )
+
+        else -> listOf(CreditLine(stringResource(R.string.feature_games_credited, earned), emphasis = true))
     }
 }
 
@@ -153,7 +175,7 @@ private fun CreditBlock(credit: CreditUi, lines: List<CreditLine>, tier: KidUiTi
             )
         }
     }
-    if (credit == CreditUi.Refused) {
+    if (credit.retryable) {
         Button(onClick = { onEvent(GamePlayEvent.RetryCredit) }) {
             TierScaledText(text = stringResource(R.string.feature_games_retry), role = TierTextRole.Label, tier = tier)
         }

@@ -2,8 +2,9 @@ package dev.kpetriv.sprout.games
 
 import android.app.Application
 import dev.kpetriv.sprout.core.database.TestHousehold
+import dev.kpetriv.sprout.core.database.usecase.INVALID_SCORE_REJECTION
 import dev.kpetriv.sprout.core.domainledger.AppendResult
-import dev.kpetriv.sprout.core.domainledger.EventId
+import dev.kpetriv.sprout.core.domainledger.GameCreditResult
 import dev.kpetriv.sprout.core.domainledger.GamePlayed
 import dev.kpetriv.sprout.core.domainledger.Money
 import dev.kpetriv.sprout.core.domainledger.Violation
@@ -13,9 +14,6 @@ import dev.kpetriv.sprout.core.games.GameKind
 import dev.kpetriv.sprout.core.games.Score
 import dev.kpetriv.sprout.core.model.KidId
 import dev.kpetriv.sprout.feature.games.GameCapSource
-import dev.kpetriv.sprout.feature.games.GameCreditResult
-import dev.kpetriv.sprout.games.UseCaseGameCreditSubmitter.Companion.refusalCode
-import dev.kpetriv.sprout.games.UseCaseGameCreditSubmitter.Companion.toPort
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.runTest
 import org.junit.After
@@ -25,9 +23,12 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
 import kotlin.test.assertEquals
-import dev.kpetriv.sprout.core.domainledger.GameCreditResult as LedgerGameCreditResult
 
-/** The games adapters over a real Room household (the trial one): credit, clamp, cap and refusals end to end. */
+/**
+ * The games adapters over a real Room household (the trial one): credit, clamp, cap and refusals end to end. The
+ * device-date refusal's shape is pinned in core/database's `GameAuditRegressionTest`, and how the screen reads every
+ * result in feature/games' `GameViewModelTest`.
+ */
 @RunWith(RobolectricTestRunner::class)
 @Config(application = Application::class) // Not the Hilt app: its startup opens the encrypted database.
 class UseCaseGameCreditSubmitterTest {
@@ -55,7 +56,8 @@ class UseCaseGameCreditSubmitterTest {
         repeat(4) { assertEquals(GameCreditResult.Credited(Money(11), Money(DAILY_CAP - 11L * (it + 1))), play()) }
         assertEquals(Money(6), cap.observeRemaining(kidId).first())
 
-        assertEquals(GameCreditResult.Credited(Money(6), Money.ZERO), play(), "clamped to what is left")
+        val clamped = GameCreditResult.Credited(Money(6), Money.ZERO, earned = Money(11))
+        assertEquals(clamped, play(), "clamped to what is left, below what it earned")
         assertEquals(Money.ZERO, cap.observeRemaining(kidId).first())
         assertEquals(GameCreditResult.CapReached, play())
 
@@ -70,7 +72,8 @@ class UseCaseGameCreditSubmitterTest {
 
         val result = submitter.submit(kidId, sprout, Score(correct = 0, total = 8, perfect = false, timedBonus = false))
 
-        assertEquals(GameCreditResult.Credited(Money.ZERO, Money(DAILY_CAP)), result)
+        // The screen shows this as a play for fun, never "+£0.00".
+        assertEquals(GameCreditResult.Credited(Money.ZERO, Money(DAILY_CAP), earned = Money.ZERO), result)
         assertEquals(emptyList(), gamesPlayed())
         assertEquals(Money(DAILY_CAP), cap.observeRemaining(kidId).first())
     }
@@ -82,26 +85,10 @@ class UseCaseGameCreditSubmitterTest {
 
         household.addKid(kidId.value)
         val impossible = submitter.submit(kidId, sprout, Score(99, 8, perfect = true, timedBonus = false))
-        assertEquals(GameCreditResult.Refused("rejected:ScoreOutOfRange"), impossible)
+        val rejected = (impossible as GameCreditResult.Refused).result as AppendResult.Rejected
+        assertEquals(INVALID_SCORE_REJECTION, rejected.reason)
+        assertEquals(listOf<Violation>(Violation.ScoreOutOfRange(99, 8)), rejected.violations)
         assertEquals(emptyList(), gamesPlayed())
-    }
-
-    @Test
-    fun `ledger results map one to one and refusal codes carry no data`() {
-        assertEquals(
-            GameCreditResult.Credited(Money(4), Money(9)),
-            LedgerGameCreditResult.Credited(Money(4), Money(9), earned = Money(7)).toPort(),
-        )
-        assertEquals(GameCreditResult.CapReached, LedgerGameCreditResult.CapReached.toPort())
-        assertEquals(GameCreditResult.NoAccount, LedgerGameCreditResult.NoAccount.toPort())
-        val refused = LedgerGameCreditResult.Refused(
-            AppendResult.Rejected("daily game cap", listOf(Violation.GameCreditTooHigh(Money(3), Money(9)))),
-        ).toPort()
-        assertEquals(GameCreditResult.Refused("rejected:GameCreditTooHigh"), refused)
-        assertEquals("duplicate", refusalCode(AppendResult.Duplicate))
-        val eventId = EventId("00000000-0000-4000-8000-000000000001")
-        assertEquals("conflict", refusalCode(AppendResult.Conflict(eventId, "stored", "incoming")))
-        assertEquals("rejected:", refusalCode(AppendResult.Rejected("no reason given")))
     }
 
     private suspend fun play(): GameCreditResult = submitter.submit(kidId, sprout, perfect)

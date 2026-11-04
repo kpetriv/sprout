@@ -38,11 +38,11 @@ import dev.kpetriv.sprout.core.ui.ReadAloud
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-internal fun GamesTopBar(title: String, onBack: () -> Unit) {
+internal fun GamesTopBar(title: String, onBack: () -> Unit, backEnabled: Boolean = true) {
     TopAppBar(
         title = { Text(text = title, modifier = Modifier.semantics { heading() }) },
         navigationIcon = {
-            IconButton(onClick = onBack) {
+            IconButton(onClick = onBack, enabled = backEnabled) {
                 Icon(
                     painter = painterResource(R.drawable.feature_games_ic_arrow_back),
                     contentDescription = stringResource(R.string.feature_games_back),
