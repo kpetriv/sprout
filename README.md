@@ -126,7 +126,7 @@ Each milestone ends with green CI and a tagged build.
 | M3 Sync and identity | Sync engine, Firebase transport, App Check, Credential Manager, the Sprout server (Spark plan), Firestore rules and emulator tests, device registry with key attestation, controls matrix, runbook | Done |
 | M4 Chat and time bank | E2EE threads, key rotation, Seedling presets and voice notes, chore photo upload, time bank with an ongoing notification | In review |
 | M5 Games | Three games, tier difficulty, daily cap, signed scoring events | In review |
-| M6 AI | Gemini Nano integration, fallbacks, kindness check, suggestions, weekly summary | Planned |
+| M6 AI | Gemini Nano integration, fallbacks, kindness check, suggestions, weekly summary | In progress |
 | M7 Showcase polish | Glance widget, adaptive layouts, Baseline Profiles, full screenshot coverage, accessibility, retention, export/delete | Planned |
 | M8 Play release | Privacy policy, data-safety form, security review, app signing, staged tracks | Planned |
 
