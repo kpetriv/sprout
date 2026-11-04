@@ -195,7 +195,7 @@ A parent can download the household's data from Settings → Household data → 
 - `ledger.csv`: the ledger as a spreadsheet, made on the phone;
 - `chat/`: after the parent confirms with their fingerprint or parent PIN, each child's chat in readable form (`chat/<child>.json`: time, who wrote it, the text, preset or voice-note length), the photos and voice notes the phone can decrypt (`chat/media/`), and a list of any it could not include (`chat/missing.json`).
 
-The readable chat is decrypted on the parent's phone from its own copy and written straight into the file the parent chose; nothing readable is sent to us. Keep the file safe: it is no longer encrypted. Households above 4 MB of server data cannot be exported in one file yet; contact us and we will export it for you.
+The readable chat is decrypted on the parent's phone from its own copy (voice notes and photos the phone has not cached are fetched from our server still encrypted and decrypted on the phone) and written straight into the file the parent chose; nothing readable is sent to us. Keep the file safe: it is no longer encrypted. Households above 4 MB of server data cannot be exported in one file yet; contact us and we will export it for you.
 
 ## How to delete your account and data
 

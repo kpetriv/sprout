@@ -528,11 +528,14 @@ class SyncEngineTest {
             next = SyncCursor(mapOf("messages" to "1")),
             hasMore = false,
             messages = listOf(parent.message("m1", seq = 1, lamport = 3), parent.message("m2", seq = 2, lamport = 4)),
+            messageStamps = mapOf("m1" to Instant.fromEpochMilliseconds(1_000)),
         )
 
         val report = engine.syncOnce()
 
         assertEquals(listOf("pull", "registry", "documents", "events", "messages", "saveCursor", "retryHeld"), log)
+        // Each message's server stamp reaches the applier with it (D-M7-80).
+        assertEquals(mapOf("m1" to Instant.fromEpochMilliseconds(1_000)), recording.messageStamps)
         assertEquals(MessageApplyReport(applied = 2), report.pulled.messages)
         assertEquals(listOf("m1", "m2"), recording.messages().map { it.messageId.value })
         assertEquals(SyncCursor(mapOf("messages" to "1")), recording.cursor())

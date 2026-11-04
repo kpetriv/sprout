@@ -5,6 +5,7 @@ import dev.kpetriv.sprout.core.domainledger.RegisteredParentKey
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.serialization.json.JsonObject
+import kotlin.time.Instant
 
 /** A transport whose pull pages and push outcomes a test scripts; logs `pull` and `push` into [log]. */
 internal class ScriptedTransport(private val log: MutableList<String> = mutableListOf()) : SyncTransport {
@@ -86,9 +87,9 @@ internal class LoggingApplier(private val inner: RemoteApplier, private val log:
         return inner.applyEvents(events)
     }
 
-    override suspend fun applyMessages(messages: List<JsonObject>): MessageApplyReport {
+    override suspend fun applyMessages(messages: List<JsonObject>, stamps: Map<String, Instant>): MessageApplyReport {
         log += "messages"
-        return inner.applyMessages(messages)
+        return inner.applyMessages(messages, stamps)
     }
 
     override suspend fun retryHeld(): EventApplyReport {

@@ -84,7 +84,32 @@ class CredentialGateTest {
             syncs += 1
         },
         pause = pause,
+        widgets = { widgetRefreshes += 1 },
     )
+
+    private var widgetRefreshes = 0
+
+    @Test
+    fun `raising and lowering the gate redraw the widget, moves behind it do not`() = runTest {
+        status = Result.failure(IllegalStateException("offline"))
+        val gate = gate()
+        gate.credentialsLost()
+        assertEquals(GateState.Unreachable, gate.state.value)
+        assertEquals(1, widgetRefreshes, "blank while the gate is up (audit 2 N2)")
+
+        status = Result.success(GateDeviceStatus(DeviceStatusValue.ACTIVE, false))
+        gate.retry()
+        assertEquals(GateState.SignInRequired(emailPassword = true), gate.state.value)
+        auth.signIn = Result.failure(AuthException(AuthError.Network))
+        gate.signInWithEmailPassword("parent@example.test", "secret1")
+        gate.dismissFailure()
+        assertEquals(1, widgetRefreshes, "Unreachable, Checking, sign-in required, busy and a failure are all gated")
+
+        auth.signIn = Result.success(Unit)
+        gate.signInWithEmailPassword("parent@example.test", "secret1")
+        assertNull(gate.state.value)
+        assertEquals(2, widgetRefreshes, "the kid's data comes back once the gate is down")
+    }
 
     @Test
     fun `an ACTIVE device asks for a sign-in with the same account, then syncs before opening`() = runTest {

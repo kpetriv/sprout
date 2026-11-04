@@ -64,11 +64,12 @@ import kotlin.time.Instant
  *   A gap older than [HELD_GAP_TIMEOUT_MS] (its predecessor was quarantined, or never uploaded) is skipped: the
  *   author's expected `seq` jumps to its lowest held one (audited `MESSAGE_GAP_SKIPPED`) and the skipped range is
  *   remembered, so one bad message cannot stall a thread for ever. A gap a server prune explains is skipped at once
- *   (D-M7-53): the household's chat prune watermark ([applyChatPrune]) is later than when this device received the
- *   author's last stored message before the gap (or nothing of that author is stored here), so the missing messages
- *   may have been deleted before this device pulled them. Pulls are ordered by the server's stamp and an author
- *   uploads in `seq` order, so a missing message stored after the cut would already have come with the held one; if
- *   one still turns up, it is accepted late as for any skipped range.
+ *   (D-M7-53, D-M7-80), judged on the server's clock only: the household's chat prune watermark ([applyChatPrune])
+ *   is later than the server stamp (`serverReceivedAt`, kept on every pulled row) of the author's last stored
+ *   message before the gap; or nothing of the author is stored before it and the thread has no stored message at all,
+ *   or the watermark is later than the thread's earliest stored stamp. The missing messages may then have been
+ *   deleted before this device pulled them; a predecessor without a stamp explains nothing. This is an inference,
+ *   not a proof: if a missing message still turns up, it is accepted late as for any skipped range.
  * - **Quarantined**: audited `MESSAGE_QUARANTINED` (ids and reason only) and kept as a QUARANTINED row without
  *   ciphertext; a verified message with the same id replaces that row.
  *
@@ -100,25 +101,30 @@ internal class ChatApplier(
     private val threadKeys = database.threadKeyDao()
     private val keyStore = ThreadKeyStore(database)
 
-    /** See the class documentation. */
-    suspend fun applyMessages(trees: List<JsonObject>): MessageApplyReport = deviceClock.withLock {
-        database.withTransaction {
-            val session = database.sessionDao().get()?.toDomain()
-            if (session == null) {
-                MessageApplyReport()
-            } else {
-                val batch = Batch(session, deviceClock.current())
-                val decoded = trees.map { it to MessageJson.decodeOrNull(it) }
-                val (readable, broken) = decoded.partition { it.second != null }
-                for ((tree, _) in broken) batch.report += refuseUndecodable(batch, tree)
-                for ((_, envelope) in readable.sortedWith(ENVELOPE_ORDER)) {
-                    batch.report += process(batch, requireNotNull(envelope), held = null)
+    /**
+     * See the class documentation. [stamps] are the backend's `serverReceivedAt` stamps by `messageId`
+     * ([dev.kpetriv.sprout.core.sync.PullPage.messageStamps]), kept on each stored or held row (D-M7-80).
+     */
+    suspend fun applyMessages(trees: List<JsonObject>, stamps: Map<String, Instant> = emptyMap()): MessageApplyReport =
+        deviceClock.withLock {
+            database.withTransaction {
+                val session = database.sessionDao().get()?.toDomain()
+                if (session == null) {
+                    MessageApplyReport()
+                } else {
+                    val batch =
+                        Batch(session, deviceClock.current(), stamps.mapValues { it.value.toEpochMilliseconds() })
+                    val decoded = trees.map { it to MessageJson.decodeOrNull(it) }
+                    val (readable, broken) = decoded.partition { it.second != null }
+                    for ((tree, _) in broken) batch.report += refuseUndecodable(batch, tree)
+                    for ((_, envelope) in readable.sortedWith(ENVELOPE_ORDER)) {
+                        batch.report += process(batch, requireNotNull(envelope), held = null)
+                    }
+                    batch.report += releaseHeld(batch)
+                    batch.report
                 }
-                batch.report += releaseHeld(batch)
-                batch.report
             }
         }
-    }
 
     /** Verifies held messages again (the registry or the clock may have caught up) and skips expired gaps. */
     suspend fun retryHeld(): MessageApplyReport = deviceClock.withLock {
@@ -151,10 +157,18 @@ internal class ChatApplier(
     suspend fun expectedSeq(deviceId: DeviceId, threadId: ThreadId): Long =
         messages.seq(threadId.value, deviceId)?.nextSeq ?: 1
 
-    private inner class Batch(val session: Session, var localMax: Long) {
+    private inner class Batch(
+        val session: Session,
+        var localMax: Long,
+        private val stamps: Map<String, Long> = emptyMap(),
+    ) {
         val verifier = MessageVerifier(registry, check, maxLamportJump, session.householdId)
         val now: Long = clock.now().toEpochMilliseconds()
         var report = MessageApplyReport()
+
+        /** [envelope]'s server stamp: pulled with it in this batch, or kept on its [held] row. */
+        fun stampOf(envelope: MessageEnvelope, held: MessageEntity?): Long? =
+            stamps[envelope.messageId.value] ?: held?.serverReceivedAtEpochMs
     }
 
     private suspend fun refuseUndecodable(batch: Batch, tree: JsonObject): MessageApplyReport {
@@ -196,6 +210,7 @@ internal class ChatApplier(
         // Nothing usable stored for the seq: empty, or this very message's quarantined copy (a tampered relay).
         val free = stored == null ||
             (stored.status == MessageStatus.QUARANTINED && stored.messageId == envelope.messageId.value)
+        backfillStamp(stored, envelope, batch.stampOf(envelope, held))
         if (free && seqRow != null && SkippedRanges.contains(seqRow.skippedRanges, envelope.seq)) {
             return accept(batch, envelope, held, late = true)
         }
@@ -211,6 +226,17 @@ internal class ChatApplier(
         }
         held?.let { messages.delete(it.messageId) }
         return MessageApplyReport(duplicates = if (held == null) 1 else 0)
+    }
+
+    /**
+     * [stored], the same message as [envelope] stored without a server stamp (this device's own, back from the
+     * server, or a row stored before schema 9), gets [stamp] now (D-M7-80).
+     */
+    private suspend fun backfillStamp(stored: MessageEntity?, envelope: MessageEnvelope, stamp: Long?) {
+        val unstamped = stored?.takeIf {
+            it.messageId == envelope.messageId.value && it.serverReceivedAtEpochMs == null
+        }
+        if (unstamped != null && stamp != null) messages.upsert(unstamped.copy(serverReceivedAtEpochMs = stamp))
     }
 
     @Suppress("ReturnCount") // Out of order, then an id conflict, return early.
@@ -259,7 +285,8 @@ internal class ChatApplier(
             Opened.Locked, is Opened.Plain -> {
                 val plaintext = (opened as? Opened.Plain)?.bytes
                 val status = if (plaintext == null) MessageStatus.LOCKED else MessageStatus.RECEIVED
-                messages.upsert(MessageEntity.of(envelope, status, plaintext, null, batch.now, displayed, late))
+                val stamp = batch.stampOf(envelope, held)
+                messages.upsert(MessageEntity.of(envelope, status, plaintext, null, batch.now, displayed, late, stamp))
                 MessageApplyReport(applied = 1)
             }
         }
@@ -315,7 +342,17 @@ internal class ChatApplier(
         val sameSeqHeld = messages.heldAt(envelope.authorDeviceId, envelope.threadId.value, envelope.seq) > 0
         val known = (existing != null && existing.status != MessageStatus.QUARANTINED) || sameSeqHeld
         if (!known) {
-            messages.upsert(MessageEntity.of(envelope, MessageStatus.HELD, null, reason.name, batch.now))
+            val stamp = batch.stampOf(envelope, null)
+            messages.upsert(
+                MessageEntity.of(
+                    envelope,
+                    MessageStatus.HELD,
+                    null,
+                    reason.name,
+                    batch.now,
+                    serverReceivedAtEpochMs = stamp,
+                ),
+            )
             capHeld(envelope.authorDeviceId, batch.now)
         }
         return if (known) MessageApplyReport(duplicates = 1) else MessageApplyReport(held = 1)
@@ -345,7 +382,17 @@ internal class ChatApplier(
         held?.let { messages.delete(it.messageId) }
         val existing = messages.get(envelope.messageId.value)
         if (existing == null) {
-            messages.upsert(MessageEntity.of(envelope, MessageStatus.QUARANTINED, null, reason, batch.now))
+            val stamp = batch.stampOf(envelope, held)
+            messages.upsert(
+                MessageEntity.of(
+                    envelope,
+                    MessageStatus.QUARANTINED,
+                    null,
+                    reason,
+                    batch.now,
+                    serverReceivedAtEpochMs = stamp,
+                ),
+            )
         }
         audit(AuditAction.MESSAGE_QUARANTINED, envelope.authorDeviceId, envelope.messageId.value, batch.now) {
             put("threadId", envelope.threadId.value)
@@ -393,7 +440,7 @@ internal class ChatApplier(
             val lowest = rows.minOf { it.seq }
             val timedOut = now - rows.minOf { it.receivedAtEpochMs } > HELD_GAP_TIMEOUT_MS
             val pruned = !timedOut && prunedBefore != null && lowest > expected &&
-                (messages.storedAt(author, threadId, expected - 1)?.receivedAtEpochMs ?: Long.MIN_VALUE) < prunedBefore
+                pruneExplains(author, threadId, expected, prunedBefore)
             if (lowest <= expected || !(timedOut || pruned)) continue
             val current = messages.seq(threadId, author) ?: MessageSeqEntity(threadId, author, 1)
             messages.upsertSeq(
@@ -407,6 +454,26 @@ internal class ChatApplier(
                 put("toSeq", lowest)
                 if (pruned) put("cause", "pruned")
             }
+        }
+    }
+
+    /**
+     * Whether the household's prune watermark [prunedBefore] explains [author]'s gap from [expected] in [threadId]
+     * (D-M7-80), on the server's clock only:
+     * - the author's last stored message before the gap has a server stamp earlier than the watermark (its
+     *   successors may have been stored before the cut too, and deleted before this device pulled them);
+     * - nothing of the author is stored before the gap: only when the thread has no stored message at all (a new
+     *   phone, or everything pruned here), or the watermark is later than the thread's earliest stored stamp (the
+     *   prune cut into the history this device holds).
+     * A stored predecessor without a stamp (this device's own, or stored before schema 9) explains nothing: the gap
+     * waits for the timeout.
+     */
+    private suspend fun pruneExplains(author: DeviceId, threadId: String, expected: Long, prunedBefore: Long): Boolean {
+        val previous = messages.lastStoredBefore(author, threadId, expected)
+        return when {
+            previous != null -> previous.serverReceivedAtEpochMs?.let { it < prunedBefore } ?: false
+            messages.countStoredIn(threadId) == 0 -> true
+            else -> messages.oldestServerStampIn(threadId)?.let { prunedBefore > it } ?: false
         }
     }
 

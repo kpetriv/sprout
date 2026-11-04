@@ -164,6 +164,21 @@ val checkReleaseConfiguration = tasks.register("checkReleaseConfiguration") {
 }
 
 /**
+ * The benchmark build types are debug-signed release copies with a placeholder backend and the demo household
+ * (D-M7-41): never a Play upload. Their bundle tasks depend on this check, which always fails (M7 audit 2 I3); their
+ * APKs (`assemble…`, what the benchmarks install) are unaffected.
+ */
+val checkNotForPlay = tasks.register("checkNotForPlay") {
+    description = "Refuses to bundle a benchmark build type: those builds are never uploaded to Play."
+    doLast {
+        throw GradleException(
+            "Benchmark build types (nonMinifiedRelease, benchmarkRelease) are debug-signed, seed a demo " +
+                "household and have no backend: they are never bundled for Play. Use bundleRelease for an upload.",
+        )
+    }
+}
+
+/**
  * Every task that builds or ships the Play bundle runs the four release checks first, not only CI's `check` (audit 2
  * I-a, audit L1): `bundleRelease`, `signReleaseBundle` (the bundle's last producer, which Gradle Play Publisher depends
  * on through the bundle artifact rather than `bundleRelease`) and Play Publisher's `publishRelease*` and
@@ -181,7 +196,10 @@ tasks.configureEach {
     val builds = name == "bundleRelease" || name == "signReleaseBundle"
     val ships = name.startsWith("publishRelease") || name == "uploadReleasePrivateBundle"
     if (builds || (ships && !publishesPrebuiltArtifact)) dependsOn(releaseChecks)
+    val benchmarkBundles = benchmarkBuildTypes.map { "bundle" + it.replaceFirstChar(Char::titlecase) }
+    if (name in benchmarkBundles) dependsOn(checkNotForPlay)
 }
+
 
 /**
  * D-M6-33 (audit H1): ML Kit pulls in Google's usage-metrics uploader (`transport-backend-cct`), whose only network

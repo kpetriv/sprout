@@ -473,10 +473,44 @@ class MigrationTest {
     }
 
     @Test
-    fun migration1To8KeepsTheM1Rows() = runTest {
+    fun migration8To9AddsTheMessageServerStampAsNull() = runTest {
+        helper.createDatabase(TEST_DB, 8).use { db ->
+            db.insertRow(
+                "messages",
+                "messageId" to "m1",
+                "householdId" to Fixtures.household.value,
+                "threadId" to Fixtures.kid.value,
+                "authorUid" to "uid-1",
+                "authorDeviceId" to "device-1",
+                "authorRole" to "KID",
+                "seq" to 1L,
+                "lamport" to 3L,
+                "createdAtEpochMs" to receivedAt,
+                "epoch" to 1L,
+                "kind" to "TEXT",
+                "ciphertext" to "AAAA",
+                "schemaVersion" to 1,
+                "status" to "RECEIVED",
+                "receivedAtEpochMs" to receivedAt,
+                "displayedAtEpochMs" to receivedAt,
+                "late" to 0,
+            )
+        }
+
+        helper.runMigrationsAndValidate(TEST_DB, 9, true, Migrations.MIGRATION_8_9).use { db ->
+            db.query("SELECT seq, serverReceivedAtEpochMs FROM messages").use { cursor ->
+                cursor.moveToFirst()
+                assertEquals(1L, cursor.getLong(0))
+                assertTrue(cursor.isNull(1), "a row stored before version 9 has no server stamp")
+            }
+        }
+    }
+
+    @Test
+    fun migration1To9KeepsTheM1Rows() = runTest {
         helper.createDatabase(TEST_DB, 1).use { db -> insertVersion1Rows(db, chore) }
 
-        helper.runMigrationsAndValidate(TEST_DB, 8, true, *Migrations.ALL).use { db ->
+        helper.runMigrationsAndValidate(TEST_DB, 9, true, *Migrations.ALL).use { db ->
             db.query("SELECT hash FROM ledger_events").use { cursor ->
                 cursor.moveToFirst()
                 assertEquals(chore.envelope.hash, cursor.getString(0))

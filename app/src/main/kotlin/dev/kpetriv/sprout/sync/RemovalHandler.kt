@@ -19,6 +19,7 @@ import dev.kpetriv.sprout.feature.lock.EncryptedParentPinStore
 import dev.kpetriv.sprout.feature.lock.ParentSession
 import dev.kpetriv.sprout.timebank.TimeBankNotifier
 import dev.kpetriv.sprout.timebank.WorkManagerTimeBankAutoStop
+import dev.kpetriv.sprout.widget.WidgetBlanker
 import dev.kpetriv.sprout.widget.WidgetRefreshWorker
 import dev.kpetriv.sprout.widget.WidgetRefresher
 import dev.kpetriv.sprout.work.PlanScheduledActionsWorker
@@ -80,7 +81,9 @@ class WorkManagerBackgroundWork @Inject constructor(
  *
  * The database is closed after the wipe, so the process must not go on using it: in the foreground the shell shows
  * the removed screen, whose "Continue" [acknowledge]s and restarts; in the background the process exits (the next
- * start shows the removed screen). Nothing is logged.
+ * start shows the removed screen). Before that, wiped or not, the home screen widget is drawn blank at once
+ * ([WidgetBlanker], audit 2 N1): the debounced refresh of the work cancel would never run in a process that exits.
+ * Nothing is logged.
  */
 @Singleton
 @Suppress("LongParameterList") // Seams for each step of the wipe; the injected constructor is shorter.
@@ -92,6 +95,7 @@ class RemovalHandler internal constructor(
     private val eraser: LocalDataEraser,
     private val inForeground: () -> Boolean,
     private val exitProcess: () -> Unit,
+    private val blankWidgets: suspend () -> Unit = {},
 ) : HouseholdRemovals {
     @Inject
     @Suppress("LongParameterList") // One collaborator per step of the wipe.
@@ -102,6 +106,7 @@ class RemovalHandler internal constructor(
         work: BackgroundWork,
         eraser: LocalDataEraser,
         foreground: ForegroundState,
+        widgets: WidgetBlanker,
     ) : this(
         scope = scope,
         preferences = preferences,
@@ -110,6 +115,7 @@ class RemovalHandler internal constructor(
         eraser = eraser,
         inForeground = foreground::isForeground,
         exitProcess = { Runtime.getRuntime().exit(0) },
+        blankWidgets = widgets::blankNow,
     )
 
     private val mutableState = MutableStateFlow(preferences.removal())
@@ -166,6 +172,8 @@ class RemovalHandler internal constructor(
             mutableFailed.value = true
             wiping.set(false)
         }
+        // Awaited: the blank drawing must reach the launcher before a background process exits.
+        bestEffort { blankWidgets() }
         if (!inForeground()) exitProcess()
     }
 

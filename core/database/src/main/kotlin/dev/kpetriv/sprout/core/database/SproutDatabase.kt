@@ -186,7 +186,9 @@ abstract class SproutDatabase : RoomDatabase() {
          *
          * 8 (M7): household policy v2 (`household_policy.chatRetentionDays`, `dailyGameCapMinor`, D-M7-10) and the
          * time bank's monotonic start readings (`time_bank_clocks`, D-M4-24). See [Migrations.MIGRATION_7_8].
+         * 9 (M7 fix pass 2): `messages.serverReceivedAtEpochMs`, the server stamp of pulled messages for the chat
+         * prune watermark's gap check (D-M7-80). See [Migrations.MIGRATION_8_9].
          */
-        const val VERSION: Int = 8
+        const val VERSION: Int = 9
     }
 }
