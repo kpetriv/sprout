@@ -59,7 +59,8 @@ data class LicenceLink(val name: String, val url: String?)
 /**
  * Settings → About and its open-source licences page.
  *
- * @property libraries null while loading or after [licencesFailed].
+ * @property libraries null until the licences page asks for them ([AboutEvent.LoadLicences]), while loading, or after
+ *   [licencesFailed].
  */
 data class AboutUiState(
     val versionName: String = "",
@@ -76,13 +77,19 @@ sealed interface AboutEvent {
 
     data object OpenSecurityPolicy : AboutEvent
 
+    /** The licences page is showing: loads the list the first time (it is not read for About alone; review L9). */
+    data object LoadLicences : AboutEvent
+
     /** A row of the licences page: opens [OpenSourceLibrary.link]. */
     data class OpenLibrary(val library: OpenSourceLibrary) : AboutEvent
 
     data object MessageShown : AboutEvent
 }
 
-/** Shows [AppBuildInfo], opens the policy pages through [UrlOpener] and loads [OpenSourceLicences] once. */
+/**
+ * Shows [AppBuildInfo], opens the policy pages through [UrlOpener] and loads [OpenSourceLicences] once, when the
+ * licences page first shows.
+ */
 @HiltViewModel
 class AboutViewModel @Inject constructor(
     private val info: AppBuildInfo,
@@ -99,20 +106,25 @@ class AboutViewModel @Inject constructor(
     )
     val state: StateFlow<AboutUiState> = mutableState.asStateFlow()
 
-    init {
-        viewModelScope.launch {
-            var loaded: List<OpenSourceLibrary>? = null
-            val ok = attempt { loaded = licences.load() }
-            mutableState.update { it.copy(libraries = loaded, licencesFailed = !ok) }
-        }
-    }
+    private var licencesRequested = false
 
     fun onEvent(event: AboutEvent) {
         when (event) {
+            AboutEvent.LoadLicences -> loadLicences()
             AboutEvent.OpenPrivacyPolicy -> open(info.privacyUrl)
             AboutEvent.OpenSecurityPolicy -> open(info.securityUrl)
             is AboutEvent.OpenLibrary -> open(event.library.link)
             AboutEvent.MessageShown -> mutableState.update { it.copy(message = null) }
+        }
+    }
+
+    private fun loadLicences() {
+        if (licencesRequested) return
+        licencesRequested = true
+        viewModelScope.launch {
+            var loaded: List<OpenSourceLibrary>? = null
+            val ok = attempt { loaded = licences.load() }
+            mutableState.update { it.copy(libraries = loaded, licencesFailed = !ok) }
         }
     }
 

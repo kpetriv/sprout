@@ -3,7 +3,7 @@
  * Admin SDK and the server's service account, for the cases the app cannot handle itself (docs/RUNBOOK.md §2, §4).
  *
  *   npm run operator -- recover-household --hid <hid> --new-parent-uid <uid> [--device <deviceId>] [--ticket <ref>]
- *                                         [--apply --confirm <hid>] [--production]
+ *                                         [--apply --device <deviceId> --confirm <hid>] [--production]
  *   npm run operator -- delete-household  --hid <hid> [--apply --confirm <hid>] [--production]
  *   npm run operator -- export-household  --hid <hid> --out <file> [--production]
  *   npm run operator -- prune-expired     [--apply] [--production]
@@ -41,7 +41,7 @@ type Command = (typeof COMMANDS)[number];
 
 /** The options each command accepts besides `--production` (anything else is refused). */
 const ALLOWED: Record<Command, readonly string[]> = {
-  'recover-household': ['hid', 'new-parent-uid', 'device', 'ticket', 'apply', 'confirm'],
+  'recover-household': ['hid', 'new-parent-uid', 'device', 'ticket', 'apply', 'confirm', 'waiting-period-days'],
   'delete-household': ['hid', 'apply', 'confirm'],
   'export-household': ['hid', 'out'],
   'prune-expired': ['apply'],
@@ -54,11 +54,24 @@ const TICKET = /^[A-Za-z0-9._#-]{1,64}$/;
 /** deletionRecords and recoveries are kept this many months (PRIVACY.md, RUNBOOK §4). */
 export const RECORD_RETENTION_MONTHS = 12;
 
+/**
+ * recover-household revokes an ACTIVE phone of the account only when the PENDING phone it admits registered at least
+ * this many days ago (audit M1, D-M8-43): meanwhile the working phone shows "New device waiting" and can remove it, so a
+ * takeover of the Google account cannot evict the real parent through the operator before they notice.
+ * `--waiting-period-days` overrides it (tests); the runbook never uses it in production.
+ */
+export const RECOVERY_WAITING_DAYS = 7;
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
 export const USAGE = `Usage: npm run operator -- <command> [options]
 
-  recover-household --hid <hid> --new-parent-uid <uid> [--device <deviceId>] [--ticket <ref>] [--apply --confirm <hid>]
+  recover-household --hid <hid> --new-parent-uid <uid> [--device <deviceId>] [--ticket <ref>]
+                    [--apply --device <deviceId> --confirm <hid>]
       Admit the PENDING parent device of <uid> as ACTIVE when the household has no working parent device (D-M3-42),
-      revoking that parent's other parent devices, and write a recoveries/{id} audit record.
+      revoking that parent's other parent devices, and write a recoveries/{id} audit record. An ACTIVE device of <uid>
+      is revoked only when the admitted one registered ${RECOVERY_WAITING_DAYS} or more days ago. With no PENDING device left, completes
+      the session revocation an earlier run did not finish.
   delete-household --hid <hid> [--apply --confirm <hid>]
       Delete the household as deleteHousehold does (RUNBOOK §4), writing its deletionRecords row.
   export-household --hid <hid> --out <file>
@@ -71,7 +84,7 @@ export const USAGE = `Usage: npm run operator -- <command> [options]
 
 type Values = Record<string, string | boolean | undefined>;
 
-function parse(argv: readonly string[]): { command: Command; values: Values } {
+function parse(argv: readonly string[]): { command: Command; values: Values } | 'help' {
   let parsed: ReturnType<typeof parseArgs>;
   try {
     parsed = parseArgs({
@@ -87,6 +100,7 @@ function parse(argv: readonly string[]): { command: Command; values: Values } {
         out: { type: 'string' },
         apply: { type: 'boolean' },
         production: { type: 'boolean' },
+        'waiting-period-days': { type: 'string' },
         help: { type: 'boolean' },
       },
     });
@@ -94,10 +108,12 @@ function parse(argv: readonly string[]): { command: Command; values: Values } {
     throw new OperatorError(`${error instanceof Error ? error.message : String(error)}\n\n${USAGE}`);
   }
   const { positionals, values } = parsed;
-  if (values.help || positionals.length === 0) throw new OperatorError(USAGE);
+  if (values.help) return 'help';
+  if (positionals.length === 0) throw new OperatorError(USAGE);
   const command = positionals[0] as Command;
-  if (positionals.length > 1 || !COMMANDS.includes(command)) {
-    throw new OperatorError(`Unknown command: ${positionals.join(' ')}\n\n${USAGE}`);
+  if (!COMMANDS.includes(command)) throw new OperatorError(`Unknown command: ${command}\n\n${USAGE}`);
+  if (positionals.length > 1) {
+    throw new OperatorError(`Unexpected argument: ${positionals.slice(1).join(' ')} (options start with --)`);
   }
   for (const key of Object.keys(values)) {
     if (key !== 'production' && !ALLOWED[command].includes(key)) {
@@ -144,7 +160,12 @@ function requireConfirmation(values: Values, hid: string): void {
  * [OperatorError]. The Admin SDK is loaded only after the target guard passed.
  */
 export async function runOperator(argv: readonly string[], io: OperatorIo): Promise<number> {
-  const { command, values } = parse(argv);
+  const parsed = parse(argv);
+  if (parsed === 'help') {
+    io.out(USAGE);
+    return 0;
+  }
+  const { command, values } = parsed;
   const target = operatorTarget(values.production === true);
   const { getApp } = await import('firebase-admin/app');
   try {
@@ -178,23 +199,45 @@ function dryRunNote(io: OperatorIo, again: string): void {
   io.out(`Dry run: nothing was written. To do it: ${again}`);
 }
 
+/** A Firestore Timestamp (or anything else) as an ISO date-time, `unknown` when it is not a timestamp. */
+function isoOf(value: unknown): string {
+  const date = (value as { toDate?: () => Date } | undefined)?.toDate?.();
+  return date instanceof Date ? date.toISOString().replace(/\.\d{3}Z$/, 'Z') : 'unknown';
+}
+
+function millisOf(value: unknown): number | undefined {
+  const date = (value as { toDate?: () => Date } | undefined)?.toDate?.();
+  return date instanceof Date ? date.getTime() : undefined;
+}
+
 /**
  * recover-household (D-M3-42, RUNBOOK §2): the household's parent phones are lost, so no ACTIVE parent device can
  * approve the parent's new phone. After the operator verified out of band that the requester controls the parent's
  * Google account (the uid), and the new phone signed in with it and registered PENDING:
- * - the PENDING parent device of that uid (`--device` when it has several) becomes ACTIVE (`approvedBy: "operator"`);
+ * - the dry run lists every parent device of the household (uid, status, `registeredAt`) and the plan;
+ * - `--apply` admits the PENDING parent device named by `--device` (required with `--apply`) as ACTIVE
+ *   (`approvedBy: "operator"`);
  * - every other non-revoked parent device of that uid is revoked as revokeDevice does (revokedAtLamport, parent keys
- *   stamped), and that parent's sessions are revoked (refresh tokens, `tokensValidAfter`): every phone of the account
- *   signs out, the new one included, and signs in again;
+ *   stamped), and when one was, that parent's sessions are revoked (refresh tokens, `tokensValidAfter`): every phone of
+ *   the account signs out, the new one included, and signs in again;
+ * - an ACTIVE device of that uid is revoked only when the admitted device registered [RECOVERY_WAITING_DAYS] or more
+ *   days ago (audit M1, D-M8-43): during that time the working phone shows "New device waiting" and can remove it;
  * - `recoveries/{autoId}` records `{ hidHash, at, deviceId, revokedDevices, ticket }` (no uid, no names).
  * Refused when the uid is not a PARENT member with matching claims, when it has no PENDING parent device, or when
  * another parent of the household still has an ACTIVE device (that parent approves the phone in the app instead).
+ *
+ * When the uid has no PENDING device but has REVOKED parent devices whose session revocation never completed (an
+ * earlier run, or an in-app revoke, stopped after its transaction), the command completes that step instead
+ * (review L13): the dry run names the devices, `--apply --confirm` revokes the sessions.
  */
 async function recoverHousehold(values: Values, apply: boolean, io: OperatorIo): Promise<void> {
   const hid = stringOption(values, 'hid', ID)!;
   const uid = stringOption(values, 'new-parent-uid', ID)!;
   const deviceOption = stringOption(values, 'device', DEVICE_ID, false);
   const ticket = stringOption(values, 'ticket', TICKET, false) ?? null;
+  const waitingOption = stringOption(values, 'waiting-period-days', /^\d{1,3}$/, false);
+  const waitingDays = waitingOption === undefined ? RECOVERY_WAITING_DAYS : Number(waitingOption);
+  const now = io.now ?? new Date();
   if (apply) requireConfirmation(values, hid);
 
   const { FieldValue } = await import('firebase-admin/firestore');
@@ -209,7 +252,10 @@ async function recoverHousehold(values: Values, apply: boolean, io: OperatorIo):
   }
 
   const household = db.doc(`households/${hid}`);
-  const prepare = async (tx: Transaction) => {
+  type Prepared =
+    | { kind: 'admit'; admitted: QueryDocumentSnapshot; plans: RevocationPlan[]; devices: QueryDocumentSnapshot[] }
+    | { kind: 'complete'; unfinished: QueryDocumentSnapshot[]; devices: QueryDocumentSnapshot[] };
+  const prepare = async (tx: Transaction): Promise<Prepared> => {
     const [home, member, parentDevices] = await Promise.all([
       tx.get(household),
       tx.get(household.collection('members').doc(uid)),
@@ -219,8 +265,13 @@ async function recoverHousehold(values: Values, apply: boolean, io: OperatorIo):
     if (!member.exists || member.get('role') !== 'PARENT') {
       throw new OperatorError(`User ${uid} is not a PARENT member of household ${hid}`);
     }
-    const own = parentDevices.docs.filter((d) => d.get('uid') === uid);
+    const devices = parentDevices.docs;
+    const own = devices.filter((d) => d.get('uid') === uid);
     const pending = own.filter((d) => d.get('status') === 'PENDING');
+    if (pending.length === 0 && deviceOption === undefined) {
+      const unfinished = own.filter((d) => d.get('status') === 'REVOKED' && d.get('sessionsRevokedAt') === undefined);
+      if (unfinished.length > 0) return { kind: 'complete', unfinished, devices };
+    }
     let admitted: QueryDocumentSnapshot;
     if (deviceOption !== undefined) {
       const chosen = pending.find((d) => d.id === deviceOption);
@@ -238,7 +289,7 @@ async function recoverHousehold(values: Values, apply: boolean, io: OperatorIo):
     } else {
       admitted = pending[0];
     }
-    const otherActive = parentDevices.docs.filter((d) => d.get('uid') !== uid && d.get('status') === 'ACTIVE');
+    const otherActive = devices.filter((d) => d.get('uid') !== uid && d.get('status') === 'ACTIVE');
     if (otherActive.length > 0) {
       throw new OperatorError(
         `Another parent of household ${hid} has an ACTIVE device (${otherActive.map((d) => d.id).join(', ')}): ` +
@@ -250,32 +301,93 @@ async function recoverHousehold(values: Values, apply: boolean, io: OperatorIo):
       if (device.id === admitted.id || device.get('status') === 'REVOKED') continue;
       plans.push(await planRevocation(tx, household, device));
     }
-    return { admitted, plans };
+    return { kind: 'admit', admitted, plans, devices };
+  };
+
+  /** Why `--apply` refuses the plan (the waiting period), else undefined. */
+  const waitingProblem = (admitted: QueryDocumentSnapshot, plans: readonly RevocationPlan[]): string | undefined => {
+    const active = plans.filter((plan) => plan.target.get('status') === 'ACTIVE').map((plan) => plan.target.id);
+    if (active.length === 0 || waitingDays === 0) return undefined;
+    const registered = millisOf(admitted.get('registeredAt'));
+    const until = registered === undefined ? undefined : registered + waitingDays * DAY_MS;
+    if (until !== undefined && until <= now.getTime()) return undefined;
+    const when = until === undefined ? 'its registration time is unknown' : `wait until ${new Date(until).toISOString()}`;
+    return (
+      `${active.join(', ')} of user ${uid} is ACTIVE, and ${admitted.id} registered less than ${waitingDays} day(s) ` +
+      `ago: ${when}. Meanwhile the working phone shows "New device waiting" and can remove it; if the requester still ` +
+      'has that phone, they approve the new one there instead (RUNBOOK §2)'
+    );
+  };
+
+  const listDevices = (devices: readonly QueryDocumentSnapshot[]) => {
+    io.out(`  parent devices of household ${hid}:`);
+    for (const d of devices) {
+      io.out(
+        `    ${d.id} user ${String(d.get('uid'))} ${String(d.get('status'))} registered ${isoOf(d.get('registeredAt'))}` +
+          (d.get('approvedBy') === 'operator' ? ' (admitted by the operator)' : ''),
+      );
+    }
   };
 
   const describe = (admittedId: string, plans: readonly RevocationPlan[]) => {
-    io.out(`recover-household ${hid}${apply ? '' : ' (dry run)'}:`);
     io.out(`  admit PENDING parent device ${admittedId} of user ${uid} as ACTIVE`);
     for (const plan of plans) {
+      const status = String(plan.target.get('status'));
       io.out(
-        `  revoke parent device ${plan.target.id} (${String(plan.target.get('status'))}) at lamport ` +
-          `${plan.revokedAtLamport}, ${plan.parentKeys.length} parent key(s)`,
+        `  revoke parent device ${plan.target.id} (${status}) at lamport ${plan.revokedAtLamport}, ` +
+          `${plan.parentKeys.length} parent key(s)` +
+          (status === 'ACTIVE' ? ': this phone was working; confirm with the requester that it is lost' : ''),
       );
     }
     if (plans.length > 0) io.out(`  revoke the sessions of user ${uid}: every phone of the account signs in again`);
     else io.out('  no other parent device to revoke');
   };
 
+  const revokeSessions = async (deviceIds: readonly string[]) => {
+    const remaining = [...deviceIds];
+    try {
+      while (remaining.length > 0) {
+        await revokeParentSessions(hid, uid, remaining[0]);
+        remaining.shift();
+      }
+    } catch (error) {
+      io.out(
+        `The sessions of user ${uid} are not revoked yet for device(s) ${remaining.join(', ')}: run ` +
+          `recover-household --hid ${hid} --new-parent-uid ${uid} --apply --confirm ${hid} again to complete it`,
+      );
+      throw error;
+    }
+  };
+
   if (!apply) {
-    const { admitted, plans } = await db.runTransaction(prepare, { readOnly: true });
-    describe(admitted.id, plans);
-    dryRunNote(io, `--apply --confirm ${hid}`);
+    const prepared = await db.runTransaction(prepare, { readOnly: true });
+    io.out(`recover-household ${hid} (dry run):`);
+    listDevices(prepared.devices);
+    if (prepared.kind === 'complete') {
+      io.out(
+        `  complete: revoke the sessions of user ${uid} for revoked device(s) ` +
+          `${prepared.unfinished.map((d) => d.id).join(', ')} (an earlier revocation stopped before this step)`,
+      );
+      dryRunNote(io, `--apply --confirm ${hid}`);
+      return;
+    }
+    describe(prepared.admitted.id, prepared.plans);
+    const problem = waitingProblem(prepared.admitted, prepared.plans);
+    if (problem !== undefined) io.out(`  --apply would be refused: ${problem}`);
+    dryRunNote(io, `--apply --device ${prepared.admitted.id} --confirm ${hid}`);
     return;
   }
 
   const record = db.collection('recoveries').doc();
   const result = await db.runTransaction(async (tx) => {
-    const { admitted, plans } = await prepare(tx);
+    const prepared = await prepare(tx);
+    if (prepared.kind === 'complete') return prepared;
+    if (deviceOption === undefined) {
+      throw new OperatorError(`--apply needs --device ${prepared.admitted.id} (the device the dry run admits)`);
+    }
+    const { admitted, plans } = prepared;
+    const problem = waitingProblem(admitted, plans);
+    if (problem !== undefined) throw new OperatorError(`Refused: ${problem}`);
     const outcomes = plans.map((plan) => ({ deviceId: plan.target.id, ...applyRevocation(tx, plan) }));
     tx.update(admitted.ref, {
       status: 'ACTIVE',
@@ -290,12 +402,16 @@ async function recoverHousehold(values: Values, apply: boolean, io: OperatorIo):
       revokedDevices: outcomes.map((o) => ({ deviceId: o.deviceId, revokedAtLamport: o.revokedAtLamport })),
       ticket,
     });
-    return { admittedId: admitted.id, plans, outcomes };
+    return { kind: 'admitted' as const, admittedId: admitted.id, plans, outcomes };
   });
-  describe(result.admittedId, result.plans);
-  for (const outcome of result.outcomes) {
-    if (outcome.sessionsPending) await revokeParentSessions(hid, outcome.uid, outcome.deviceId);
+  io.out(`recover-household ${hid}:`);
+  if (result.kind === 'complete') {
+    await revokeSessions(result.unfinished.map((d) => d.id));
+    io.out(`Done: the sessions of user ${uid} are revoked; every phone of the account signs in again`);
+    return;
   }
+  describe(result.admittedId, result.plans);
+  await revokeSessions(result.outcomes.filter((o) => o.sessionsPending).map((o) => o.deviceId));
   io.out(`Done: device ${result.admittedId} is ACTIVE; audit record recoveries/${record.id}`);
 }
 
@@ -319,9 +435,22 @@ async function deleteHousehold(values: Values, apply: boolean, io: OperatorIo): 
   const outcome = await deleteHouseholdData(hid);
   io.out(
     `Done: deletionRecords row written (hidHash ${outcome.hidHash}); ${outcome.usersDeleted} user(s) deleted, ` +
-      `${outcome.userDeleteFailures} failure(s)`,
+      `${outcome.failedUids.length} failure(s)`,
   );
-  if (outcome.userDeleteFailures > 0) io.out('Some Auth users were not deleted: run the command again.');
+  if (outcome.cleanupFailures > 0) {
+    io.out(
+      `${outcome.cleanupFailures} link code, challenge or userHouseholds row(s) were not deleted: ` +
+        'prune-expired removes expired link codes and challenges; check userHouseholds in the console (RUNBOOK §4)',
+    );
+  }
+  if (outcome.failedUids.length > 0) {
+    // The household's rows are gone, so a second run cannot find these users (review M2): delete them by hand.
+    io.out(`These Auth users were not deleted: ${outcome.failedUids.join(', ')}`);
+    io.out(
+      'Delete each in the Firebase console → Authentication → Users (search the UID, ⋮ → Delete account); ' +
+        'there is no firebase CLI command for it. Then note it on the deletion request (RUNBOOK §4).',
+    );
+  }
 }
 
 /** export-household: the export bundle without the callable's size limits, to a new local file (mode 0600). */
@@ -375,6 +504,7 @@ const PRUNE_PAGE = 400;
 async function pruneExpired(apply: boolean, io: OperatorIo): Promise<void> {
   const { Timestamp } = await import('firebase-admin/firestore');
   const { db } = await import('../src/firebase.js');
+  const { bulkDelete } = await import('../src/bulkDelete.js');
   io.out(`prune-expired${apply ? '' : ' (dry run)'}:`);
   for (const rule of pruneRules(io.now ?? new Date())) {
     const query = db.collection(rule.collection).where(rule.field, '<', Timestamp.fromDate(rule.before));
@@ -384,16 +514,17 @@ async function pruneExpired(apply: boolean, io: OperatorIo): Promise<void> {
       continue;
     }
     let deleted = 0;
+    let failures = 0;
     for (;;) {
       const page = await query.limit(PRUNE_PAGE).get();
       if (page.empty) break;
-      const writer = db.bulkWriter();
-      page.docs.forEach((d) => void writer.delete(d.ref));
-      await writer.close();
-      deleted += page.size;
-      if (page.size < PRUNE_PAGE) break;
+      const failed = await bulkDelete(page.docs.map((d) => d.ref));
+      deleted += page.size - failed;
+      failures += failed;
+      // A page that deleted nothing would be read again unchanged: stop and report.
+      if (page.size < PRUNE_PAGE || failed === page.size) break;
     }
-    io.out(`  ${rule.collection}: deleted ${deleted} ${rule.why}`);
+    io.out(`  ${rule.collection}: deleted ${deleted} ${rule.why}${failures > 0 ? `, ${failures} failed` : ''}`);
   }
   if (!apply) dryRunNote(io, '--apply');
 }

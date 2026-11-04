@@ -1,19 +1,23 @@
-# Builds the signed Play bundle for a release tag (M8 §4, D-M8-5). Manual only:
+# Builds the signed Play bundle for a release tag (M8 §4, D-M8-5). Manual only, from main:
 #
-#   gh workflow run release.yml -f tag=v1.0.0
+#   gh workflow run release.yml --ref main -f tag=v1.0.0                      # versionCode = commit count of the tag
+#   gh workflow run release.yml --ref main -f tag=v1.0.0 -f version_code=78   # a rebuild needs a higher versionCode
 #
-# Checks out the tag with its full history (versionName from the tag, versionCode from the commit count, D-M8-4),
-# writes the upload keystore and google-services.json to the runner only, runs the static gate checks and
+# The job runs in the `release` environment (D-M8-42): only `main` may deploy to it, the owner approves each run, and
+# the signing secrets are environment secrets, so no other branch's workflow can read them. It checks out the tag with
+# its full history (versionName from the tag, versionCode from the commit count unless `version_code` is given, D-M8-4),
+# refuses a tag whose commit is not on main or whose CI run did not succeed, runs the static gate checks before any
+# secret reaches the runner, then writes the upload keystore and google-services.json to the runner only and runs
 # `bundleRelease` (which runs checkReleaseConfiguration, the telemetry manifest check, checkReleaseMapping and
-# checkReleaseAppCheck), checks the data-safety inventory, and uploads the AAB and R8's mapping.txt as an artifact.
-# Publishing to Play's internal track (as a draft) is optional: it runs only when the PLAY_SERVICE_ACCOUNT_JSON secret
-# is set. docs/RELEASE_CHECKLIST.md item 9 lists the secrets and how to set them.
+# checkReleaseAppCheck) without the Gradle caches, checks the data-safety inventory, and uploads the AAB and R8's
+# mapping.txt as an artifact. Publishing to Play's internal track (as a draft) is optional: it runs only when the
+# PLAY_SERVICE_ACCOUNT_JSON secret is set. docs/RELEASE_CHECKLIST.md item 9 creates the environment and its secrets.
 #
-# Secrets: SPROUT_UPLOAD_KEYSTORE_BASE64, SPROUT_UPLOAD_KEYSTORE_PASSWORD, SPROUT_UPLOAD_KEY_ALIAS,
-# SPROUT_UPLOAD_KEY_PASSWORD, GOOGLE_SERVICES_JSON_B64, SPROUT_FUNCTIONS_BASE_URL, SPROUT_GOOGLE_SERVER_CLIENT_ID,
-# SPROUT_PRIVACY_URL, optional SPROUT_SECURITY_URL (default: /security on the privacy page's host) and
-# PLAY_SERVICE_ACCOUNT_JSON. Secrets reach only the steps that need them, through `env`, never through `${{ }}` in a
-# script, and nothing prints them (GitHub masks them in logs as well).
+# Secrets (environment `release`): SPROUT_UPLOAD_KEYSTORE_BASE64, SPROUT_UPLOAD_KEYSTORE_PASSWORD,
+# SPROUT_UPLOAD_KEY_ALIAS, SPROUT_UPLOAD_KEY_PASSWORD, GOOGLE_SERVICES_JSON_B64, SPROUT_FUNCTIONS_BASE_URL,
+# SPROUT_GOOGLE_SERVER_CLIENT_ID, SPROUT_PRIVACY_URL, optional SPROUT_SECURITY_URL (default: /security on the privacy
+# page's host) and PLAY_SERVICE_ACCOUNT_JSON. Secrets reach only the steps that need them, through `env`, never through
+# `${{ }}` in a script, and nothing prints them (GitHub masks them in logs as well).
 name: Release
 
 on:
@@ -23,9 +27,16 @@ on:
         description: 'Release tag to build, for example v1.0.0'
         required: true
         type: string
+      version_code:
+        description: 'Optional versionCode override (digits only); needed to rebuild a tag Play already has'
+        required: false
+        type: string
+        default: ''
 
 permissions:
   contents: read
+  # Reading the tagged commit's CI runs (the "CI passed" check below).
+  actions: read
 
 concurrency:
   group: release-${{ inputs.tag }}
@@ -35,17 +46,24 @@ jobs:
   release:
     name: Signed bundle for ${{ inputs.tag }}
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 75
+    # Deployment branches: main only; required reviewer: the owner (RELEASE_CHECKLIST item 9, audit M2).
+    environment: release
     env:
       RELEASE_TAG: ${{ inputs.tag }}
+      VERSION_CODE: ${{ inputs.version_code }}
       # "true" or "false" only; the credentials themselves are passed to the publish step alone.
       PLAY_PUBLISHING: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON != '' }}
 
     steps:
-      - name: Check the tag name
+      - name: Check the inputs
         run: |
           if [[ ! "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]]; then
             echo "::error::The tag must look like v1.2.3 (optionally v1.2.3-rc.1)."
+            exit 1
+          fi
+          if [[ -n "$VERSION_CODE" && ! "$VERSION_CODE" =~ ^[0-9]{1,10}$ ]]; then
+            echo "::error::version_code must be digits only (Versioning.kt checks the range)."
             exit 1
           fi
 
@@ -59,14 +77,45 @@ jobs:
           fetch-tags: true
           persist-credentials: false
 
-      - name: Check the version
+      # The tag's commit must be on main (audit M2): a tag on another branch would run that branch's build logic with
+      # the signing secrets. The waiver of checkReleaseConfiguration must not be committed (audit L7).
+      - name: Check the tag is on main and the version
         run: |
+          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          if ! git merge-base --is-ancestor HEAD origin/main; then
+            echo "::error::$RELEASE_TAG is not on main: release only from main."
+            exit 1
+          fi
           described="$(git describe --tags --match 'v*' --abbrev=0)"
           if [[ "$described" != "$RELEASE_TAG" ]]; then
             echo "::error::git describe gives $described, not $RELEASE_TAG: release the newest v* tag of its commit."
             exit 1
           fi
-          echo "Building ${RELEASE_TAG#v} (versionCode $(git rev-list --count HEAD))."
+          if grep -rqs --include=gradle.properties 'sprout\.allowUnconfiguredRelease' .; then
+            echo "::error::A gradle.properties sets sprout.allowUnconfiguredRelease: remove it before releasing."
+            exit 1
+          fi
+          code="${VERSION_CODE:-$(git rev-list --count HEAD)}"
+          echo "Building ${RELEASE_TAG#v} (versionCode $code)."
+          {
+            echo "### Sprout ${RELEASE_TAG#v}"
+            echo "- versionCode **$code** ($([[ -n "$VERSION_CODE" ]] && echo 'from the version_code input' || echo 'commit count'))"
+            echo "- commit \`$(git rev-parse HEAD)\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # The workflow does not run the unit tests; CI ran them on this commit when it reached main (audit L7). This
+      # needs `actions: read` and a CI run of the commit itself (a push to main); a tag on a commit CI never built
+      # alone (part of a multi-commit push) is refused too: tag the head of that push.
+      - name: Check CI passed on the tagged commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          sha="$(git rev-parse HEAD)"
+          passed="$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?head_sha=$sha&status=success&per_page=1" --jq '.total_count')"
+          if [[ "$passed" == "0" ]]; then
+            echo "::error::No successful CI run for $sha: wait for CI on main to pass, or fix it first."
+            exit 1
+          fi
 
       - name: Set up JDK 17
         uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
@@ -74,11 +123,17 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      # Validates the wrapper jar checksum. Read-only cache: a release build never writes to the shared cache.
+      # Validates the wrapper jar checksum. No Gradle cache at all (audit L6): a release never reuses outputs or
+      # dependencies cached by lower-trust CI runs, and never writes a cache.
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c # v6.4.1
         with:
-          cache-read-only: true
+          cache-disabled: true
+
+      # The static half of the gate (as CI's build job, without the unit tests), before any secret is on the runner or
+      # in the environment (audit L6), so no lint or Detekt plugin ever sees one.
+      - name: Static checks
+        run: ./gradlew detekt lint checkMergedManifestForTelemetry --no-daemon --no-build-cache --no-configuration-cache
 
       # Outside the workspace (RUNNER_TEMP), owner-only, removed at the end. google-services.json has to be in app/.
       - name: Write the signing key and Firebase configuration
@@ -95,9 +150,10 @@ jobs:
           printf '%s' "$SPROUT_UPLOAD_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/upload.keystore"
           printf '%s' "$GOOGLE_SERVICES_JSON_B64" | base64 --decode > app/google-services.json
 
-      # The static half of the gate (as CI's build job, without the unit tests), then the signed bundle. bundleRelease
-      # depends on checkReleaseConfiguration, which fails naming any missing secret's variable or property.
-      - name: Static checks and signed bundle
+      # bundleRelease depends on checkReleaseConfiguration, which fails naming any missing secret's variable or property
+      # (a blank optional one falls back to its default), and refuses the waiver: `=false` on the command line wins
+      # over any properties file (audit L7).
+      - name: Signed bundle
         env:
           SPROUT_UPLOAD_KEYSTORE_PASSWORD: ${{ secrets.SPROUT_UPLOAD_KEYSTORE_PASSWORD }}
           SPROUT_UPLOAD_KEY_ALIAS: ${{ secrets.SPROUT_UPLOAD_KEY_ALIAS }}
@@ -112,13 +168,17 @@ jobs:
             "-Psprout.functionsBaseUrl=$SPROUT_FUNCTIONS_BASE_URL"
             "-Psprout.googleServerClientId=$SPROUT_GOOGLE_SERVER_CLIENT_ID"
             "-Psprout.privacyUrl=$SPROUT_PRIVACY_URL"
+            "-Psprout.securityUrl=$SPROUT_SECURITY_URL"
+            "-Psprout.allowUnconfiguredRelease=false"
           )
-          if [[ -n "$SPROUT_SECURITY_URL" ]]; then properties+=("-Psprout.securityUrl=$SPROUT_SECURITY_URL"); fi
-          ./gradlew detekt lint checkMergedManifestForTelemetry :app:bundleRelease "${properties[@]}" --no-daemon
+          if [[ -n "$VERSION_CODE" ]]; then properties+=("-PversionCode=$VERSION_CODE"); fi
+          ./gradlew :app:bundleRelease "${properties[@]}" --no-daemon --no-build-cache --no-configuration-cache
 
       # checkDataSafetyInventory (D-M8-2), as in CI: the shipped permissions and SDKs match docs/DATA_SAFETY.md.
       - name: Data-safety inventory
-        run: python3 tools/privacy/inventory.py --check --gradle-arg=--no-daemon
+        run: >-
+          python3 tools/privacy/inventory.py --check --gradle-arg=--no-daemon --gradle-arg=--no-build-cache
+          --gradle-arg=--no-configuration-cache
 
       - name: Upload the bundle and mapping
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -131,8 +191,9 @@ jobs:
           retention-days: 30
 
       # Optional (D-M8-5): Gradle Play Publisher uploads the bundle built above to the internal track as a draft; the
-      # owner rolls it out in the Play Console. Play takes a new app's first bundle only through the console, so the
-      # first release is uploaded by hand from the artifact. Upload mapping.txt in the console with the release.
+      # owner rolls it out in the Play Console. With --artifact-dir it builds nothing (so it does not rerun the release
+      # checks, which ran above). Play takes a new app's first bundle only through the console, so the first release
+      # is uploaded by hand from the artifact. Upload mapping.txt in the console with the release.
       - name: Publish to the internal track (draft)
         if: ${{ env.PLAY_PUBLISHING == 'true' }}
         env:
@@ -145,7 +206,7 @@ jobs:
           "-Psprout.functionsBaseUrl=$SPROUT_FUNCTIONS_BASE_URL"
           "-Psprout.googleServerClientId=$SPROUT_GOOGLE_SERVER_CLIENT_ID"
           "-Psprout.privacyUrl=$SPROUT_PRIVACY_URL"
-          --no-daemon
+          --no-daemon --no-build-cache --no-configuration-cache
 
       - name: Remove the signing key and Firebase configuration
         if: always()

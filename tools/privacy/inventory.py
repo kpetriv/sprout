@@ -50,6 +50,11 @@ SDK_GROUPS = (
     "com.google.android.libraries.*",
     "com.google.android.odml",
     "androidx.credentials",
+    # androidx groups that read identifiers or health data (audit I3): `library androidx.*` must not cover them.
+    "androidx.ads",
+    "androidx.privacysandbox.*",
+    "androidx.health",
+    "androidx.health.*",
     "io.github.*",
     "com.squareup.okhttp3",
     "io.grpc",
@@ -110,6 +115,9 @@ def classpath_modules(report: str) -> Set[Tuple[str, str]]:
         if not match:
             continue
         entry = match.group(1).strip()
+        if entry.endswith("FAILED"):
+            # An unresolved module would otherwise count as shipped (review L4): the report is not trustworthy.
+            raise InventoryError(f"the dependency report has an unresolved module: {entry}")
         if entry.startswith("project ") or entry.endswith("(c)") or entry.endswith("(n)"):
             continue
         module = MODULE.match(entry)
@@ -214,17 +222,23 @@ def print_inventory(permissions: Set[str], modules: Set[Tuple[str, str]]) -> Non
 def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--check", action="store_true", help="compare with docs/DATA_SAFETY.md and fail on a mismatch")
-    parser.add_argument("--manifest", type=Path, help="merged release manifest (skips the Gradle run with --dependencies)")
-    parser.add_argument("--dependencies", type=Path, help="saved output of :app:dependencies --configuration releaseRuntimeClasspath")
+    parser.add_argument("--manifest", type=Path, help="merged release manifest (with --dependencies: no Gradle run)")
+    parser.add_argument(
+        "--dependencies", type=Path,
+        help="saved output of :app:dependencies --configuration releaseRuntimeClasspath (with --manifest)",
+    )
     parser.add_argument("--gradle-arg", action="append", default=[], help="extra Gradle argument (repeatable)")
     parser.add_argument("--data-safety", type=Path, default=DATA_SAFETY, help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
+    if (args.manifest is None) != (args.dependencies is None):
+        # Either both saved inputs or a fresh Gradle run: never a fresh report with a stale manifest (review L5).
+        parser.error("--manifest and --dependencies go together")
     try:
         if args.dependencies is not None:
             report = args.dependencies.read_text(encoding="utf-8")
         else:
             report = run_gradle(args.gradle_arg)
-        manifest = args.manifest or find_manifest()
+        manifest = args.manifest if args.manifest is not None else find_manifest()
         permissions = manifest_permissions(manifest)
         modules = classpath_modules(report)
         if not args.check:

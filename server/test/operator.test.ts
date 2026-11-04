@@ -2,7 +2,7 @@ import { mkdtemp, readFile, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { FieldValue, Timestamp } from 'firebase-admin/firestore';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { OperatorError, operatorTarget, pruneRules, runOperator } from '../scripts/operator.js';
 import { sha256Hex } from '../src/crypto.js';
 import {
@@ -48,6 +48,15 @@ async function pendingPhone(h: Household): Promise<TestDevice> {
 
 const device = async (hid: string, id: string) => (await db.doc(`households/${hid}/devices/${id}`).get()).data()!;
 
+const DAY = 24 * 60 * 60 * 1000;
+
+/** Sets the `registeredAt` of device [id] to [days] days ago and returns it as the dry run prints it. */
+async function registeredDaysAgo(hid: string, id: string, days: number): Promise<string> {
+  const at = Timestamp.fromMillis(Math.floor((Date.now() - days * DAY) / 1000) * 1000);
+  await db.doc(`households/${hid}/devices/${id}`).update({ registeredAt: at });
+  return at.toDate().toISOString().replace(/\.\d{3}Z$/, 'Z');
+}
+
 describe('target guard', () => {
   it('refuses anything but the emulator without --production', () => {
     const emulator = {
@@ -79,9 +88,17 @@ describe('target guard', () => {
     }
   });
 
+  it('prints the usage for --help and exits 0', async () => {
+    const lines: string[] = [];
+    await expect(runOperator(['--help'], { out: (line) => lines.push(line) })).resolves.toBe(0);
+    expect(lines.join('\n')).toMatch(/^Usage: npm run operator/);
+  });
+
   it('refuses unknown commands and options, and options of another command', async () => {
     await refused([], /Usage: npm run operator/);
-    await refused(['wipe-everything'], /Unknown command/);
+    await refused(['wipe-everything'], /Unknown command: wipe-everything/);
+    await refused(['delete-household', 'abc'], /Unexpected argument: abc/);
+    await refused(['recover-household', '--hid', 'x', '--new-parent-uid', 'u', '--waiting-period-days', 'x'], /--waiting-period-days is not a valid value/);
     await refused(['prune-expired', '--force'], /Unknown option/);
     await refused(['prune-expired', '--hid', 'x'], /prune-expired does not take --hid/);
     await refused(['export-household', '--hid', 'x', '--apply'], /does not take --apply/);
@@ -98,15 +115,22 @@ describe('recover-household', () => {
     await db.doc(`households/${h.hid}/parentKeys/${'7'.repeat(64)}`).set({ deviceId: lost, validFromLamport: 1 });
     const phone = await pendingPhone(h);
     const linked = await linkKid(h);
+    const lostAt = await registeredDaysAgo(h.hid, lost, 90);
+    const phoneAt = await registeredDaysAgo(h.hid, phone.deviceId, 8);
 
     const dry = await operator('recover-household', '--hid', h.hid, '--new-parent-uid', h.parent.uid);
     expect(dry).toEqual([
       'Target: emulator, project demo-sprout',
       `recover-household ${h.hid} (dry run):`,
+      `  parent devices of household ${h.hid}:`,
+      ...[
+        `    ${lost} user ${h.parent.uid} ACTIVE registered ${lostAt}`,
+        `    ${phone.deviceId} user ${h.parent.uid} PENDING registered ${phoneAt}`,
+      ].sort((a, b) => a.localeCompare(b)),
       `  admit PENDING parent device ${phone.deviceId} of user ${h.parent.uid} as ACTIVE`,
-      `  revoke parent device ${lost} (ACTIVE) at lamport 6, 1 parent key(s)`,
+      `  revoke parent device ${lost} (ACTIVE) at lamport 6, 1 parent key(s): this phone was working; confirm with the requester that it is lost`,
       `  revoke the sessions of user ${h.parent.uid}: every phone of the account signs in again`,
-      `Dry run: nothing was written. To do it: --apply --confirm ${h.hid}`,
+      `Dry run: nothing was written. To do it: --apply --device ${phone.deviceId} --confirm ${h.hid}`,
     ]);
     expect((await device(h.hid, phone.deviceId)).status).toBe('PENDING');
     expect((await device(h.hid, lost)).status).toBe('ACTIVE');
@@ -120,10 +144,15 @@ describe('recover-household', () => {
       ['recover-household', '--hid', h.hid, '--new-parent-uid', h.parent.uid, '--apply', '--confirm', 'other'],
       /--apply needs --confirm/,
     );
+    await refused(
+      ['recover-household', '--hid', h.hid, '--new-parent-uid', h.parent.uid, '--apply', '--confirm', h.hid],
+      new RegExp(`--apply needs --device ${phone.deviceId}`),
+    );
+    expect((await device(h.hid, phone.deviceId)).status).toBe('PENDING');
 
     const before = nowSeconds() - 1;
     const out = await operator(
-      'recover-household', '--hid', h.hid, '--new-parent-uid', h.parent.uid,
+      'recover-household', '--hid', h.hid, '--new-parent-uid', h.parent.uid, '--device', phone.deviceId,
       '--ticket', 'INC-7', '--apply', '--confirm', h.hid,
     );
     expect(out.at(-1)).toMatch(new RegExp(`^Done: device ${phone.deviceId} is ACTIVE; audit record recoveries/\\w+$`));
@@ -168,13 +197,84 @@ describe('recover-household', () => {
     );
   });
 
+  it('revokes a working phone of the account only after the waiting period (audit M1)', async () => {
+    const h = await newHousehold();
+    const phone = await pendingPhone(h);
+    const args = ['recover-household', '--hid', h.hid, '--new-parent-uid', h.parent.uid, '--device', phone.deviceId];
+
+    // Just registered: the dry run says why --apply would refuse, and --apply refuses without writing.
+    const dry = await operator(...args);
+    expect(dry.find((line) => line.startsWith('  --apply would be refused:'))).toMatch(
+      new RegExp(`${h.device.deviceId} of user ${h.parent.uid} is ACTIVE, and ${phone.deviceId} registered less than 7 day\\(s\\) ago: wait until `),
+    );
+    await refused([...args, '--apply', '--confirm', h.hid], /Refused: .* is ACTIVE, .*New device waiting/);
+    await registeredDaysAgo(h.hid, phone.deviceId, 6);
+    await refused([...args, '--apply', '--confirm', h.hid], /Refused: /);
+    expect((await device(h.hid, phone.deviceId)).status).toBe('PENDING');
+    expect((await device(h.hid, h.device.deviceId)).status).toBe('ACTIVE');
+    expect((await db.collection('recoveries').get()).size).toBe(0);
+
+    // No registration time: refused as well.
+    await db.doc(`households/${h.hid}/devices/${phone.deviceId}`).update({ registeredAt: FieldValue.delete() });
+    await refused([...args, '--apply', '--confirm', h.hid], /its registration time is unknown/);
+
+    // The override exists for tests and is never used by the runbook.
+    await operator(...args, '--waiting-period-days', '0', '--apply', '--confirm', h.hid);
+    expect((await device(h.hid, phone.deviceId)).status).toBe('ACTIVE');
+    expect((await device(h.hid, h.device.deviceId)).status).toBe('REVOKED');
+  });
+
+  it('admits after the waiting period when the working phone did not remove the new one', async () => {
+    const h = await newHousehold();
+    const phone = await pendingPhone(h);
+    await registeredDaysAgo(h.hid, phone.deviceId, 7);
+    const dry = await operator('recover-household', '--hid', h.hid, '--new-parent-uid', h.parent.uid);
+    expect(dry.some((line) => line.includes('would be refused'))).toBe(false);
+    await operator(
+      'recover-household', '--hid', h.hid, '--new-parent-uid', h.parent.uid, '--device', phone.deviceId,
+      '--apply', '--confirm', h.hid,
+    );
+    expect((await device(h.hid, phone.deviceId)).status).toBe('ACTIVE');
+    expect((await device(h.hid, h.device.deviceId)).status).toBe('REVOKED');
+  });
+
+  it('completes a session revocation an earlier run did not finish (review L13)', async () => {
+    const h = await newHousehold();
+    const phone = await pendingPhone(h);
+    await registeredDaysAgo(h.hid, phone.deviceId, 8);
+    await operator(
+      'recover-household', '--hid', h.hid, '--new-parent-uid', h.parent.uid, '--device', phone.deviceId,
+      '--apply', '--confirm', h.hid,
+    );
+    // As if revokeParentSessions had failed after the transaction.
+    await db.doc(`households/${h.hid}/devices/${h.device.deviceId}`).update({ sessionsRevokedAt: FieldValue.delete() });
+    await db.doc(`households/${h.hid}/members/${h.parent.uid}`).update({ tokensValidAfter: FieldValue.delete() });
+
+    const dry = await operator('recover-household', '--hid', h.hid, '--new-parent-uid', h.parent.uid);
+    expect(dry).toContain(
+      `  complete: revoke the sessions of user ${h.parent.uid} for revoked device(s) ${h.device.deviceId} ` +
+        '(an earlier revocation stopped before this step)',
+    );
+    const out = await operator('recover-household', '--hid', h.hid, '--new-parent-uid', h.parent.uid, '--apply', '--confirm', h.hid);
+    expect(out.at(-1)).toBe(`Done: the sessions of user ${h.parent.uid} are revoked; every phone of the account signs in again`);
+    expect((await device(h.hid, h.device.deviceId)).sessionsRevokedAt).toBeDefined();
+    expect((await db.doc(`households/${h.hid}/members/${h.parent.uid}`).get()).get('tokensValidAfter')).toBeTypeOf('number');
+    expect((await db.collection('recoveries').get()).size).toBe(1);
+    await refused(['recover-household', '--hid', h.hid, '--new-parent-uid', h.parent.uid], /has no PENDING parent device/);
+  });
+
   it('only admits when every parent device is already revoked, without signing anyone out', async () => {
     const h = await newHousehold();
     await db.doc(`households/${h.hid}/devices/${h.device.deviceId}`).update({ status: 'REVOKED', revokedAtLamport: 1 });
     const phone = await pendingPhone(h);
     const dry = await operator('recover-household', '--hid', h.hid, '--new-parent-uid', h.parent.uid);
     expect(dry).toContain('  no other parent device to revoke');
-    await operator('recover-household', '--hid', h.hid, '--new-parent-uid', h.parent.uid, '--apply', '--confirm', h.hid);
+    expect(dry.some((line) => line.includes('would be refused'))).toBe(false);
+    // Nothing ACTIVE is revoked, so no waiting period applies.
+    await operator(
+      'recover-household', '--hid', h.hid, '--new-parent-uid', h.parent.uid, '--device', phone.deviceId,
+      '--apply', '--confirm', h.hid,
+    );
     expect((await device(h.hid, phone.deviceId)).status).toBe('ACTIVE');
     expect((await db.doc(`households/${h.hid}/members/${h.parent.uid}`).get()).get('tokensValidAfter')).toBeUndefined();
     const record = (await db.collection('recoveries').get()).docs[0].data();
@@ -190,6 +290,7 @@ describe('recover-household', () => {
       ['recover-household', '--hid', h.hid, '--new-parent-uid', h.parent.uid, '--device', h.device.deviceId],
       /is not a PENDING parent device/,
     );
+    await registeredDaysAgo(h.hid, second.deviceId, 8);
     await operator(
       'recover-household', '--hid', h.hid, '--new-parent-uid', h.parent.uid,
       '--device', second.deviceId, '--apply', '--confirm', h.hid,
@@ -257,6 +358,27 @@ describe('delete-household', () => {
     );
     expect(status).toEqual({ status: 'UNKNOWN', householdGone: true });
 
+    await refused(['delete-household', '--hid', h.hid], /No household/);
+  });
+
+  it('prints the Auth users it could not delete, since a second run cannot find them (review M2)', async () => {
+    const h = await newHousehold();
+    const linked = await linkKid(h);
+    const spy = vi.spyOn(auth, 'deleteUsers').mockResolvedValueOnce({
+      successCount: 1,
+      failureCount: 1,
+      errors: [{ index: 1, error: new Error('internal') as never }],
+    });
+    try {
+      const out = await operator('delete-household', '--hid', h.hid, '--apply', '--confirm', h.hid);
+      const uids = spy.mock.calls[0][0];
+      expect([...uids].sort()).toEqual([h.parent.uid, linked.kid.uid].sort());
+      expect(out).toContain(`These Auth users were not deleted: ${uids[1]}`);
+      expect(out.at(-1)).toMatch(/Firebase console → Authentication → Users .* there is no firebase CLI command/);
+      expect(out.join('\n')).toContain('1 user(s) deleted, 1 failure(s)');
+    } finally {
+      spy.mockRestore();
+    }
     await refused(['delete-household', '--hid', h.hid], /No household/);
   });
 });

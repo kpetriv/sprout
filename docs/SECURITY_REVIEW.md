@@ -21,7 +21,7 @@
 2. Play Integrity and App Check against the real project, then App Check enforcement on Firestore ([P3](#p3-play-integrity-and-app-check), IA-15, IA-16; THREAT_MODEL T11, T33).
 3. Google sign-in on the internal-track build ([P4](#p4-google-sign-in), IA-1).
 4. The published privacy page and `security.txt` with real values after the legal review (DP-12, LM-9; checklist items 4 and 5).
-5. Firebase Instance ID in the release classpath (D-M8-32): exclude it, or keep the disclosure in PRIVACY.md and DATA_SAFETY.md and confirm in P1 what it sends.
+5. Firebase Instance ID in the release classpath (D-M8-32): excluding it breaks Firebase start-up (`firebase-functions` 23.0.0 requires it, D-M8-41), so the disclosure in PRIVACY.md and DATA_SAFETY.md stays; confirm in P1 what it sends.
 
 ## Controls and evidence
 
@@ -37,7 +37,7 @@ Every row of [CONTROLS.md](CONTROLS.md) with links to the evidence that shows it
 | IA-6 | Role gates at the server | Implemented M3 | [`documents.test.ts`](../firestore/test/documents.test.ts), [`events.test.ts`](../firestore/test/events.test.ts), [`registry.test.ts`](../firestore/test/registry.test.ts) | Not needed: CI |
 | IA-7 | One household per uid | Implemented M3 | [`household.test.ts`](../server/test/household.test.ts), [`linking.test.ts`](../server/test/linking.test.ts) | Not needed: CI |
 | IA-8 | Device registry with key attestation | Partial M3 | [`attestation.test.ts`](../server/test/attestation.test.ts) | **No** → [P5](#p5-key-attestation-on-hardware) |
-| IA-9 | A second parent device stays PENDING until an ACTIVE parent device approves it | Implemented M3 | [`devices.test.ts`](../server/test/devices.test.ts) | Not needed: CI |
+| IA-9 | A second parent device stays PENDING until an ACTIVE parent device approves it (operator exception with a 7-day wait, D-M8-43) | Implemented M3 | [`devices.test.ts`](../server/test/devices.test.ts), [`operator.test.ts`](../server/test/operator.test.ts) | Not needed: CI |
 | IA-10 | Kid link codes: 40 bits, 10 minutes, single use, HMAC-stored, rate limited | Implemented M3 | [`linking.test.ts`](../server/test/linking.test.ts), [`logging.test.ts`](../server/test/logging.test.ts) | Not needed: CI |
 | IA-11 | Device proofs on privileged callables, bound to the ID token | Implemented M3 | [`devices.test.ts`](../server/test/devices.test.ts), [`household.test.ts`](../server/test/household.test.ts), [`linking.test.ts`](../server/test/linking.test.ts), [`DeviceProofTest`](../core/sync-firebase/src/test/kotlin/dev/kpetriv/sprout/core/syncfirebase/DeviceProofTest.kt), [`HouseholdAdminFunctionsTest`](../app/src/test/kotlin/dev/kpetriv/sprout/household/HouseholdAdminFunctionsTest.kt) | Not needed: CI |
 | IA-12 | Device revocation (lamport cut, kid user disabled, parent sessions revoked) | Implemented M3 | [`devices.test.ts`](../server/test/devices.test.ts), [`events.test.ts`](../firestore/test/events.test.ts), [`RemoteEventVerifierTest`](../core/domain-ledger/src/test/kotlin/dev/kpetriv/sprout/core/domainledger/RemoteEventVerifierTest.kt) | Not needed: CI |
@@ -92,7 +92,7 @@ Every row of [CONTROLS.md](CONTROLS.md) with links to the evidence that shows it
 | DP-7 | Retention (codes, challenges, rate limits, deletion records, logs, chat) | Partial M3; chat retention M7 | [`linking.test.ts`](../server/test/linking.test.ts), [`ChatRetentionTest`](../app/src/test/kotlin/dev/kpetriv/sprout/chat/ChatRetentionTest.kt), [`server/scripts/operator.ts`](../server/scripts/operator.ts) | Code paths CI; TTL **No** → checklist 6 |
 | DP-8 | No device backups | Implemented M0 | [`AndroidManifest.xml`](../app/src/main/AndroidManifest.xml), [`data_extraction_rules.xml`](../app/src/main/res/xml/data_extraction_rules.xml) | Not needed: CI |
 | DP-9 | `FLAG_SECURE` on onboarding, parent and kid areas; widget data on the kid's own phone only | Implemented M2; structural M7 | [`RequireParentTest`](../feature/lock/src/test/kotlin/dev/kpetriv/sprout/feature/lock/RequireParentTest.kt), [`SecureAreaTest`](../app/src/test/kotlin/dev/kpetriv/sprout/navigation/SecureAreaTest.kt), [`WidgetAdaptersTest`](../app/src/test/kotlin/dev/kpetriv/sprout/widget/WidgetAdaptersTest.kt), [`SproutWidgetContentTest`](../widget/src/test/kotlin/dev/kpetriv/sprout/widget/SproutWidgetContentTest.kt) | CI; M7 emulator walk |
-| DP-10 | Rate-limit rows store no uid, IP or code in clear | Implemented M3 | [`guards.test.ts`](../server/test/guards.test.ts) | Not needed: CI |
+| DP-10 | Rate-limit rows store no uid, IP or code in clear (keyed hash, D-M8-44) | Implemented M3 | [`guards.test.ts`](../server/test/guards.test.ts) | Not needed: CI |
 | DP-11 | Data location (Firestore `eur3`, server `fra1`) | Partial M3 | [`vercel.json`](../server/vercel.json) | **No** → checklist 1 |
 | DP-12 | Privacy notice published at a stable URL | Partial M8 | [PRIVACY.md](PRIVACY.md), [`render.py`](../tools/privacy/render.py), [`check.py`](../tools/privacy/check.py) | **No** → checklist 4, 5 |
 | DP-13 | Parental consent recorded at household creation | Planned (decision D-M8-33) | none yet | Not built (D-M8-33) |
@@ -111,7 +111,7 @@ Every row of [CONTROLS.md](CONTROLS.md) with links to the evidence that shows it
 | SC-1 | npm lockfiles, `npm ci`, pinned tool devDependencies | Implemented M3 | [`server/package-lock.json`](../server/package-lock.json), [`firestore/package-lock.json`](../firestore/package-lock.json) | Not needed: CI |
 | SC-2 | One Gradle version catalog with exact versions | Implemented M0 | [`libs.versions.toml`](../gradle/libs.versions.toml) | Not needed: CI |
 | SC-3 | Deploy CLIs pinned | Implemented M3 | [FIREBASE.md](FIREBASE.md) | Not needed: CI |
-| SC-4 | Vulnerability scanning of npm dependencies | Implemented M8 | [`audit.mjs`](../server/scripts/audit.mjs), [`ci.yml`](../.github/workflows/ci.yml) job `backend` | Not needed: CI |
+| SC-4 | Vulnerability scanning of npm dependencies | Implemented M8 | [`audit.mjs`](../server/scripts/audit.mjs), [`ci.yml`](../.github/workflows/ci.yml) job `backend`. The backend job is not a required check (D-M3-11, CM-3), so a failing audit is visible on the PR but does not block a merge | Not needed: CI |
 | SC-5 | Runtime fetch limited to Google's attestation status list | Implemented M3 | [`attestation.test.ts`](../server/test/attestation.test.ts) | Not needed: CI |
 | SC-6 | Vendor review | Partial M8 | [Vendors](#vendors) | **No** → checklist 6 |
 | SE-1 | No secrets in the repository; secret scanning and push protection | Implemented M0 | [`.gitignore`](../.gitignore) | Repository settings (API read 2026-11-03) |
@@ -119,7 +119,7 @@ Every row of [CONTROLS.md](CONTROLS.md) with links to the evidence that shows it
 | SE-3 | Service-account key and link-code key rotation procedures | Implemented M3 | [RUNBOOK.md](RUNBOOK.md) | Not exercised |
 | SE-4 | Emulator relaxations need `SPROUT_EMULATOR=true` and a `demo-` project | Implemented M3 | [`guards.test.ts`](../server/test/guards.test.ts) | Not needed: CI |
 | SE-5 | Device secrets wrapped by Keystore keys, stored in `noBackupFilesDir` | Implemented M1 | [`WrappedSecretStoreTest`](../core/crypto/src/test/kotlin/dev/kpetriv/sprout/core/crypto/WrappedSecretStoreTest.kt) | Not needed: CI |
-| SE-6 | Release secrets only from CI secrets or the owner's Gradle properties | Partial M8 | [`app/build.gradle.kts`](../app/build.gradle.kts), `.github/workflows/release.yml`, `tools/release/create-upload-keystore.sh` | **No** → checklist 9 |
+| SE-6 | Release secrets only from the protected `release` environment (D-M8-42) or the owner's Gradle properties | Partial M8 | [`app/build.gradle.kts`](../app/build.gradle.kts), `.github/workflows/release.yml`, `tools/release/create-upload-keystore.sh` | **No** → checklist 9 |
 
 ## Owner procedures
 
@@ -285,7 +285,7 @@ Unchanged from the [threat model](THREAT_MODEL.md#accepted-risks) unless noted; 
 - Attestation leniency in the details (software keys accepted and shown; boot state logged, not enforced; revocation list fails open).
 - No server-side backups on Spark (AV-7), accepted for v1 at this review.
 - Rate-limit buckets hash IP addresses without a salt.
-- **New at M8:** Firebase Instance ID ships inside the Functions client (D-M8-32) until it is excluded; disclosed in PRIVACY.md and DATA_SAFETY.md.
+- **New at M8:** Firebase Instance ID ships inside the Functions client (D-M8-32), which cannot start without it (D-M8-41); disclosed in PRIVACY.md and DATA_SAFETY.md.
 - **New at M8:** Google Play services' per-receipt-scan usage event (D-M6-51), disclosed and gated by the AI switch.
 - **Product, not security:** the splash window is not `FLAG_SECURE` (D-M7-76, no household data); the widget on a background kid phone follows the next sync (D-M7-72).
 

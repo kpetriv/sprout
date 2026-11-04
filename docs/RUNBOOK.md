@@ -39,11 +39,13 @@
 3. **Kid devices** need nothing: they keep syncing; they hold anything the lost phone writes after revocation as quarantined.
 4. **Re-adding a replacement phone:** sign in on it, then approve it from the remaining parent phone ("New device waiting", compare fingerprints).
 
-**The lost phone was the household's only parent device** (or every phone of the only parent is gone). There is no in-app recovery: a new phone registers PENDING, and only an ACTIVE parent device can approve it or revoke the old one. The operator script does what `revokeDevice` and `approveDevice` would (D-M3-42, D-M8-14); never edit the registry by hand in the console.
+**The lost phone was the household's only parent device** (or every phone of the only parent is gone). There is no in-app recovery: a new phone registers PENDING, and only an ACTIVE parent device can approve it or revoke the old one. The operator script does what `revokeDevice` and `approveDevice` would (D-M3-42, D-M8-14, D-M8-43); never edit the registry by hand in the console.
+
+This path is also the one an attacker who took over the parent's Google account would use (threat model T41): they can sign in on their own phone and write to you that "the phone is lost". So the script never revokes a phone of the account that still works (ACTIVE) until the new phone has waited **7 days**; in that time the working phone shows "New device waiting" on the dashboard and lists the new phone in Settings → Devices as "Waiting for approval", where the real parent taps **Remove**. Never shorten the wait in production (`--waiting-period-days` exists for tests only).
 
 1. **The parent signs in on the new phone** with the same Google account. It registers PENDING and shows its fingerprint (four groups of four hex characters).
 2. **Find the ids** in the Firebase console: Authentication → search the account → *User UID*; Firestore → `userHouseholds/{uid}` → `hid`. Do not copy the e-mail address into notes; the incident record uses the uid and hid.
-3. **Verify the requester controls that Google account** before anything else: send a one-time phrase to the account's address and have them read it back to you from the new phone's session (or reply from the account). A caller who cannot do this is refused; the household's data stays where it is.
+3. **Verify the requester controls that Google account** before anything else: send a one-time phrase to the account's address and have them read it back to you from the new phone's session (or reply from the account). A caller who cannot do this is refused; the household's data stays where it is. This proves control of the mailbox, which an attacker with the account also has: it is necessary, not sufficient, hence the dry run's checks below.
 4. **Dry run** (from `server/`, with credentials as in FIREBASE.md "Operator script"):
 
    ```
@@ -51,14 +53,21 @@
    npm run operator -- recover-household --hid <hid> --new-parent-uid <uid> --production
    ```
 
-   Expected: `Target: PRODUCTION project sprout-3e1c7`, then `admit PENDING parent device <deviceId> of user <uid> as ACTIVE`, one `revoke parent device …` line per other phone of that parent (the lost ones) and `revoke the sessions of user <uid>`. The first 16 characters of `<deviceId>` must be the fingerprint the new phone shows; if the parent registered more than one phone the script lists them and needs `--device <deviceId>`. It refuses when another parent of the household still has an ACTIVE phone (that parent approves the new phone in the app instead), when the uid is not a parent of that household, or when nothing is PENDING.
+   Expected: `Target: PRODUCTION project sprout-3e1c7`, the household's parent devices (`<deviceId> user <uid> <status> registered <time>`), then `admit PENDING parent device <deviceId> of user <uid> as ACTIVE`, one `revoke parent device …` line per other phone of that parent (the lost ones) and `revoke the sessions of user <uid>`, and the exact `--apply --device <deviceId> --confirm <hid>` to use. Check:
+   - the first 16 characters of `<deviceId>` are the fingerprint the new phone shows (if the parent registered more than one phone the script lists them and needs `--device <deviceId>`);
+   - **an ACTIVE phone in the revoke lines is a red flag**: it was working, so the "lost" phone may not be lost. Ask when it was last used, and whether the requester can still open it (then they approve the new phone there instead). The dry run then also says `--apply would be refused: … wait until <time>` while the new phone registered less than 7 days ago. Tell the requester to keep the new phone signed in and come back after that time; do not apply earlier. If the new phone disappears from the list (the working phone removed it), stop and treat the request as an attack: note it in the incident, tell the account's owner through the household's other contact if there is one;
+   - a phone `(admitted by the operator)` shows an earlier recovery.
+
+   It refuses when another parent of the household still has an ACTIVE phone (that parent approves the new phone in the app instead), when the uid is not a parent of that household, or when nothing is PENDING.
 5. **Apply:**
 
    ```
-   npm run operator -- recover-household --hid <hid> --new-parent-uid <uid> --ticket <incident-id> --apply --confirm <hid> --production
+   npm run operator -- recover-household --hid <hid> --new-parent-uid <uid> --device <deviceId> --ticket <incident-id> --apply --confirm <hid> --production
    ```
 
    The new phone becomes ACTIVE (`approvedBy: "operator"`); each lost phone becomes REVOKED at a lamport above everything it wrote, with its parent keys stamped, as an in-app revocation does (the start of this section); the parent's refresh tokens are revoked and `tokensValidAfter` set, so **every phone of that account signs out, the new one included**: the parent signs in again on it and carries on as after an in-app approval (registering the parent key for signing). A lost phone wipes itself when it next comes online, as above. `recoveries/{id}` records `{ hidHash, at, deviceId, revokedDevices, ticket }` (no uid, no name); put that id in the incident record. Delete the key file afterwards (§7).
+
+   `--apply` always needs the `--device` the dry run admitted. If the run stops after the transaction while revoking the sessions (a network error: it exits 1 and names the devices left), run the same command again without `--device`: with nothing PENDING it completes the session revocation (`complete: revoke the sessions of user <uid> …` in the dry run).
 
 If the parent has also lost the Google account, the household cannot be recovered: Google's account recovery comes first; failing that, the only path is deleting the household (§4).
 
@@ -96,7 +105,9 @@ Suggest an **export first** (Settings → Data → Export household), which is t
    # Done: deletionRecords row written (hidHash …); 2 user(s) deleted, 0 failure(s)
    ```
 
-   If users failed to delete, run the apply again (it records the deletion again, as an in-app retry does). Record the `hidHash` in the incident, not the hid.
+   If Auth users failed to delete, the output lists their uids (`These Auth users were not deleted: …`). Do **not** run the apply again: the household's rows are gone, so a second run finds nothing (`No household`). Delete each uid by hand: Firebase console → Authentication → Users → search the UID → ⋮ → **Delete account** (there is no `firebase` CLI command for it). Note in the incident that they were removed. A count of link code, challenge or `userHouseholds` rows that failed is printed too: expired codes and challenges go with the monthly prune; delete a left-over `userHouseholds/<uid>` row in the console. Record the `hidHash` in the incident, not the hid.
+
+   The in-app deletion logs only counts (`household.deleted`: `userDeleteFailures`, `cleanupFailures`); a failure there leaves an Auth user with no household data behind it. The log holds counts only, by design, so there is no list: when it shows failures, `npx --prefix firestore firebase auth:export /tmp/users.json --project sprout-3e1c7`, delete (as above) each user whose `customAttributes` name a `hid` with no `households/<hid>` document, then delete `/tmp/users.json` (it holds e-mail addresses).
 
 **Retention after deletion.** `deletionRecords` and `recoveries` rows: 12 months (PRIVACY.md), then deleted by the monthly prune below. Server logs: Vercel's log retention (PRIVACY.md); they carry ids and counts only. Link codes, challenges and rate-limit rows expire on their own (TTL on `expiresAt`, FIREBASE.md checklist step 6).
 
@@ -185,7 +196,7 @@ npx vercel@64.7.0 --prod
 git checkout public          # back to the committed example pages
 ```
 
-Vercel's production build runs `npm run check:deploy`, which fails the deployment while the pages carry example or placeholder values or `security.txt` has expired. Then the smoke check (§6) and `curl -sI https://<production-url>/privacy` (200, `content-security-policy` and `cache-control: public, max-age=3600`). Never set `SPROUT_EMULATOR`, `ALLOW_UNATTESTED`, `FIRESTORE_EMULATOR_HOST` or `FIREBASE_AUTH_EMULATOR_HOST` on Vercel. A rules change that tightens what clients may write can leave outbox items "sync blocked" on devices that wrote under the old rules; ship the client change first.
+Vercel's build runs `npm run check:deploy` for every deployment except previews and development builds (a missing `VERCEL_ENV` counts as production), which fails the deployment while the pages carry example or placeholder values or `security.txt` has expired, and warns when `security.txt` expires within 60 days. **Yearly:** before the `Expires` date in `security.txt` (a year after `EFFECTIVE_DATE`), set a new `EFFECTIVE_DATE` or `SECURITY_TXT_EXPIRES` in `docs/privacy.properties`, re-render and redeploy (RELEASE_CHECKLIST item 5). Then the smoke check (§6) and `curl -sI https://<production-url>/privacy` (200, `content-security-policy` and `cache-control: public, max-age=3600`). Never set `SPROUT_EMULATOR`, `ALLOW_UNATTESTED`, `FIRESTORE_EMULATOR_HOST` or `FIREBASE_AUTH_EMULATOR_HOST` on Vercel. A rules change that tightens what clients may write can leave outbox items "sync blocked" on devices that wrote under the old rules; ship the client change first.
 
 ## 9. Reproducing locally with the emulators
 

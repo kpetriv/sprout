@@ -23,7 +23,8 @@ import org.gradle.kotlin.dsl.register
 import java.io.File
 
 /**
- * Checks on the shrunk release build (M8 §3, §4), both part of `check` and of `bundleRelease`:
+ * Checks on the shrunk release build (M8 §3, §4), both part of `check` and of every task that builds or ships the
+ * Play bundle (`bundleRelease`, `signReleaseBundle`, Play Publisher's tasks; app/build.gradle.kts):
  *
  * - `checkReleaseMapping`: R8 ran for release and wrote a non-empty `mapping.txt` (uploaded with the bundle so Play
  *   can de-obfuscate crashes), and reported no missing classes: R8 writes the `-dontwarn` rules it would need to
@@ -56,8 +57,9 @@ internal fun Project.configureReleaseChecks() {
             mappingFile.from(mapping)
             report.set(layout.buildDirectory.file("reports/release-checks/app-check.txt"))
         }
+        // The tasks that build or ship the Play bundle depend on both as well, wired in app/build.gradle.kts with the
+        // app's own release checks (audit L1).
         tasks.named("check") { dependsOn(checkMapping, checkAppCheck) }
-        tasks.matching { it.name == "bundleRelease" }.configureEach { dependsOn(checkMapping, checkAppCheck) }
     }
 }
 

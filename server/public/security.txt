@@ -4,5 +4,6 @@
 Contact: mailto:security@example.invalid
 Expires: 2027-11-04T00:00:00Z
 Canonical: https://sprout.example.invalid/.well-known/security.txt
+Canonical: https://sprout.example.invalid/security.txt
 Policy: https://sprout.example.invalid/security
 Preferred-Languages: en

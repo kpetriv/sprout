@@ -51,7 +51,7 @@ Evidence to paste: "Fingerprints registered (upload, debug) <date>; checkRelease
 ### 4. Privacy policy values, legal review and rendering
 
 - [ ] Legal review of [PRIVACY.md](PRIVACY.md) and [SECURITY.md](SECURITY.md): every **Owner (legal)** note (controller identity, lawful bases, parental consent D-M8-33, processors, retention figures, the 30-day e-mail deletion, safe harbour). Change the Markdown, not the rendered page.
-- [ ] Decide the D-M6-51 question and D-M8-32 (Firebase Instance ID) ([DATA_SAFETY.md](DATA_SAFETY.md#the-d-m6-51-question-owner-and-legal-review)).
+- [ ] Decide the D-M6-51 question ([DATA_SAFETY.md](DATA_SAFETY.md#the-d-m6-51-question-owner-and-legal-review)) and confirm the Firebase Instance ID disclosure (D-M8-32: it cannot be excluded, D-M8-41).
 - [ ] Fill the values and render:
 
 ```
@@ -73,7 +73,7 @@ Follow FIREBASE.md "Service account (least privilege)" and "Deploying the server
 cd server && npx vercel@64.7.0 --prod
 ```
 
-Vercel's build runs `npm run check:deploy`, which refuses placeholder pages. Then restore the committed example pages: `git checkout server/public` (or `python3 tools/privacy/render.py && npm --prefix server run build:static -- --example`), and check `git status` is clean.
+`LINK_CODE_HMAC_KEY` is required: link codes and the rate limit of every callable are keyed from it (D-M8-44), so without it every callable answers `internal`. Vercel's build runs `npm run check:deploy`, which refuses placeholder pages. Then restore the committed example pages: `git checkout server/public` (or `python3 tools/privacy/render.py && npm --prefix server run build:static -- --example`), and check `git status` is clean.
 
 Verify:
 
@@ -85,6 +85,8 @@ curl -s -o /dev/null -w '%{http_code}\n' -X POST https://<host>/deviceStatus -H 
 ```
 
 - [ ] Deploy the Firestore rules and indexes: `npx --no-install --prefix firestore firebase deploy --only firestore --project sprout-3e1c7`.
+
+- [ ] **Yearly reminder:** put a calendar reminder 60 days before the `Expires` date `security.txt` shows (a year after `EFFECTIVE_DATE`): set a new `EFFECTIVE_DATE` (or `SECURITY_TXT_EXPIRES`) in `docs/privacy.properties`, re-render, `npm --prefix server run build:static`, redeploy as above. `check:deploy` warns from 60 days before and refuses an expired file.
 
 Evidence to paste: "Server deployed <date>, region fra1; /privacy 200; security.txt Expires <date>; unauthenticated callable 401; rules deployed" → CONTROLS AV-8, SE-2, IA-21, CM-11, DP-12, LM-9.
 
@@ -129,38 +131,70 @@ Evidence to paste: "Data safety submitted <date> from DATA_SAFETY.md at <commit>
 
 ### 9. Build and upload the release (internal track)
 
-Repository secrets for `.github/workflows/release.yml` (D-M8-5; names as in that workflow), set once with `gh`:
+**The `release` environment** (D-M8-42, audit M2). The repository is public: a repository-wide secret could be read by any workflow on any branch, so the signing secrets live only in a protected environment. Once:
+
+- [ ] GitHub → the repository → Settings → Environments → **New environment** `release` → *Deployment branches and tags*: **Selected branches and tags** → add `main` only → *Required reviewers*: yourself → *Prevent self-review* off (you are the only reviewer) → Save. With `gh` (your numeric id: `gh api user --jq .id`): `gh api -X PUT repos/<owner>/<repo>/environments/release -F 'deployment_branch_policy[protected_branches]=false' -F 'deployment_branch_policy[custom_branch_policies]=true' -f 'reviewers[][type]=User' -F 'reviewers[][id]=<your id>'`, then `gh api -X POST repos/<owner>/<repo>/environments/release/deployment-branch-policies -f name=main -f type=branch`. Check in Settings → Environments that it shows `main` and you as reviewer.
+- [ ] Delete any repository-level copies of these secrets (`gh secret list`; `gh secret delete <name>`).
+- [ ] Optional: a tag ruleset (Settings → Rules → Rulesets → New tag ruleset, target `v*`, restrict creations to yourself).
+
+Environment secrets (names as in `.github/workflows/release.yml`), set once with `gh` (each `gh secret set` without `--body` asks for the value; never type it on the command line):
 
 ```
-base64 -i app/google-services.json        | gh secret set GOOGLE_SERVICES_JSON
-base64 -i ~/.sprout/sprout-upload.jks      | gh secret set SPROUT_UPLOAD_KEYSTORE_BASE64
-gh secret set SPROUT_UPLOAD_KEYSTORE_PASSWORD      # paste when asked; never on the command line
-gh secret set SPROUT_UPLOAD_KEY_ALIAS
-gh secret set SPROUT_UPLOAD_KEY_PASSWORD
-gh secret set SPROUT_FUNCTIONS_BASE_URL --body 'https://<host>'
-gh secret set SPROUT_GOOGLE_SERVER_CLIENT_ID --body '<id>.apps.googleusercontent.com'
-gh secret set SPROUT_PRIVACY_URL --body 'https://<host>/privacy'
+base64 -i app/google-services.json        | gh secret set GOOGLE_SERVICES_JSON_B64 --env release
+base64 -i ~/.sprout/sprout-upload.jks      | gh secret set SPROUT_UPLOAD_KEYSTORE_BASE64 --env release
+gh secret set SPROUT_UPLOAD_KEYSTORE_PASSWORD --env release      # paste when asked
+gh secret set SPROUT_UPLOAD_KEY_ALIAS --env release
+gh secret set SPROUT_UPLOAD_KEY_PASSWORD --env release
+gh secret set SPROUT_FUNCTIONS_BASE_URL --env release --body 'https://<host>'
+gh secret set SPROUT_GOOGLE_SERVER_CLIENT_ID --env release --body '<id>.apps.googleusercontent.com'
+gh secret set SPROUT_PRIVACY_URL --env release --body 'https://<host>/privacy'
+# optional: only when the disclosure page is not /security on the privacy page's host
+gh secret set SPROUT_SECURITY_URL --env release --body 'https://<host>/security'
 # optional, publishes to the internal track (off unless set): a Play service account with release permissions
-gh secret set PLAY_SERVICE_ACCOUNT_JSON < play-service-account.json && rm play-service-account.json
+gh secret set PLAY_SERVICE_ACCOUNT_JSON --env release < play-service-account.json && rm play-service-account.json
 ```
 
-Tag and run (the version name comes from the tag, the version code from the commit count unless overridden; D-M8-4):
+Tag a commit on `main` that CI built green, and run the workflow from `main` (the version name comes from the tag; see "Versioning" below):
 
 ```
+git switch main && git pull && gh run list --workflow ci.yml --branch main --limit 1   # completed, success
 git tag -a v1.0.0 -m "Sprout 1.0.0" && git push origin v1.0.0
-gh workflow run release.yml -f tag=v1.0.0
-gh run watch                                       # the gate, bundleRelease, checkReleaseMapping, artifacts
-gh run download --name <AAB artifact name>         # the signed AAB and mapping.txt
+gh workflow run release.yml --ref main -f tag=v1.0.0
+# approve the deployment when GitHub asks (the run page, or the e-mail), then:
+gh run watch                                       # tag on main, CI passed, static checks, bundleRelease, the checks
+gh run download --name sprout-v1.0.0               # the signed AAB and mapping.txt
 ```
+
+The run summary shows the versionCode it built. The workflow refuses a tag whose commit is not on `main`, a commit without a successful CI run (tag the head commit of a push), a `gradle.properties` that sets `sprout.allowUnconfiguredRelease`, and any missing secret (by name).
 
 Without the Play secret, upload the AAB by hand: Play Console → Test and release → Internal testing → Create release → upload → add testers (a Google group or e-mails) → Save and roll out.
 
-Local alternative (same checks, signing from `~/.gradle/gradle.properties`): `./gradlew :app:bundleRelease` → `app/build/outputs/bundle/release/app-release.aab`.
+**Local alternative** (the same Gradle checks; it skips the workflow's tag, main and CI checks and the inventory step, so run `python3 tools/privacy/inventory.py --check` yourself): on a clean checkout of the tag, with `app/google-services.json` in place, the signing values from item 2 and the configuration from item 3 in `~/.gradle/gradle.properties`, or on the command line:
 
-- [ ] After the first upload: Play Console → App integrity → App signing → copy the **app signing key** SHA-1 and SHA-256 → add both in Firebase (item 3) and download `google-services.json` again; update the `GOOGLE_SERVICES_JSON` secret.
+```
+git switch --detach v1.0.0
+./gradlew :app:bundleRelease \
+  -Psprout.functionsBaseUrl=https://<host> \
+  -Psprout.googleServerClientId=<id>.apps.googleusercontent.com \
+  -Psprout.privacyUrl=https://<host>/privacy        # only if not <host>/privacy
+# -> app/build/outputs/bundle/release/app-release.aab
+```
+
+`-Psprout.allowUnconfiguredRelease=true` waives the configuration check for a local test bundle only; never upload one built that way.
+
+- [ ] After the first upload: Play Console → Test and release → App integrity → App signing → copy the **app signing key** SHA-1 and SHA-256 → add both in Firebase (item 3) and download `google-services.json` again; update the secret: `base64 -i app/google-services.json | gh secret set GOOGLE_SERVICES_JSON_B64 --env release`.
 - [ ] Keep `mapping.txt` with the release (Play Console also takes it for deobfuscated crash stacks).
 
-Evidence to paste: "v1.0.0 (versionCode <n>) built by release.yml run <id> on <date>; internal track rolled out; app signing SHA registered" → CONTROLS SE-6.
+#### Versioning
+
+- **versionName** is the newest `v*` tag reachable from the commit, without the `v` (`v1.2.0` builds `1.2.0`). Without a tag a build is `0.1.0-dev`, which `checkReleaseConfiguration` refuses for a Play bundle (D-M8-46).
+- **versionCode** is the number of commits on the tagged commit (`git rev-list --count HEAD`), or the `version_code` input (`-f version_code=<n>`; locally `-PversionCode=<n>`).
+- **Release from `main` only:** the commit count grows only along one branch, so a tag on another branch could go backwards.
+- **Every upload needs a higher versionCode than the last one Play has:** Play refuses a code it has seen ("Version code N has already been used"). Re-running the workflow for the same tag, or a second tag on the same commit, builds the same code: pass `-f version_code=<last + 1>` (the last code is in Play Console → App bundle explorer, or the previous run's summary), or make a new commit and tag.
+- **Full history:** a shallow clone counts only the fetched commits (versionCode 1); the workflow checks out with full history.
+- Debug builds carry the same numbers.
+
+Evidence to paste: "v1.0.0 (versionCode <n>) built by release.yml run <id> on <date> in the release environment; internal track rolled out; app signing SHA registered" → CONTROLS SE-6.
 
 ### 10. Device verification
 

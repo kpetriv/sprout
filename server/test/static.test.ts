@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { loadProperties, propertiesFile, renderSecurityTxt, staleSecurityTxt, writeSecurityTxt } from '../scripts/build-static.js';
-import { deployProblems } from '../scripts/check-deploy.js';
+import { deployProblems, expiryWarning, shouldCheck } from '../scripts/check-deploy.js';
 import { createApp } from '../src/index.js';
 import { DEFAULT_PUBLIC_DIR, HTML, STATIC_HEADERS, STATIC_ROUTES, TEXT } from '../src/static.js';
 import { app, testAppCheck } from './helpers.js';
@@ -142,6 +142,7 @@ describe('build:static (security.txt)', () => {
         'Contact: mailto:security@sprout.dev',
         'Expires: 2027-11-04T00:00:00Z',
         'Canonical: https://sprout.dev/.well-known/security.txt',
+        'Canonical: https://sprout.dev/security.txt',
         'Policy: https://sprout.dev/security',
         'Preferred-Languages: en',
         '',
@@ -159,6 +160,7 @@ describe('build:static (security.txt)', () => {
     });
     expect(txt).toContain('Contact: https://sprout.dev/report\n');
     expect(txt).toContain('Canonical: https://policy.sprout.dev/.well-known/security.txt\n');
+    expect(txt).toContain('Canonical: https://policy.sprout.dev/security.txt\n');
     expect(txt).toContain('Expires: 2027-06-30T00:00:00Z\n');
     expect(txt).toContain('Policy: https://sprout.dev/disclosure\n');
     // Without SECURITY_CONTACT the privacy contact is used.
@@ -231,11 +233,10 @@ describe('check:deploy', () => {
   });
 
   it('refuses placeholders, example domains, unfilled values, a missing page and an expired or split security.txt', async () => {
-    await writeFile(join(dir, 'privacy/index.html'), '<meta name="sprout-placeholder" content="true">{{CONTACT_EMAIL}}');
+    await writeFile(join(dir, 'privacy/index.html'), '<p>{{CONTACT_EMAIL}}</p>');
     await writeFile(join(dir, 'security/index.html'), page('x').replace('privacy@sprout.dev', 'a@example.invalid (to be filled)'));
     await writeFile(join(dir, 'security.txt'), 'Contact: mailto:x@sprout.dev\n');
     expect(await deployProblems(dir, new Date('2027-11-05T00:00:00Z'))).toEqual([
-      'public/privacy/index.html is the committed placeholder',
       'public/privacy/index.html has unfilled {{…}} placeholders',
       'public/security/index.html has "(to be filled)" values',
       'public/security/index.html names an example domain',
@@ -244,5 +245,21 @@ describe('check:deploy', () => {
     ]);
     await rm(join(dir, 'privacy/index.html'));
     expect(await deployProblems(dir, new Date('2026-11-05T00:00:00Z'))).toContain('public/privacy/index.html is missing');
+  });
+
+  it('checks every build but Vercel previews and development builds, VERCEL_ENV missing included (audit L5)', () => {
+    expect(shouldCheck({ VERCEL: '1', VERCEL_ENV: 'production' })).toBe(true);
+    expect(shouldCheck({ VERCEL: '1' })).toBe(true);
+    expect(shouldCheck({})).toBe(true);
+    expect(shouldCheck({ VERCEL: '1', VERCEL_ENV: 'staging' })).toBe(true);
+    expect(shouldCheck({ VERCEL: '1', VERCEL_ENV: 'preview' })).toBe(false);
+    expect(shouldCheck({ VERCEL: '1', VERCEL_ENV: 'development' })).toBe(false);
+    expect(shouldCheck({ VERCEL_ENV: 'preview' }, true)).toBe(true);
+  });
+
+  it('warns when security.txt expires within 60 days', async () => {
+    expect(await expiryWarning(dir, new Date('2027-08-01T00:00:00Z'))).toBeUndefined();
+    expect(await expiryWarning(dir, new Date('2027-10-05T00:00:00Z'))).toMatch(/^security.txt expires in 30 day\(s\)/);
+    expect(await expiryWarning(dir, new Date('2027-12-01T00:00:00Z'))).toBeUndefined();
   });
 });

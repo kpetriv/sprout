@@ -1,7 +1,8 @@
+import { createHmac, hkdfSync } from 'node:crypto';
 import { FieldValue, Timestamp } from 'firebase-admin/firestore';
 import { HttpsError } from './https.js';
 import { db } from './firebase.js';
-import { sha256Hex } from './crypto.js';
+import { linkCodeKey } from './config.js';
 import { log } from './log.js';
 
 /** One limit: at most [max] calls per [windowMs], as a sliding window over the stored call times. */
@@ -43,14 +44,38 @@ export type Callable = keyof typeof LIMITS;
 /** The callables of a signed-in user, limited per uid and IP ([limitCaller]). */
 export type UserCallable = Exclude<Callable, 'deviceStatus'>;
 
+/** HKDF `info` of the rate-limit id key (D-M8-44): derived from LINK_CODE_HMAC_KEY, so there is no new secret. */
+export const RATE_LIMIT_KEY_INFO = 'sprout/rate-limit/v1';
+
+let derived: { from: string; key: Buffer } | undefined;
+
+/**
+ * The HMAC key of rate-limit bucket ids: HKDF-SHA256 of the link-code key ([linkCodeKey]: the variable in production,
+ * the public dev key in the emulator), empty salt, info [RATE_LIMIT_KEY_INFO], 32 bytes. Without the server's secret a
+ * copy of `rateLimits` cannot be turned back into IP addresses by enumerating the IPv4 space (audit L4).
+ */
+function rateLimitKey(): Buffer {
+  const source = linkCodeKey();
+  if (derived?.from !== source) {
+    derived = { from: source, key: Buffer.from(hkdfSync('sha256', source, Buffer.alloc(0), RATE_LIMIT_KEY_INFO, 32)) };
+  }
+  return derived.key;
+}
+
+/** The `rateLimits` document id of ([callable], [kind], [key]): `<callable>_<kind>_<hmac(key)[0..32]>`. */
+export function rateLimitBucket(callable: Callable, kind: string, key: string): string {
+  const digest = createHmac('sha256', rateLimitKey()).update(`${callable}|${kind}|${key}`, 'utf8').digest('hex');
+  return `${callable}_${kind}_${digest.slice(0, 32)}`;
+}
+
 /**
  * Records one call in `rateLimits/{bucket}` and throws `resource-exhausted` when the window is full. The bucket id is
- * `<callable>_<kind>_<sha256(key)[0..32]>`: the key (a uid, an IP address or a code hash) is never stored in clear.
- * Rows carry `expiresAt` for a Firestore TTL policy. A refused call is not recorded, so a caller that waits regains
- * capacity as old calls leave the window.
+ * [rateLimitBucket], a keyed hash: the key (a uid, an IP address or a code hash) is never stored in clear and cannot be
+ * recovered without the server's secret. Rows carry `expiresAt` for a Firestore TTL policy. A refused call is not
+ * recorded, so a caller that waits regains capacity as old calls leave the window.
  */
 export async function hit(callable: Callable, kind: string, key: string, limit: Limit, now = Date.now()) {
-  const bucket = `${callable}_${kind}_${sha256Hex(`${callable}|${kind}|${key}`).slice(0, 32)}`;
+  const bucket = rateLimitBucket(callable, kind, key);
   const ref = db.collection('rateLimits').doc(bucket);
   const allowed = await db.runTransaction(async (tx) => {
     const snap = await tx.get(ref);

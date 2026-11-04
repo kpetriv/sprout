@@ -6,7 +6,7 @@
 #
 # The upload keystore defaults to $SPROUT_UPLOAD_KEYSTORE and the alias to $SPROUT_UPLOAD_KEY_ALIAS (else
 # "sprout-upload"); the password comes from $SPROUT_UPLOAD_KEYSTORE_PASSWORD or is asked for. Without an upload
-# keystore only the debug key is shown. Play App Signing's own key is in Play Console -> Setup -> App signing.
+# keystore only the debug key is shown. Play App Signing's own key is in Play Console -> Test and release -> App integrity -> App signing.
 set -euo pipefail
 
 command -v keytool >/dev/null || { echo "keytool (from a JDK) is not on PATH." >&2; exit 1; }

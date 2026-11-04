@@ -1,5 +1,6 @@
 import com.android.build.api.artifact.SingleArtifact
 import com.github.triplet.gradle.androidpublisher.ReleaseStatus
+import dev.kpetriv.sprout.buildlogic.FALLBACK_VERSION_NAME
 import java.net.URI
 import javax.xml.parsers.DocumentBuilderFactory
 
@@ -53,26 +54,32 @@ if (file("google-services.json").exists()) {
 val firebaseEmulatorHost: String = providers.gradleProperty("sprout.firebaseEmulatorHost").orElse("10.0.2.2").get()
 
 /**
+ * A Gradle property, with a blank value treated as absent (review L7): the release workflow passes `-P<name>=` with an
+ * empty value when an optional secret is unset, and that must fall back to the default rather than fail as "not https".
+ */
+fun nonBlankProperty(name: String): String? = providers.gradleProperty(name).orNull?.takeIf(String::isNotBlank)
+
+/**
  * Base URL of the household callables (`server/`, D-M3-29) as seen from the device. Debug default: the host's
  * port 8787 through the Android emulator's loopback alias; release: only when the property is set.
  */
-val functionsBaseUrl: String? = providers.gradleProperty("sprout.functionsBaseUrl").orNull
+val functionsBaseUrl: String? = nonBlankProperty("sprout.functionsBaseUrl")
 
 /** OAuth web client id Google ID tokens are issued for; only exists with a real Firebase project (D-M3-2). */
-val googleServerClientId: String? = providers.gradleProperty("sprout.googleServerClientId").orNull
+val googleServerClientId: String? = nonBlankProperty("sprout.googleServerClientId")
 
 /**
  * The hosted privacy policy (About → "Privacy policy", M8 §1): `sprout.privacyUrl`, by default the Sprout server's
  * `/privacy` page (`<sprout.functionsBaseUrl>/privacy`, D-M8-1). Debug builds fall back to the local server's.
  */
-val privacyUrl: String? = providers.gradleProperty("sprout.privacyUrl").orNull
+val privacyUrl: String? = nonBlankProperty("sprout.privacyUrl")
     ?: functionsBaseUrl?.let { it.trimEnd('/') + "/privacy" }
 
 /**
  * The disclosure policy (About → "Security and disclosure"): `sprout.securityUrl`, by default the `/security` page on
  * the privacy page's host (the Sprout server serves it next to `/privacy` and `/.well-known/security.txt`).
  */
-val securityUrl: String? = providers.gradleProperty("sprout.securityUrl").orNull
+val securityUrl: String? = nonBlankProperty("sprout.securityUrl")
     ?: privacyUrl?.let { url -> runCatching { URI(url) }.getOrNull()?.let { "${it.scheme}://${it.rawAuthority}" } }
         ?.let { "$it/security" }
 
@@ -100,9 +107,10 @@ val uploadSigningReady: Boolean = uploadSigning.values.all { it != null } && upl
 /**
  * Release builds must be shippable (audit Low 5, D-M8-3): an https callable base URL (`sprout.functionsBaseUrl`;
  * release never falls back to Cloud Functions), `app/google-services.json`, the OAuth web client id, https privacy and
- * security URLs, and the upload key. `bundleRelease` (the Play artifact) fails without them unless
- * `-Psprout.allowUnconfiguredRelease=true` (CI, never shipped); `assembleRelease` (part of `build`) does not check.
- * Problems name the missing variable or property, never a value.
+ * security URLs, the upload key, and a version name from a `v*` tag (not [FALLBACK_VERSION_NAME]). Every task that
+ * builds or ships the Play bundle fails without them unless `-Psprout.allowUnconfiguredRelease=true` (a local test
+ * bundle that is never shipped; the release workflow passes `=false`); `assembleRelease` (part of `build`) does not
+ * check. Problems name the missing variable or property, never a value.
  */
 val allowUnconfiguredRelease: Boolean =
     providers.gradleProperty("sprout.allowUnconfiguredRelease").map(String::toBoolean).orElse(false).get()
@@ -127,23 +135,52 @@ val releaseConfigurationProblems: List<String> = buildList {
         add("SPROUT_UPLOAD_KEYSTORE does not name an existing keystore file")
     }
 }
+
+/** The release variant's version name (build-logic Versioning.kt), read when checkReleaseConfiguration runs. */
+val releaseVersionName: Property<String> = objects.property(String::class.java)
+androidComponents {
+    onVariants(selector().withName("release")) { variant ->
+        releaseVersionName.set(variant.outputs.first().versionName)
+    }
+}
 val checkReleaseConfiguration = tasks.register("checkReleaseConfiguration") {
     description = "Fails a release build that is not configured for the real backend."
     val problems = releaseConfigurationProblems
     val allowed = allowUnconfiguredRelease
+    val versionName = releaseVersionName
     doLast {
-        if (problems.isNotEmpty() && !allowed) {
+        val version = versionName.orNull
+        val all = problems + listOfNotNull(
+            "the version name is the fallback $FALLBACK_VERSION_NAME: build from a v* tag (git tag -a v1.2.3)"
+                .takeIf { version == null || version == FALLBACK_VERSION_NAME },
+        )
+        if (all.isNotEmpty() && !allowed) {
             throw GradleException(
-                "Release build is not configured: " + problems.joinToString("; ") +
+                "Release build is not configured: " + all.joinToString("; ") +
                     ". Pass -Psprout.allowUnconfiguredRelease=true only for builds that are never shipped.",
             )
         }
     }
 }
+
+/**
+ * Every task that builds or ships the Play bundle runs the four release checks first, not only CI's `check` (audit 2
+ * I-a, audit L1): `bundleRelease`, `signReleaseBundle` (the bundle's last producer, which Gradle Play Publisher depends
+ * on through the bundle artifact rather than `bundleRelease`) and Play Publisher's `publishRelease*` and
+ * `uploadReleasePrivateBundle`. A publish task given `--artifact-dir` builds nothing (it uploads a bundle that was
+ * built and checked before, as the release workflow does), so it is left alone.
+ */
+val publishesPrebuiltArtifact: Boolean = gradle.startParameter.taskNames.any { it.startsWith("--artifact-dir") }
+val releaseChecks = listOf(
+    checkReleaseConfiguration,
+    "checkMergedManifestForTelemetryRelease",
+    "checkReleaseMapping",
+    "checkReleaseAppCheck",
+)
 tasks.configureEach {
-    // A local Play bundle runs the release checks too, not only CI's `check` (audit 2 I-a).
-    // checkReleaseMapping and checkReleaseAppCheck are wired by the application convention plugin (ReleaseChecks.kt).
-    if (name == "bundleRelease") dependsOn(checkReleaseConfiguration, "checkMergedManifestForTelemetryRelease")
+    val builds = name == "bundleRelease" || name == "signReleaseBundle"
+    val ships = name.startsWith("publishRelease") || name == "uploadReleasePrivateBundle"
+    if (builds || (ships && !publishesPrebuiltArtifact)) dependsOn(releaseChecks)
 }
 
 /**

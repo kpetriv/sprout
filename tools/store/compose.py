@@ -165,8 +165,22 @@ def launcher_layers() -> Tuple[Tuple[int, int, int], List[Tuple[Tuple[int, int, 
             background = hex_colour(colour.text or "")
     if background is None:
         raise ComposeError("@color/ic_launcher_background not found")
+    vector = ElementTree.parse(FOREGROUND).getroot()
+    # The rasteriser fills plain paths only (review L6): a group transform, a fill rule, an alpha or a stroke would
+    # compose wrongly without a sign, so they are refused until compose.py learns them.
+    unsupported = [element.tag for element in vector.iter() if element.tag not in ("vector", "path")]
+    for element in vector.iter("path"):
+        unsupported += [
+            name.replace(ANDROID, "android:")
+            for name in element.attrib
+            if name not in (ANDROID + "fillColor", ANDROID + "pathData")
+        ]
+    if unsupported:
+        raise ComposeError(
+            f"the launcher foreground uses {', '.join(sorted(set(unsupported)))}, which compose.py does not draw"
+        )
     paths = []
-    for element in ElementTree.parse(FOREGROUND).getroot().iter("path"):
+    for element in vector.iter("path"):
         paths.append((hex_colour(element.get(ANDROID + "fillColor", "#FF000000")), path_polygons(element.get(ANDROID + "pathData", ""))))
     return background, paths
 
@@ -395,6 +409,10 @@ def main(argv: Optional[List[str]] = None) -> int:
             expected = data.encode("utf-8") if isinstance(data, str) else data
             if current != expected:
                 problems.append(f"{path.relative_to(ROOT)} is out of date (python3 tools/store/compose.py)")
+        image_dir = out / "images"
+        for extra in sorted(image_dir.glob("**/*.png")) if image_dir.is_dir() else []:
+            if str(extra.relative_to(out)) not in images:
+                problems.append(f"{extra.relative_to(ROOT)} is not produced by listing.yaml (python3 tools/store/compose.py removes it)")
     else:
         image_dir = out / "images"
         for stale in sorted(image_dir.glob("**/*.png")) if image_dir.is_dir() else []:

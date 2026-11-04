@@ -85,7 +85,8 @@ abstract class GitOutput : ValueSource<String, GitOutput.Parameters> {
     }
 }
 
-private const val FALLBACK_VERSION_NAME = "0.1.0-dev"
+/** The version name without a `v*` tag; app `checkReleaseConfiguration` refuses it for a Play bundle. */
+const val FALLBACK_VERSION_NAME = "0.1.0-dev"
 
 /** Google Play's largest `versionCode`. */
 private const val MAX_VERSION_CODE = 2_100_000_000

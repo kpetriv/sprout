@@ -2,6 +2,7 @@ package dev.kpetriv.sprout.buildlogic
 
 import com.android.build.api.variant.ApplicationAndroidComponentsExtension
 import org.gradle.api.DefaultTask
+import org.gradle.api.GradleException
 import org.gradle.api.Project
 import org.gradle.api.artifacts.Configuration
 import org.gradle.api.artifacts.component.ModuleComponentIdentifier
@@ -31,7 +32,9 @@ import javax.xml.parsers.DocumentBuilderFactory
  * reads the asset ([OPEN_SOURCE_LICENCES_ASSET]).
  *
  * The POMs are resolved with detached, non-transitive configurations of `group:name:version@pom`, so they go through
- * the same repositories and dependency verification as everything else. That happens when the task's inputs are first
+ * the same repositories and dependency verification as everything else. The resolution is lenient (a parent POM that
+ * is missing must not stop the build), so the task itself fails when a shipped module ends up with no POM or no licence
+ * (review L8): add its licence to [MANUAL_LICENCES] after checking it by hand. That happens when the task's inputs are first
  * computed (with the configuration cache: when its entry is stored), and only for variants a build actually runs.
  */
 internal fun Project.configureOpenSourceLicences() {
@@ -122,9 +125,17 @@ abstract class GenerateOpenSourceLicences : DefaultTask() {
                 version = version,
                 url = pom?.let { lineage(it, byCoordinates).firstNotNullOfOrNull(Pom::url) },
                 licences = pom?.let { lineage(it, byCoordinates).firstOrNull { p -> p.licences.isNotEmpty() } }
-                    ?.licences.orEmpty(),
+                    ?.licences.orEmpty().ifEmpty { MANUAL_LICENCES["$group:$name"].orEmpty() },
             )
         }.sortedWith(compareBy({ it.name.lowercase() }, { it.module }))
+        val unlicensed = libraries.filter { it.licences.isEmpty() }.map { "${it.module}:${it.version}" }
+        if (unlicensed.isNotEmpty()) {
+            throw GradleException(
+                "No licence found for ${unlicensed.size} shipped module(s) (no POM, or none in its POM or parents): " +
+                    unlicensed.joinToString() + ". Check each by hand and add it to MANUAL_LICENCES in " +
+                    "build-logic OpenSourceLicences.kt.",
+            )
+        }
         val directory = outputDirectory.get().asFile
         directory.deleteRecursively()
         directory.mkdirs()
@@ -139,6 +150,12 @@ abstract class GenerateOpenSourceLicences : DefaultTask() {
 internal const val OPEN_SOURCE_LICENCES_ASSET = "open_source_licences.json"
 
 private const val MAX_PARENT_DEPTH = 10
+
+/**
+ * Licences checked by hand for modules whose POM (and parents) declare none, by `group:name`. Empty: every shipped
+ * module's POM names its licence today.
+ */
+private val MANUAL_LICENCES: Map<String, List<Licence>> = emptyMap()
 
 private data class Licence(val name: String, val url: String?)
 

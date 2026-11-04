@@ -44,7 +44,6 @@ class AboutViewModelTest {
         assertEquals(345, state.versionCode)
         assertTrue(state.hasPrivacyPolicy)
         assertTrue(state.hasSecurityPolicy)
-        assertEquals(libraries, state.libraries)
         assertFalse(state.licencesFailed)
     }
 
@@ -99,15 +98,29 @@ class AboutViewModelTest {
     }
 
     @Test
-    fun `the licence list loads once and a failure is shown`() = runTest {
+    fun `the licence list loads when the page first shows, once, and a failure is shown`() = runTest {
+        var loads = 0
         val gate = CompletableDeferred<List<OpenSourceLibrary>>()
-        val loading = viewModel(licences = OpenSourceLicences { gate.await() })
+        val loading = viewModel(
+            licences = OpenSourceLicences {
+                loads++
+                gate.await()
+            },
+        )
+        assertEquals(0, loads)
+        assertNull(loading.state.value.libraries)
+
+        loading.onEvent(AboutEvent.LoadLicences)
+        loading.onEvent(AboutEvent.LoadLicences)
         assertNull(loading.state.value.libraries)
         assertFalse(loading.state.value.licencesFailed)
         gate.complete(libraries)
         assertEquals(libraries, loading.state.value.libraries)
+        loading.onEvent(AboutEvent.LoadLicences)
+        assertEquals(1, loads)
 
         val failed = viewModel(licences = OpenSourceLicences { error("asset missing") })
+        failed.onEvent(AboutEvent.LoadLicences)
         assertNull(failed.state.value.libraries)
         assertTrue(failed.state.value.licencesFailed)
     }

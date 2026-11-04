@@ -14,6 +14,7 @@ import { dataOf, parent, signedIn } from '../guards.js';
 import { verifiedEncryptionKey, encryptionKeyClaimOf } from '../encryptionKeys.js';
 import { log } from '../log.js';
 import { attestDevice } from '../registration.js';
+import { bulkDelete } from '../bulkDelete.js';
 import { deviceDocument } from './registry.js';
 
 const CURRENCY = /^[A-Z]{3}$/;
@@ -249,7 +250,9 @@ export async function exportHousehold(request: CallableRequest): Promise<ExportB
  * permission off them, so clients lose access before anything else goes), `households/{hid}` recursively, the
  * household's outstanding link codes, and for every uid that was a member or owns a registered device (a revoked
  * kid's member row is already gone): its registration challenge, its `userHouseholds` row and its Auth user (kids and
- * parents, the caller included). A retry after a partial failure records the deletion again (counts as then left).
+ * parents, the caller included). A retry is possible only while the caller's member row and device still exist (a
+ * failure before the recursive delete); it records the deletion again (counts as then left). Auth users that fail to
+ * delete are logged as a count only (the user keeps no household data; RUNBOOK §4 has the manual clean-up).
  */
 export async function deleteHousehold(request: CallableRequest): Promise<{ deleted: true }> {
   const caller = await parent(request, 'deleteHousehold');
@@ -266,7 +269,8 @@ export async function deleteHousehold(request: CallableRequest): Promise<{ delet
     hidHash: outcome.hidHash,
     ...outcome.counts,
     usersDeleted: outcome.usersDeleted,
-    userDeleteFailures: outcome.userDeleteFailures,
+    userDeleteFailures: outcome.failedUids.length,
+    cleanupFailures: outcome.cleanupFailures,
   });
   return { deleted: true };
 }
@@ -315,34 +319,44 @@ export async function householdFootprint(
   };
 }
 
+/** The outcome of [deleteHouseholdData]: counts, the id's hash and the uids whose Auth user could not be deleted. */
+export interface DeletionOutcome {
+  readonly hidHash: string;
+  readonly counts: DeletionCounts;
+  readonly usersDeleted: number;
+  /**
+   * The uids whose Auth user `deleteUsers` did not delete. The household rows naming them are gone by then, so a second
+   * run cannot find them: the operator prints them for deletion by hand (review M2, RUNBOOK §4). Never logged.
+   */
+  readonly failedUids: readonly string[];
+  /** Link code, challenge and userHouseholds deletes that failed after the BulkWriter's retries. */
+  readonly cleanupFailures: number;
+}
+
 /**
  * Deletes household [hid] as described on [deleteHousehold], after the caller's checks: shared by the callable and the
  * operator script (`delete-household`, RUNBOOK §4), which differ only in how the request is authorised.
  */
-export async function deleteHouseholdData(
-  hid: string,
-): Promise<{ hidHash: string; counts: DeletionCounts; usersDeleted: number; userDeleteFailures: number }> {
+export async function deleteHouseholdData(hid: string): Promise<DeletionOutcome> {
   const ref = db.doc(`households/${hid}`);
   const { counts, uids, memberRefs } = await householdFootprint(hid);
 
   const hidHash = sha256Hex(hid);
   await db.collection('deletionRecords').add({ hidHash, at: FieldValue.serverTimestamp(), counts });
 
-  const memberWriter = db.bulkWriter();
-  memberRefs.forEach((m) => void memberWriter.delete(m));
-  await memberWriter.close();
+  // Members first, so the rules stop granting access at once; a member delete that fails here is removed by
+  // recursiveDelete below, so it is not counted.
+  await bulkDelete(memberRefs);
 
   await db.recursiveDelete(ref);
 
-  const writer = db.bulkWriter();
   const codes = await db.collection('linkCodes').where('hid', '==', hid).get();
-  codes.docs.forEach((d) => void writer.delete(d.ref));
-  uids.forEach((uid) => {
-    void writer.delete(db.doc(`challenges/${uid}`));
-    void writer.delete(db.doc(`userHouseholds/${uid}`));
-  });
-  await writer.close();
+  const cleanupFailures = await bulkDelete([
+    ...codes.docs.map((d) => d.ref),
+    ...uids.flatMap((uid) => [db.doc(`challenges/${uid}`), db.doc(`userHouseholds/${uid}`)]),
+  ]);
 
-  const result = uids.length > 0 ? await auth.deleteUsers(uids) : { successCount: 0, failureCount: 0 };
-  return { hidHash, counts, usersDeleted: result.successCount, userDeleteFailures: result.failureCount };
+  const result = uids.length > 0 ? await auth.deleteUsers(uids) : { successCount: 0, errors: [] };
+  const failedUids = result.errors.map((e) => uids[e.index]).filter((uid): uid is string => uid !== undefined);
+  return { hidHash, counts, usersDeleted: result.successCount, failedUids, cleanupFailures };
 }

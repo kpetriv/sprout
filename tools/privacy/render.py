@@ -17,7 +17,9 @@ Python 3.9+, standard library only (runs in CI without installing anything). Det
 byte-identical outputs, which tools/privacy/check.py relies on.
 
 The Markdown supported is the subset the two documents use: ATX headings, paragraphs, "-" and "1." lists, pipe tables,
-block quotes, fenced code, and inline code, links, **strong** and *emphasis*. Anything else is rendered as text.
+block quotes, fenced code, and inline code, links, **strong** and *emphasis*. Anything else is rendered as text, except
+what would render wrongly without a sign: nested (indented) list items and ordered items out of sequence fail with a
+RenderError (a list that starts above 1, or a loose one split by blank lines, keeps its numbers with `start`).
 
 Usage:
     python3 tools/privacy/render.py                       # example values -> server/public (what is committed)
@@ -212,6 +214,11 @@ def split_row(line: str) -> List[str]:
 
 TABLE_RULE = re.compile(r"^\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)*\|?\s*$")
 LIST_ITEM = re.compile(r"^(?:(-|\*)|(\d+)\.)\s+(.*)$")
+HEADING_START = re.compile(r"^#{1,6}\s")
+
+
+def unsupported(line: str, why: str) -> RenderError:
+    return RenderError(f"{why}: {line.strip()[:60]!r}")
 
 
 def render_blocks(lines: List[str], inline: Inline, headings: List[Tuple[int, str]]) -> List[str]:
@@ -266,33 +273,46 @@ def render_blocks(lines: List[str], inline: Inline, headings: List[Tuple[int, st
             continue
         item = LIST_ITEM.match(stripped)
         if item:
+            if line[:1].isspace():
+                raise unsupported(line, "an indented (nested) list item is not supported")
             ordered = item.group(2) is not None
             tag = "ol" if ordered else "ul"
+            first = int(item.group(2)) if ordered else 1
             items: List[str] = []
             while i < len(lines):
                 current = LIST_ITEM.match(lines[i].strip()) if lines[i].strip() else None
-                if current is None or (current.group(2) is not None) != ordered or lines[i].startswith(" "):
+                if current is None or (current.group(2) is not None) != ordered or lines[i][:1].isspace():
                     break
+                if ordered and int(current.group(2)) != first + len(items):
+                    raise unsupported(lines[i], f"ordered list item numbered out of sequence (expected {first + len(items)})")
                 text = [current.group(3)]
                 i += 1
                 while i < len(lines) and lines[i].strip() and lines[i].startswith("  "):
+                    if LIST_ITEM.match(lines[i].strip()):
+                        raise unsupported(lines[i], "an indented (nested) list item is not supported")
                     text.append(lines[i].strip())
                     i += 1
                 items.append("<li>" + inline.render(" ".join(text)) + "</li>")
-            out.append(f"<{tag}>\n" + "\n".join(items) + f"\n</{tag}>")
+            # A loose list (blank lines between items) continues its numbering instead of restarting at 1.
+            start = f' start="{first}"' if ordered and first != 1 else ""
+            out.append(f"<{tag}{start}>\n" + "\n".join(items) + f"\n</{tag}>")
             continue
         paragraph = []
         while i < len(lines):
             current = lines[i].strip()
             if (
                 not current
-                or current.startswith(("#", ">", "```"))
+                or HEADING_START.match(current)
+                or current.startswith((">", "```"))
                 or LIST_ITEM.match(current)
                 or (current.startswith("|") and i + 1 < len(lines) and TABLE_RULE.match(lines[i + 1].strip()))
             ):
                 break
             paragraph.append(current)
             i += 1
+        if not paragraph:
+            # Every branch above consumes at least one line; a line none of them takes would loop for ever (review M3).
+            raise unsupported(lines[i], "a line no block rule consumes")
         out.append("<p>" + inline.render(" ".join(paragraph)) + "</p>")
     return out
 

@@ -37,8 +37,10 @@ jobs:
           cache-read-only: ${{ github.ref != 'refs/heads/main' }}
 
       # Everything but the unit tests (`-x test` drops every module's test tasks), so a lint or Detekt failure is told
-      # apart from a test or screenshot failure below. CI has no server URL or google-services.json, so the release
-      # configuration check is waived here: CI builds are never shipped.
+      # apart from a test or screenshot failure below. `build` runs assembleRelease (R8) and `check` the release checks
+      # on its output (checkReleaseMapping, checkReleaseAppCheck, checkMergedManifestForTelemetry), so a release
+      # regression shows on every PR. CI builds no Play bundle, so checkReleaseConfiguration (secrets, a v* tag) does
+      # not run here; the release workflow runs it.
       - name: Build, Detekt, Lint
         id: static
         run: ./gradlew build detekt lint -x test --no-daemon

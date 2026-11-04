@@ -17,6 +17,7 @@ import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -39,6 +40,10 @@ fun AboutRoute(onBack: () -> Unit, modifier: Modifier = Modifier, viewModel: Abo
     var showingLicences by rememberSaveable { mutableStateOf(false) }
     val closeLicences = { showingLicences = false }
     SystemBackHandler(enabled = showingLicences, onBack = closeLicences)
+    // Also after the page is restored (process death): the list is read only when the page shows.
+    LaunchedEffect(showingLicences) {
+        if (showingLicences) viewModel.onEvent(AboutEvent.LoadLicences)
+    }
     if (showingLicences) {
         // A page of its own inside About: it keeps its back arrow beside the hub too (like the link screen).
         CompositionLocalProvider(LocalBesideHub provides false) {

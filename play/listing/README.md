@@ -10,7 +10,7 @@ python3 tools/store/compose.py           # writes this folder; prints each file'
 python3 tools/store/compose.py --check   # compares with what is committed
 ```
 
-Edit the text and the choice of screens in `listing.yaml`, never the files here. The screenshots are composed from the committed screenshot-test goldens (the demo household Mia, Leo and Zoe; no real data), so re-run after re-recording goldens. The committed images were made on macOS with Arial; another machine falls back to DejaVu Sans or Roboto (or `SPROUT_STORE_FONT` / `SPROUT_STORE_FONT_BOLD`), which changes the captions slightly.
+Edit the text and the choice of screens in `listing.yaml`, never the files here. The screenshots are composed from the committed screenshot-test goldens (the demo household Mia, Leo and Zoe; no real data), so re-run after re-recording goldens: CI does not check this folder (the captions depend on the fonts), so goldens re-recorded without a re-run leave the listing stale without any failure. The committed images were made on macOS with Arial; another machine falls back to DejaVu Sans or Roboto (or `SPROUT_STORE_FONT` / `SPROUT_STORE_FONT_BOLD`), which changes the captions slightly.
 
 ## Upload order
 
@@ -46,6 +46,6 @@ Play Console → Grow users → Store presence → Main store listing (English (
 | `images/tablet/light/04-kid-wallet.png` | 61 KB | A kid's wallet on a tablet |
 | **Total** | **1.9 MB** | 18 images; budget 3 MB, Play's limit 8 MB each |
 
-`compose.py` fails when a text is over Play's limit, an image has alpha, is over 8 MB or outside 320 to 3,840 px or 2:1, there are more than 8 screenshots of a type, or the images together pass 3 MB.
+`compose.py` fails when the launcher foreground uses anything but plain filled paths (groups, fill types, alpha or strokes are not drawn), `--check` also when a committed PNG is not produced by `listing.yaml`, and either fails when a text is over Play's limit, an image has alpha, is over 8 MB or outside 320 to 3,840 px or 2:1, there are more than 8 screenshots of a type, or the images together pass 3 MB.
 
 The layout differs from Gradle Play Publisher's (`listings/<locale>/graphics/...`); the release workflow publishes only the app bundle, so these files stay a manual upload.
