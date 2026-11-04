@@ -15,6 +15,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
+import dev.kpetriv.sprout.core.ui.contentWidth
 import dev.kpetriv.sprout.core.ui.rememberMoneyFormatter
 
 /** Sprout (about 8 to 11): the timer with minutes left, then today's sessions and today's total. */
@@ -26,7 +27,7 @@ internal fun SproutTimeBankContent(
 ) {
     val formatter = rememberMoneyFormatter()
     Column(
-        modifier = modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
+        modifier = modifier.fillMaxSize().verticalScroll(rememberScrollState()).contentWidth().padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
         TimerCard(state, onEvent)
@@ -59,7 +60,7 @@ internal fun SaplingTimeBankContent(
 ) {
     val formatter = rememberMoneyFormatter()
     Column(
-        modifier = modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
+        modifier = modifier.fillMaxSize().verticalScroll(rememberScrollState()).contentWidth().padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
         TimerCard(state, onEvent)

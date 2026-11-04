@@ -27,6 +27,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import dev.kpetriv.sprout.core.designsystem.theme.SproutTheme
 import dev.kpetriv.sprout.core.model.KidUiTier
+import dev.kpetriv.sprout.core.ui.ContentWidth
 import dev.kpetriv.sprout.core.ui.MoneyFormatter
 import dev.kpetriv.sprout.core.ui.TierScaledText
 import dev.kpetriv.sprout.core.ui.TierTextRole
@@ -45,58 +46,60 @@ internal fun ListTodayContent(
 ) {
     val tier = state.tier
     val formatter = rememberMoneyFormatter()
-    LazyColumn(
-        modifier = modifier.fillMaxSize(),
-        contentPadding = PaddingValues(16.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
-        item(key = "today") { Heading(stringResource(R.string.feature_chores_today), tier) }
-        if (state.today.isEmpty()) {
-            item(key = "today-empty") {
-                TierScaledText(stringResource(R.string.feature_chores_no_chores_today), TierTextRole.Body, tier)
-            }
-        }
-        items(state.today, key = { "today:${it.choreId.value}" }) { chore ->
-            TodayRow(
-                chore = chore,
-                tier = tier,
-                formatter = formatter,
-                submitting = chore.choreId in state.submitting,
-                onDidIt = { onEvent(KidTodayEvent.OpenSubmit(chore.choreId)) },
-            )
-        }
-        item(key = "upcoming") {
-            Heading(stringResource(R.string.feature_chores_upcoming), tier, Modifier.padding(top = 8.dp))
-        }
-        if (state.upcoming.isEmpty()) {
-            item(key = "upcoming-empty") {
-                TierScaledText(stringResource(R.string.feature_chores_nothing_upcoming), TierTextRole.Body, tier)
-            }
-        }
-        items(state.upcoming, key = { "next:${it.choreId.value}:${it.dueOn}" }) { chore ->
-            UpcomingRow(chore, state, formatter)
-        }
-        if (state.canPropose) {
-            item(key = "ideas") {
-                Heading(stringResource(R.string.feature_chores_my_ideas), tier, Modifier.padding(top = 8.dp))
-            }
-            items(state.proposals, key = { "idea:${it.choreId.value}" }) { idea ->
-                Column(modifier = Modifier.fillMaxWidth().semantics(mergeDescendants = true) {}) {
-                    TierScaledText(idea.title, TierTextRole.Body, tier)
-                    TierScaledText(
-                        text = idea.reward.format(formatter, tier) + " · " +
-                            stringResource(R.string.feature_chores_idea_waiting),
-                        role = TierTextRole.Label,
-                        tier = tier,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
+    ContentWidth(modifier = modifier.fillMaxSize()) {
+        LazyColumn(
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            item(key = "today") { Heading(stringResource(R.string.feature_chores_today), tier) }
+            if (state.today.isEmpty()) {
+                item(key = "today-empty") {
+                    TierScaledText(stringResource(R.string.feature_chores_no_chores_today), TierTextRole.Body, tier)
                 }
             }
-            item(key = "propose") {
-                OutlinedButton(
-                    onClick = { onEvent(KidTodayEvent.OpenPropose) },
-                    modifier = Modifier.fillMaxWidth().heightIn(min = SproutTheme.tierTokens.minTouchTarget),
-                ) { Text(stringResource(R.string.feature_chores_propose)) }
+            items(state.today, key = { "today:${it.choreId.value}" }) { chore ->
+                TodayRow(
+                    chore = chore,
+                    tier = tier,
+                    formatter = formatter,
+                    submitting = chore.choreId in state.submitting,
+                    onDidIt = { onEvent(KidTodayEvent.OpenSubmit(chore.choreId)) },
+                )
+            }
+            item(key = "upcoming") {
+                Heading(stringResource(R.string.feature_chores_upcoming), tier, Modifier.padding(top = 8.dp))
+            }
+            if (state.upcoming.isEmpty()) {
+                item(key = "upcoming-empty") {
+                    TierScaledText(stringResource(R.string.feature_chores_nothing_upcoming), TierTextRole.Body, tier)
+                }
+            }
+            items(state.upcoming, key = { "next:${it.choreId.value}:${it.dueOn}" }) { chore ->
+                UpcomingRow(chore, state, formatter)
+            }
+            if (state.canPropose) {
+                item(key = "ideas") {
+                    Heading(stringResource(R.string.feature_chores_my_ideas), tier, Modifier.padding(top = 8.dp))
+                }
+                items(state.proposals, key = { "idea:${it.choreId.value}" }) { idea ->
+                    Column(modifier = Modifier.fillMaxWidth().semantics(mergeDescendants = true) {}) {
+                        TierScaledText(idea.title, TierTextRole.Body, tier)
+                        TierScaledText(
+                            text = idea.reward.format(formatter, tier) + " · " +
+                                stringResource(R.string.feature_chores_idea_waiting),
+                            role = TierTextRole.Label,
+                            tier = tier,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+                item(key = "propose") {
+                    OutlinedButton(
+                        onClick = { onEvent(KidTodayEvent.OpenPropose) },
+                        modifier = Modifier.fillMaxWidth().heightIn(min = SproutTheme.tierTokens.minTouchTarget),
+                    ) { Text(stringResource(R.string.feature_chores_propose)) }
+                }
             }
         }
     }

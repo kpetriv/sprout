@@ -37,6 +37,7 @@ import dev.kpetriv.sprout.core.ui.MoneyFormatter
 import dev.kpetriv.sprout.core.ui.ReadAloud
 import dev.kpetriv.sprout.core.ui.TierScaledText
 import dev.kpetriv.sprout.core.ui.TierTextRole
+import dev.kpetriv.sprout.core.ui.contentWidth
 import dev.kpetriv.sprout.core.ui.rememberMoneyFormatter
 
 /**
@@ -69,7 +70,7 @@ internal fun GameResultContent(
     var confettiDone by rememberSaveable(score.correct, score.total) { mutableStateOf(false) }
     Box(modifier = Modifier.fillMaxSize()) {
         Column(
-            modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(24.dp),
+            modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).contentWidth().padding(24.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp, Alignment.CenterVertically),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {

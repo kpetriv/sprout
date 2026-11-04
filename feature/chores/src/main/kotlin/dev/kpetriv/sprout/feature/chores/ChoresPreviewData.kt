@@ -79,6 +79,39 @@ internal object ChoresPreviewData {
         currency = gbp,
     )
 
+    /** Today for [tier] with nothing due and nothing coming up. */
+    fun todayEmpty(tier: KidUiTier) =
+        today(tier).copy(today = emptyList(), upcoming = emptyList(), proposals = emptyList())
+
+    /** Today for [tier] with one chore a parent did not accept (with a reason) above one still to do. */
+    fun todayRejected(tier: KidUiTier) = today(tier).let { ready ->
+        ready.copy(
+            today = listOf(
+                ready.today.first { it.choreId.value == "teeth" }.copy(
+                    status = OccurrenceStatus.NOT_ACCEPTED,
+                    rejectionReason = "Please brush for two minutes",
+                ),
+                ready.today.first { it.choreId.value == "bed" },
+            ),
+        )
+    }
+
+    /** The Sprout / Sapling submission sheet for "Make your bed" with a note and a photo attached. */
+    val submitSheet = SubmitSheetUi(
+        choreId = ChoreId("bed"),
+        title = "Make your bed",
+        note = "Done before school!",
+        hasPhoto = true,
+    )
+
+    /** Sapling's "Propose a chore" sheet, filled in, after a first try that left the minutes invalid. */
+    val proposeSheet = ProposeSheetUi(
+        title = "Walk the dog",
+        moneyText = "3.00",
+        minutesText = "ten",
+        errors = setOf(EditorError.MINUTES_INVALID),
+    )
+
     fun approvals(): ApprovalsUiState.Ready = ApprovalsUiState.Ready(
         submissions = listOf(
             SubmissionUi(

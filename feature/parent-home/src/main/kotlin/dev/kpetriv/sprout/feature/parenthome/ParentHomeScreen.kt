@@ -36,6 +36,7 @@ import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.isTraversalGroup
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
@@ -46,7 +47,10 @@ import dev.kpetriv.sprout.core.model.CalendarDate
 import dev.kpetriv.sprout.core.model.DeviceId
 import dev.kpetriv.sprout.core.model.KidId
 import dev.kpetriv.sprout.core.model.KidUiTier
+import dev.kpetriv.sprout.core.ui.ContentWidthDefaults
+import dev.kpetriv.sprout.core.ui.contentWidth
 import dev.kpetriv.sprout.core.ui.rememberMoneyFormatter
+import dev.kpetriv.sprout.core.ui.rememberWindowWidthClass
 import java.time.LocalDate
 import java.time.format.DateTimeFormatter
 import java.time.format.FormatStyle
@@ -113,7 +117,16 @@ fun ParentHomeScreen(
     val snackbar = remember { SnackbarHostState() }
     Scaffold(
         modifier = modifier,
-        topBar = { TopAppBar(title = { Text(stringResource(R.string.feature_parent_home_title)) }) },
+        topBar = {
+            TopAppBar(
+                title = {
+                    Text(
+                        stringResource(R.string.feature_parent_home_title),
+                        modifier = Modifier.semantics { heading() },
+                    )
+                },
+            )
+        },
         snackbarHost = { SnackbarHost(snackbar) },
     ) { padding ->
         Box(modifier = Modifier.padding(padding).fillMaxSize()) {
@@ -139,6 +152,11 @@ fun ParentHomeScreen(
     }
 }
 
+/**
+ * The dashboard's cards. Compact: one column in the order below. Medium and wider (D-M7-2): two columns, household
+ * status and payments on the left, the kids, the weekly summary and the links on the right, together capped at
+ * [TWO_COLUMN_MAX_WIDTH] and centred.
+ */
 @Composable
 private fun Dashboard(
     state: ParentHomeUiState.Ready,
@@ -146,29 +164,64 @@ private fun Dashboard(
     onEvent: (ParentHomeEvent) -> Unit,
     links: ParentHomeLinks,
 ) {
+    val twoColumns = rememberWindowWidthClass().isAtLeastMedium
+    val spacing = Arrangement.spacedBy(12.dp)
     Column(
-        modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
+        modifier = Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .contentWidth(if (twoColumns) TWO_COLUMN_MAX_WIDTH else ContentWidthDefaults.Max)
+            .padding(16.dp),
+        verticalArrangement = spacing,
     ) {
-        HouseholdCards(state.household, links)
-        ApprovalsCard(state.pendingApprovals, links.onOpenApprovals)
-        PendingActionsCard(state.pendingActions, state.signing, onSignNow)
-        if (state.attention.isNotEmpty()) AttentionCard(state.attention) { onEvent(ParentHomeEvent.Dismiss(it)) }
-        AnomaliesCard(state, links.onOpenKid)
-        SectionTitle(stringResource(R.string.feature_parent_home_kids_title))
-        if (state.kids.isEmpty()) {
-            Text(stringResource(R.string.feature_parent_home_kids_none), style = MaterialTheme.typography.bodyMedium)
+        if (twoColumns) {
+            Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                Column(modifier = Modifier.weight(1f), verticalArrangement = spacing) {
+                    StatusCards(state, onSignNow, onEvent, links)
+                }
+                Column(modifier = Modifier.weight(1f), verticalArrangement = spacing) {
+                    KidsAndSummary(state, onEvent, links)
+                }
+            }
+        } else {
+            StatusCards(state, onSignNow, onEvent, links)
+            KidsAndSummary(state, onEvent, links)
         }
-        state.kids.forEach { KidCard(it, onOpen = { links.onOpenKid(it.kid.id) }) }
-        WeeklySummaryCard(
-            summary = state.summary,
-            week = state.summaryWeek,
-            onWeekChange = { onEvent(ParentHomeEvent.SummaryWeekChanged(it)) },
-            onDownloadModel = links.onOpenAiSettings,
-        )
-        QuickLinks(links)
     }
 }
+
+@Composable
+private fun StatusCards(
+    state: ParentHomeUiState.Ready,
+    onSignNow: () -> Unit,
+    onEvent: (ParentHomeEvent) -> Unit,
+    links: ParentHomeLinks,
+) {
+    HouseholdCards(state.household, links)
+    ApprovalsCard(state.pendingApprovals, links.onOpenApprovals)
+    PendingActionsCard(state.pendingActions, state.signing, onSignNow)
+    if (state.attention.isNotEmpty()) AttentionCard(state.attention) { onEvent(ParentHomeEvent.Dismiss(it)) }
+    AnomaliesCard(state, links.onOpenKid)
+}
+
+@Composable
+private fun KidsAndSummary(state: ParentHomeUiState.Ready, onEvent: (ParentHomeEvent) -> Unit, links: ParentHomeLinks) {
+    SectionTitle(stringResource(R.string.feature_parent_home_kids_title))
+    if (state.kids.isEmpty()) {
+        Text(stringResource(R.string.feature_parent_home_kids_none), style = MaterialTheme.typography.bodyMedium)
+    }
+    state.kids.forEach { KidCard(it, onOpen = { links.onOpenKid(it.kid.id) }) }
+    WeeklySummaryCard(
+        summary = state.summary,
+        week = state.summaryWeek,
+        onWeekChange = { onEvent(ParentHomeEvent.SummaryWeekChanged(it)) },
+        onDownloadModel = links.onOpenAiSettings,
+    )
+    QuickLinks(links)
+}
+
+/** Two dashboard columns of at most about [ContentWidthDefaults.Max] each. */
+private val TWO_COLUMN_MAX_WIDTH = 1_200.dp
 
 @Composable
 private fun DashboardCard(
@@ -251,7 +304,11 @@ private fun AttentionCard(items: List<AttentionItemUi>, onDismiss: (String) -> U
         )
         val formatter = rememberMoneyFormatter()
         items.forEach { item ->
-            Row(verticalAlignment = Alignment.CenterVertically) {
+            // One traversal group per payment, so each "Dismiss" is read right after the payment it dismisses.
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.semantics { isTraversalGroup = true },
+            ) {
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
                         stringResource(

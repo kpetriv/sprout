@@ -29,6 +29,7 @@ import dev.kpetriv.sprout.core.ui.ReadAloud
 import dev.kpetriv.sprout.core.ui.SavingsStars
 import dev.kpetriv.sprout.core.ui.TierScaledText
 import dev.kpetriv.sprout.core.ui.TierTextRole
+import dev.kpetriv.sprout.core.ui.contentWidth
 
 /**
  * Seedling (about 5 to 7): a coin jar with a whole number, a sun for screen time, two big picture buttons and a
@@ -70,6 +71,7 @@ internal fun SeedlingWalletContent(
         modifier = modifier
             .fillMaxSize()
             .verticalScroll(rememberScrollState())
+            .contentWidth()
             .padding(24.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(24.dp),

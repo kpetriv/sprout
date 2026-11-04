@@ -15,6 +15,10 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.ReadOnlyComposable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalViewConfiguration
+import androidx.compose.ui.platform.ViewConfiguration
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.DpSize
 import dev.kpetriv.sprout.core.model.KidUiTier
 
 // Corner radius of each Material shape slot relative to TierTokens.cornerRadius (the medium slot).
@@ -69,14 +73,35 @@ private fun TierScaledMaterialTheme(colorScheme: ColorScheme, tokens: TierTokens
     val typography = remember(tokens) { Typography().scaledBy(tokens.typeScale) }
     val shapes = remember(tokens) { tokens.toShapes() }
 
+    val viewConfiguration = LocalViewConfiguration.current
+    val tierViewConfiguration = remember(viewConfiguration, tokens) {
+        viewConfiguration.withMinimumTouchTarget(tokens.minTouchTarget)
+    }
     CompositionLocalProvider(LocalTierTokens provides tokens) {
         MaterialTheme(colorScheme = colorScheme, typography = typography, shapes = shapes) {
-            // Inside MaterialTheme so nothing it provides can override the tier's touch target.
+            // Inside MaterialTheme so nothing it provides can override the tier's touch target. Material components
+            // reserve the tier's size through LocalMinimumInteractiveComponentSize; the view configuration makes
+            // Compose's hit testing extend every smaller pointer target (custom clickables included) to it (M7 §8).
             CompositionLocalProvider(
                 LocalMinimumInteractiveComponentSize provides tokens.minTouchTarget,
+                LocalViewConfiguration provides tierViewConfiguration,
                 content = content,
             )
         }
+    }
+}
+
+/**
+ * This configuration with a minimum touch target of at least [minTouchTarget] square. Never shrinks it: on Sapling
+ * (48 dp, the platform default) the configuration is returned unchanged.
+ */
+internal fun ViewConfiguration.withMinimumTouchTarget(minTouchTarget: Dp): ViewConfiguration {
+    val current = minimumTouchTargetSize
+    if (current.width >= minTouchTarget && current.height >= minTouchTarget) return this
+    val size = DpSize(maxOf(current.width, minTouchTarget), maxOf(current.height, minTouchTarget))
+    val base = this
+    return object : ViewConfiguration by base {
+        override val minimumTouchTargetSize: DpSize = size
     }
 }
 

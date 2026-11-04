@@ -2,6 +2,7 @@ package dev.kpetriv.sprout.feature.games
 
 import dev.kpetriv.sprout.core.model.KidUiTier
 import dev.kpetriv.sprout.core.testing.screenshot.ScreenshotTest
+import dev.kpetriv.sprout.core.testing.screenshot.ScreenshotWindow
 import dev.kpetriv.sprout.core.ui.ReadAloud
 import org.junit.Test
 
@@ -9,9 +10,17 @@ import org.junit.Test
  * Golden screenshots of the brain games, every tier (word scramble: Sprout and Sapling only, D-M5-6), in
  * src/test/screenshots. Re-record with `./gradlew :feature:games:recordRoborazziDebug`.
  */
-class GamesScreenshotTest : ScreenshotTest() {
+class GamesScreenshotTest : ScreenshotTest(checkAccessibility = true) {
     @Test
     fun `hub, ready`() = screenshot.captureTiers("games_hub") { tier ->
+        GamesHubScreen(state = GamesPreviewData.hub(tier), onEvent = {}, onPlay = {}, readAloud = speech)
+    }
+
+    @Test
+    fun `hub on a tablet, every tier`() = screenshot.captureWidthClassTiers(
+        name = "games_hub",
+        windows = listOf(ScreenshotWindow.TABLET),
+    ) { _, tier ->
         GamesHubScreen(state = GamesPreviewData.hub(tier), onEvent = {}, onPlay = {}, readAloud = speech)
     }
 

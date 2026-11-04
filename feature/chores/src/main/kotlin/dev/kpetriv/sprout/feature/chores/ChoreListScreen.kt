@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -29,14 +30,25 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.isTraversalGroup
+import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.kpetriv.sprout.core.model.ChoreId
 import dev.kpetriv.sprout.core.model.ChoreState
+import dev.kpetriv.sprout.core.ui.ContentWidth
 import dev.kpetriv.sprout.core.ui.rememberMoneyFormatter
 
-/** Navigation entry for the parent's chore list. */
+/**
+ * Navigation entry for the parent's chore list.
+ *
+ * List-detail (M7 §5, D-M7-2): on an Expanded window the app shows this route as the list pane and
+ * [ChoreEditorRoute] as the detail pane (Navigation 3 `ListDetailSceneStrategy`: this entry's metadata is
+ * `listPane(detailPlaceholder = { ChoreEditorPlaceholder() })`, the editor's is `detailPane()`). Pass the chore open
+ * in the editor as [selectedChoreId] so its row is marked selected while both panes show.
+ */
 @Composable
 fun ChoreListRoute(
     onCreateChore: () -> Unit,
@@ -44,6 +56,7 @@ fun ChoreListRoute(
     onOpenApprovals: () -> Unit,
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
+    selectedChoreId: ChoreId? = null,
 ) {
     val viewModel = choresViewModel<ChoreListViewModel>(key = "chores:list")
     val state by viewModel.state.collectAsStateWithLifecycle()
@@ -55,10 +68,14 @@ fun ChoreListRoute(
         onOpenApprovals = onOpenApprovals,
         onBack = onBack,
         modifier = modifier,
+        selectedChoreId = selectedChoreId,
     )
 }
 
-/** Every kid's chores, grouped by kid, with state chips, archive / restore and a "New chore" button. */
+/**
+ * Every kid's chores, grouped by kid, with state chips, archive / restore and a "New chore" button.
+ * [selectedChoreId] marks the chore open in the editor pane (list-detail on an Expanded window).
+ */
 @Composable
 fun ChoreListScreen(
     state: ChoreListUiState,
@@ -68,6 +85,7 @@ fun ChoreListScreen(
     onEditChore: (ChoreId) -> Unit = {},
     onOpenApprovals: () -> Unit = {},
     onBack: () -> Unit = {},
+    selectedChoreId: ChoreId? = null,
 ) {
     val snackbar = remember { SnackbarHostState() }
     val ready = state as? ChoreListUiState.Ready
@@ -84,10 +102,13 @@ fun ChoreListScreen(
         },
         floatingActionButton = {
             if (ready != null && ready.groups.isNotEmpty()) {
+                val newChore = stringResource(R.string.feature_chores_new_chore)
                 ExtendedFloatingActionButton(
                     onClick = onCreateChore,
+                    // Material's extended FAB does not expose its text to accessibility services (M7 §8).
+                    modifier = Modifier.semantics { contentDescription = newChore },
                     icon = { Icon(painterResource(R.drawable.feature_chores_ic_add), contentDescription = null) },
-                    text = { Text(stringResource(R.string.feature_chores_new_chore)) },
+                    text = { Text(newChore) },
                 )
             }
         },
@@ -102,7 +123,7 @@ fun ChoreListScreen(
                     onRetry = { onEvent(ChoreListEvent.Retry) },
                 )
 
-                is ChoreListUiState.Ready -> ReadyList(state, onEvent, onEditChore)
+                is ChoreListUiState.Ready -> ReadyList(state, onEvent, onEditChore, selectedChoreId)
             }
         }
     }
@@ -118,7 +139,12 @@ fun ChoreListScreen(
 }
 
 @Composable
-private fun ReadyList(state: ChoreListUiState.Ready, onEvent: (ChoreListEvent) -> Unit, onEdit: (ChoreId) -> Unit) {
+private fun ReadyList(
+    state: ChoreListUiState.Ready,
+    onEvent: (ChoreListEvent) -> Unit,
+    onEdit: (ChoreId) -> Unit,
+    selectedChoreId: ChoreId?,
+) {
     if (state.groups.isEmpty()) {
         Text(
             text = stringResource(R.string.feature_chores_no_kids),
@@ -127,60 +153,95 @@ private fun ReadyList(state: ChoreListUiState.Ready, onEvent: (ChoreListEvent) -
         )
         return
     }
-    LazyColumn(
-        contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 96.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-        item(key = "toggle") {
-            TextButton(onClick = { onEvent(ChoreListEvent.ToggleArchived) }) {
-                val label = if (state.showArchived) {
-                    R.string.feature_chores_hide_archived
-                } else {
-                    R.string.feature_chores_show_archived
+    ContentWidth(modifier = Modifier.fillMaxSize()) {
+        LazyColumn(
+            contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 96.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            item(key = "toggle") {
+                TextButton(onClick = { onEvent(ChoreListEvent.ToggleArchived) }) {
+                    val label = if (state.showArchived) {
+                        R.string.feature_chores_hide_archived
+                    } else {
+                        R.string.feature_chores_show_archived
+                    }
+                    Text(stringResource(label))
                 }
-                Text(stringResource(label))
             }
-        }
-        state.groups.forEach { group ->
-            item(key = "kid:${group.kidId.value}") {
-                SectionHeading(text = group.kidName, modifier = Modifier.padding(top = 8.dp))
-            }
-            if (group.chores.isEmpty()) {
-                item(key = "empty:${group.kidId.value}") {
-                    Text(
-                        text = stringResource(R.string.feature_chores_kid_no_chores, group.kidName),
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+            state.groups.forEach { group ->
+                item(key = "kid:${group.kidId.value}") {
+                    SectionHeading(text = group.kidName, modifier = Modifier.padding(top = 8.dp))
+                }
+                if (group.chores.isEmpty()) {
+                    item(key = "empty:${group.kidId.value}") {
+                        Text(
+                            text = stringResource(R.string.feature_chores_kid_no_chores, group.kidName),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+                items(group.chores, key = { it.id.value }) { row ->
+                    ChoreRow(
+                        row = row,
+                        selected = row.id == selectedChoreId,
+                        onClick = { onEdit(row.id) },
+                        onArchive = { onEvent(ChoreListEvent.Archive(row.id)) },
+                        onRestore = { onEvent(ChoreListEvent.Restore(row.id)) },
                     )
                 }
-            }
-            items(group.chores, key = { it.id.value }) { row ->
-                ChoreRow(
-                    row = row,
-                    onClick = { onEdit(row.id) },
-                    onArchive = { onEvent(ChoreListEvent.Archive(row.id)) },
-                    onRestore = { onEvent(ChoreListEvent.Restore(row.id)) },
-                )
             }
         }
     }
 }
 
+/**
+ * The detail pane before a chore is picked (list-detail on an Expanded window): the app passes it as the list pane's
+ * `detailPlaceholder`.
+ */
 @Composable
-private fun ChoreRow(row: ChoreRowUi, onClick: () -> Unit, onArchive: () -> Unit, onRestore: () -> Unit) {
+fun ChoreEditorPlaceholder(modifier: Modifier = Modifier) {
+    Box(modifier = modifier.fillMaxSize().padding(24.dp), contentAlignment = Alignment.Center) {
+        Text(
+            text = stringResource(R.string.feature_chores_editor_placeholder),
+            style = MaterialTheme.typography.bodyLarge,
+            textAlign = TextAlign.Center,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
+@Composable
+private fun ChoreRow(
+    row: ChoreRowUi,
+    selected: Boolean,
+    onClick: () -> Unit,
+    onArchive: () -> Unit,
+    onRestore: () -> Unit,
+) {
     val formatter = rememberMoneyFormatter()
     val reward = row.reward.format(formatter)
     val schedule = scheduleLabel(row.schedule)
     val stateLabel = stateLabel(row.state)
     val description = stringResource(R.string.feature_chores_row_description, row.title, reward, schedule, stateLabel)
-    Card(modifier = Modifier.fillMaxWidth()) {
+    // The chore open in the editor pane beside the list is shown in the secondary container colour and announced as
+    // selected. Each card is a traversal group, so its archive button is read with its chore.
+    val colors = if (selected) {
+        CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer)
+    } else {
+        CardDefaults.cardColors()
+    }
+    Card(modifier = Modifier.fillMaxWidth().semantics { isTraversalGroup = true }, colors = colors) {
         Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
             Column(
                 verticalArrangement = Arrangement.spacedBy(4.dp),
                 modifier = Modifier
                     .weight(1f)
                     .clickable(onClick = onClick)
-                    .semantics(mergeDescendants = true) { contentDescription = description }
+                    .semantics(mergeDescendants = true) {
+                        contentDescription = description
+                        if (selected) this.selected = true
+                    }
                     .padding(16.dp),
             ) {
                 Text(text = row.title, style = MaterialTheme.typography.titleMedium)

@@ -15,6 +15,7 @@ import dev.kpetriv.sprout.core.designsystem.theme.SproutTheme
 import dev.kpetriv.sprout.core.model.ChoreId
 import dev.kpetriv.sprout.core.model.KidUiTier
 import dev.kpetriv.sprout.core.model.SubmissionId
+import dev.kpetriv.sprout.core.testing.accessibility.AccessibilityRule
 import dev.kpetriv.sprout.core.ui.ReadAloud
 import org.junit.Rule
 import org.junit.Test
@@ -28,8 +29,11 @@ import kotlin.test.assertTrue
 @RunWith(RobolectricTestRunner::class)
 @Config(qualifiers = "en-rGB-w411dp-h2400dp")
 class ChoresScreensTest {
-    @get:Rule
+    @get:Rule(order = 0)
     val compose = createComposeRule()
+
+    @get:Rule(order = 1)
+    val a11y = AccessibilityRule(compose)
 
     private val kidEvents = mutableListOf<KidTodayEvent>()
     private val spoken = mutableListOf<String>()

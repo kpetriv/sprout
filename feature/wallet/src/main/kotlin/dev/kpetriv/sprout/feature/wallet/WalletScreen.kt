@@ -31,6 +31,7 @@ import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextAlign
@@ -110,6 +111,7 @@ fun WalletScreen(
                     Text(
                         text = ready?.let { stringResource(R.string.feature_wallet_title_named, it.kid.firstName) }
                             ?: stringResource(R.string.feature_wallet_title),
+                        modifier = Modifier.semantics { heading() },
                     )
                 },
                 navigationIcon = {

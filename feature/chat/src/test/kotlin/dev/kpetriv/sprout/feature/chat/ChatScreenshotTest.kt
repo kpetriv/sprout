@@ -1,9 +1,20 @@
 package dev.kpetriv.sprout.feature.chat
 
 import android.graphics.Bitmap
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.width
+import androidx.compose.material3.VerticalDivider
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
+import dev.kpetriv.sprout.core.model.KidId
 import dev.kpetriv.sprout.core.model.KidUiTier
 import dev.kpetriv.sprout.core.testing.screenshot.ScreenshotTest
+import dev.kpetriv.sprout.core.testing.screenshot.ScreenshotWindow
+import dev.kpetriv.sprout.core.ui.LocalWindowWidthClass
 import dev.kpetriv.sprout.core.ui.ReadAloud
+import dev.kpetriv.sprout.core.ui.WindowWidthClass
 import org.junit.Test
 import java.io.ByteArrayOutputStream
 
@@ -13,7 +24,7 @@ import java.io.ByteArrayOutputStream
  * the thread unchanged. Parent screens are captured light and dark. Re-record with
  * `./gradlew :feature:chat:recordRoborazziDebug`.
  */
-class ChatScreenshotTest : ScreenshotTest() {
+class ChatScreenshotTest : ScreenshotTest(checkAccessibility = true) {
     @Test
     fun `kid, empty, every tier`() = screenshot.captureTiers("chat_kid_empty") { tier ->
         ChatScreen(state = ChatPreviewData.kidEmpty(tier), onEvent = {}, readAloud = speech)
@@ -105,7 +116,69 @@ class ChatScreenshotTest : ScreenshotTest() {
         ChatScreen(state = ChatPreviewData.parentLocked(), onEvent = {})
     }
 
+    // One dark golden per kid screen family (docs/SCREENSHOT_TESTS.md).
+    @Test
+    fun `kid, messages, dark theme, every tier`() =
+        screenshot.captureTiers("chat_kid_messages_dark", darkTheme = true) { tier ->
+            ChatScreen(state = ChatPreviewData.kidMessages(tier), onEvent = {}, readAloud = speech)
+        }
+
+    @Test
+    fun `parent thread at font scale 2`() = screenshot.captureFontScale("chat_parent_thread") {
+        ChatScreen(state = ChatPreviewData.parentThread(PhotoUi.Loaded(photo)), onEvent = {})
+    }
+
+    // The inbox and thread panes as the app's list-detail scene lays them out on a tablet (M7 §5): a 360 dp list pane
+    // at the phone layout, the open thread beside it.
+    @Test
+    fun `parent inbox and thread side by side on a tablet`() = screenshot.captureWidthClasses(
+        name = "chat_threads_detail",
+        windows = listOf(ScreenshotWindow.TABLET),
+    ) {
+        Row(modifier = Modifier.fillMaxSize()) {
+            CompositionLocalProvider(LocalWindowWidthClass provides WindowWidthClass.Compact) {
+                ChatThreadListScreen(
+                    state = ChatPreviewData.threads(),
+                    onEvent = {},
+                    onOpenThread = {},
+                    onBack = {},
+                    modifier = Modifier.width(LIST_PANE_WIDTH),
+                    selectedThreadId = KidId("kid-leo"),
+                )
+            }
+            VerticalDivider()
+            ChatScreen(
+                state = ChatPreviewData.parentThread(PhotoUi.Loaded(photo)),
+                onEvent = {},
+                modifier = Modifier.weight(1f),
+            )
+        }
+    }
+
+    @Test
+    fun `parent inbox with the thread placeholder on a tablet`() = screenshot.captureWidthClasses(
+        name = "chat_threads_placeholder",
+        windows = listOf(ScreenshotWindow.TABLET),
+    ) {
+        Row(modifier = Modifier.fillMaxSize()) {
+            CompositionLocalProvider(LocalWindowWidthClass provides WindowWidthClass.Compact) {
+                ChatThreadListScreen(
+                    state = ChatPreviewData.threads(),
+                    onEvent = {},
+                    onOpenThread = {},
+                    onBack = {},
+                    modifier = Modifier.width(LIST_PANE_WIDTH),
+                )
+            }
+            VerticalDivider()
+            ChatThreadPlaceholder(modifier = Modifier.weight(1f))
+        }
+    }
+
     private companion object {
+        /** Material's default list pane width in a list-detail scene. */
+        val LIST_PANE_WIDTH = 360.dp
+
         // Shows that Seedling bubbles are tappable for read-aloud; nothing is drawn differently.
         val speech = ReadAloud { }
 

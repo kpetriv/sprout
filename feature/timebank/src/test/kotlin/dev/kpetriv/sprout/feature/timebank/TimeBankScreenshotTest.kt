@@ -8,7 +8,7 @@ import org.junit.Test
  * the time up while still running, loading and failed to load.
  * Re-record with `./gradlew :feature:timebank:recordRoborazziDebug`.
  */
-class TimeBankScreenshotTest : ScreenshotTest() {
+class TimeBankScreenshotTest : ScreenshotTest(checkAccessibility = true) {
     @Test
     fun `idle, every tier`() = screenshot.captureTiers("timebank_idle") { tier ->
         TimeBankScreen(state = TimeBankPreviewData.idle(tier), onEvent = {})
@@ -18,6 +18,13 @@ class TimeBankScreenshotTest : ScreenshotTest() {
     fun `running, every tier`() = screenshot.captureTiers("timebank_running") { tier ->
         TimeBankScreen(state = TimeBankPreviewData.running(tier), onEvent = {})
     }
+
+    // One dark golden per kid screen family (docs/SCREENSHOT_TESTS.md).
+    @Test
+    fun `running, dark theme, every tier`() =
+        screenshot.captureTiers("timebank_running_dark", darkTheme = true) { tier ->
+            TimeBankScreen(state = TimeBankPreviewData.running(tier), onEvent = {})
+        }
 
     @Test
     fun `empty balance, every tier`() = screenshot.captureTiers("timebank_empty") { tier ->

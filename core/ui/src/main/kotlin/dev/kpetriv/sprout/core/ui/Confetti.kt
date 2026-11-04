@@ -14,7 +14,8 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.rotate
-import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.hideFromAccessibility
+import androidx.compose.ui.semantics.semantics
 
 private const val PIECES = 36
 private const val DURATION_MILLIS = 1_600
@@ -41,7 +42,7 @@ fun Confetti(onFinished: () -> Unit, modifier: Modifier = Modifier) {
         progress.animateTo(1f, animationSpec = tween(DURATION_MILLIS, easing = LinearEasing))
         finished.value()
     }
-    Canvas(modifier = modifier.clearAndSetSemantics { }) {
+    Canvas(modifier = modifier.semantics { hideFromAccessibility() }) {
         val t = progress.value
         val pieceSize = Size(size.minDimension / 40f, size.minDimension / 24f)
         pieces.forEach { piece ->

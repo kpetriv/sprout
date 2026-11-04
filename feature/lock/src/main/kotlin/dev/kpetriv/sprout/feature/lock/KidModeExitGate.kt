@@ -16,6 +16,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
@@ -48,26 +50,51 @@ fun KidModeExitGate(onDismiss: () -> Unit, onExitConfirmed: () -> Unit) {
         properties = DialogProperties(securePolicy = SecureFlagPolicy.SecureOn, usePlatformDefaultWidth = false),
     ) {
         SecureWindow()
-        Surface(shape = MaterialTheme.shapes.extraLarge, tonalElevation = 6.dp) {
-            Column(
-                modifier = Modifier.padding(24.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(16.dp),
-            ) {
-                if (gate.session == ParentSessionState.SetupRequired) {
-                    PinSetupRoute()
-                } else {
-                    Text(
-                        text = stringResource(R.string.feature_lock_exit_kid_mode_title),
-                        style = MaterialTheme.typography.titleLarge,
-                        textAlign = TextAlign.Center,
-                    )
-                    KidModeExitPinEntry()
-                }
-                TextButton(onClick = onDismiss) { Text(stringResource(R.string.feature_lock_cancel)) }
+        KidModeExitGateCard(onDismiss = onDismiss) {
+            if (gate.session == ParentSessionState.SetupRequired) {
+                PinSetupRoute()
+            } else {
+                KidModeExitPinEntry()
             }
         }
     }
+}
+
+/** The gate's card: [content] (PIN setup, or the title and PIN entry) above Cancel. Stateless, for goldens. */
+@Composable
+internal fun KidModeExitGateCard(onDismiss: () -> Unit, content: @Composable () -> Unit) {
+    Surface(shape = MaterialTheme.shapes.extraLarge, tonalElevation = 6.dp) {
+        Column(
+            modifier = Modifier.padding(24.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(16.dp),
+        ) {
+            content()
+            TextButton(onClick = onDismiss) { Text(stringResource(R.string.feature_lock_cancel)) }
+        }
+    }
+}
+
+/** "Exit kid mode?" over the PIN pad, as [KidModeExitPinEntry] shows it for [state]. */
+@Composable
+internal fun KidModeExitPinContent(
+    state: PinEntryUiState,
+    onEvent: (PinEntryEvent) -> Unit,
+    onUseBiometric: (() -> Unit)?,
+) {
+    Text(
+        text = stringResource(R.string.feature_lock_exit_kid_mode_title),
+        style = MaterialTheme.typography.titleLarge,
+        textAlign = TextAlign.Center,
+        modifier = Modifier.semantics { heading() },
+    )
+    PinEntryBody(
+        state = state,
+        onEvent = onEvent,
+        onUseBiometric = onUseBiometric,
+        keySize = 56.dp,
+        allowRenewal = false,
+    )
 }
 
 @Composable
@@ -76,11 +103,9 @@ private fun KidModeExitPinEntry() {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val prompter = rememberBiometricUnlockPrompter()
     LaunchedEffect(viewModel) { viewModel.onEvent(PinEntryEvent.Shown) }
-    PinEntryBody(
+    KidModeExitPinContent(
         state = state,
         onEvent = viewModel::onEvent,
         onUseBiometric = prompter?.let { { viewModel.onEvent(PinEntryEvent.UseBiometric(it)) } },
-        keySize = 56.dp,
-        allowRenewal = false,
     )
 }

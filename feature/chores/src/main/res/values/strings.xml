@@ -164,4 +164,6 @@
   <string name="feature_chores_proposed_message">Sent! A parent will look at your idea.</string>
   <string name="feature_chores_propose_failed">Your idea didn\'t send. Please try again.</string>
   <string name="feature_chores_counter">%1$d/%2$d</string>
+  <!-- Detail pane of the chore list on a tablet before a chore is picked. -->
+  <string name="feature_chores_editor_placeholder">Pick a chore to edit it here, or add a new one.</string>
 </resources>

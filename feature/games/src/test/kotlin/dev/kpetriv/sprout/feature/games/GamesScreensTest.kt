@@ -31,6 +31,7 @@ import dev.kpetriv.sprout.core.games.GameKind
 import dev.kpetriv.sprout.core.games.GameSession
 import dev.kpetriv.sprout.core.games.MemoryRound
 import dev.kpetriv.sprout.core.model.KidUiTier
+import dev.kpetriv.sprout.core.testing.accessibility.AccessibilityRule
 import dev.kpetriv.sprout.core.ui.ReadAloud
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import org.junit.Rule
@@ -56,6 +57,9 @@ class GamesScreensTest {
 
     @get:Rule(order = 1)
     val compose = createComposeRule()
+
+    @get:Rule(order = 2)
+    val a11y = AccessibilityRule(compose)
 
     private val spoken = mutableListOf<String>()
     private val readAloud = ReadAloud { spoken += it }

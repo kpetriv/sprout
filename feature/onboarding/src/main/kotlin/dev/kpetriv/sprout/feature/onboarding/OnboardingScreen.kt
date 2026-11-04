@@ -62,6 +62,7 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.kpetriv.sprout.core.domainledger.Currency
+import dev.kpetriv.sprout.core.ui.contentWidth
 
 /**
  * Onboarding (M3 §6) backed by an [OnboardingViewModel].
@@ -116,6 +117,7 @@ fun OnboardingScreen(
             modifier = Modifier
                 .safeDrawingPadding()
                 .verticalScroll(rememberScrollState())
+                .contentWidth()
                 .padding(horizontal = 24.dp, vertical = 16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {

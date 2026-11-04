@@ -28,6 +28,11 @@ internal object WalletPreviewData {
     private const val GOAL_MINOR = 4_000L
     private const val INTEREST_MINOR = 12L
     private const val GOAL_TITLE = "a new bike"
+    private const val OVER_CAP_INDEX = 9
+    private const val OVER_CAP_MINOR = 20L
+    private const val LATE_INDEX = 10
+    private const val LATE_MINOR = 15L
+    private const val NOT_COUNTED = 2
     private val now = Instant.fromEpochMilliseconds(1_793_000_000_000L)
 
     private val names = mapOf(
@@ -127,6 +132,44 @@ internal object WalletPreviewData {
             canAdjust = canAdjust,
             adjustment = adjustment,
             message = null,
+        )
+    }
+
+    /** [ready] in kid mode with the savings goal reached: every star lit, the bar full. */
+    fun goalReached(tier: KidUiTier): WalletUiState.Ready = ready(tier, canAdjust = false).let { ready ->
+        ready.copy(
+            savingsGoal = SavingsGoalUi(
+                savedText = formatter.formatForTier(Money(GOAL_MINOR), gbp, tier),
+                targetText = formatter.formatForTier(Money(GOAL_MINOR), gbp, tier),
+                progress = 1f,
+                title = GOAL_TITLE,
+                stars = SavingsStarsDefaults.STAR_COUNT,
+                isComplete = true,
+            ),
+        )
+    }
+
+    /** [ready] in kid mode before anything has happened: no history yet. */
+    fun noHistory(tier: KidUiTier): WalletUiState.Ready =
+        ready(tier, canAdjust = false).copy(events = emptyList(), availableFilters = emptyList())
+
+    /**
+     * The parent view with two game plays the ledger left out of the balance (M5 audit L3), one per reason, between
+     * two counted events.
+     */
+    fun notCounted(tier: KidUiTier): WalletUiState.Ready {
+        val overCap = event(OVER_CAP_INDEX, EventCategory.GAMES, AmountDirection.IN, OVER_CAP_MINOR)
+        val late = event(LATE_INDEX, EventCategory.GAMES, AmountDirection.IN, LATE_MINOR)
+        val counted = events.filter { it.category == EventCategory.CHORES || it.category == EventCategory.ALLOWANCE }
+        val notCounted = listOf(
+            counted.first(),
+            overCap.copy(excluded = GameExclusion.DAILY_CAP_EXCEEDED),
+            late.copy(excluded = GameExclusion.PLAYED_ON_OUT_OF_RANGE),
+            counted.last(),
+        )
+        return ready(tier, anomaliesCount = NOT_COUNTED).copy(
+            events = notCounted,
+            availableFilters = EventCategory.entries.filter { c -> notCounted.any { it.category == c } },
         )
     }
 

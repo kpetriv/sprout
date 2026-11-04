@@ -13,6 +13,7 @@ import androidx.compose.ui.test.performClick
 import dev.kpetriv.sprout.core.designsystem.theme.SproutTheme
 import dev.kpetriv.sprout.core.model.KidUiTier
 import dev.kpetriv.sprout.core.model.RewardId
+import dev.kpetriv.sprout.core.testing.accessibility.AccessibilityRule
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -25,8 +26,11 @@ import kotlin.test.assertTrue
 @RunWith(RobolectricTestRunner::class)
 @Config(qualifiers = "w411dp-h2400dp")
 class ShopScreenTest {
-    @get:Rule
+    @get:Rule(order = 0)
     val compose = createComposeRule()
+
+    @get:Rule(order = 1)
+    val a11y = AccessibilityRule(compose)
 
     private val events = mutableListOf<ShopEvent>()
 

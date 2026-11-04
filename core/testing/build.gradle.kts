@@ -10,6 +10,8 @@ plugins {
 
 android {
     namespace = "dev.kpetriv.sprout.core.testing"
+    // The module's own Robolectric tests (ScreenshotRuleTest, AccessibilityRuleTest).
+    testOptions.unitTests.isIncludeAndroidResources = true
 }
 
 // Nothing here ships, so there is nothing for Dependency-Check to scan; Robolectric's own tooling
@@ -21,6 +23,8 @@ dependencyCheck {
 dependencies {
     api(projects.core.common)
     api(projects.core.designsystem)
+    // WindowWidthClass / LocalWindowWidthClass for ScreenshotRule.captureWidthClasses.
+    api(projects.core.ui)
     api(libs.junit4)
     api(libs.kotlin.test.junit)
     api(libs.kotlinx.coroutines.test)
@@ -31,4 +35,7 @@ dependencies {
     api(libs.roborazzi.compose)
     api(libs.roborazzi.junit.rule)
     api(libs.androidx.compose.ui.test.junit4)
+
+    // Registers the empty ComponentActivity the module's own tests launch.
+    debugImplementation(libs.androidx.compose.ui.test.manifest)
 }

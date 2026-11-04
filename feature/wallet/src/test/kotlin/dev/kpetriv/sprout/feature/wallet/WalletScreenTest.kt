@@ -23,6 +23,7 @@ import dev.kpetriv.sprout.core.designsystem.theme.SproutTheme
 import dev.kpetriv.sprout.core.domainledger.Currency
 import dev.kpetriv.sprout.core.domainledger.Money
 import dev.kpetriv.sprout.core.model.KidUiTier
+import dev.kpetriv.sprout.core.testing.accessibility.AccessibilityRule
 import dev.kpetriv.sprout.core.ui.AmountDirection
 import dev.kpetriv.sprout.core.ui.ReadAloud
 import org.junit.Rule
@@ -38,8 +39,11 @@ import kotlin.time.Instant
 @RunWith(RobolectricTestRunner::class)
 @Config(qualifiers = "w411dp-h2400dp")
 class WalletScreenTest {
-    @get:Rule
+    @get:Rule(order = 0)
     val compose = createComposeRule()
+
+    @get:Rule(order = 1)
+    val a11y = AccessibilityRule(compose)
 
     private val events = mutableListOf<WalletEvent>()
     private val spoken = mutableListOf<String>()

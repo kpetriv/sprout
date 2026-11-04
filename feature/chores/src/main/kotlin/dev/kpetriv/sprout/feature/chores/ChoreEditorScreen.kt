@@ -34,6 +34,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.kpetriv.sprout.core.model.ChoreId
 import dev.kpetriv.sprout.core.model.KidId
+import dev.kpetriv.sprout.core.ui.contentWidth
 
 /**
  * Navigation entry for creating ([choreId] null) or editing a chore. [kidId] preselects the kid of a new chore.
@@ -124,6 +125,7 @@ private fun EditorForm(state: ChoreEditorUiState, onEvent: (ChoreEditorEvent) ->
         modifier = Modifier
             .fillMaxSize()
             .verticalScroll(rememberScrollState())
+            .contentWidth()
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {

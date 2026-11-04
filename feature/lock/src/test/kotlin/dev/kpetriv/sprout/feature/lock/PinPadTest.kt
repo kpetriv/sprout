@@ -6,6 +6,7 @@ import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import dev.kpetriv.sprout.core.designsystem.theme.SproutTheme
+import dev.kpetriv.sprout.core.testing.accessibility.AccessibilityRule
 import dev.kpetriv.sprout.core.ui.PinDots
 import dev.kpetriv.sprout.core.ui.PinPad
 import org.junit.Rule
@@ -19,8 +20,11 @@ import kotlin.test.assertEquals
 @RunWith(RobolectricTestRunner::class)
 @Config(qualifiers = "w411dp-h900dp")
 class PinPadTest {
-    @get:Rule
+    @get:Rule(order = 0)
     val compose = createComposeRule()
+
+    @get:Rule(order = 1)
+    val a11y = AccessibilityRule(compose)
 
     @Test
     fun `every key reports its digit and backspace reports itself`() {

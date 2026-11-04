@@ -6,6 +6,7 @@ import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import dev.kpetriv.sprout.core.designsystem.theme.SproutTheme
+import dev.kpetriv.sprout.core.testing.accessibility.AccessibilityRule
 import dev.kpetriv.sprout.feature.lock.SessionFixture.Companion.PIN
 import dev.kpetriv.sprout.feature.lock.SessionFixture.Companion.WRONG_PIN
 import kotlinx.coroutines.CoroutineScope
@@ -24,8 +25,11 @@ import kotlin.test.assertIs
 @RunWith(RobolectricTestRunner::class)
 @Config(qualifiers = "w411dp-h1200dp")
 class PinSetupScreenTest {
-    @get:Rule
+    @get:Rule(order = 0)
     val compose = createComposeRule()
+
+    @get:Rule(order = 1)
+    val a11y = AccessibilityRule(compose)
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
     private val fixture = SessionFixture(scope)

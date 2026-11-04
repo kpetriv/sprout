@@ -16,6 +16,7 @@ import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import dev.kpetriv.sprout.core.designsystem.theme.SproutTheme
+import dev.kpetriv.sprout.core.testing.accessibility.AccessibilityRule
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -27,8 +28,11 @@ import kotlin.test.assertEquals
 @RunWith(RobolectricTestRunner::class)
 @Config(qualifiers = "w411dp-h3000dp")
 class ParentHomeScreenTest {
-    @get:Rule
+    @get:Rule(order = 0)
     val compose = createComposeRule()
+
+    @get:Rule(order = 1)
+    val a11y = AccessibilityRule(compose)
 
     private val opened = mutableListOf<String>()
     private val events = mutableListOf<ParentHomeEvent>()

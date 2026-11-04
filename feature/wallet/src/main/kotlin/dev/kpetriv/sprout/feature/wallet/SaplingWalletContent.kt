@@ -23,6 +23,7 @@ import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import dev.kpetriv.sprout.core.model.KidUiTier
+import dev.kpetriv.sprout.core.ui.ContentWidth
 import dev.kpetriv.sprout.core.ui.TierScaledText
 import dev.kpetriv.sprout.core.ui.TierTextRole
 import java.text.DateFormat
@@ -44,32 +45,34 @@ internal fun SaplingWalletContent(
     val tier = KidUiTier.SAPLING
     val locale = LocalConfiguration.current.locales[0]
     val dateFormat = remember(locale) { DateFormat.getDateInstance(DateFormat.MEDIUM, locale) }
-    LazyColumn(
-        modifier = modifier.fillMaxSize(),
-        contentPadding = PaddingValues(16.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
-        item { SectionHeading(stringResource(R.string.feature_wallet_accounts), tier) }
-        items(state.balances, key = { "balance-${it.accountId.value}" }) { balance ->
-            BalanceCard(title = balance.label(), value = balance.kidFormatted, tier = tier)
-        }
-        item { ChoresAndShopButtons(onOpenChores = onOpenChores, onOpenShop = onOpenShop) }
-        state.savingsGoal?.takeIf { it.title != null }?.let { goal -> item { SavingsGoalCard(goal, tier) } }
-        item { InterestCard(state.interestEarned) }
-        item { BudgetPlaceholderCard() }
-        item {
-            OutlinedButton(onClick = onExport, modifier = Modifier.fillMaxWidth()) {
-                Text(stringResource(R.string.feature_wallet_export_csv))
+    ContentWidth(modifier = modifier.fillMaxSize()) {
+        LazyColumn(
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            item { SectionHeading(stringResource(R.string.feature_wallet_accounts), tier) }
+            items(state.balances, key = { "balance-${it.accountId.value}" }) { balance ->
+                BalanceCard(title = balance.label(), value = balance.kidFormatted, tier = tier)
             }
-        }
-        item { SectionHeading(stringResource(R.string.feature_wallet_history), tier) }
-        item { FilterChips(state.availableFilters, state.filter, onFilterChange) }
-        if (state.events.isEmpty()) {
-            item { EmptyHistory(tier) }
-        } else {
-            items(state.events, key = { it.eventId }) { event ->
-                val date = dateFormat.format(Date(event.createdAt.toEpochMilliseconds()))
-                EventRow(event, tier, subtitle = listOfNotNull(event.note, date).joinToString(" · "))
+            item { ChoresAndShopButtons(onOpenChores = onOpenChores, onOpenShop = onOpenShop) }
+            state.savingsGoal?.takeIf { it.title != null }?.let { goal -> item { SavingsGoalCard(goal, tier) } }
+            item { InterestCard(state.interestEarned) }
+            item { BudgetPlaceholderCard() }
+            item {
+                OutlinedButton(onClick = onExport, modifier = Modifier.fillMaxWidth()) {
+                    Text(stringResource(R.string.feature_wallet_export_csv))
+                }
+            }
+            item { SectionHeading(stringResource(R.string.feature_wallet_history), tier) }
+            item { FilterChips(state.availableFilters, state.filter, onFilterChange) }
+            if (state.events.isEmpty()) {
+                item { EmptyHistory(tier) }
+            } else {
+                items(state.events, key = { it.eventId }) { event ->
+                    val date = dateFormat.format(Date(event.createdAt.toEpochMilliseconds()))
+                    EventRow(event, tier, subtitle = listOfNotNull(event.note, date).joinToString(" · "))
+                }
             }
         }
     }

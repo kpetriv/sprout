@@ -41,6 +41,7 @@ import androidx.compose.ui.unit.dp
 import dev.kpetriv.sprout.core.model.KidUiTier
 import dev.kpetriv.sprout.core.ui.TierScaledText
 import dev.kpetriv.sprout.core.ui.TierTextRole
+import dev.kpetriv.sprout.core.ui.contentWidth
 import kotlin.math.PI
 import kotlin.math.cos
 import kotlin.math.sin
@@ -57,7 +58,7 @@ internal fun SeedlingTimeBankContent(
 ) {
     val tier = KidUiTier.SEEDLING
     Column(
-        modifier = modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(24.dp),
+        modifier = modifier.fillMaxSize().verticalScroll(rememberScrollState()).contentWidth().padding(24.dp),
         verticalArrangement = Arrangement.spacedBy(24.dp, Alignment.CenterVertically),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {

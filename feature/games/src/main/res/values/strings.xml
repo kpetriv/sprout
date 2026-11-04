@@ -68,8 +68,8 @@
   <string name="feature_games_word_hint">Hint: %1$s</string>
   <string name="feature_games_word_clear">Clear</string>
   <string name="feature_games_word_answer_label">Type the word</string>
-  <!-- %1$s is a letter. -->
-  <string name="feature_games_word_letter">Letter %1$s</string>
+  <!-- %1$s is a letter; %2$d is the tile's position among %3$d tiles, so repeated letters sound different. -->
+  <string name="feature_games_word_letter">Letter %1$s, %2$d of %3$d</string>
   <!-- %1$s is the letters so far. -->
   <string name="feature_games_word_answer_description">Your word: %1$s</string>
   <string name="feature_games_word_answer_empty">No letters yet</string>

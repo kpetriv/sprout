@@ -119,29 +119,29 @@ fun KidTodayScreen(
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun KidTodaySheets(state: KidTodayUiState.Ready, onEvent: (KidTodayEvent) -> Unit, onAddPhoto: () -> Unit) {
-    val sheet = state.sheet
-    if (sheet != null) {
-        ModalBottomSheet(onDismissRequest = { onEvent(KidTodayEvent.DismissSubmit) }) {
-            ProvideKidTier(state.tier) {
+    // Kid sheets have no drag handle: Material's is a 48 dp target in the sheet's own window, below the 56 and 72 dp
+    // tier minimum (M7 §8). The whole sheet still drags, the scrim closes it, and the form has its own buttons.
+    ProvideKidTier(state.tier) {
+        val sheet = state.sheet
+        if (sheet != null) {
+            ModalBottomSheet(onDismissRequest = { onEvent(KidTodayEvent.DismissSubmit) }, dragHandle = null) {
                 SubmitForm(
                     sheet = sheet,
                     tier = state.tier,
                     onEvent = onEvent,
                     onAddPhoto = onAddPhoto,
-                    modifier = Modifier.padding(start = 24.dp, end = 24.dp, bottom = 24.dp),
+                    modifier = Modifier.padding(24.dp),
                 )
             }
         }
-    }
-    val propose = state.propose
-    if (propose != null && state.canPropose) {
-        ModalBottomSheet(onDismissRequest = { onEvent(KidTodayEvent.DismissPropose) }) {
-            ProvideKidTier(state.tier) {
+        val propose = state.propose
+        if (propose != null && state.canPropose) {
+            ModalBottomSheet(onDismissRequest = { onEvent(KidTodayEvent.DismissPropose) }, dragHandle = null) {
                 ProposeForm(
                     form = propose,
                     currency = state.currency,
                     onEvent = onEvent,
-                    modifier = Modifier.padding(start = 24.dp, end = 24.dp, bottom = 24.dp),
+                    modifier = Modifier.padding(24.dp),
                 )
             }
         }

@@ -18,6 +18,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextAlign
@@ -29,6 +30,7 @@ import dev.kpetriv.sprout.core.crypto.ParentAuthAvailability
 import dev.kpetriv.sprout.core.designsystem.theme.SproutTheme
 import dev.kpetriv.sprout.core.ui.PinDots
 import dev.kpetriv.sprout.core.ui.PinPad
+import dev.kpetriv.sprout.core.ui.contentWidth
 
 /** First-run PIN setup backed by a [PinSetupViewModel]. */
 @Composable
@@ -50,6 +52,7 @@ fun PinSetupScreen(state: PinSetupUiState, onEvent: (PinSetupEvent) -> Unit, mod
             modifier = Modifier
                 .safeDrawingPadding()
                 .verticalScroll(rememberScrollState())
+                .contentWidth()
                 .padding(horizontal = 24.dp, vertical = 32.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(20.dp),
@@ -61,6 +64,7 @@ fun PinSetupScreen(state: PinSetupUiState, onEvent: (PinSetupEvent) -> Unit, mod
                 ),
                 style = MaterialTheme.typography.headlineSmall,
                 textAlign = TextAlign.Center,
+                modifier = Modifier.semantics { heading() },
             )
             PinDots(entered = state.enteredDigits, length = state.pinLength, shakeKey = state.rejections)
             Text(

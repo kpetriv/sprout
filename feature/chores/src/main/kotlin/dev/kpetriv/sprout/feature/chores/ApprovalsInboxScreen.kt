@@ -27,6 +27,7 @@ import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import dev.kpetriv.sprout.core.ui.ContentWidth
 
 /** Navigation entry for the parent's approvals inbox (submissions and chore proposals). */
 @Composable
@@ -106,37 +107,41 @@ private fun EmptyInbox() {
 
 @Composable
 private fun Inbox(state: ApprovalsUiState.Ready, onEvent: (ApprovalsEvent) -> Unit) {
-    LazyColumn(
-        contentPadding = PaddingValues(16.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
-        modifier = Modifier.fillMaxWidth(),
-    ) {
-        if (state.submissions.isNotEmpty()) {
-            item(key = "submissions") { SectionHeading(stringResource(R.string.feature_chores_approvals_submissions)) }
-            items(state.submissions, key = { it.id.value }) { submission ->
-                SubmissionCard(
-                    submission = submission,
-                    busy = state.busy == submission.id.value,
-                    enabled = state.busy == null,
-                    onApprove = { onEvent(ApprovalsEvent.Approve(submission.id)) },
-                    onReject = { onEvent(ApprovalsEvent.OpenReject(submission.id)) },
-                )
+    ContentWidth(modifier = Modifier.fillMaxSize()) {
+        LazyColumn(
+            contentPadding = PaddingValues(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            if (state.submissions.isNotEmpty()) {
+                item(key = "submissions") {
+                    SectionHeading(stringResource(R.string.feature_chores_approvals_submissions))
+                }
+                items(state.submissions, key = { it.id.value }) { submission ->
+                    SubmissionCard(
+                        submission = submission,
+                        busy = state.busy == submission.id.value,
+                        enabled = state.busy == null,
+                        onApprove = { onEvent(ApprovalsEvent.Approve(submission.id)) },
+                        onReject = { onEvent(ApprovalsEvent.OpenReject(submission.id)) },
+                    )
+                }
             }
-        }
-        if (state.proposals.isNotEmpty()) {
-            item(key = "proposals") {
-                SectionHeading(
-                    text = stringResource(R.string.feature_chores_approvals_proposals),
-                    modifier = Modifier.padding(top = 8.dp),
-                )
-            }
-            items(state.proposals, key = { it.choreId.value }) { proposal ->
-                ProposalCard(
-                    proposal = proposal,
-                    enabled = state.busy == null,
-                    onAccept = { onEvent(ApprovalsEvent.AcceptProposal(proposal.choreId)) },
-                    onDecline = { onEvent(ApprovalsEvent.DeclineProposal(proposal.choreId)) },
-                )
+            if (state.proposals.isNotEmpty()) {
+                item(key = "proposals") {
+                    SectionHeading(
+                        text = stringResource(R.string.feature_chores_approvals_proposals),
+                        modifier = Modifier.padding(top = 8.dp),
+                    )
+                }
+                items(state.proposals, key = { it.choreId.value }) { proposal ->
+                    ProposalCard(
+                        proposal = proposal,
+                        enabled = state.busy == null,
+                        onAccept = { onEvent(ApprovalsEvent.AcceptProposal(proposal.choreId)) },
+                        onDecline = { onEvent(ApprovalsEvent.DeclineProposal(proposal.choreId)) },
+                    )
+                }
             }
         }
     }

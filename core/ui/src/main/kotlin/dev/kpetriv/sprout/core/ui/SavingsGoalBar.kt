@@ -23,6 +23,8 @@ import kotlin.math.roundToInt
 /**
  * Progress towards a savings goal: [title], a bar at [progress] (0..1, clamped; ignored when [targetText] is null),
  * and "saved / target" underneath. Without a target the bar stays empty and says so to accessibility services.
+ * Accessibility: one node (M7 §8) reading the title, the saved and target amounts and the progress state, so the bar
+ * is never announced on its own as a bare percentage.
  */
 @Composable
 fun SavingsGoalBar(
@@ -41,7 +43,10 @@ fun SavingsGoalBar(
         val percent = (target * PERCENT_FULL).roundToInt()
         pluralStringResource(R.plurals.core_ui_savings_progress, percent, percent)
     }
-    Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    Column(
+        modifier = modifier.semantics(mergeDescendants = true) {},
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
         TierScaledText(text = title, role = TierTextRole.Title, tier = tier)
         LinearProgressIndicator(
             progress = { animated },

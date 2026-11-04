@@ -85,6 +85,7 @@ fun ShopScreen(
                     Text(
                         text = ready?.let { stringResource(R.string.feature_wallet_shop_title_named, it.kid.firstName) }
                             ?: stringResource(R.string.feature_wallet_shop_title),
+                        modifier = Modifier.semantics { heading() },
                     )
                 },
                 navigationIcon = {
