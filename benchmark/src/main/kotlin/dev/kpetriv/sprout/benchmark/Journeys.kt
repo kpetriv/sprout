@@ -10,6 +10,13 @@ import androidx.test.uiautomator.Until
 import java.util.regex.Pattern
 
 private const val TIMEOUT_MS = 15_000L
+
+/**
+ * How long a start may take to show its first screen. Startup work (the encrypted database, the ledger check, the
+ * benchmark seed on a fresh install) runs behind the loading indicator; [startWithoutAccessibility] normally waits for
+ * it, and this bounds the rest (D-V1-11).
+ */
+private const val START_TIMEOUT_MS = 180_000L
 private const val SHORT_TIMEOUT_MS = 2_000L
 private const val MAX_STEPS = 8
 private const val MAX_ROUNDS = 16
@@ -96,7 +103,7 @@ private fun MacrobenchmarkScope.enterPin() {
  * app in) to the unlocked parent dashboard.
  */
 internal fun MacrobenchmarkScope.reachParentDashboard() {
-    await(ENTRY_SCREENS, "a start screen")
+    await(ENTRY_SCREENS, "a start screen", START_TIMEOUT_MS)
     repeat(MAX_STEPS) {
         when {
             has(DASHBOARD) -> return
@@ -121,14 +128,17 @@ internal fun MacrobenchmarkScope.reachParentDashboard() {
             // Kid mode at its root: back asks for the parent PIN (KidModeExitGate).
             else -> device.pressBack()
         }
-        device.wait(Until.hasObject(ENTRY_SCREENS), TIMEOUT_MS)
+        device.wait(Until.hasObject(ENTRY_SCREENS), START_TIMEOUT_MS)
     }
     await(DASHBOARD)
 }
 
-/** Cold start to the unlocked parent dashboard: the PIN, then the dashboard's first frame of content. */
+/**
+ * Cold start to the unlocked parent dashboard: the start until the app reports itself fully drawn (the PIN screen,
+ * D-M7-43), then the PIN and the dashboard's first frame of content.
+ */
 internal fun MacrobenchmarkScope.startToParentDashboard() {
-    startActivityAndWait()
+    startWithoutAccessibility()
     reachParentDashboard()
 }
 
@@ -156,7 +166,7 @@ private fun MacrobenchmarkScope.scrollTo(selector: BySelector, what: String): Ui
 
 /** The kid's wallet in kid mode: stays there when a previous iteration left it there, otherwise [enterKidMode]. */
 internal fun MacrobenchmarkScope.reachKidWallet() {
-    await(ENTRY_SCREENS, "a start screen")
+    await(ENTRY_SCREENS, "a start screen", START_TIMEOUT_MS)
     if (device.hasObject(KID_WALLET)) return
     enterKidMode()
 }

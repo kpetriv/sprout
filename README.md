@@ -135,6 +135,8 @@ A Play release is built from a `v*` tag; nothing secret is in the repository (M8
 
 ## Performance
 
+> **Re-run pending (D-V1-11).** The table above predates `ReportDrawnWhen` (D-M7-43) and the accessibility-off start. To refresh it on an idle machine (no other emulator or Gradle build): boot a lock-free API 33 AVD with `-gpu host -port 5580`, then `ANDROID_SERIAL=emulator-5580 ./gradlew :app:generateBaselineProfile -Pandroid.testInstrumentationRunnerArguments.androidx.benchmark.suppressErrors=EMULATOR --no-daemon` (commit the regenerated `app/src/main/generated/baselineProfiles/*.txt`), then `:benchmark:connectedBenchmarkReleaseAndroidTest` with the same flags, and replace the table with the new P50/P90 values.
+
 Startup and scrolling are measured with Macrobenchmark (`benchmark/`) against the `benchmarkRelease` build, and the app ships a Baseline Profile and a startup profile (`app/src/main/generated/baselineProfiles/`, used by every release build) generated from the same journeys (D-M7-3, D-M7-41). The benchmark build types are release code under R8, debug-signed, with the demo household seeded offline: no Firebase, no sync, no App Check, and a placeholder server URL (`BenchmarkSeed`). The journeys choose the parent PIN on the first run and enter it after that: cold start to the parent dashboard, then in kid mode Zoe's wallet history (a lazy list of 60 seeded rows), today's chores, and the games hub to an arithmetic game.
 
 Results, 4 November 2026, 10 iterations each, on an **emulator** (`Sprout_Benchmark` AVD: Pixel 7 profile, API 33 Google Play arm64 image, 4 cores, 4 GB, host GPU via `-gpu host`) on an Apple M1 Pro laptop that was also running Gradle builds:
