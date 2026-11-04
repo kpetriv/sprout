@@ -34,6 +34,7 @@ import dev.kpetriv.sprout.core.ui.AdaptiveColumns
 import dev.kpetriv.sprout.core.ui.ContentWidth
 import dev.kpetriv.sprout.core.ui.TierScaledText
 import dev.kpetriv.sprout.core.ui.TierTextRole
+import dev.kpetriv.sprout.core.ui.withGutters
 
 /**
  * Seedling shop: big picture tiles, green with a tick when the kid can buy the reward and grey with a piggy bank when
@@ -47,11 +48,11 @@ internal fun SeedlingShopContent(
     onSelect: (ShopItemUi) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    ContentWidth(modifier = modifier.fillMaxSize(), max = GRID_MAX_WIDTH) {
+    ContentWidth(modifier = modifier.fillMaxSize(), max = GRID_MAX_WIDTH) { gutters ->
         LazyVerticalGrid(
             columns = AdaptiveColumns(minColumnWidth = SEEDLING_TILE_MIN_WIDTH, minColumns = SEEDLING_COLUMNS),
             modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(24.dp),
+            contentPadding = PaddingValues(24.dp).withGutters(gutters),
             horizontalArrangement = Arrangement.spacedBy(16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
@@ -122,10 +123,10 @@ internal fun SproutShopContent(
     onSelect: (ShopItemUi) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    ContentWidth(modifier = modifier.fillMaxSize()) {
+    ContentWidth(modifier = modifier.fillMaxSize()) { gutters ->
         LazyColumn(
             modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(16.dp),
+            contentPadding = PaddingValues(16.dp).withGutters(gutters),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             item { ShopBalanceHeader(state) }
@@ -148,10 +149,10 @@ internal fun SaplingShopContent(
     modifier: Modifier = Modifier,
 ) {
     val tier = KidUiTier.SAPLING
-    ContentWidth(modifier = modifier.fillMaxSize()) {
+    ContentWidth(modifier = modifier.fillMaxSize()) { gutters ->
         LazyColumn(
             modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(16.dp),
+            contentPadding = PaddingValues(16.dp).withGutters(gutters),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             item { ShopBalanceHeader(state) }

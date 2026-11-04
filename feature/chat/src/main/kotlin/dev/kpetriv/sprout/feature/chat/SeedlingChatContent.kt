@@ -64,40 +64,45 @@ internal fun SeedlingChatContent(
     onEvent: (ChatEvent) -> Unit,
     readAloud: ReadAloud,
     modifier: Modifier = Modifier,
+    gutters: PaddingValues = PaddingValues(),
 ) {
     val speak: ((String) -> Unit)? = if (readAloud !== ReadAloud.None) readAloud::speak else null
     Column(modifier = modifier.fillMaxSize()) {
-        if (!state.canSend) WaitingBanner(ChatMode.KID, state.keyState)
+        if (!state.canSend) WaitingBanner(ChatMode.KID, state.keyState, modifier = Modifier.padding(gutters))
         MessageList(
             state = state,
             onEvent = onEvent,
             emptyText = stringResource(R.string.feature_chat_empty_seedling),
             onSpeak = speak,
             modifier = Modifier.weight(1f),
+            gutters = gutters,
         )
-        val recording = state.recording
-        if (recording != null) {
-            RecordingPanel(recording)
-        } else {
-            PresetGrid(state, onEvent, speak)
-            EmojiRow(state, onEvent)
-        }
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(12.dp),
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            HoldToRecordButton(recording = recording != null, enabled = state.canSend, onEvent = onEvent)
-            Button(
-                onClick = { onEvent(ChatEvent.SendSelection) },
-                enabled = state.canSendSelection && recording == null,
-                modifier = Modifier.weight(1f).heightIn(min = minTouch),
+        // Below the thread, everything sits inside the gutters (the thread itself scrolls across the full width).
+        Column(modifier = Modifier.padding(gutters)) {
+            val recording = state.recording
+            if (recording != null) {
+                RecordingPanel(recording)
+            } else {
+                PresetGrid(state, onEvent, speak)
+                EmojiRow(state, onEvent)
+            }
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(12.dp),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalAlignment = Alignment.CenterVertically,
             ) {
-                TierScaledText(
-                    text = "✉️ " + stringResource(R.string.feature_chat_send),
-                    role = TierTextRole.Title,
-                    tier = KidUiTier.SEEDLING,
-                )
+                HoldToRecordButton(recording = recording != null, enabled = state.canSend, onEvent = onEvent)
+                Button(
+                    onClick = { onEvent(ChatEvent.SendSelection) },
+                    enabled = state.canSendSelection && recording == null,
+                    modifier = Modifier.weight(1f).heightIn(min = minTouch),
+                ) {
+                    TierScaledText(
+                        text = "✉️ " + stringResource(R.string.feature_chat_send),
+                        role = TierTextRole.Title,
+                        tier = KidUiTier.SEEDLING,
+                    )
+                }
             }
         }
     }

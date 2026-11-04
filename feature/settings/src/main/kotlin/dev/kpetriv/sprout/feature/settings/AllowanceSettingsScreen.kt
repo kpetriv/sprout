@@ -47,6 +47,7 @@ import dev.kpetriv.sprout.core.model.AllowanceCadence
 import dev.kpetriv.sprout.core.model.CalendarDate
 import dev.kpetriv.sprout.core.model.DayOfWeek
 import dev.kpetriv.sprout.core.model.MAX_SCHEDULE_DAY_OF_MONTH
+import dev.kpetriv.sprout.core.ui.contentWidth
 import dev.kpetriv.sprout.core.ui.rememberMoneyFormatter
 import java.time.format.TextStyle
 
@@ -74,7 +75,7 @@ fun AllowanceSettingsScreen(
     ) { padding ->
         Column(modifier = Modifier.padding(padding).fillMaxSize()) {
             if (!loadStatus(state.isLoading, state.loadFailed)) {
-                Column(modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
+                Column(modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).contentWidth()) {
                     if (state.rows.isEmpty()) {
                         Text(stringResource(R.string.feature_settings_no_kids), modifier = Modifier.sectionPadding())
                     }

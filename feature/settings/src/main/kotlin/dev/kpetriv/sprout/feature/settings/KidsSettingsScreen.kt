@@ -39,6 +39,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.kpetriv.sprout.core.model.KidId
 import dev.kpetriv.sprout.core.model.KidUiTier
 import dev.kpetriv.sprout.core.model.MAX_FIRST_NAME_LENGTH
+import dev.kpetriv.sprout.core.ui.contentWidth
 import java.text.DateFormatSymbols
 
 @Composable
@@ -79,7 +80,7 @@ fun KidsSettingsScreen(
     ) { padding ->
         Column(modifier = Modifier.padding(padding).fillMaxSize()) {
             if (!loadStatus(state.isLoading, state.loadFailed)) {
-                Column(modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
+                Column(modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).contentWidth()) {
                     if (state.kids.isEmpty()) {
                         Text(
                             stringResource(R.string.feature_settings_kids_empty),

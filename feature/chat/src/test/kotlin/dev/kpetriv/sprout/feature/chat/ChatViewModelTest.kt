@@ -33,26 +33,29 @@ class ChatViewModelTest {
     private val filter = FakeFilter()
     private val pickPhoto = FakePickPhoto()
 
-    private fun viewModel(mode: ChatMode = ChatMode.PARENT, tier: KidUiTier? = null): ChatViewModel {
-        val args = buildMap {
+    private fun args(mode: ChatMode = ChatMode.PARENT, tier: KidUiTier? = null) = SavedStateHandle(
+        buildMap {
             put(ChatViewModel.THREAD_ID_KEY, ChatTestData.leo.value)
             put(ChatViewModel.MODE_KEY, mode.name)
             if (tier != null) put(ChatViewModel.TIER_KEY, tier.name)
-        }
-        return ChatViewModel(
-            savedStateHandle = SavedStateHandle(args),
-            threads = threads,
-            reader = reader,
-            sender = sender,
-            keyStatus = keys,
-            blobs = blobs,
-            recorder = recorder,
-            player = player,
-            filter = filter,
-            pickPhoto = pickPhoto,
-            clock = FakeClock(ChatTestData.start),
-        )
-    }
+        },
+    )
+
+    private fun viewModel(mode: ChatMode = ChatMode.PARENT, tier: KidUiTier? = null) = viewModel(args(mode, tier))
+
+    private fun viewModel(handle: SavedStateHandle): ChatViewModel = ChatViewModel(
+        savedStateHandle = handle,
+        threads = threads,
+        reader = reader,
+        sender = sender,
+        keyStatus = keys,
+        blobs = blobs,
+        recorder = recorder,
+        player = player,
+        filter = filter,
+        pickPhoto = pickPhoto,
+        clock = FakeClock(ChatTestData.start),
+    )
 
     private fun TestScope.ready(vm: ChatViewModel): () -> ChatUiState.Ready {
         val state = subscribe(vm.state)
@@ -723,6 +726,58 @@ class ChatViewModelTest {
         val state = ready(viewModel())
 
         assertEquals(listOf(false, true), state().messages.map { it.late })
+    }
+
+    @Test
+    fun `a kid's draft survives process death and is cleared from the saved state on send (D-V1-2)`() = runTest {
+        val handle = args(ChatMode.KID, KidUiTier.SPROUT)
+        ready(viewModel(handle))().let { assertEquals("", it.draft) }
+        viewModel(handle).onEvent(ChatEvent.DraftChanged("See you at the park"))
+
+        // A new ViewModel from the same saved state stands in for the one the system killed.
+        val restored = viewModel(handle)
+        val state = ready(restored)
+        assertEquals("See you at the park", state().draft)
+
+        restored.onEvent(ChatEvent.SendText)
+        assertEquals(listOf<OutgoingMessage>(OutgoingMessage.Text("See you at the park")), sender.sent)
+        assertEquals("", state().draft)
+        assertNull(handle.get<String>(ChatViewModel.DRAFT_KEY))
+        assertEquals("", ready(viewModel(handle))().draft)
+    }
+
+    @Test
+    fun `an accepted suggestion survives process death and is still sent unchecked (D-V1-2, D-M6-2)`() = runTest {
+        filter.verdict = FilterVerdict.Nudge("Can we talk later?")
+        val handle = args(ChatMode.KID, KidUiTier.SAPLING)
+        val vm = viewModel(handle)
+        ready(vm)
+        vm.onEvent(ChatEvent.DraftChanged("Whatever"))
+        vm.onEvent(ChatEvent.SendText)
+        vm.onEvent(ChatEvent.NudgeUseSuggestion)
+
+        val restored = viewModel(handle)
+        val state = ready(restored)
+        assertEquals("Can we talk later?", state().draft)
+        assertNull(state().nudge)
+        restored.onEvent(ChatEvent.SendText)
+
+        assertEquals(listOf("Whatever" to KidUiTier.SAPLING), filter.checked)
+        assertEquals(listOf<OutgoingMessage>(OutgoingMessage.Text("Can we talk later?")), sender.sent)
+        assertNull(handle.get<String>(ChatViewModel.ACCEPTED_SUGGESTION_KEY))
+    }
+
+    @Test
+    fun `a saved draft is capped and a stale marker is dropped on restore`() = runTest {
+        val handle = args(ChatMode.KID, KidUiTier.SPROUT)
+        handle[ChatViewModel.DRAFT_KEY] = "a".repeat(OutgoingMessage.MAX_TEXT_LENGTH + 5)
+        handle[ChatViewModel.ACCEPTED_SUGGESTION_KEY] = "something else"
+        val vm = viewModel(handle)
+        val state = ready(vm)
+        assertEquals(OutgoingMessage.MAX_TEXT_LENGTH, state().draft.length)
+
+        vm.onEvent(ChatEvent.SendText)
+        assertEquals(1, filter.checked.size, "a marker that is not the draft gives no bypass")
     }
 
     @Test

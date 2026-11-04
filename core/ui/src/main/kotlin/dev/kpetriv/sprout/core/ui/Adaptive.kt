@@ -1,14 +1,15 @@
 package dev.kpetriv.sprout.core.ui
 
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.ReadOnlyComposable
 import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.ui.Alignment
@@ -16,9 +17,12 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalWindowInfo
+import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
+import kotlin.math.roundToInt
 
 /*
  * Window-size helpers (M7 §5, D-M7-2). Screens read the width class through [rememberWindowWidthClass] and never
@@ -97,20 +101,58 @@ object ContentWidthDefaults {
 }
 
 /**
- * Centres [content] horizontally and caps its width at [max]. On a phone (narrower than [max]) the content gets the
- * full width, exactly as without the wrapper, so phone layouts and their goldens do not change. Wrap every scrolling
- * screen's list in it (the whole list, so the scroll position and the content padding stay with the list).
- * [modifier] applies to the full-width outer box (pass `fillMaxSize()` or `weight(1f)` here).
+ * Caps a scrolling list at [max] wide and centres it, while the whole window stays scrollable (M7 review L10). The box
+ * fills the width it is given and passes [content] the side `gutters` that centre a column exactly `min(width, max)`
+ * wide; the list fills the box and adds the gutters to its content padding
+ * (`contentPadding = PaddingValues(16.dp).withGutters(gutters)`), so a drag in a gutter scrolls the list as well.
+ * Content beside the list that does not scroll (a composer, a banner) takes `Modifier.padding(gutters)`. On a phone
+ * (narrower than [max]) the gutters are zero, so phone layouts and their goldens do not change. A scrolling column
+ * uses the [contentWidth] modifier after `verticalScroll` instead. [modifier] applies to the full-width box (pass
+ * `fillMaxSize()` or `weight(1f)` here).
  */
 @Composable
 fun ContentWidth(
     modifier: Modifier = Modifier,
     max: Dp = ContentWidthDefaults.Max,
-    content: @Composable BoxScope.() -> Unit,
+    content: @Composable BoxScope.(gutters: PaddingValues) -> Unit,
 ) {
-    Box(modifier = modifier, contentAlignment = Alignment.TopCenter) {
-        Box(modifier = Modifier.widthIn(max = max).fillMaxWidth(), content = content)
+    BoxWithConstraints(modifier = modifier) {
+        val gutters = LocalDensity.current.contentWidthGutters(constraints.maxWidth, max)
+        content(gutters)
     }
+}
+
+/**
+ * The left and right padding that centre a column at most [max] wide in [availableWidthPx], in whole pixels and
+ * rounded as `Alignment.CenterHorizontally` rounds, so the column lands where the old centred box put it at integer
+ * densities. At a fractional density the gutters are converted to dp and added to the list's own dp padding before
+ * the list rounds the sum, so the column may sit 1 px off the old position (cosmetic). Zero when the width is at
+ * most [max] or unbounded. Pure, so it is unit tested.
+ */
+fun Density.contentWidthGutters(availableWidthPx: Int, max: Dp = ContentWidthDefaults.Max): PaddingValues {
+    val spare = if (availableWidthPx == Constraints.Infinity) 0 else availableWidthPx - max.roundToPx()
+    if (spare <= 0) return NoGutters
+    val left = (spare / 2f).roundToInt()
+    return PaddingValues.Absolute(left = left.toDp(), right = (spare - left).toDp())
+}
+
+/** [this] content padding with the [ContentWidth] [gutters] added on each side. */
+fun PaddingValues.withGutters(gutters: PaddingValues): PaddingValues =
+    if (gutters === NoGutters) this else GutteredPadding(this, gutters)
+
+private val NoGutters = PaddingValues(0.dp)
+
+@Immutable
+private data class GutteredPadding(val padding: PaddingValues, val gutters: PaddingValues) : PaddingValues {
+    override fun calculateLeftPadding(layoutDirection: LayoutDirection): Dp =
+        padding.calculateLeftPadding(layoutDirection) + gutters.calculateLeftPadding(layoutDirection)
+
+    override fun calculateTopPadding(): Dp = padding.calculateTopPadding() + gutters.calculateTopPadding()
+
+    override fun calculateRightPadding(layoutDirection: LayoutDirection): Dp =
+        padding.calculateRightPadding(layoutDirection) + gutters.calculateRightPadding(layoutDirection)
+
+    override fun calculateBottomPadding(): Dp = padding.calculateBottomPadding() + gutters.calculateBottomPadding()
 }
 
 /**

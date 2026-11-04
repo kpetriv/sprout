@@ -92,8 +92,8 @@ fun ChatThreadListScreen(
                         modifier = Modifier.align(Alignment.Center).padding(24.dp),
                     )
                 } else {
-                    ContentWidth(modifier = Modifier.fillMaxSize()) {
-                        LazyColumn(modifier = Modifier.fillMaxSize()) {
+                    ContentWidth(modifier = Modifier.fillMaxSize()) { gutters ->
+                        LazyColumn(modifier = Modifier.fillMaxSize(), contentPadding = gutters) {
                             items(state.threads, key = { it.threadId.value }) { row ->
                                 ThreadRow(
                                     row = row,

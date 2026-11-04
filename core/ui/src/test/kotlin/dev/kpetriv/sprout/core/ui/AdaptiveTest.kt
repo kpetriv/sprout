@@ -1,10 +1,14 @@
 package dev.kpetriv.sprout.core.ui
 
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Density
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import org.junit.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertSame
 
 class AdaptiveTest {
     @Test
@@ -49,5 +53,45 @@ class AdaptiveTest {
         assertEquals(listOf(105, 104, 104), sizes)
         assertEquals(333 - 2 * 10, sizes.sum())
         assertEquals(AdaptiveColumns(100.dp, minColumns = 2), cells)
+    }
+
+    @Test
+    fun `content width gutters centre a capped column in whole pixels`() {
+        val mdpi = Density(1f)
+        // Phone: narrower than the cap, no gutters.
+        assertEquals(0.dp, mdpi.contentWidthGutters(411).calculateLeftPadding(LayoutDirection.Ltr))
+        assertEquals(0.dp, mdpi.contentWidthGutters(640).calculateRightPadding(LayoutDirection.Ltr))
+        // Tablet: 1280 dp leaves 320 dp each side.
+        val tablet = mdpi.contentWidthGutters(1280)
+        assertEquals(320.dp, tablet.calculateLeftPadding(LayoutDirection.Ltr))
+        assertEquals(320.dp, tablet.calculateRightPadding(LayoutDirection.Rtl))
+        // An odd spare pixel goes left, as Alignment.CenterHorizontally rounds it.
+        val odd = mdpi.contentWidthGutters(641)
+        assertEquals(0.dp, odd.calculateRightPadding(LayoutDirection.Ltr))
+        assertEquals(1.dp, odd.calculateLeftPadding(LayoutDirection.Rtl))
+        // xxhdpi: 1080 px is 360 dp; a 2560 px window leaves (2560 - 1920) / 2 px each side.
+        val xxhdpi = Density(3f)
+        assertEquals(0.dp, xxhdpi.contentWidthGutters(1080).calculateLeftPadding(LayoutDirection.Ltr))
+        with(xxhdpi) {
+            assertEquals(320, contentWidthGutters(2560).calculateLeftPadding(LayoutDirection.Ltr).roundToPx())
+        }
+        // A custom cap, and an unbounded width.
+        assertEquals(140.dp, mdpi.contentWidthGutters(1000, max = 720.dp).calculateLeftPadding(LayoutDirection.Ltr))
+        assertEquals(0.dp, mdpi.contentWidthGutters(Constraints.Infinity).calculateLeftPadding(LayoutDirection.Ltr))
+    }
+
+    @Test
+    fun `gutters add to a list's own content padding`() {
+        val padded = PaddingValues(start = 16.dp, top = 8.dp, end = 4.dp, bottom = 96.dp)
+            .withGutters(Density(1f).contentWidthGutters(1281))
+
+        assertEquals(16.dp + 321.dp, padded.calculateLeftPadding(LayoutDirection.Ltr))
+        assertEquals(4.dp + 320.dp, padded.calculateRightPadding(LayoutDirection.Ltr))
+        assertEquals(4.dp + 321.dp, padded.calculateLeftPadding(LayoutDirection.Rtl))
+        assertEquals(8.dp, padded.calculateTopPadding())
+        assertEquals(96.dp, padded.calculateBottomPadding())
+        // No gutters (a phone): the list's padding as it was.
+        val phone = PaddingValues(16.dp)
+        assertSame(phone, phone.withGutters(Density(1f).contentWidthGutters(411)))
     }
 }

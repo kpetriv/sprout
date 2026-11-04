@@ -12,6 +12,7 @@ import dev.kpetriv.sprout.core.domainledger.Money
 import dev.kpetriv.sprout.core.model.AgeBand
 import dev.kpetriv.sprout.core.model.MAX_DESCRIPTION_LENGTH
 import dev.kpetriv.sprout.core.model.MAX_TITLE_LENGTH
+import java.text.Normalizer
 
 /**
  * Hard bounds on model output (M6 §1, ADR-0010). Model text is untrusted: anything that fails here is replaced by the
@@ -229,7 +230,26 @@ object AiOutputRules {
         val foreignDigit = text.codePoints().anyMatch { Character.isDigit(it) && it !in ASCII_DIGITS }
         val quantityWord = Regex("\\p{L}+").findAll(text.lowercase()).any { it.value in quantityWords }
         val allowed = numbersOf(facts)
-        return !foreignDigit && !quantityWord && numbersIn(text).all { readings -> readings.any { it in allowed } }
+        return !foreignDigit && !quantityWord && !hasForeignNumberWord(text, facts) &&
+            numbersIn(text).all { readings -> readings.any { it in allowed } }
+    }
+
+    /**
+     * Whether [text] has a number word of another common device language ([foreignNumberWords]: German, French,
+     * Spanish, Italian, Portuguese, Dutch; one to twenty, the tens, hundred, thousand), so a model that slips out of
+     * English falls back to the template (D-M6-35 residual). Accents are ignored ("zwölf", "zwolf") and "ß" reads as
+     * "ss" ("dreißig"); a word that is part of a kid's first name ("Otto", "Elf") is not one, since the names are in
+     * the summary's facts.
+     */
+    internal fun hasForeignNumberWord(text: String, facts: WeeklyFacts): Boolean {
+        val names = facts.kids.flatMapTo(mutableSetOf()) { words(it.firstName) }
+        return words(text).any { it in foreignNumberWords && it !in names }
+    }
+
+    /** The letter runs of [text], lower case, accents removed, "ß" as "ss" (NFD leaves it whole). */
+    private fun words(text: String): Sequence<String> {
+        val folded = Normalizer.normalize(text.lowercase().replace("ß", "ss"), Normalizer.Form.NFD).replace(MARKS, "")
+        return Regex("\\p{L}+").findAll(folded).map { it.value }
     }
 
     /**
@@ -325,6 +345,39 @@ object AiOutputRules {
         "hundred", "hundreds", "thousand", "thousands", "million", "millions", "billion", "billions", "dozen",
         "dozens", "half", "halves", "once", "twice", "thrice",
     )
+
+    private val MARKS = Regex("\\p{M}+")
+
+    /**
+     * Number words of the device languages Sprout is most likely to meet besides English (one to twenty, the tens
+     * thirty to ninety, hundred, thousand; lower case, "ß" as "ss", accents removed; common spellings of both
+     * Portuguese standards and the transliterated German umlauts). Left out because they are ordinary English words a
+     * summary may use: "six" (an English number, checked as one), "sept" (September), "seize", "cent", "due", "doze",
+     * and "once" (refused as an English quantity word anyway).
+     */
+    private val foreignNumberWords: Set<String> = (
+        // German
+        "ein eins eine zwei drei vier funf fuenf sechs sieben acht neun zehn elf zwolf zwoelf dreizehn vierzehn " +
+            "funfzehn fuenfzehn sechzehn siebzehn achtzehn neunzehn zwanzig dreissig vierzig funfzig fuenfzig " +
+            "sechzig siebzig achtzig neunzig hundert tausend " +
+            // French
+            "un une deux trois quatre cinq huit neuf dix onze douze treize quatorze quinze vingt trente quarante " +
+            "cinquante soixante mille " +
+            // Spanish
+            "uno una dos tres cuatro cinco seis siete ocho nueve diez doce trece catorce quince dieciseis " +
+            "diecisiete dieciocho diecinueve veinte treinta cuarenta cincuenta sesenta setenta ochenta noventa " +
+            "cien ciento mil " +
+            // Italian
+            "tre quattro cinque sei sette otto nove dieci undici dodici tredici quattordici quindici sedici " +
+            "diciassette diciotto diciannove venti trenta quaranta cinquanta sessanta settanta ottanta novanta " +
+            "cento " +
+            // Portuguese
+            "um uma dois duas quatro sete oito dez treze catorze quatorze dezesseis dezasseis dezessete dezassete " +
+            "dezoito dezenove dezanove vinte trinta quarenta cinquenta sessenta setenta oitenta noventa cem " +
+            // Dutch
+            "een twee drie vijf zes zeven negen tien twaalf dertien veertien vijftien zestien zeventien achttien " +
+            "negentien twintig dertig veertig vijftig zestig zeventig tachtig negentig honderd duizend"
+        ).split(' ').toSet()
 
     private val spelledNumbers: Map<String, Int> =
         UNITS_AND_TEENS.split(' ').mapIndexed { index, word -> word to index + FIRST_SPELLED }.toMap() +

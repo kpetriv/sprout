@@ -37,6 +37,7 @@ import dev.kpetriv.sprout.core.model.DeviceId
 import dev.kpetriv.sprout.core.model.KidId
 import dev.kpetriv.sprout.core.ui.ProvideWindowWidthClass
 import dev.kpetriv.sprout.core.ui.WindowWidthClass
+import dev.kpetriv.sprout.core.ui.contentWidth
 import dev.kpetriv.sprout.core.ui.rememberWindowWidthClass
 
 /**
@@ -201,7 +202,7 @@ fun SettingsScreen(
     listPane: Boolean = selected != null,
 ) {
     SettingsScaffold(title = stringResource(R.string.feature_settings_title), onBack = onBack, modifier = modifier) {
-        Column(modifier = Modifier.padding(it).fillMaxSize().verticalScroll(rememberScrollState())) {
+        Column(modifier = Modifier.padding(it).fillMaxSize().verticalScroll(rememberScrollState()).contentWidth()) {
             sections.forEachIndexed { index, section ->
                 if (index > 0) HorizontalDivider()
                 val isSelected = section == selected

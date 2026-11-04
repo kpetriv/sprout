@@ -52,7 +52,6 @@ import dev.kpetriv.sprout.core.model.CalendarDate
 import dev.kpetriv.sprout.core.model.Kid
 import dev.kpetriv.sprout.core.model.KidId
 import dev.kpetriv.sprout.core.model.KidUiTier
-import dev.kpetriv.sprout.core.ui.ContentWidth
 import java.time.LocalDate
 import java.time.format.DateTimeFormatter
 import java.time.format.FormatStyle

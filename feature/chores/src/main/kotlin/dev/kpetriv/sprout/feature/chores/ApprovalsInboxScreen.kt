@@ -28,6 +28,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.kpetriv.sprout.core.ui.ContentWidth
+import dev.kpetriv.sprout.core.ui.withGutters
 
 /** Navigation entry for the parent's approvals inbox (submissions and chore proposals). */
 @Composable
@@ -107,11 +108,11 @@ private fun EmptyInbox() {
 
 @Composable
 private fun Inbox(state: ApprovalsUiState.Ready, onEvent: (ApprovalsEvent) -> Unit) {
-    ContentWidth(modifier = Modifier.fillMaxSize()) {
+    ContentWidth(modifier = Modifier.fillMaxSize()) { gutters ->
         LazyColumn(
-            contentPadding = PaddingValues(16.dp),
+            contentPadding = PaddingValues(16.dp).withGutters(gutters),
             verticalArrangement = Arrangement.spacedBy(12.dp),
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier.fillMaxSize(),
         ) {
             if (state.submissions.isNotEmpty()) {
                 item(key = "submissions") {

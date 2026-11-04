@@ -47,12 +47,16 @@ import kotlin.time.Instant
  *
  * Arguments from the [SavedStateHandle]: [THREAD_ID_KEY] (the kid id), [MODE_KEY] (a [ChatMode] name) and, in kid
  * mode, [TIER_KEY] (a [KidUiTier] name). Message text never reaches a log or a `toString`.
+ *
+ * The unsent draft and the D-M6-2 accepted-suggestion marker are kept in the same handle ([DRAFT_KEY],
+ * [ACCEPTED_SUGGESTION_KEY]) so a kid's message survives process death (D-V1-2); nothing else stores them (no
+ * DataStore, no database), and sending clears them. A nudge, a recording and a picked photo are not kept.
  */
 @Suppress("LongParameterList", "TooManyFunctions") // One port per capability the thread screen combines.
 @OptIn(ExperimentalCoroutinesApi::class)
 @HiltViewModel
 class ChatViewModel @Inject constructor(
-    savedStateHandle: SavedStateHandle,
+    private val savedStateHandle: SavedStateHandle,
     private val threads: ChatThreads,
     private val reader: MessageReader,
     private val sender: MessageSender,
@@ -72,7 +76,7 @@ class ChatViewModel @Inject constructor(
 
     private val refreshes = MutableStateFlow(0)
     private val limit = MutableStateFlow(PAGE_SIZE)
-    private val local = MutableStateFlow(LocalState())
+    private val local = MutableStateFlow(restoredLocalState())
     private val photos = MutableStateFlow<Map<String, PhotoUi>>(emptyMap())
     private var nextLocalId = 0L
     private var recordingEnd: CompletableDeferred<Boolean>? = null
@@ -90,7 +94,7 @@ class ChatViewModel @Inject constructor(
             // Review M7: the field is disabled while the check runs, and an edit that still arrives is ignored, so
             // the text checked is the text sent.
             is ChatEvent.DraftChanged -> if (!local.value.checking) {
-                local.update {
+                updateLocal {
                     val draft = event.text.truncatedTo(OutgoingMessage.MAX_TEXT_LENGTH)
                     val accepted = it.acceptedSuggestion?.takeIf { suggestion -> suggestion == draft }
                     it.copy(draft = draft, nudge = null, acceptedSuggestion = accepted)
@@ -103,11 +107,11 @@ class ChatViewModel @Inject constructor(
                 send(OutgoingMessage.Preset(event.presetId, emoji = null))
             }
 
-            is ChatEvent.SelectPreset -> local.update {
+            is ChatEvent.SelectPreset -> updateLocal {
                 it.copy(selectedPreset = event.presetId.takeIf { id -> id != it.selectedPreset })
             }
 
-            is ChatEvent.SelectEmoji -> local.update {
+            is ChatEvent.SelectEmoji -> updateLocal {
                 it.copy(selectedEmoji = event.emoji.takeIf { emoji -> emoji != it.selectedEmoji })
             }
 
@@ -131,7 +135,7 @@ class ChatViewModel @Inject constructor(
 
             ChatEvent.NudgeSendAnyway -> nudgeSendAnyway()
 
-            ChatEvent.NudgeUseSuggestion -> local.update { s ->
+            ChatEvent.NudgeUseSuggestion -> updateLocal { s ->
                 val suggestion = s.nudge?.suggestion?.truncatedTo(OutgoingMessage.MAX_TEXT_LENGTH)
                 s.copy(
                     draft = suggestion ?: s.draft,
@@ -140,13 +144,13 @@ class ChatViewModel @Inject constructor(
                 )
             }
 
-            ChatEvent.NudgeDismiss -> local.update { it.copy(nudge = null) }
+            ChatEvent.NudgeDismiss -> updateLocal { it.copy(nudge = null) }
 
             ChatEvent.LoadOlder -> if ((state.value as? ChatUiState.Ready)?.hasMore == true) {
                 limit.update { it + PAGE_SIZE }
             }
 
-            ChatEvent.NoticeShown -> local.update { it.copy(notice = null) }
+            ChatEvent.NoticeShown -> updateLocal { it.copy(notice = null) }
 
             ChatEvent.Reload -> {
                 // Photos that could not be loaded are asked for again.
@@ -166,7 +170,7 @@ class ChatViewModel @Inject constructor(
     private fun discard(messageId: String) {
         val pending = local.value.pending.firstOrNull { it.id == messageId }
         if (pending != null) {
-            if (pending.failed) local.update { s -> s.copy(pending = s.pending.filterNot { it.id == messageId }) }
+            if (pending.failed) updateLocal { s -> s.copy(pending = s.pending.filterNot { it.id == messageId }) }
             return
         }
         val blocked = ready()?.messages?.any { it.id == messageId && it.sendState == SendState.BLOCKED } == true
@@ -174,6 +178,21 @@ class ChatViewModel @Inject constructor(
         viewModelScope.launch {
             if (attempt { sender.discard(threadId, messageId) }.isFailure) notify(ChatNotice.DISCARD_FAILED)
         }
+    }
+
+    /** Updates [local] and mirrors the draft and the accepted suggestion into the [SavedStateHandle] (D-V1-2). */
+    private inline fun updateLocal(function: (LocalState) -> LocalState) {
+        local.update(function)
+        val current = local.value
+        savedStateHandle[DRAFT_KEY] = current.draft.ifEmpty { null }
+        savedStateHandle[ACCEPTED_SUGGESTION_KEY] = current.acceptedSuggestion
+    }
+
+    /** The draft saved before process death, capped as typed text is; the marker only while it is still the draft. */
+    private fun restoredLocalState(): LocalState {
+        val draft = savedStateHandle.get<String>(DRAFT_KEY).orEmpty().truncatedTo(OutgoingMessage.MAX_TEXT_LENGTH)
+        val accepted = savedStateHandle.get<String>(ACCEPTED_SUGGESTION_KEY)?.takeIf { it == draft && tier != null }
+        return LocalState(draft = draft, acceptedSuggestion = accepted)
     }
 
     override fun onCleared() {
@@ -257,14 +276,14 @@ class ChatViewModel @Inject constructor(
         val text = ready.draft.trim()
         when (val kidTier = tier) {
             null -> {
-                local.update { it.copy(draft = "") }
+                updateLocal { it.copy(draft = "") }
                 send(OutgoingMessage.Text(text))
             }
 
             else -> if (local.value.acceptedSuggestion == ready.draft) {
                 // D-M6-2: the kid took the filter's own suggestion and did not change it; checking it again could
                 // flag it and loop.
-                local.update { it.copy(draft = "", acceptedSuggestion = null) }
+                updateLocal { it.copy(draft = "", acceptedSuggestion = null) }
                 send(OutgoingMessage.Text(text))
             } else {
                 checkThenSend(text, kidTier)
@@ -278,21 +297,21 @@ class ChatViewModel @Inject constructor(
      * the check ends (review M6).
      */
     private fun checkThenSend(text: String, kidTier: KidUiTier) {
-        local.update { it.copy(checking = true) }
+        updateLocal { it.copy(checking = true) }
         viewModelScope.launch {
             try {
                 when (val verdict = checkKindness(text, kidTier)) {
                     FilterVerdict.Ok -> {
-                        local.update { it.copy(checking = false, draft = "", acceptedSuggestion = null) }
+                        updateLocal { it.copy(checking = false, draft = "", acceptedSuggestion = null) }
                         send(OutgoingMessage.Text(text))
                     }
 
-                    is FilterVerdict.Nudge -> local.update {
+                    is FilterVerdict.Nudge -> updateLocal {
                         it.copy(checking = false, nudge = NudgeUi(text, verdict.suggestion))
                     }
                 }
             } finally {
-                local.update { it.copy(checking = false) }
+                updateLocal { it.copy(checking = false) }
             }
         }
     }
@@ -315,7 +334,7 @@ class ChatViewModel @Inject constructor(
     private fun nudgeSendAnyway() {
         val nudge = local.value.nudge ?: return
         if (ready()?.canSend != true) return
-        local.update { it.copy(nudge = null, draft = "", acceptedSuggestion = null) }
+        updateLocal { it.copy(nudge = null, draft = "", acceptedSuggestion = null) }
         send(OutgoingMessage.Text(nudge.text))
     }
 
@@ -324,7 +343,7 @@ class ChatViewModel @Inject constructor(
         if (!ready.canSendSelection) return
         val preset = ready.selectedPreset
         val emoji = ready.selectedEmoji
-        local.update { it.copy(selectedPreset = null, selectedEmoji = null) }
+        updateLocal { it.copy(selectedPreset = null, selectedEmoji = null) }
         when {
             preset != null -> send(OutgoingMessage.Preset(preset, emoji))
             emoji != null -> send(OutgoingMessage.Text(emoji))
@@ -336,14 +355,14 @@ class ChatViewModel @Inject constructor(
         if (ready()?.canSend != true) return
         val id = "$LOCAL_ID_PREFIX${nextLocalId++}"
         val pending = PendingMessage(id = id, message = message, createdAt = clock.now())
-        local.update { it.copy(pending = it.pending + pending) }
+        updateLocal { it.copy(pending = it.pending + pending) }
         deliver(pending)
     }
 
     private fun deliver(pending: PendingMessage) {
         viewModelScope.launch {
             val stored = attempt { sender.send(threadId, pending.message) }.isSuccess
-            local.update { s ->
+            updateLocal { s ->
                 s.copy(
                     pending = if (stored) {
                         s.pending.filterNot { it.id == pending.id }
@@ -360,7 +379,7 @@ class ChatViewModel @Inject constructor(
         val pending = local.value.pending.firstOrNull { it.id == messageId }
         if (pending != null) {
             if (pending.failed) {
-                local.update { s ->
+                updateLocal { s ->
                     s.copy(pending = s.pending.map { if (it.id == messageId) it.copy(failed = false) else it })
                 }
                 deliver(pending)
@@ -391,7 +410,7 @@ class ChatViewModel @Inject constructor(
         val end = CompletableDeferred<Boolean>()
         recordingEnd = end
         stopPlayback()
-        local.update { it.copy(recording = RecordingUi(elapsedMs = 0)) }
+        updateLocal { it.copy(recording = RecordingUi(elapsedMs = 0)) }
         viewModelScope.launch {
             if (attempt { recorder.start() }.isFailure) {
                 finishRecording(ChatNotice.MIC_UNAVAILABLE)
@@ -402,7 +421,7 @@ class ChatViewModel @Inject constructor(
                 while (elapsed < VoiceRecorder.MAX_DURATION_MS) {
                     delay(RECORDING_TICK_MS)
                     elapsed += RECORDING_TICK_MS
-                    local.update { s -> s.copy(recording = s.recording?.copy(elapsedMs = elapsed)) }
+                    updateLocal { s -> s.copy(recording = s.recording?.copy(elapsedMs = elapsed)) }
                 }
                 end.complete(true)
             }
@@ -429,7 +448,7 @@ class ChatViewModel @Inject constructor(
 
     private fun finishRecording(notice: ChatNotice?) {
         recordingEnd = null
-        local.update { it.copy(recording = null, notice = notice ?: it.notice) }
+        updateLocal { it.copy(recording = null, notice = notice ?: it.notice) }
     }
 
     private fun togglePlayback(messageId: String) {
@@ -437,7 +456,7 @@ class ChatViewModel @Inject constructor(
         stopPlayback()
         val audio = audioOf(messageId)
         if (playing == messageId || recordingEnd != null || audio == null) return
-        local.update { it.copy(playingId = messageId) }
+        updateLocal { it.copy(playingId = messageId) }
         playback = viewModelScope.launch {
             val played = attempt { audio() }.fold(
                 onSuccess = { bytes ->
@@ -448,7 +467,7 @@ class ChatViewModel @Inject constructor(
                 },
                 onFailure = { false },
             )
-            local.update { it.copy(playingId = null, notice = if (played) it.notice else ChatNotice.PLAYBACK_FAILED) }
+            updateLocal { it.copy(playingId = null, notice = if (played) it.notice else ChatNotice.PLAYBACK_FAILED) }
         }
     }
 
@@ -477,7 +496,7 @@ class ChatViewModel @Inject constructor(
             player.stop()
         }
         playback = null
-        local.update { it.copy(playingId = null) }
+        updateLocal { it.copy(playingId = null) }
     }
 
     private fun ChatMessage.toUi(photoMap: Map<String, PhotoUi>): MessageUi = MessageUi(
@@ -497,7 +516,7 @@ class ChatViewModel @Inject constructor(
         late = late,
     )
 
-    private fun notify(notice: ChatNotice) = local.update { it.copy(notice = notice) }
+    private fun notify(notice: ChatNotice) = updateLocal { it.copy(notice = notice) }
 
     /** [call]; a thrown exception (not cancellation) becomes a failed result. */
     @Suppress("TooGenericExceptionCaught") // A storage or media failure must surface as a notice, not crash the chat.
@@ -568,6 +587,12 @@ class ChatViewModel @Inject constructor(
 
         /** [SavedStateHandle] key of the [KidUiTier] name (kid mode only). */
         const val TIER_KEY = "tier"
+
+        /** [SavedStateHandle] key of the unsent draft text (D-V1-2). */
+        const val DRAFT_KEY = "chatDraft"
+
+        /** [SavedStateHandle] key of the suggestion the kid took into the draft (D-M6-2, D-V1-2). */
+        const val ACCEPTED_SUGGESTION_KEY = "chatAcceptedSuggestion"
 
         /** Messages per page. */
         const val PAGE_SIZE = 50

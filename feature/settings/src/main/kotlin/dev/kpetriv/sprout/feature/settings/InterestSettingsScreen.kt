@@ -23,6 +23,7 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.kpetriv.sprout.core.model.MAX_SCHEDULE_DAY_OF_MONTH
+import dev.kpetriv.sprout.core.ui.contentWidth
 import dev.kpetriv.sprout.core.ui.rememberMoneyFormatter
 
 @Composable
@@ -57,7 +58,7 @@ fun InterestSettingsScreen(
 @Composable
 private fun InterestForm(state: InterestSettingsUiState, onEvent: (InterestSettingsEvent) -> Unit) {
     Column(
-        modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).sectionPadding(),
+        modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).contentWidth().sectionPadding(),
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
         Text(

@@ -232,6 +232,48 @@ class AiOutputRulesTest {
     }
 
     @Test
+    fun numberWordsOfOtherDeviceLanguagesAreRefused() {
+        val facts = TestFacts.facts()
+        listOf(
+            "Leo hat vier Spiele gespielt.", // German
+            "Leo hat zwölf Aufgaben erledigt.", // German, umlaut
+            "Leo hat zwoelf Aufgaben erledigt.", // German, transliterated
+            "Leo a joué trois jeux.", // French
+            "Leo a fait dix-sept tâches.", // French compound
+            "Leo jugó cinco juegos.", // Spanish
+            "Leo ganó dieciséis libras.", // Spanish, accent
+            "Leo ganó diecise\u0301is libras.", // Spanish, decomposed accent
+            "Leo ha giocato quattro partite.", // Italian
+            "Leo jogou dois jogos.", // Portuguese
+            "Leo ganhou mil libras.", // Portuguese and Spanish thousand
+            "Leo heeft twee spellen gespeeld.", // Dutch
+            "Leo earned hundert pounds.", // German hundred inside English
+            "Leo hat dreißig Pfund verdient.", // German tens, ß read as ss
+            "Leo hat dreissig Pfund verdient.", // German tens, Swiss spelling
+            "Leo a gagné quarante livres.", // French tens
+            "Leo heeft tachtig punten.", // Dutch tens
+            "Leo earned £3.98 and played VIER games.", // Upper case
+        ).forEach { assertFalse(AiOutputRules.numbersConsistent(it, facts), it) }
+    }
+
+    @Test
+    fun englishWordsThatLookForeignAndKidNamesStayAllowed() {
+        val facts = TestFacts.facts()
+        listOf(
+            "Leo played 4 games and the allowance is due on Monday.",
+            "Leo earned £3.98, every cent of it from chores.",
+            "In Sept, Leo played 4 games.",
+            "Leo got 2 chores approved; no one had to seize the tablet.",
+        ).forEach { assertTrue(AiOutputRules.numbersConsistent(it, facts), it) }
+
+        val otto = TestFacts.leo.copy(firstName = "Otto Elf")
+        val withOtto = TestFacts.facts(otto)
+        assertTrue(AiOutputRules.numbersConsistent("Otto Elf played 4 games.", withOtto))
+        assertFalse(AiOutputRules.numbersConsistent("Otto played vier games.", withOtto))
+        assertTrue(AiOutputRules.hasForeignNumberWord("Otto played 4 games.", facts))
+    }
+
+    @Test
     fun theLedgerWarningMustStayWhenThereIsOne() {
         val facts = TestFacts.facts()
         assertTrue(AiOutputRules.keepsLedgerWarnings("Also, 1 ledger warning needs a look.", facts))

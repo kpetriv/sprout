@@ -28,7 +28,7 @@ class ScrollBenchmark {
         startupMode = null,
         iterations = ITERATIONS,
         setupBlock = {
-            startActivityAndWait()
+            startWithoutAccessibility()
             reachKidWallet()
         },
     ) {

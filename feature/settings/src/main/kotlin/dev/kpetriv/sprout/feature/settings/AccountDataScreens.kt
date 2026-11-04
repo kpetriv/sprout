@@ -39,6 +39,7 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import dev.kpetriv.sprout.core.ui.contentWidth
 
 @Composable
 internal fun AccountRoute(onBack: () -> Unit, modifier: Modifier = Modifier) {
@@ -61,7 +62,7 @@ fun AccountScreen(
         modifier = modifier,
     ) {
         Column(
-            modifier = Modifier.padding(it).sectionPadding(),
+            modifier = Modifier.padding(it).contentWidth().sectionPadding(),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             Text(
@@ -127,7 +128,7 @@ fun DataScreen(state: DataUiState, onEvent: (DataEvent) -> Unit, onBack: () -> U
         snackbarHostState = snackbar,
     ) {
         Column(
-            modifier = Modifier.padding(it).verticalScroll(rememberScrollState()).sectionPadding(),
+            modifier = Modifier.padding(it).verticalScroll(rememberScrollState()).contentWidth().sectionPadding(),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             ChatDataSection(state, onEvent)

@@ -8,6 +8,7 @@ import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
@@ -128,24 +129,27 @@ fun ChatScreen(
         topBar = { ChatTopBar(title = title, onBack = onBack) },
         snackbarHost = { SnackbarHost(snackbar) },
     ) { padding ->
-        // Capped and centred on wide windows and panes (D-M7-2); a phone gets the full width as before.
-        ContentWidth(modifier = Modifier.padding(padding).fillMaxSize().imePadding()) {
+        // Capped and centred on wide windows and panes (D-M7-2); a phone gets the full width as before. The message
+        // list spans the full width so its gutters scroll too (M7 review L10); everything else sits inside them.
+        ContentWidth(modifier = Modifier.padding(padding).fillMaxSize().imePadding()) { gutters ->
             when (state) {
-                ChatUiState.Loading -> LoadingContent()
+                ChatUiState.Loading -> LoadingContent(Modifier.padding(gutters))
 
                 is ChatUiState.Error -> when (state.reason) {
                     ChatError.LOAD_FAILED -> ErrorContent(
                         text = stringResource(R.string.feature_chat_error_load_failed),
                         onRetry = { onEvent(ChatEvent.Reload) },
+                        modifier = Modifier.padding(gutters),
                     )
 
                     ChatError.THREAD_NOT_FOUND -> ErrorContent(
                         text = stringResource(R.string.feature_chat_error_not_found),
                         onRetry = null,
+                        modifier = Modifier.padding(gutters),
                     )
                 }
 
-                is ChatUiState.Ready -> ReadyContent(state, onEvent, onAttachPhoto, readAloud)
+                is ChatUiState.Ready -> ReadyContent(state, onEvent, onAttachPhoto, readAloud, gutters)
             }
         }
     }
@@ -159,34 +163,39 @@ private fun ReadyContent(
     onEvent: (ChatEvent) -> Unit,
     onAttachPhoto: () -> Unit,
     readAloud: ReadAloud,
+    gutters: PaddingValues,
 ) {
     val tier = state.tier
     if (state.mode == ChatMode.PARENT || tier == null) {
-        TextThread(state, onEvent, presets = false, onAttachPhoto = onAttachPhoto)
+        TextThread(state, onEvent, presets = false, onAttachPhoto = onAttachPhoto, gutters = gutters)
         return
     }
     ProvideKidTier(tier) {
         when (tier) {
-            KidUiTier.SEEDLING -> SeedlingChatContent(state, onEvent, readAloud)
-            KidUiTier.SPROUT -> TextThread(state, onEvent, presets = true, onAttachPhoto = null)
-            KidUiTier.SAPLING -> TextThread(state, onEvent, presets = false, onAttachPhoto = null)
+            KidUiTier.SEEDLING -> SeedlingChatContent(state, onEvent, readAloud, gutters = gutters)
+            KidUiTier.SPROUT -> TextThread(state, onEvent, presets = true, onAttachPhoto = null, gutters = gutters)
+            KidUiTier.SAPLING -> TextThread(state, onEvent, presets = false, onAttachPhoto = null, gutters = gutters)
         }
     }
 }
 
-/** The parent, Sprout and Sapling thread: messages, then (Sprout) preset chips, the nudge, and the composer. */
+/**
+ * The parent, Sprout and Sapling thread: messages, then (Sprout) preset chips, the nudge, and the composer. The
+ * message list fills the width with [gutters] as content padding; the rest sits inside the gutters.
+ */
 @Composable
 private fun TextThread(
     state: ChatUiState.Ready,
     onEvent: (ChatEvent) -> Unit,
     presets: Boolean,
     onAttachPhoto: (() -> Unit)?,
+    gutters: PaddingValues,
 ) {
     Column(modifier = Modifier.fillMaxSize()) {
-        if (!state.canSend) WaitingBanner(state.mode, state.keyState)
-        MessageList(state = state, onEvent = onEvent, modifier = Modifier.weight(1f))
-        state.nudge?.let { NudgeCard(it, onEvent, modifier = Modifier.padding(bottom = 8.dp)) }
-        if (presets) PresetChips(state, onEvent)
-        TextComposer(state, onEvent, onAttachPhoto = onAttachPhoto)
+        if (!state.canSend) WaitingBanner(state.mode, state.keyState, modifier = Modifier.padding(gutters))
+        MessageList(state = state, onEvent = onEvent, modifier = Modifier.weight(1f), gutters = gutters)
+        state.nudge?.let { NudgeCard(it, onEvent, modifier = Modifier.padding(gutters).padding(bottom = 8.dp)) }
+        if (presets) PresetChips(state, onEvent, modifier = Modifier.padding(gutters))
+        TextComposer(state, onEvent, modifier = Modifier.padding(gutters), onAttachPhoto = onAttachPhoto)
     }
 }

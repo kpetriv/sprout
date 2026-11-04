@@ -35,6 +35,7 @@ import dev.kpetriv.sprout.core.crypto.ParentAuthAvailability
 import dev.kpetriv.sprout.core.ui.PinDots
 import dev.kpetriv.sprout.core.ui.PinPad
 import dev.kpetriv.sprout.core.ui.PinPadDefaults
+import dev.kpetriv.sprout.core.ui.contentWidth
 import kotlin.time.Duration
 import kotlin.time.DurationUnit
 
@@ -68,7 +69,12 @@ fun ParentSecurityScreen(
         snackbarHostState = snackbar,
     ) { padding ->
         Column(
-            modifier = Modifier.padding(padding).fillMaxSize().verticalScroll(rememberScrollState()).sectionPadding(),
+            modifier = Modifier
+                .padding(padding)
+                .fillMaxSize()
+                .verticalScroll(rememberScrollState())
+                .contentWidth()
+                .sectionPadding(),
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
             SigningCard(state, onEvent)

@@ -34,6 +34,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.kpetriv.sprout.core.domainhousehold.SavingsGoal
 import dev.kpetriv.sprout.core.domainledger.Currency
 import dev.kpetriv.sprout.core.model.MAX_TITLE_LENGTH
+import dev.kpetriv.sprout.core.ui.contentWidth
 import dev.kpetriv.sprout.core.ui.rememberMoneyFormatter
 
 @Composable
@@ -71,10 +72,10 @@ fun SavingsGoalsScreen(
 @Composable
 private fun GoalsContent(state: SavingsGoalsUiState, onEvent: (SavingsGoalsEvent) -> Unit) {
     if (state.kids.isEmpty()) {
-        Text(stringResource(R.string.feature_settings_no_kids), modifier = Modifier.sectionPadding())
+        Text(stringResource(R.string.feature_settings_no_kids), modifier = Modifier.contentWidth().sectionPadding())
         return
     }
-    Column(modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
+    Column(modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).contentWidth()) {
         KidChips(
             kids = state.kids,
             selected = state.selectedKidId,
