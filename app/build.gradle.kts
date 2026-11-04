@@ -200,7 +200,6 @@ tasks.configureEach {
     if (name in benchmarkBundles) dependsOn(checkNotForPlay)
 }
 
-
 /**
  * D-M6-33 (audit H1): ML Kit pulls in Google's usage-metrics uploader (`transport-backend-cct`), whose only network
  * backend is registered as a `backend:...CctBackendFactory` meta-data of `TransportBackendDiscovery`. The app manifest
