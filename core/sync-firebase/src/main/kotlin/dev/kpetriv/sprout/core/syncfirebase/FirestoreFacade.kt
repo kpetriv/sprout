@@ -100,6 +100,9 @@ data class ServerTime(val seconds: Long, val nanos: Int) : Comparable<ServerTime
     /** ISO-8601 instant, e.g. `2026-11-03T10:15:30.123456Z`. */
     fun toIsoString(): String = Instant.ofEpochSecond(seconds, nanos.toLong()).toString()
 
+    /** The same instant as a `kotlin.time.Instant`, as core/sync's `PulledEvent` carries it. */
+    fun toInstant(): kotlin.time.Instant = kotlin.time.Instant.fromEpochSeconds(seconds, nanos)
+
     companion object {
         private const val NANOS_PER_SECOND = 1_000_000_000
 

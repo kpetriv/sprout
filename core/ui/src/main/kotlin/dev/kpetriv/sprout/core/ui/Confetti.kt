@@ -1,4 +1,4 @@
-package dev.kpetriv.sprout.feature.chores
+package dev.kpetriv.sprout.core.ui
 
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.LinearEasing
@@ -25,11 +25,12 @@ private class Piece(val x: Float, val delay: Float, val speed: Float, val sway: 
 
 /**
  * A short confetti burst over the content, then [onFinished]. Finite and deterministic (pieces come from a fixed
- * seed), so it never runs forever and never makes a screenshot flaky. Decorative: hidden from accessibility.
+ * seed), so it never runs forever and never makes a screenshot flaky. Decorative: hidden from accessibility. Used for
+ * finished chores and brain-game results (D-M5-8).
  */
 @Suppress("MagicNumber") // Piece size and colour are proportions of the canvas, tuned by eye.
 @Composable
-internal fun Confetti(onFinished: () -> Unit, modifier: Modifier = Modifier) {
+fun Confetti(onFinished: () -> Unit, modifier: Modifier = Modifier) {
     val finished = rememberUpdatedState(onFinished)
     val progress = remember { Animatable(0f) }
     val colors = MaterialTheme.colorScheme.let {

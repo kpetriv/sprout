@@ -16,6 +16,8 @@ import dev.kpetriv.sprout.core.model.HouseholdId
  * @property reason why it is held: a `QuarantineReason` name for a verifier hold (`UNKNOWN_DEVICE`,
  *   `DEVICE_NOT_ACTIVE`), otherwise one of `RoomLedgerRepository`'s `HELD_*` codes. Null for rows held by schema
  *   version 3 (they get a reason on the next retry).
+ * @property serverReceivedAtEpochMs the backend's `serverReceivedAt` stamp the event was pulled with (schema version
+ *   7), moved to its `ledger_events` row when it is stored. Null for rows held before version 7.
  */
 @Entity(
     tableName = "ledger_inbox",
@@ -30,6 +32,7 @@ data class LedgerInboxEntity(
     val lamport: Long,
     val receivedAtEpochMs: Long,
     val reason: String? = null,
+    val serverReceivedAtEpochMs: Long? = null,
 )
 
 /**

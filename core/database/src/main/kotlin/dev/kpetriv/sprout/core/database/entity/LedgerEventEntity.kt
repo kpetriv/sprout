@@ -39,6 +39,9 @@ enum class EventOrigin {
  *   events and every row written by schema version 1 of this database.
  * @property receivedAtEpochMs when this device stored the row (local wall clock; display and diagnostics only).
  * @property ingestedAtEpochMs for a REMOTE row (schema version 3): when ingest stored it; null for local rows.
+ * @property serverReceivedAtEpochMs for a REMOTE row (schema version 7): the backend's `serverReceivedAt` stamp it
+ *   was pulled with, which a game's played-on window is judged against (D-M5-5, `Ledger.project`'s `receivedAt`).
+ *   Null for local rows (the author's own copy is never date-checked) and for rows ingested before version 7.
  */
 @Entity(
     tableName = "ledger_events",
@@ -72,4 +75,5 @@ data class LedgerEventEntity(
     val quarantineReason: String? = null,
     val parentSignature: String? = null,
     val ingestedAtEpochMs: Long? = null,
+    val serverReceivedAtEpochMs: Long? = null,
 )

@@ -14,6 +14,8 @@ dependencies {
     api(libs.kotlinx.serialization.json)
     // LedgerRepository exposes reads as Flow.
     api(libs.kotlinx.coroutines.core)
+    // GamePlayed credits are re-derived from the game id and score (ADR-0009); pure Kotlin like this module.
+    implementation(projects.core.games)
 
     testImplementation(testFixtures(projects.core.time))
     testImplementation(libs.kotlinx.coroutines.test)

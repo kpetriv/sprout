@@ -39,6 +39,8 @@ import dev.kpetriv.sprout.feature.chores.ApprovalsInboxRoute
 import dev.kpetriv.sprout.feature.chores.ChoreEditorRoute
 import dev.kpetriv.sprout.feature.chores.ChoreListRoute
 import dev.kpetriv.sprout.feature.chores.KidTodayRoute
+import dev.kpetriv.sprout.feature.games.GamePlayRoute
+import dev.kpetriv.sprout.feature.games.GamesHubRoute
 import dev.kpetriv.sprout.feature.lock.KidModeExitGate
 import dev.kpetriv.sprout.feature.lock.ParentGateViewModel
 import dev.kpetriv.sprout.feature.lock.ParentSessionState
@@ -72,10 +74,11 @@ import kotlinx.coroutines.launch
  *   household the dashboard's Chat shortcut opens the chat inbox ([ChatThreadsKey]) and each kid's thread
  *   ([ChatThreadKey]), both `SecureWindow`.
  * - **Kid**: the kid's wallet ([KidHomeKey]) with its shop and today's chores, no lock, and shortcuts to the kid's
- *   chat ([ChatThreadKey], real households only, `SecureWindow`, read-aloud by text-to-speech) and screen time
- *   ([TimeBankKey]), each in the kid's tier. On a parent's phone back at
- *   the root (system back or the wallet's back arrow) opens `KidModeExitGate`; a successful unlock returns to the
- *   parent area. On a kid's own linked phone there is no parent area: back at the root leaves the app.
+ *   chat ([ChatThreadKey], real households only, `SecureWindow`, read-aloud by text-to-speech), screen time
+ *   ([TimeBankKey]) and the brain games hub ([KidGamesKey], one [GamePlayKey] per play, read aloud by
+ *   text-to-speech too), each in the kid's tier. On a parent's phone back at the root (system back or the wallet's
+ *   back arrow) opens `KidModeExitGate`; a successful unlock returns to the parent area. On a kid's own linked phone
+ *   there is no parent area: back at the root leaves the app.
  * - **SignInAgain**: the "Sign in again" gate for a phone whose sign-in ended; no household data behind it.
  * - **Removed**: the blocking wipe screen.
  *
@@ -246,6 +249,11 @@ internal fun NavBackStack<NavKey>.push(key: NavKey) {
     if (lastOrNull() != key) add(key)
 }
 
+/** Closes [key] if it is on top; a no-op otherwise (a second tap on a "Done" that already closed it). */
+internal fun NavBackStack<NavKey>.popIf(key: NavKey) {
+    if (lastOrNull() == key) removeLastOrNull()
+}
+
 /** The parent area's entries other than the dashboard. */
 private fun EntryProviderScope<NavKey>.parentEntries(backStack: NavBackStack<NavKey>) {
     val pop: () -> Unit = { backStack.removeLastOrNull() }
@@ -309,8 +317,14 @@ private fun KidArea(
     val decorators = entryDecorators()
     var exiting by rememberSaveable { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
-    // The chores tap looks the tier up first; a second tap while that runs is ignored instead of opening it twice.
-    var openingChores by remember { mutableStateOf<Job?>(null) }
+    // The chores and games taps look the tier up first; a second tap while that runs is ignored instead of opening a
+    // screen twice.
+    var opening by remember { mutableStateOf<Job?>(null) }
+    val openWithTier: (KidId, (KidUiTier) -> NavKey) -> Unit = { id, keyFor ->
+        if (opening?.isActive != true) {
+            opening = scope.launch { tierOf(id)?.let { backStack.push(keyFor(it)) } }
+        }
+    }
     val atRoot = backStack.size <= 1
     val back: () -> Unit = {
         when {
@@ -333,6 +347,7 @@ private fun KidArea(
                     chat = chatAvailable,
                     onChat = { backStack.push(ChatThreadKey(key.kidId)) },
                     onScreenTime = { backStack.push(TimeBankKey(key.kidId)) },
+                    onGames = { openWithTier(key.kidId) { tier -> KidGamesKey(key.kidId, tier) } },
                 )
                 WithShortcuts(shortcuts) {
                     WalletRoute(
@@ -340,13 +355,7 @@ private fun KidArea(
                         mode = WalletMode.KID,
                         onBack = back,
                         onOpenShop = { backStack.push(ShopKey(key.kidId, WalletMode.KID)) },
-                        onOpenChores = {
-                            if (openingChores?.isActive != true) {
-                                openingChores = scope.launch {
-                                    tierOf(key.kidId)?.let { backStack.push(KidChoresKey(key.kidId, it)) }
-                                }
-                            }
-                        },
+                        onOpenChores = { openWithTier(key.kidId) { tier -> KidChoresKey(key.kidId, tier) } },
                     )
                 }
             }
@@ -360,6 +369,26 @@ private fun KidArea(
             }
             entry<TimeBankKey> { key ->
                 WithTier(key.kidId, tierOf) { tier -> TimeBankRoute(kidId = key.kidId, tier = tier, onBack = back) }
+            }
+            entry<KidGamesKey> { key ->
+                GamesHubRoute(
+                    kidId = key.kidId,
+                    tier = key.tier,
+                    onPlay = { kind -> backStack.push(GamePlayKey(key.kidId, key.tier, kind)) },
+                    onBack = back,
+                    readAloud = rememberReadAloud(),
+                )
+            }
+            entry<GamePlayKey> { key ->
+                GamePlayRoute(
+                    kidId = key.kidId,
+                    tier = key.tier,
+                    kind = key.kind,
+                    // Back to the hub; a second tap on Done must not leave the hub too.
+                    onFinished = { backStack.popIf(key) },
+                    onBack = back,
+                    readAloud = rememberReadAloud(),
+                )
             }
         },
     )

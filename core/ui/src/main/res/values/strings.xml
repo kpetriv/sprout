@@ -5,6 +5,15 @@
     <item quantity="one">%1$s coin</item>
     <item quantity="other">%1$s coins</item>
   </plurals>
+  <!-- Minor units named per currency (Seedling game credits, D-M5-10). %1$s is an already formatted number. -->
+  <plurals name="core_ui_pennies">
+    <item quantity="one">%1$s penny</item>
+    <item quantity="other">%1$s pennies</item>
+  </plurals>
+  <plurals name="core_ui_cents">
+    <item quantity="one">%1$s cent</item>
+    <item quantity="other">%1$s cents</item>
+  </plurals>
   <string name="core_ui_minutes_short">%1$s min</string>
   <string name="core_ui_hours_short">%1$s h</string>
   <string name="core_ui_hours_minutes_short">%1$s h %2$s min</string>

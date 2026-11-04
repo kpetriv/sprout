@@ -12,5 +12,6 @@ Each ADR records one significant decision in the short format described by Micha
 | [0006](0006-sync-protocol-and-document-envelope.md) | Sync protocol and document envelope | Accepted (implemented in M3) |
 | [0007](0007-identity-linking-and-device-registry.md) | Identity, device linking and the device registry | Accepted (implemented in M3) |
 | [0008](0008-chat-encryption-and-thread-keys.md) | Chat encryption and thread keys | Accepted (implemented in M4) |
+| [0009](0009-games-scoring-and-credit.md) | Games scoring and credit | Accepted (implemented in M5) |
 
 Related: [threat model](../THREAT_MODEL.md), [controls matrix](../CONTROLS.md), [incident runbook](../RUNBOOK.md), [Firebase backend](../FIREBASE.md), [privacy policy draft](../PRIVACY.md).

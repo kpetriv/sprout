@@ -57,7 +57,7 @@ class PurgeAndWipeTest {
     private suspend fun seedTrial() {
         val (kid, accounts) = household.addKid()
         val main = with(household) { accounts.money() }
-        household.writer.append(kid.id, main.id) { GamePlayed(it, household.gbp, Money(5), "memory", 3, today) }
+        household.writer.append(kid.id, main.id) { GamePlayed(it, household.gbp, Money(5), "memory.sprout", 6, today) }
         household.policies.ensure(household.gbp)
         household.chores.upsert(
             Chore(

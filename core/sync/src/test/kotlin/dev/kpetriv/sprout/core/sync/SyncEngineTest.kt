@@ -18,6 +18,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import kotlin.time.Instant
 
 class SyncEngineTest {
     private val parent = TestIdentity("parent-device", "parent-uid", Role.PARENT)
@@ -39,7 +40,7 @@ class SyncEngineTest {
         devices = if (n == 1) listOf(parent.registered) else emptyList(),
         parentKeys = emptyList(),
         documents = documents,
-        events = listOf(parent.event("e$n", lamport = n.toLong())),
+        events = listOf(PulledEvent(parent.event("e$n", lamport = n.toLong()), Instant.fromEpochSeconds(n * 60L))),
         next = SyncCursor(mapOf("events" to "$n")),
         hasMore = hasMore,
     )
@@ -69,6 +70,11 @@ class SyncEngineTest {
         assertEquals(2, report.pulled.pages)
         assertEquals(1, report.pulled.documents.applied)
         assertEquals(2, report.pulled.events.applied)
+        // Each pulled event reaches the applier with its server stamp.
+        assertEquals(
+            listOf(Instant.fromEpochSeconds(60), Instant.fromEpochSeconds(120)),
+            recording.eventStamps().values.toList(),
+        )
         assertEquals(1, report.pushed)
         assertNull(report.error)
         assertTrue(outbox.rows().isEmpty())
@@ -518,7 +524,7 @@ class SyncEngineTest {
             devices = listOf(parent.registered),
             parentKeys = emptyList(),
             documents = listOf(threadKey),
-            events = listOf(parent.event("e1", lamport = 2)),
+            events = listOf(PulledEvent(parent.event("e1", lamport = 2))),
             next = SyncCursor(mapOf("messages" to "1")),
             hasMore = false,
             messages = listOf(parent.message("m1", seq = 1, lamport = 3), parent.message("m2", seq = 2, lamport = 4)),

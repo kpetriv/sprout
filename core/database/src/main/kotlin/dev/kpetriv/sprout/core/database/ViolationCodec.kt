@@ -9,6 +9,7 @@ import dev.kpetriv.sprout.core.domainledger.Money
 import dev.kpetriv.sprout.core.domainledger.PeriodClaim
 import dev.kpetriv.sprout.core.domainledger.Violation
 import dev.kpetriv.sprout.core.model.AccountId
+import dev.kpetriv.sprout.core.model.CalendarDate
 import dev.kpetriv.sprout.core.model.KidId
 import dev.kpetriv.sprout.core.model.Role
 import kotlinx.serialization.json.JsonObject
@@ -23,8 +24,8 @@ import kotlinx.serialization.json.put
  * Lossless JSON form of a [Violation] for the anomalies cache, so a stored [dev.kpetriv.sprout.core.domainledger
  * .LedgerAnomaly.InvalidEvent] reads back equal to the projected one. `{"kind": <class name>, ...fields}`.
  *
- * Violations hold ids, amounts, field names and enum values only; never free text (the domain keeps the text
- * itself out of them).
+ * Violations hold ids, amounts, dates, field names and enum values only; never free text (the domain keeps the
+ * text itself out of them, and quotes an unknown game id only when it is id-shaped).
  */
 @Suppress("CyclomaticComplexMethod", "LongMethod") // One branch per Violation type, in both directions.
 internal object ViolationCodec {
@@ -132,6 +133,26 @@ internal object ViolationCodec {
                 put("grantedBy", violation.grantedBy.value)
                 put("creditedBy", violation.creditedBy.value)
             }
+
+            // Only an id-shaped game id is kept by the domain; null is stored as an absent key.
+            is Violation.UnknownGame -> violation.gameId?.let { put("gameId", it) }
+
+            is Violation.ScoreOutOfRange -> {
+                put("score", violation.score)
+                put("max", violation.max)
+            }
+
+            is Violation.GameCreditTooHigh -> {
+                money("earned", violation.earned)
+                money("requested", violation.requested)
+            }
+
+            is Violation.GameCurrencyNotAllowed -> currency("currency", violation.currency)
+
+            is Violation.PlayedOnOutOfRange -> {
+                put("playedOn", violation.playedOn.toString())
+                put("today", violation.today.toString())
+            }
         }
     }
 
@@ -218,6 +239,22 @@ internal object ViolationCodec {
                 Violation.GrantMinutesMismatch(event("grantedBy"), money("expected"), money("actual"))
 
             "GrantAlreadyCredited" -> Violation.GrantAlreadyCredited(event("grantedBy"), event("creditedBy"))
+
+            "UnknownGame" -> Violation.UnknownGame(json["gameId"]?.jsonPrimitive?.content)
+
+            "ScoreOutOfRange" -> Violation.ScoreOutOfRange(
+                json.getValue("score").jsonPrimitive.long,
+                json.getValue("max").jsonPrimitive.int,
+            )
+
+            "GameCreditTooHigh" -> Violation.GameCreditTooHigh(money("earned"), money("requested"))
+
+            "GameCurrencyNotAllowed" -> Violation.GameCurrencyNotAllowed(currency("currency"))
+
+            "PlayedOnOutOfRange" -> Violation.PlayedOnOutOfRange(
+                CalendarDate.parse(text("playedOn")),
+                CalendarDate.parse(text("today")),
+            )
 
             else -> throw IllegalArgumentException("Unknown violation kind $kind")
         }

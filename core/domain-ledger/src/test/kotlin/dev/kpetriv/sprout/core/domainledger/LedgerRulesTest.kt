@@ -30,7 +30,7 @@ class LedgerRulesTest {
         assertEquals(ValidationResult.Valid, LedgerRules.validate(parent.allowance(100), before))
         assertTrue(LedgerRules.validate(kid.purchase(500), before).isValid)
         assertTrue(LedgerRules.validate(kid.transfer(200), before).isValid)
-        assertTrue(LedgerRules.validate(kid.game(50), before).isValid)
+        assertTrue(LedgerRules.validate(kid.game(15), before).isValid)
         assertTrue(LedgerRules.validate(kid.timeStart("s"), before).isValid)
     }
 
@@ -326,22 +326,22 @@ class LedgerRulesTest {
 
     @Test
     fun gamesRespectTheDailyCap() {
-        val policy = LedgerPolicy(dailyGameCap = Money(30))
-        val before = Projection.empty(Fixtures.accounts, policy).apply(listOf(kid.game(20)))
+        val policy = LedgerPolicy(dailyGameCap = Money(25))
+        val before = Projection.empty(Fixtures.accounts, policy).apply(listOf(kid.game(15)))
         assertEquals(
-            listOf(Violation.DailyCapExceeded(Money(30), Money(20), Money(11))),
+            listOf(Violation.DailyCapExceeded(Money(25), Money(15), Money(11))),
             violations(kid.game(11), before),
         )
         assertEquals(emptyList(), violations(kid.game(10), before))
         // A different day has its own allowance.
-        assertEquals(emptyList(), violations(kid.game(30, Fixtures.today.copy(day = 3)), before))
-        // So does another currency, with its own override.
-        val minutesPolicy = policy.copy(dailyGameCapOverrides = mapOf(Currency.Minutes to Money(5)))
-        val minutesBefore = Projection.empty(Fixtures.accounts, minutesPolicy)
-        assertEquals(emptyList(), violations(kid.game(5, account = Fixtures.minutes), minutesBefore))
-        assertIs<Violation.DailyCapExceeded>(
-            violations(kid.game(6, account = Fixtures.minutes), minutesBefore).single(),
-        )
+        assertEquals(emptyList(), violations(kid.game(15, Fixtures.today.copy(day = 3)), before))
+        // So does another fiat currency, with its own override.
+        val eur = Currency.Fiat("EUR")
+        val eurMain = Account(AccountId("main-eur"), Fixtures.kid, eur, AccountKind.MAIN)
+        val eurPolicy = policy.copy(dailyGameCapOverrides = mapOf(eur to Money(5)))
+        val eurBefore = Projection.empty(Fixtures.accounts + eurMain, eurPolicy).apply(listOf(kid.game(15)))
+        assertEquals(emptyList(), violations(kid.game(5, account = eurMain), eurBefore))
+        assertIs<Violation.DailyCapExceeded>(violations(kid.game(6, account = eurMain), eurBefore).single())
     }
 
     @Test
@@ -499,17 +499,15 @@ class LedgerRulesTest {
         val permissive = LedgerPolicy(maxAmount = Money(Long.MAX_VALUE), dailyGameCap = Money(Long.MAX_VALUE))
         val rich = Projection.empty(Fixtures.accounts, permissive).apply(parent.chore(Long.MAX_VALUE))
         assertEquals(listOf(Violation.Overflow), violations(parent.chore(1), rich))
-        // The daily cap is compared without adding, so a huge game is a cap violation, not an overflow.
-        val capped = permissive.copy(dailyGameCap = Money(Long.MAX_VALUE - 1))
-        val played = Projection.empty(Fixtures.accounts, capped)
-            .apply(listOf(kid.game(Long.MAX_VALUE - 1), parent.adjust(-(Long.MAX_VALUE - 1))))
-        assertEquals(Money.ZERO, played.balanceOf(Fixtures.main.id))
+        // A huge game is a credit violation (static, so the cap is never reached), not an overflow.
         assertEquals(
-            listOf(
-                Violation.DailyCapExceeded(Money(Long.MAX_VALUE - 1), Money(Long.MAX_VALUE - 1), Money(Long.MAX_VALUE)),
-            ),
-            violations(kid.game(Long.MAX_VALUE), played),
+            listOf(Violation.GameCreditTooHigh(Money(Fixtures.GAME_MAX_CREDIT), Money(Long.MAX_VALUE))),
+            violations(kid.game(Long.MAX_VALUE), rich),
         )
+        // The daily cap is compared without adding, so a cap near the limit cannot overflow either.
+        val capped = permissive.copy(dailyGameCap = Money(Long.MAX_VALUE))
+        val played = Projection.empty(Fixtures.accounts, capped).apply(listOf(kid.game(15)))
+        assertEquals(emptyList(), violations(kid.game(15), played))
     }
 
     @Test
@@ -588,6 +586,77 @@ class LedgerRulesTest {
         assertIs<Violation.LamportTooFarAhead>(
             violations(DeviceWriter(Fixtures.kidTablet, lamport = LamportClock(5)).game(1), tight).single(),
         )
+    }
+
+    @Test
+    fun aGameMustBePlayableWithAScoreInRange() {
+        assertEquals(listOf(Violation.UnknownGame("memory")), violations(kid.game(1, gameId = "memory")))
+        // Word scramble is not offered at Seedling, so its id does not parse.
+        assertEquals(
+            listOf(Violation.UnknownGame("words.seedling")),
+            violations(kid.game(1, gameId = "words.seedling", score = 1)),
+        )
+        // An id that is not id-shaped is not quoted (it may hold anything).
+        assertEquals(listOf(Violation.UnknownGame(null)), violations(kid.game(1, gameId = "Hi, I'm Sam")))
+        assertEquals(listOf(Violation.UnknownGame(null)), violations(kid.game(1, gameId = "a".repeat(65))))
+        assertEquals(
+            listOf(Violation.ScoreOutOfRange(9, 8)),
+            violations(kid.game(1, gameId = "arithmetic.sprout", score = 9)),
+        )
+        assertEquals(
+            listOf(Violation.ScoreOutOfRange(-1, 5)),
+            violations(kid.game(1, gameId = "memory.seedling", score = -1)),
+        )
+        assertEquals(emptyList(), violations(kid.game(5, gameId = "memory.seedling", score = 5)))
+    }
+
+    @Test
+    fun aGameCreditsAtMostWhatItsScoreEarns() {
+        // (id, score, earned): 1 per correct round, +3 perfect, +2 more for a perfect Sapling play (timed bonus).
+        val table = listOf(
+            Triple("arithmetic.seedling", 4L, 4L),
+            Triple("arithmetic.seedling", 5L, 8L),
+            Triple("words.sprout", 7L, 7L),
+            Triple("words.sprout", 8L, 11L),
+            Triple("memory.sapling", 9L, 9L),
+            Triple("memory.sapling", 10L, 15L),
+        )
+        for ((gameId, score, earned) in table) {
+            assertEquals(emptyList(), violations(kid.game(earned, gameId = gameId, score = score)), gameId)
+            // Less is allowed: the author clamps a play to what is left of the day's cap.
+            assertEquals(emptyList(), violations(kid.game(1, gameId = gameId, score = score)), gameId)
+            assertEquals(
+                listOf(Violation.GameCreditTooHigh(Money(earned), Money(earned + 1))),
+                violations(kid.game(earned + 1, gameId = gameId, score = score)),
+                gameId,
+            )
+        }
+        // A score of zero earns nothing, so no positive amount is allowed.
+        assertEquals(
+            setOf(Violation.GameCreditTooHigh(Money.ZERO, Money(1))),
+            violations(kid.game(1, gameId = "memory.sprout", score = 0)).toSet(),
+        )
+    }
+
+    @Test
+    fun aGameIsCheckedAgainstTheDeviceDateOnlyWhenGivenOne() {
+        val today = Fixtures.today
+        fun local(event: LedgerEvent) = when (val result = LedgerRules.validate(event, funded(), today)) {
+            ValidationResult.Valid -> emptyList()
+            is ValidationResult.Invalid -> result.violations
+        }
+        // Edges of the window: one day ahead and seven days back are accepted.
+        assertEquals(emptyList(), local(kid.game(5, today.plusDays(1))))
+        assertEquals(emptyList(), local(kid.game(5, today)))
+        assertEquals(emptyList(), local(kid.game(5, today.plusDays(-7))))
+        val ahead = today.plusDays(2)
+        assertEquals(listOf(Violation.PlayedOnOutOfRange(ahead, today)), local(kid.game(5, ahead)))
+        val behind = today.plusDays(-8)
+        assertEquals(listOf(Violation.PlayedOnOutOfRange(behind, today)), local(kid.game(5, behind)))
+        // Without a date (a pulled event) the window is the projection's business, not validation's.
+        assertEquals(emptyList(), violations(kid.game(5, behind)))
+        // Other event types are never date-checked.
+        assertTrue(LedgerRules.validate(parent.chore(5, dueOn = behind), funded(), today).isValid)
     }
 
     @Test

@@ -74,7 +74,24 @@ object Migrations {
         }
     }
 
-    val ALL: Array<Migration> = arrayOf(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6)
+    /**
+     * 6 to 7 (M5): the backend's `serverReceivedAt` stamp on pulled events (`ledger_events`) and held ones
+     * (`ledger_inbox`), for the games' played-on window (D-M5-5). Existing rows keep null: they are never
+     * date-checked.
+     */
+    val MIGRATION_6_7: Migration = object : Migration(6, 7) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            VERSION_7_STATEMENTS.forEach(db::execSQL)
+        }
+    }
+
+    val ALL: Array<Migration> =
+        arrayOf(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7)
+
+    private val VERSION_7_STATEMENTS: List<String> = listOf(
+        "ALTER TABLE `ledger_events` ADD COLUMN `serverReceivedAtEpochMs` INTEGER",
+        "ALTER TABLE `ledger_inbox` ADD COLUMN `serverReceivedAtEpochMs` INTEGER",
+    )
 
     private val VERSION_6_STATEMENTS: List<String> = listOf(
         "ALTER TABLE `outbox` ADD COLUMN `data` BLOB",

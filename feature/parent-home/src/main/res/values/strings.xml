@@ -157,5 +157,6 @@
   <string name="feature_parent_home_reason_wrong_thread">Message sent to the wrong kid</string>
   <string name="feature_parent_home_reason_waiting_for_earlier">Waiting for an earlier message from this phone</string>
   <string name="feature_parent_home_reason_wrong_household">From another household</string>
+  <string name="feature_parent_home_reason_game_rule">Game result breaks the credit rules</string>
   <string name="feature_parent_home_reason_other">Didn’t pass the ledger’s checks</string>
 </resources>

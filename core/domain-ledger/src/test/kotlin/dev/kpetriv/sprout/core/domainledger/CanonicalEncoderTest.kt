@@ -332,7 +332,7 @@ class CanonicalEncoderTest {
             return listOf(
                 chore,
                 parent.allowance(500),
-                kid.game(10),
+                kid.game(6, gameId = "arithmetic.sprout", score = 6),
                 kid.purchase(50),
                 screenTime,
                 kid.timeCredit(20, grantedBy = screenTime),

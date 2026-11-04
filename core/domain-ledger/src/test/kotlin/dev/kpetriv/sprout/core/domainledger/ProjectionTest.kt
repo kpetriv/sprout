@@ -1,5 +1,6 @@
 package dev.kpetriv.sprout.core.domainledger
 
+import dev.kpetriv.sprout.core.model.CalendarDate
 import dev.kpetriv.sprout.core.model.DeviceId
 import dev.kpetriv.sprout.core.model.Role
 import kotlin.test.Test
@@ -8,6 +9,7 @@ import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import kotlin.time.Instant
 
 class ProjectionTest {
     private val parent = DeviceWriter(Fixtures.parentPhone)
@@ -25,14 +27,14 @@ class ProjectionTest {
         val events = listOf(
             parent.chore(150),
             parent.allowance(500),
-            kid.game(20),
+            kid.game(15),
             kid.purchase(120),
             parent.adjust(-30),
             kid.transfer(200),
             parent.interest(3),
         )
         val projection = project(events)
-        assertEquals(Money(150 + 500 + 20 - 120 - 30 - 200), projection.balanceOf(Fixtures.main.id))
+        assertEquals(Money(150 + 500 + 15 - 120 - 30 - 200), projection.balanceOf(Fixtures.main.id))
         assertEquals(Money(203), projection.balanceOf(Fixtures.savings.id))
         assertEquals(Money.ZERO, projection.balanceOf(Fixtures.minutes.id))
         assertTrue(projection.anomalies.isEmpty())
@@ -65,20 +67,20 @@ class ProjectionTest {
 
     @Test
     fun aGameOverTheDailyCapIsExcludedWholeNotClamped() {
-        val policy = LedgerPolicy(dailyGameCap = Money(30))
-        val first = kid.game(20)
+        val policy = LedgerPolicy(dailyGameCap = Money(20))
+        val first = kid.game(12)
         val second = kid.game(15)
-        val third = kid.game(5)
-        val fourth = kid.game(5)
+        val third = kid.game(4)
+        val fourth = kid.game(4)
         val tomorrow = kid.game(10, Fixtures.today.copy(day = 3))
         val projection = project(listOf(first, second, third, fourth, tomorrow), policy)
-        assertEquals(Money(30), projection.dailyGameCredits(Fixtures.kid, Fixtures.today, Fixtures.gbp))
+        assertEquals(Money(20), projection.dailyGameCredits(Fixtures.kid, Fixtures.today, Fixtures.gbp))
         assertEquals(Money(10), projection.dailyGameCredits(Fixtures.kid, Fixtures.today.copy(day = 3), Fixtures.gbp))
         assertEquals(Money.ZERO, projection.dailyGameCredits(Fixtures.kid, Fixtures.today, Currency.Minutes))
-        assertEquals(Money(20 + 5 + 5 + 10), projection.balanceOf(Fixtures.main.id))
+        assertEquals(Money(12 + 4 + 4 + 10), projection.balanceOf(Fixtures.main.id))
         assertEquals(
             listOf(
-                LedgerAnomaly.DailyCapExceeded(Fixtures.kid, Fixtures.today, Fixtures.gbp, second.eventId, Money(5)),
+                LedgerAnomaly.DailyCapExceeded(Fixtures.kid, Fixtures.today, Fixtures.gbp, second.eventId, Money(7)),
             ),
             projection.anomalies,
         )
@@ -87,6 +89,46 @@ class ProjectionTest {
         assertIs<Violation.DailyCapExceeded>(
             assertIs<ValidationResult.Invalid>(LedgerRules.validate(second, beforeSecond)).violations.single(),
         )
+    }
+
+    @Test
+    fun aPulledGameDatedOutsideItsReceiveWindowIsExcludedWhole() {
+        val today = Fixtures.today
+
+        // Stamps at 23:59 UTC on the receive day: the date, not the time of day, is what counts.
+        fun stampOn(date: CalendarDate) = Instant.fromEpochSeconds(date.toEpochDay() * 86_400 + 86_399)
+        val offline = kid.game(10, today.plusDays(-7)) // offline for a week: accepted
+        val early = kid.game(10, today.plusDays(1)) // a day ahead (time zones): accepted
+        val backdated = kid.game(10, today.plusDays(-8))
+        val postdated = kid.game(10, today.plusDays(2))
+        val own = kid.game(10, today.plusDays(-30)) // no stamp: the author's own copy, never date-checked
+        val received = listOf(offline, early, backdated, postdated).associate { it.envelope.hash to stampOn(today) }
+        val events = listOf(offline, early, backdated, postdated, own)
+        val projection = Ledger.project(events, Fixtures.accounts, receivedAt = received)
+
+        assertEquals(Money(30), projection.balanceOf(Fixtures.main.id))
+        assertEquals(
+            listOf(
+                LedgerAnomaly.PlayedOnOutOfRange(Fixtures.kid, backdated.eventId, backdated.playedOn, today),
+                LedgerAnomaly.PlayedOnOutOfRange(Fixtures.kid, postdated.eventId, postdated.playedOn, today),
+            ),
+            projection.anomalies,
+        )
+        // Excluded games take nothing from their day's cap.
+        assertEquals(Money.ZERO, projection.dailyGameCredits(Fixtures.kid, backdated.playedOn, Fixtures.gbp))
+        assertEquals(Money(10), projection.dailyGameCredits(Fixtures.kid, offline.playedOn, Fixtures.gbp))
+        assertEquals(
+            projection.anomalies,
+            projection.anomaliesFor(Fixtures.kid),
+        )
+        // Incremental applies carry the stamps they are given, and match the full projection.
+        val incremental = events.sortedWith(LedgerOrdering).fold(Projection.empty(Fixtures.accounts)) { p, e ->
+            p.apply(e, received.filterKeys { it == e.envelope.hash })
+        }
+        assertEquals(projection, incremental)
+        assertEquals(projection.anomalies, incremental.anomalies)
+        // Without stamps everything applies.
+        assertEquals(Money(50), Ledger.project(events, Fixtures.accounts).balanceOf(Fixtures.main.id))
     }
 
     @Test
@@ -261,7 +303,7 @@ class ProjectionTest {
         val debit = parent.adjust(-200)
         kid.observe(debit.lamport)
         val reused = kid.writeWithId(debit.eventId, Fixtures.main) {
-            GamePlayed(it, Fixtures.gbp, Money(5), "g", 1, Fixtures.today)
+            GamePlayed(it, Fixtures.gbp, Money(5), Fixtures.GAME_ID, Fixtures.GAME_SCORE, Fixtures.today)
         }
 
         val projection = project(listOf(allowance, debit, reused))
@@ -374,11 +416,11 @@ class ProjectionTest {
         val kidTwin = DeviceWriter(Fixtures.kidTablet.copy(deviceId = DeviceId("kid-phone"))).writeWithId(
             game.eventId,
             Fixtures.main,
-        ) { GamePlayed(it, Fixtures.gbp, Money(20), "g", 1, Fixtures.today) }
+        ) { GamePlayed(it, Fixtures.gbp, Money(15), Fixtures.GAME_ID, Fixtures.GAME_SCORE, Fixtures.today) }
         assertEquals(game.lamport, kidTwin.lamport)
         // Same lamport: "kid-phone" sorts before "kid-tablet".
         val kids = project(listOf(game, kidTwin))
-        assertEquals(Money(20), kids.balanceOf(Fixtures.main.id))
+        assertEquals(Money(15), kids.balanceOf(Fixtures.main.id))
         val kidConflict = assertIs<LedgerAnomaly.ConflictingDuplicate>(kids.anomalies.single())
         assertEquals(kidTwin.envelope.hash, kidConflict.applied?.hash)
         assertEquals(kids, project(listOf(kidTwin, game)))

@@ -3,6 +3,7 @@ package dev.kpetriv.sprout.navigation
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.consumeWindowInsets
@@ -19,6 +20,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import dev.kpetriv.sprout.R
 
@@ -27,8 +29,8 @@ internal data class Shortcut(val label: Int, val onClick: () -> Unit)
 
 /**
  * [content] (a feature's home screen) with a bar of [shortcuts] under it (M4: Chat and Screen time on the kid's home,
- * Chat on the parent dashboard). The bar takes the navigation bar inset, so the screen above does not pad for it
- * again. Without shortcuts the content is shown as is.
+ * Chat on the parent dashboard; M5: Games on the kid's home). The bar takes the navigation bar inset, so the screen
+ * above does not pad for it again. Without shortcuts the content is shown as is.
  */
 @Composable
 internal fun WithShortcuts(shortcuts: List<Shortcut>, modifier: Modifier = Modifier, content: @Composable () -> Unit) {
@@ -50,24 +52,37 @@ private fun ShortcutBar(shortcuts: List<Shortcut>) {
                 .fillMaxWidth()
                 .navigationBarsPadding()
                 .padding(horizontal = 16.dp, vertical = 8.dp),
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             shortcuts.forEach { shortcut ->
+                // Three buttons share a phone's width (M5): a narrow inner padding and centred text, so a label that
+                // has to wrap ("Screen time") wraps evenly instead of pushing its emoji onto a line of its own.
                 FilledTonalButton(
                     onClick = shortcut.onClick,
                     modifier = Modifier.weight(1f).heightIn(min = 56.dp),
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp),
                 ) {
-                    Text(stringResource(shortcut.label), style = MaterialTheme.typography.titleMedium)
+                    Text(
+                        stringResource(shortcut.label),
+                        style = MaterialTheme.typography.titleMedium,
+                        textAlign = TextAlign.Center,
+                    )
                 }
             }
         }
     }
 }
 
-/** The kid's home shortcuts: Chat (real households only) and Screen time. */
-internal fun kidShortcuts(chat: Boolean, onChat: () -> Unit, onScreenTime: () -> Unit): List<Shortcut> = buildList {
+/** The kid's home shortcuts: Chat (real households only), Screen time and Games (M5). */
+internal fun kidShortcuts(
+    chat: Boolean,
+    onChat: () -> Unit,
+    onScreenTime: () -> Unit,
+    onGames: () -> Unit,
+): List<Shortcut> = buildList {
     if (chat) add(Shortcut(R.string.home_chat, onChat))
     add(Shortcut(R.string.home_screen_time, onScreenTime))
+    add(Shortcut(R.string.home_games, onGames))
 }
 
 /** The parent dashboard's shortcut: Chat (real households only). */

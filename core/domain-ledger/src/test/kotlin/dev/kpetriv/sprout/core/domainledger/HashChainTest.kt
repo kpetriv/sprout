@@ -198,6 +198,23 @@ class HashChainTest {
         }
     }
 
+    @Test
+    fun editingAGamePlayBreaksTheChain() {
+        val kid = DeviceWriter(Fixtures.kidTablet)
+        kid.game(10, score = 9)
+        kid.game()
+        val events = kid.written.toList()
+        assertIs<ChainVerification.Valid>(chain.verifyChain(events))
+        for (index in events.indices) {
+            val edits = payloadMutations(events[index])
+            assertEquals(4, edits.size)
+            for (edited in edits) {
+                val tampered = events.toMutableList().apply { this[index] = edited }
+                assertIs<ChainVerification.Broken>(chain.verifyChain(tampered), "event $index payload $edited")
+            }
+        }
+    }
+
     private fun payloadMutations(event: LedgerEvent): List<LedgerEvent> = when (event) {
         is ChoreRewarded -> listOf(
             event.copy(amount = event.amount + Money(1)),
@@ -218,6 +235,13 @@ class HashChainTest {
             event.copy(days = event.days + 1),
             event.copy(principal = Money(1)),
             event.copy(periodKey = "2099-01"),
+        )
+
+        is GamePlayed -> listOf(
+            event.copy(gameId = "memory.sapling"),
+            event.copy(score = event.score - 1),
+            event.copy(amount = event.amount - Money(1)),
+            event.copy(playedOn = event.playedOn.plusDays(-1)),
         )
 
         else -> emptyList()

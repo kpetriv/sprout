@@ -87,7 +87,7 @@ abstract class LedgerRepositoryContract {
         parent.written.forEach { assertEquals(AppendResult.Accepted, repository.append(it)) }
         // The kid device has not synced, so its copy has a lower lamport than the parent's original.
         val reused = kid.writeWithId(chore.eventId, Fixtures.main) {
-            GamePlayed(it, Fixtures.gbp, Money(5), "g", 1, Fixtures.today)
+            GamePlayed(it, Fixtures.gbp, Money(5), Fixtures.GAME_ID, Fixtures.GAME_SCORE, Fixtures.today)
         }
         assertEquals(true, reused.lamport < chore.lamport)
 
@@ -129,7 +129,7 @@ abstract class LedgerRepositoryContract {
 
         // The kid saw the parent's debit and writes a harmless event under the same id, hoping to cancel it.
         val reused = kid.writeWithId(debit.eventId, Fixtures.main) {
-            GamePlayed(it, Fixtures.gbp, Money(5), "g", 1, Fixtures.today)
+            GamePlayed(it, Fixtures.gbp, Money(5), Fixtures.GAME_ID, Fixtures.GAME_SCORE, Fixtures.today)
         }
         assertIs<AppendResult.Conflict>(repository.append(reused))
 

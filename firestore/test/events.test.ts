@@ -10,6 +10,7 @@ import {
   clean,
   document,
   event,
+  gamePlayed,
   HASH,
   HID,
   KID2_ID,
@@ -52,6 +53,12 @@ describe('events: create', () => {
 
   it('a kid creates a KID-role event for their own kid from their device', async () => {
     await assertSucceeds(put(asKid(env), kidEvent()));
+  });
+
+  it('a kid creates a game_played event for their own kid with the existing key set (M5)', async () => {
+    await assertSucceeds(put(asKid(env), gamePlayed()));
+    // The same keys a kid already writes: the ledger, not the rules, judges the credit (ADR-0009).
+    await assertFails(put(asKid(env), gamePlayed({ eventId: 'evt-game-2', kidId: KID2_ID })));
   });
 
   it('a parent stores a conflicting copy under eventId__hash; a server-stamped event is accepted', async () => {
@@ -149,6 +156,15 @@ describe('events: create', () => {
   it('requires serverReceivedAt stamped with the server time', async () => {
     await assertFails(put(asParent(env), event({ serverReceivedAt: undefined })));
     await assertFails(put(asParent(env), event({ serverReceivedAt: new Date(0) })));
+  });
+
+  it('a kid cannot forge or omit the server stamp of a game_played event (M5 audit I7, D-M5-5)', async () => {
+    // The played-on window is judged against this stamp, so a kid session must not be able to choose it.
+    await assertFails(put(asKid(env), gamePlayed({ serverReceivedAt: undefined })));
+    await assertFails(put(asKid(env), gamePlayed({ serverReceivedAt: new Date(0) })));
+    await assertFails(put(asKid(env), gamePlayed({ serverReceivedAt: new Date(Date.now() + 9 * 86_400_000) })));
+    await assertFails(put(asKid(env), gamePlayed({ serverReceivedAt: '2026-11-03T00:00:00Z' })));
+    await assertSucceeds(put(asKid(env), gamePlayed()));
   });
 
   it('a kid cannot store a conflicting copy under eventId__hash', async () => {

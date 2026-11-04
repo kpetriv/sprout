@@ -135,6 +135,23 @@ export function kidEvent(overrides: Record<string, unknown> = {}): Record<string
   });
 }
 
+/**
+ * A brain game's credit (M5) from the kid's own device, as the app writes it: a perfect Sapling arithmetic play
+ * (10 of 10) for the 15 it earns, on the day it was played.
+ */
+export function gamePlayed(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return kidEvent({
+    eventId: 'evt-game-1',
+    type: 'game_played',
+    rewardId: undefined,
+    amount: 15,
+    gameId: 'arithmetic.sapling',
+    score: 10,
+    playedOn: '2026-11-03',
+    ...overrides,
+  });
+}
+
 export const COLLECTIONS: Record<string, string> = {
   kids: 'kid',
   accounts: 'account',

@@ -120,6 +120,8 @@ dependencies {
     implementation(projects.core.designsystem)
     // ParentAuthorizationRequester (bound by feature/lock) for the parent dashboard's "Sign now".
     implementation(projects.core.domainLedger)
+    // GameKind in the games nav keys; GameId and Score for the games adapters (M5).
+    implementation(projects.core.games)
     implementation(projects.core.model)
     // SyncEngine and its ports, run by SyncController and SyncWorker.
     implementation(projects.core.sync)

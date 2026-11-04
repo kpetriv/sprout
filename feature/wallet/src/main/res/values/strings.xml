@@ -53,6 +53,9 @@
   <string name="feature_wallet_event_chores">Chore reward</string>
   <string name="feature_wallet_event_allowance">Pocket money</string>
   <string name="feature_wallet_event_games">Game reward</string>
+  <!-- Under a game reward the ledger left out of the balance. -->
+  <string name="feature_wallet_game_not_counted_window">Not counted: synced too long after the day it was played</string>
+  <string name="feature_wallet_game_not_counted_cap">Not counted: over that day\'s game limit</string>
   <string name="feature_wallet_event_shop">Shop</string>
   <string name="feature_wallet_event_savings">Moved to savings</string>
   <string name="feature_wallet_event_interest">Interest</string>

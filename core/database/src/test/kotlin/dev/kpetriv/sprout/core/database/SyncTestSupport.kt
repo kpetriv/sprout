@@ -22,8 +22,11 @@ import dev.kpetriv.sprout.core.model.KidId
 import dev.kpetriv.sprout.core.model.Role
 import dev.kpetriv.sprout.core.sync.DocumentEnvelope
 import dev.kpetriv.sprout.core.sync.DocumentJsonCodec
+import dev.kpetriv.sprout.core.sync.EventApplyReport
+import dev.kpetriv.sprout.core.sync.PulledEvent
 import kotlinx.serialization.json.JsonObject
 import org.robolectric.RuntimeEnvironment
+import kotlin.time.Instant
 
 /** The household the sync tests link their devices to. */
 internal val HOME = HouseholdId("home-1")
@@ -70,6 +73,15 @@ internal suspend fun TestHousehold.queuedDocuments(): List<DocumentEnvelope> = d
 internal suspend fun TestHousehold.queuedEvents(): List<JsonObject> = database.outboxDao().all()
     .filter { it.kind == OutboxKind.LEDGER_EVENT }
     .map { LedgerJson.json.parseToJsonElement(it.payload) as JsonObject }
+
+/**
+ * Applies [events] as pulled event documents carrying [serverReceivedAt] (null: no stamp, as from a transport that
+ * gives none; the played-on window is then not judged).
+ */
+internal suspend fun RoomRemoteApplier.applyEvents(
+    events: List<JsonObject>,
+    serverReceivedAt: Instant? = null,
+): EventApplyReport = applyEvents(events.map { PulledEvent(it, serverReceivedAt) })
 
 /**
  * [from]'s parent keys as the server registry lists them once `registerParentKey` succeeded (D-M3-34): keys are never

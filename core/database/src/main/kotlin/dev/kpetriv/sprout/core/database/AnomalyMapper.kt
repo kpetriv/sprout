@@ -30,6 +30,7 @@ import kotlinx.serialization.json.put
  * Maps [LedgerAnomaly] to cache rows and back, losslessly. Row ids are stable across projection rebuilds:
  * - overdraft: `overdraft:<accountId>:<first causing eventId>` (later debits extend the same anomaly);
  * - daily cap: `daily_cap:<eventId>`;
+ * - played-on window: `played_on:<eventId>`;
  * - invalid event, conflicting duplicate: `<kind>:<eventId>:<kidId>`. One eventId can concern several kids (an id
  *   reused across kids), and each kid's audit view gets its own row.
  *
@@ -74,6 +75,8 @@ internal object AnomalyMapper {
                 detectedAtEpochMs = detectedAtEpochMs,
             )
 
+            is LedgerAnomaly.PlayedOnOutOfRange -> playedOnEntity(kidId, anomaly, order, detectedAtEpochMs)
+
             is LedgerAnomaly.InvalidEvent -> AnomalyEntity(
                 anomalyId = "invalid:${anomaly.eventId.value}:${kidId.value}",
                 kidId = kidId,
@@ -102,6 +105,26 @@ internal object AnomalyMapper {
                 ),
             )
         }
+
+    private fun playedOnEntity(
+        kidId: KidId,
+        anomaly: LedgerAnomaly.PlayedOnOutOfRange,
+        order: Int,
+        detectedAtEpochMs: Long,
+    ) = AnomalyEntity(
+        anomalyId = "played_on:${anomaly.eventId.value}",
+        kidId = kidId,
+        kind = AnomalyKind.PLAYED_ON_OUT_OF_RANGE,
+        accountId = null,
+        eventId = anomaly.eventId.value,
+        amountMinor = null,
+        detailsJson = details(order) {
+            put("anomalyKidId", anomaly.kidId.value)
+            put("playedOn", anomaly.playedOn.toString())
+            put("receivedOn", anomaly.receivedOn.toString())
+        },
+        detectedAtEpochMs = detectedAtEpochMs,
+    )
 
     /** Every readable row as a domain anomaly, in projection order. A row that cannot be read is skipped. */
     fun toDomain(rows: List<AnomalyEntity>): List<LedgerAnomaly> = rows
@@ -136,6 +159,13 @@ internal object AnomalyMapper {
                 currency = LedgerJson.json.decodeFromJsonElement(CurrencySerializer, details.getValue("currency")),
                 eventId = eventId,
                 excess = requireNotNull(row.amountMinor) { "daily cap without excess" },
+            )
+
+            AnomalyKind.PLAYED_ON_OUT_OF_RANGE -> LedgerAnomaly.PlayedOnOutOfRange(
+                kidId = KidId(details.getValue("anomalyKidId").jsonPrimitive.content),
+                eventId = eventId,
+                playedOn = CalendarDate.parse(details.getValue("playedOn").jsonPrimitive.content),
+                receivedOn = CalendarDate.parse(details.getValue("receivedOn").jsonPrimitive.content),
             )
 
             AnomalyKind.INVALID_EVENT -> LedgerAnomaly.InvalidEvent(

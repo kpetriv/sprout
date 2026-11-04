@@ -19,9 +19,10 @@ interface RemoteApplier {
 
     /**
      * Verifies and ingests ledger events: applied, duplicates, quarantined (including forked chains), or held for a
-     * missing predecessor or an author device not yet known or approved.
+     * missing predecessor or an author device not yet known or approved. Each event's
+     * [PulledEvent.serverReceivedAt] is kept with it (held ones included), for the played-on window (D-M5-5).
      */
-    suspend fun applyEvents(events: List<JsonObject>): EventApplyReport
+    suspend fun applyEvents(events: List<PulledEvent>): EventApplyReport
 
     /**
      * Verifies and stores chat messages (`MessageJson` trees; core/domain-ledger `MessageVerifier`): applied (stored,

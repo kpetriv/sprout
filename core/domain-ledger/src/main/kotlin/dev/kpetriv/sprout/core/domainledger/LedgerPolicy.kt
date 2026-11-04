@@ -11,8 +11,9 @@ package dev.kpetriv.sprout.core.domainledger
  * not applies them.
  *
  * @property dailyGameCap the most [GamePlayed] may credit per kid, per [GamePlayed.playedOn] date, per currency,
- *   in that currency's minor units (pence for GBP, minutes for [Currency.Minutes]). A game that would go over the
- *   cap is rejected at validation and excluded (not clamped) when projecting merged streams.
+ *   in that currency's minor units (pence for GBP). Games credit a fiat currency only
+ *   ([Violation.GameCurrencyNotAllowed]). A game that would go over the cap is rejected at validation and excluded
+ *   (not clamped) when projecting merged streams.
  * @property dailyGameCapOverrides per-currency caps that replace [dailyGameCap] for that currency.
  * @property maxAmount the largest absolute amount any single event may carry (and the largest interest principal).
  *   Keeps every sum a projection computes far away from `Long` overflow.
@@ -52,7 +53,7 @@ data class LedgerPolicy(
     fun dailyGameCapFor(currency: Currency): Money = dailyGameCapOverrides[currency] ?: dailyGameCap
 
     companion object {
-        /** 50 minor units (50p, or 50 minutes) a day unless the household configures otherwise. */
+        /** 50 minor units (50p) a day unless the household configures otherwise. */
         val DEFAULT_DAILY_GAME_CAP: Money = Money(50)
 
         /** 10^12 minor units (ten billion pounds, or about 1.9 million years of minutes). */

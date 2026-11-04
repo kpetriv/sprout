@@ -1,6 +1,10 @@
 package dev.kpetriv.sprout.core.domainledger
 
+import dev.kpetriv.sprout.core.games.GameCatalogue
+import dev.kpetriv.sprout.core.games.GameCredit
+import dev.kpetriv.sprout.core.games.GameId
 import dev.kpetriv.sprout.core.model.AccountId
+import dev.kpetriv.sprout.core.model.CalendarDate
 import dev.kpetriv.sprout.core.model.KidId
 import dev.kpetriv.sprout.core.model.Role
 import kotlin.reflect.KClass
@@ -33,6 +37,18 @@ import kotlin.reflect.KClass
  *   surrogate (it has no UTF-8 form, so the event could not be hashed or signed).
  * - **Period keys.** [AllowancePaid.periodKey] and [InterestAccrued.periodKey] are [PeriodKeys.isValid].
  * - **Granted minutes.** A [RewardPurchased.minutesGranted], when present, is positive and within the amount bound.
+ * - **Game credit (ADR-0009, D-M5-3, D-M5-4).** A [GamePlayed] is in a [Currency.Fiat] currency
+ *   ([Violation.GameCurrencyNotAllowed]; with the currency and account-kind rules, it credits the kid's fiat MAIN
+ *   account only), its [GamePlayed.gameId] parses as a playable [GameId] ([Violation.UnknownGame]), its
+ *   [GamePlayed.score] is within `0..`[GameCatalogue.rounds] ([Violation.ScoreOutOfRange]), and its amount is at
+ *   most what [GameCredit.earned] gives for that id and score ([Violation.GameCreditTooHigh]). Less is allowed, so
+ *   the author can clamp a play to the day's remaining cap.
+ *
+ * Local date rule (only at local validation time, when [validate] is given `today`):
+ * - **Played-on window (D-M5-5).** A [GamePlayed.playedOn] is within [PlayedOnWindow] of `today`
+ *   ([Violation.PlayedOnOutOfRange]). Pulled events are held to the same window against the server's receive date
+ *   by the projection ([LedgerAnomaly.PlayedOnOutOfRange]), never against the receiving device's date (that would
+ *   make replicas diverge).
  *
  * History rules (against what was applied before the event, in total order; checked at local validation **and**
  * when projecting merged streams, where a violating event is excluded and reported as
@@ -69,6 +85,9 @@ object LedgerRules {
      */
     const val MAX_CAUSES: Int = 16
 
+    /** What a [Violation.UnknownGame] may quote of an unknown game id. */
+    private val GAME_ID_SHAPE = Regex("[a-z0-9._-]{1,64}")
+
     /**
      * Event types only a [Role.PARENT] may author, whatever their content. A [TimeBankCredited] is parent-only only
      * when it is a manual grant; use [isParentOnly] to decide for a given event.
@@ -81,8 +100,12 @@ object LedgerRules {
         OverdraftCompensated::class,
     )
 
-    /** Checks [event] against every static and stateful rule, given the projection it would be applied to. */
-    fun validate(event: LedgerEvent, projectionBefore: Projection): ValidationResult {
+    /**
+     * Checks [event] against every static and stateful rule, given the projection it would be applied to. With
+     * [today] (the authoring device's household-local date), a [GamePlayed] must also be within [PlayedOnWindow] of
+     * it; null skips that check (pulled events, whose window the projection checks against the server date).
+     */
+    fun validate(event: LedgerEvent, projectionBefore: Projection, today: CalendarDate? = null): ValidationResult {
         if (projectionBefore.contains(event.eventId)) {
             return ValidationResult.Invalid(listOf(Violation.DuplicateEvent(event.eventId)))
         }
@@ -94,7 +117,7 @@ object LedgerRules {
                 projectionBefore.balances,
                 requireKnownAccounts = true,
                 policy = projectionBefore.policy,
-            ).ifEmpty {
+            ).plus(playedOnViolations(event, today)).ifEmpty {
                 historyViolations(event, projectionBefore.rewardGrants, projectionBefore.claimedPeriods) +
                     statefulViolations(event, projectionBefore)
             }
@@ -173,7 +196,37 @@ object LedgerRules {
 
         is TimeBankCredited -> listOfNotNull(Violation.BlankText("rewardId").takeIf { event.rewardId.isBlank() })
 
+        is GamePlayed -> gameViolations(event)
+
         else -> emptyList()
+    }
+
+    /**
+     * The game-credit rule (ADR-0009): a fiat currency (games never credit screen-time minutes, so a forged play
+     * cannot open a second daily cap in another currency), a playable id, a score within its rounds, and an amount
+     * no more than the credit [GameCredit.earned] re-derives (the timed bonus assumed wherever it was possible).
+     * Never throws.
+     */
+    private fun gameViolations(event: GamePlayed): List<Violation> {
+        if (event.currency !is Currency.Fiat) return listOf(Violation.GameCurrencyNotAllowed(event.currency))
+        val gameId = GameId.parse(event.gameId)
+        val rounds = gameId?.let(GameCatalogue::rounds) ?: 0
+        // Only a score within the rounds is narrowed to Int; earned is null for anything else.
+        val earned = gameId?.takeIf { event.score in 0L..rounds.toLong() }
+            ?.let { GameCredit.earned(it.wire, event.score.toInt()) }
+            ?.let(::Money)
+        return when {
+            gameId == null -> listOf(Violation.UnknownGame(event.gameId.takeIf { GAME_ID_SHAPE.matches(it) }))
+            earned == null -> listOf(Violation.ScoreOutOfRange(event.score, rounds))
+            event.amount > earned -> listOf(Violation.GameCreditTooHigh(earned, event.amount))
+            else -> emptyList()
+        }
+    }
+
+    /** The local played-on window: only for a [GamePlayed] validated with a [today]. */
+    private fun playedOnViolations(event: LedgerEvent, today: CalendarDate?): List<Violation> = when {
+        today == null || event !is GamePlayed || PlayedOnWindow.contains(event.playedOn, today) -> emptyList()
+        else -> listOf(Violation.PlayedOnOutOfRange(event.playedOn, today))
     }
 
     private fun periodKeyViolations(periodKey: String): List<Violation> =
@@ -431,6 +484,28 @@ sealed interface Violation {
     data class InsufficientFunds(val accountId: AccountId, val available: Money, val requested: Money) : Violation
 
     data class DailyCapExceeded(val cap: Money, val alreadyCredited: Money, val requested: Money) : Violation
+
+    /**
+     * [GamePlayed.gameId] is not a playable game id ([GameId.parse]). [gameId] is the id as written when it looks
+     * like an id (at most 64 lower-case letters, digits, `.`, `_` or `-`); null otherwise, since an author-written
+     * string may hold anything and violations never carry free text.
+     */
+    data class UnknownGame(val gameId: String?) : Violation
+
+    /** A [GamePlayed] in [currency], which is not a [Currency.Fiat]: games credit the fiat MAIN account only. */
+    data class GameCurrencyNotAllowed(val currency: Currency) : Violation
+
+    /** [GamePlayed.score] is outside `0..`[max], [max] being the game's rounds ([GameCatalogue.rounds]). */
+    data class ScoreOutOfRange(val score: Long, val max: Int) : Violation
+
+    /** [GamePlayed.amount] ([requested]) is more than the credit the game id and score earn ([earned]). */
+    data class GameCreditTooHigh(val earned: Money, val requested: Money) : Violation
+
+    /**
+     * A locally authored [GamePlayed.playedOn] is outside [PlayedOnWindow] of [today]: the device's today, or (data
+     * layer, [PlayedOnWindow.isBeforeWindowOf]) the UTC date of the newest server stamp the device holds.
+     */
+    data class PlayedOnOutOfRange(val playedOn: CalendarDate, val today: CalendarDate) : Violation
 
     data object TimeBankAlreadyRunning : Violation
 

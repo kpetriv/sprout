@@ -32,6 +32,15 @@ object Fixtures {
 
     val start: Instant = Instant.parse("2026-11-02T08:00:00Z")
 
+    /** A playable game id (`core/games` `GameId` wire form) with 10 rounds. */
+    const val GAME_ID: String = "arithmetic.sapling"
+
+    /** A perfect score for [GAME_ID]. */
+    const val GAME_SCORE: Long = 10
+
+    /** What [GAME_SCORE] in [GAME_ID] earns: the most any single play can (`GameCredit.MAX_PER_PLAY`). */
+    const val GAME_MAX_CREDIT: Long = 15
+
     /**
      * The registered role of each fixture device, as a device registry would report it: a `roleOf` for
      * [Ledger.project] and [appliedCopyOf]. Null for any other device.
@@ -122,8 +131,17 @@ class DeviceWriter(
     fun allowance(amount: Long, periodKey: String = nextWeek()) =
         write(Fixtures.main) { AllowancePaid(it, Fixtures.gbp, Money(amount), "weekly", periodKey) }
 
-    fun game(amount: Long, date: CalendarDate = Fixtures.today, account: Account = Fixtures.main) =
-        write(account) { GamePlayed(it, account.currency, Money(amount), "memory", 10, date) }
+    /**
+     * A game play. The defaults are a perfect Sapling arithmetic play (10 of 10), which earns the most any play can
+     * ([Fixtures.GAME_MAX_CREDIT]), so every [amount] up to that passes the game-credit rule.
+     */
+    fun game(
+        amount: Long = Fixtures.GAME_MAX_CREDIT,
+        date: CalendarDate = Fixtures.today,
+        account: Account = Fixtures.main,
+        gameId: String = Fixtures.GAME_ID,
+        score: Long = Fixtures.GAME_SCORE,
+    ) = write(account) { GamePlayed(it, account.currency, Money(amount), gameId, score, date) }
 
     fun purchase(
         amount: Long,

@@ -102,6 +102,7 @@ data class SavingsGoalUi(
  *
  * @property amount the magnitude moved; [direction] gives the sign.
  * @property note free text the author attached (a manual adjustment's reason), shown under the title.
+ * @property excluded why a game play is not counted in the balance (the ledger excluded it), or null when it counts.
  */
 data class EventUi(
     val eventId: String,
@@ -111,7 +112,20 @@ data class EventUi(
     val currency: Currency,
     val note: String?,
     val createdAt: Instant,
+    val excluded: GameExclusion? = null,
 )
+
+/**
+ * Why the ledger left a game play out of the balance (M5 audit L3): the row is still listed, with a "Not counted" line,
+ * so a parent can see which play an anomaly is about.
+ */
+enum class GameExclusion {
+    /** It reached the household too long after (or before) the day it says it was played (D-M5-5). */
+    PLAYED_ON_OUT_OF_RANGE,
+
+    /** It would have gone over that day's game limit. */
+    DAILY_CAP_EXCEEDED,
+}
 
 /** What a ledger event was for; drives the row icon, title and the Sapling filter chips. */
 enum class EventCategory {

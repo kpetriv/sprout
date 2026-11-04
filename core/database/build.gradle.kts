@@ -27,6 +27,8 @@ room {
 
 dependencies {
     api(projects.core.domainLedger)
+    // GameId and Score in PlayGameUseCase's signature, and GameCredit for what a play earns (M5).
+    api(projects.core.games)
     // Chores, rewards, allowance, savings and their planners (M2); repositories expose these models.
     api(projects.core.domainHousehold)
     api(projects.core.model)

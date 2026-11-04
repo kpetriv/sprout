@@ -52,7 +52,7 @@ class IngestTest {
 
     private suspend fun game(on: TestHousehold, amount: Long = 5): AppendResult {
         val main = with(on) { on.database.accountDao().forKid(KID_X).map { it.toDomain() }.money() }
-        return on.writer.append(KID_X, main.id) { GamePlayed(it, on.gbp, Money(amount), "memory", 3, day) }
+        return on.writer.append(KID_X, main.id) { GamePlayed(it, on.gbp, Money(amount), "memory.sprout", 6, day) }
     }
 
     private suspend fun balanceOf(on: TestHousehold): Money =
@@ -122,11 +122,11 @@ class IngestTest {
             AllowancePaid(it, kid.gbp, Money(10_000), "weekly", "2026-W45")
         }
         // A game credited to a savings account: well signed, but breaks a ledger rule of its own.
-        val misplaced = kid.craft(KID_X, savings.id) { GamePlayed(it, kid.gbp, Money(5), "memory", 3, day) }
+        val misplaced = kid.craft(KID_X, savings.id) { GamePlayed(it, kid.gbp, Money(5), "memory.sprout", 6, day) }
         // A device the household never registered.
         val stranger =
             TestHousehold(RuntimeEnvironment.getApplication(), sessionFor = TestHousehold.kidSession(HOME, "x", KID_X))
-        val unknown = stranger.craft(KID_X, main.id) { GamePlayed(it, kid.gbp, Money(5), "memory", 3, day) }
+        val unknown = stranger.craft(KID_X, main.id) { GamePlayed(it, kid.gbp, Money(5), "memory.sprout", 6, day) }
         stranger.close()
         val broken = JsonObject(mapOf("envelope" to JsonObject(mapOf("eventId" to JsonPrimitive("e")))))
 
@@ -162,7 +162,7 @@ class IngestTest {
         val parentRow = parent.database.ledgerEventDao().all().single()
         // The kid device reuses the parent's eventId for its own event.
         val copy = kid.craft(KID_X, main.id, eventId = parentRow.eventId) {
-            GamePlayed(it, kid.gbp, Money(40), "memory", 3, day)
+            GamePlayed(it, kid.gbp, Money(15), "arithmetic.sapling", 10, day)
         }
 
         assertEquals(EventApplyReport(applied = 1), parent.applier.applyEvents(listOf(copy)))
@@ -195,7 +195,7 @@ class IngestTest {
             LedgerJson.json.encodeToString(
                 JsonObject.serializer(),
                 stranger.craft(KidId("y"), dev.kpetriv.sprout.core.model.AccountId("acc-y")) {
-                    GamePlayed(it, kid.gbp, Money(5), "memory", 3, day)
+                    GamePlayed(it, kid.gbp, Money(5), "memory.sprout", 6, day)
                 },
             ),
         )

@@ -371,7 +371,8 @@ class FirebaseEmulatorTransportTest {
         var pages = 0
         do {
             val page = blocking { transport.pull(cursor) }
-            pulledEvents += page.events
+            pulledEvents += page.events.map { it.json }
+            assertTrue(page.events.all { it.serverReceivedAt != null }, "every pulled event carries its server stamp")
             pulledMessages += page.messages
             pulledDocuments += page.documents.map { it.docId }
             pulledKeys += page.parentKeys.map { it.fingerprint }

@@ -361,6 +361,19 @@ class ParentHomeViewModelTest {
     }
 
     @Test
+    fun `every game-rule quarantine maps to GAME_RULE, other invariants stay OTHER`() {
+        for (name in listOf("GameCreditTooHigh", "UnknownGame", "ScoreOutOfRange", "GameCurrencyNotAllowed")) {
+            assertEquals(RejectionReason.GAME_RULE, RejectionReason.of("invariant violated: $name"), name)
+        }
+        assertEquals(
+            RejectionReason.GAME_RULE,
+            RejectionReason.of("invariant violated: GameCurrencyNotAllowed,CurrencyMismatch"),
+        )
+        assertEquals(RejectionReason.OTHER, RejectionReason.of("invariant violated: WrongAccountKind"))
+        assertEquals(RejectionReason.OTHER, RejectionReason.of("GameCreditTooHigh"))
+    }
+
+    @Test
     fun `every verifier quarantine code has its own reason`() {
         val unmapped = QuarantineReason.entries.filter { RejectionReason.of(it.name) == RejectionReason.OTHER }
         assertEquals(emptyList(), unmapped)

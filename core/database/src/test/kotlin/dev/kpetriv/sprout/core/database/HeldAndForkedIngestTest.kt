@@ -58,7 +58,9 @@ class HeldAndForkedIngestTest {
             .sumOf { it.amount.minorUnits }.let(::Money)
 
     private suspend fun TestHousehold.game(main: AccountId, lamport: Long, prevHash: String? = null) =
-        craft(KID_X, main, lamport = lamport, prevHash = prevHash) { GamePlayed(it, gbp, Money(5), "memory", 3, day) }
+        craft(KID_X, main, lamport = lamport, prevHash = prevHash) {
+            GamePlayed(it, gbp, Money(5), "memory.sprout", 6, day)
+        }
 
     private fun JsonObject.hash(): String = getValue("envelope").jsonObject.getValue("hash").jsonPrimitive.content
 
@@ -71,7 +73,7 @@ class HeldAndForkedIngestTest {
         parent.applier.applyRegistry(listOf(parent.registered(), kid.registered()), emptyList())
         parent.addKid(KID_X.value)
         val main = mainOf(parent)
-        parent.writer.append(KID_X, main) { GamePlayed(it, parent.gbp, Money(5), "memory", 3, day) }
+        parent.writer.append(KID_X, main) { GamePlayed(it, parent.gbp, Money(5), "memory.sprout", 6, day) }
 
         val documents = kid.applier.applyDocuments(parent.queuedDocuments())
         val events = kid.applier.applyEvents(parent.queuedEvents())
@@ -102,7 +104,7 @@ class HeldAndForkedIngestTest {
     fun aPendingDevicesEventIsHeldUntilApprovedAndARevokedOnesIsQuarantined() = runTest {
         val main = linked()
         kid.applier.applyRegistry(listOf(parent.registered(DeviceStatus.Pending)), emptyList())
-        parent.writer.append(KID_X, main) { GamePlayed(it, parent.gbp, Money(5), "memory", 3, day) }
+        parent.writer.append(KID_X, main) { GamePlayed(it, parent.gbp, Money(5), "memory.sprout", 6, day) }
 
         assertEquals(EventApplyReport(held = 1), kid.applier.applyEvents(parent.queuedEvents()))
         assertEquals(QuarantineReason.DEVICE_NOT_ACTIVE.name, kid.database.ledgerInboxDao().all().single().reason)
@@ -112,7 +114,7 @@ class HeldAndForkedIngestTest {
         assertEquals(Money(5), balanceOf(kid))
 
         // A REVOKED device's event at or above its revocation lamport is refused for good.
-        parent.writer.append(KID_X, main) { GamePlayed(it, parent.gbp, Money(6), "memory", 3, day) }
+        parent.writer.append(KID_X, main) { GamePlayed(it, parent.gbp, Money(6), "memory.sprout", 6, day) }
         kid.applier.applyRegistry(listOf(parent.registered(DeviceStatus.Revoked(0))), emptyList())
         val revoked = kid.applier.applyEvents(parent.queuedEvents().takeLast(1))
         assertEquals(EventApplyReport(quarantined = 1), revoked)

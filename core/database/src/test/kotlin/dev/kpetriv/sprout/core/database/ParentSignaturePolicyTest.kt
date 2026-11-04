@@ -68,7 +68,7 @@ class ParentSignaturePolicyTest {
 
         // Events that are not parent-only still need no signature.
         val game = writer.append(kid.id, main.id) {
-            GamePlayed(it, household.gbp, Money(5), "memory", 3, CalendarDate(2026, 11, 2))
+            GamePlayed(it, household.gbp, Money(5), "memory.sprout", 6, CalendarDate(2026, 11, 2))
         }
         assertEquals(AppendResult.Accepted, game)
         // The unsigned allowance from before the key still counts.

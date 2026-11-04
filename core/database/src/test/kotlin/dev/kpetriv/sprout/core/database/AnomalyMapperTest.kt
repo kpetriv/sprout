@@ -59,6 +59,13 @@ class AnomalyMapperTest {
         Violation.GrantRewardMismatch(eventA),
         Violation.GrantMinutesMismatch(eventA, expected = Money(30), actual = Money(45)),
         Violation.GrantAlreadyCredited(eventA, creditedBy = eventB),
+        Violation.UnknownGame("chess.sprout"),
+        Violation.UnknownGame(null),
+        Violation.ScoreOutOfRange(score = 11, max = 10),
+        Violation.ScoreOutOfRange(score = -1, max = 5),
+        Violation.GameCreditTooHigh(earned = Money(11), requested = Money(12)),
+        Violation.GameCurrencyNotAllowed(Currency.Minutes),
+        Violation.PlayedOnOutOfRange(Fixtures.today.plusDays(-8), Fixtures.today),
     )
 
     @Test
@@ -92,6 +99,7 @@ class AnomalyMapperTest {
             ),
             LedgerAnomaly.OverdraftDetected(account, Money(20), listOf(eventA, eventB)),
             LedgerAnomaly.DailyCapExceeded(Fixtures.kid, Fixtures.today, Currency.Minutes, eventA, Money(7)),
+            LedgerAnomaly.PlayedOnOutOfRange(Fixtures.kid, eventB, Fixtures.today.plusDays(-8), Fixtures.today),
             LedgerAnomaly.InvalidEvent(eventB, everyViolation),
         )
         val rows = anomalies.mapIndexed { order, anomaly -> AnomalyMapper.toEntity(Fixtures.kid, anomaly, order, 0) }

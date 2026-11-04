@@ -1,5 +1,7 @@
 package dev.kpetriv.sprout.feature.parenthome
 
+import dev.kpetriv.sprout.core.database.RoomLedgerRepository
+import dev.kpetriv.sprout.core.domainledger.Violation
 import dev.kpetriv.sprout.core.model.DeviceId
 import dev.kpetriv.sprout.core.model.Role
 import kotlinx.coroutines.flow.Flow
@@ -99,6 +101,13 @@ enum class RejectionReason {
 
     /** Signed for another household (M4 `WRONG_HOUSEHOLD`). */
     WRONG_HOUSEHOLD,
+
+    /**
+     * A game play whose credit breaks the ledger's game rules (ADR-0009): an unknown game, an impossible score, more
+     * than the score earns, or a currency other than money. The data layer's code is `invariant violated: ` and the
+     * broken rules' names.
+     */
+    GAME_RULE,
     OTHER,
     ;
 
@@ -120,7 +129,21 @@ enum class RejectionReason {
             "WRONG_THREAD" -> WRONG_THREAD
             "SEQ_GAP" -> WAITING_FOR_EARLIER
             "WRONG_HOUSEHOLD" -> WRONG_HOUSEHOLD
-            else -> OTHER
+            else -> if (isGameRule(code)) GAME_RULE else OTHER
+        }
+
+        /** The ledger's game-credit violations (ADR-0009), by the names the data layer writes. */
+        private val GAME_VIOLATIONS: Set<String> = listOf(
+            Violation.GameCreditTooHigh::class,
+            Violation.UnknownGame::class,
+            Violation.ScoreOutOfRange::class,
+            Violation.GameCurrencyNotAllowed::class,
+        ).mapNotNull { it.simpleName }.toSet()
+
+        /** A pulled event that broke an order-independent rule, among them a game rule. */
+        private fun isGameRule(code: String): Boolean {
+            val prefix = RoomLedgerRepository.INVARIANT_QUARANTINE
+            return code.startsWith(prefix) && code.removePrefix(prefix).split(',').any { it.trim() in GAME_VIOLATIONS }
         }
     }
 }

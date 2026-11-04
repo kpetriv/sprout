@@ -376,6 +376,59 @@ class MigrationTest {
     }
 
     @Test
+    fun migration6To7AddsTheServerStampColumnsAsNull() = runTest {
+        helper.createDatabase(TEST_DB, 6).use { db ->
+            insertEventRow(db, chore, EventOrigin.REMOTE)
+            db.insertRow(
+                "ledger_inbox",
+                "eventId" to chore.eventId.value,
+                "hash" to chore.envelope.hash,
+                "payloadJson" to "{}",
+                "authorDeviceId" to chore.envelope.authorDeviceId.value,
+                "lamport" to 1L,
+                "receivedAtEpochMs" to receivedAt,
+                "reason" to "CHAIN_GAP",
+            )
+        }
+
+        helper.runMigrationsAndValidate(TEST_DB, 7, true, Migrations.MIGRATION_6_7).use { db ->
+            db.query("SELECT hash, serverReceivedAtEpochMs FROM ledger_events").use { cursor ->
+                cursor.moveToFirst()
+                assertEquals(chore.envelope.hash, cursor.getString(0))
+                assertTrue(cursor.isNull(1), "ingested before the stamp was kept: never date-checked")
+            }
+            db.query("SELECT reason, serverReceivedAtEpochMs FROM ledger_inbox").use { cursor ->
+                cursor.moveToFirst()
+                assertEquals("CHAIN_GAP", cursor.getString(0))
+                assertTrue(cursor.isNull(1))
+            }
+        }
+
+        val database = Room.databaseBuilder(RuntimeEnvironment.getApplication(), SproutDatabase::class.java, TEST_DB)
+            .addMigrations(*Migrations.ALL)
+            .build()
+        try {
+            assertNull(database.ledgerEventDao().all().single().serverReceivedAtEpochMs)
+            assertNull(database.ledgerInboxDao().all().single().serverReceivedAtEpochMs)
+        } finally {
+            database.close()
+        }
+    }
+
+    @Test
+    fun migration1To7KeepsTheM1Rows() = runTest {
+        helper.createDatabase(TEST_DB, 1).use { db -> insertVersion1Rows(db, chore) }
+
+        helper.runMigrationsAndValidate(TEST_DB, 7, true, *Migrations.ALL).use { db ->
+            db.query("SELECT hash, serverReceivedAtEpochMs FROM ledger_events").use { cursor ->
+                cursor.moveToFirst()
+                assertEquals(chore.envelope.hash, cursor.getString(0))
+                assertTrue(cursor.isNull(1))
+            }
+        }
+    }
+
+    @Test
     fun roomOpensTheHelperCreatedDatabase() {
         helper.createDatabase(TEST_DB, SproutDatabase.VERSION).close()
         val database = Room.databaseBuilder(RuntimeEnvironment.getApplication(), SproutDatabase::class.java, TEST_DB)
@@ -390,29 +443,7 @@ class MigrationTest {
 
     /** One row in each M1 table that M2 touches, written with the version 1 columns only. */
     private fun insertVersion1Rows(db: SupportSQLiteDatabase, event: LedgerEvent) {
-        val row = LedgerEventMapper.toEntity(event, EventOrigin.LOCAL, receivedAt)
-        db.insertRow(
-            "ledger_events",
-            "eventId" to row.eventId.value,
-            "householdId" to row.householdId.value,
-            "kidId" to row.kidId.value,
-            "accountId" to row.accountId.value,
-            "authorUid" to row.authorUid.value,
-            "authorDeviceId" to row.authorDeviceId.value,
-            "authorRole" to row.authorRole.name,
-            "lamport" to row.lamport,
-            "createdAtEpochMs" to row.createdAtEpochMs,
-            "type" to row.type,
-            "currency" to Converters.currencyToString(row.currency),
-            "schemaVersion" to row.schemaVersion,
-            "prevHash" to row.prevHash,
-            "hash" to row.hash,
-            "signature" to row.signature,
-            "payloadJson" to row.payloadJson,
-            "receivedAtEpochMs" to row.receivedAtEpochMs,
-            "origin" to row.origin.name,
-            "quarantined" to 0,
-        )
+        val row = insertEventRow(db, event)
         val account = Fixtures.main.id.value
         val kid = Fixtures.kid.value
         db.insertRow(
@@ -443,6 +474,38 @@ class MigrationTest {
             "lastLamport" to 1L,
         )
         insertOutboxAndClock(db, row)
+    }
+
+    /** [event] as a `ledger_events` row with the version 1 columns only. */
+    private fun insertEventRow(
+        db: SupportSQLiteDatabase,
+        event: LedgerEvent,
+        origin: EventOrigin = EventOrigin.LOCAL,
+    ): LedgerEventEntity {
+        val row = LedgerEventMapper.toEntity(event, origin, receivedAt)
+        db.insertRow(
+            "ledger_events",
+            "eventId" to row.eventId.value,
+            "householdId" to row.householdId.value,
+            "kidId" to row.kidId.value,
+            "accountId" to row.accountId.value,
+            "authorUid" to row.authorUid.value,
+            "authorDeviceId" to row.authorDeviceId.value,
+            "authorRole" to row.authorRole.name,
+            "lamport" to row.lamport,
+            "createdAtEpochMs" to row.createdAtEpochMs,
+            "type" to row.type,
+            "currency" to Converters.currencyToString(row.currency),
+            "schemaVersion" to row.schemaVersion,
+            "prevHash" to row.prevHash,
+            "hash" to row.hash,
+            "signature" to row.signature,
+            "payloadJson" to row.payloadJson,
+            "receivedAtEpochMs" to row.receivedAtEpochMs,
+            "origin" to row.origin.name,
+            "quarantined" to 0,
+        )
+        return row
     }
 
     private fun insertOutboxAndClock(db: SupportSQLiteDatabase, row: LedgerEventEntity) {
