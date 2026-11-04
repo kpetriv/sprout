@@ -14,6 +14,7 @@ import dev.kpetriv.sprout.core.syncfirebase.HouseholdFunctions
 import dev.kpetriv.sprout.core.syncfirebase.IdTokenHashSource
 import dev.kpetriv.sprout.core.syncfirebase.LinkCode
 import dev.kpetriv.sprout.core.syncfirebase.ParentKeyRegistration
+import dev.kpetriv.sprout.core.syncfirebase.PrunedMessages
 import dev.kpetriv.sprout.core.syncfirebase.RegisteredEncryptionKey
 import dev.kpetriv.sprout.core.syncfirebase.RevokedDevice
 import dev.kpetriv.sprout.feature.lock.ParentKeyChallengeSource
@@ -21,6 +22,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.json.JsonObject
 import javax.inject.Inject
+import kotlin.time.Instant
 
 /**
  * The parent callables that carry this device's proof (D-M3-34): each signs the exact bytes of core/sync-firebase's
@@ -59,6 +61,38 @@ class HouseholdAdminFunctions @Inject constructor(
     suspend fun exportHousehold(): Result<JsonObject> = withProof { session, tokenHash ->
         val signature = signer.sign(DeviceProof.exportHouseholdPayload(session.householdId, tokenHash))
         functions.exportHousehold(session.deviceId, signature)
+    }
+
+    /**
+     * Asks the server to delete the household's chat messages dated before [before], and the chat blob chunks only
+     * they named (M7 §2, D-M7-8, ADR-0011): with [purge] false the household's retention (the server refuses a cut
+     * later than its own policy allows, and answers [FunctionsError.FailedPrecondition] when the household keeps
+     * messages); with [purge] true "Delete chat history now" at [before]. PARENT devices only. One call deletes at
+     * most 5,000 documents and says [PrunedMessages.more]: this calls again, each time with a fresh proof, up to
+     * [maxCalls] times (the server allows 10 calls an hour per account; the caller keeps the budget). [onCall] runs
+     * before every request sent, a proof retry included. Returns the last answer with the totals.
+     */
+    @Suppress("ReturnCount") // A failed call, the last page, or the call budget used up.
+    suspend fun pruneMessages(
+        before: Instant,
+        purge: Boolean,
+        maxCalls: Int = MAX_PRUNE_CALLS,
+        onCall: () -> Unit = {},
+    ): Result<PrunedMessages> {
+        var messages = 0
+        var blobChunks = 0
+        repeat(maxCalls) {
+            val answer = withProof { session, tokenHash ->
+                onCall()
+                val payload = DeviceProof.pruneMessagesPayload(session.householdId, tokenHash, before, purge)
+                val signature = signer.sign(payload)
+                functions.pruneMessages(before, purge, session.deviceId, signature)
+            }.getOrElse { return Result.failure(it) }
+            messages += answer.messages
+            blobChunks += answer.blobChunks
+            if (!answer.more) return Result.success(answer.copy(messages = messages, blobChunks = blobChunks))
+        }
+        return Result.success(PrunedMessages(messages, blobChunks, more = true, before = before.toEpochMilliseconds()))
     }
 
     /**
@@ -163,6 +197,9 @@ class HouseholdAdminFunctions @Inject constructor(
 
     private companion object {
         val proofCalls = Mutex()
+
+        /** Default calls of one [pruneMessages] (5,000 documents each); the rest goes at the next prune. */
+        const val MAX_PRUNE_CALLS = 4
     }
 }
 

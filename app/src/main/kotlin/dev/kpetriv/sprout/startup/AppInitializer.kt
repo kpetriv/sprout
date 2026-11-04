@@ -6,6 +6,7 @@ import dev.kpetriv.sprout.BuildConfig
 import dev.kpetriv.sprout.chat.ChatMaintenance
 import dev.kpetriv.sprout.chat.VoiceTempFiles
 import dev.kpetriv.sprout.core.ai.AiGateway
+import dev.kpetriv.sprout.core.database.ChatPruneScheduler
 import dev.kpetriv.sprout.core.database.HouseholdBootstrap
 import dev.kpetriv.sprout.core.database.RoomLedgerRepository
 import dev.kpetriv.sprout.core.database.Session
@@ -16,6 +17,7 @@ import dev.kpetriv.sprout.sync.RemovalHandler
 import dev.kpetriv.sprout.sync.SessionReconciler
 import dev.kpetriv.sprout.sync.ShellPreferences
 import dev.kpetriv.sprout.sync.SyncController
+import dev.kpetriv.sprout.widget.WidgetDataObserver
 import dev.kpetriv.sprout.work.PlanScheduler
 import dev.kpetriv.sprout.work.ScheduledActionsPlanner
 import kotlinx.coroutines.CancellationException
@@ -49,7 +51,9 @@ import javax.inject.Singleton
  *    parent's thread key upkeep, the chore photo upload and (in the background) the encryption key registration;
  * 5. for the trial session only, plan allowance and interest up to today ([ScheduledActionsPlanner]), best effort; a
  *    real household plans after its first successful pull instead (`SyncReportProcessor`); no session never plans;
- * 6. schedule the daily planner ([PlanScheduler], kept if already scheduled);
+ * 6. schedule the daily planner ([PlanScheduler], kept if already scheduled) and the daily chat prune
+ *    ([ChatPruneScheduler], M7 §2), and start the home screen widget's refresh on data changes ([WidgetDataObserver],
+ *    M7 §4);
  * 7. start sync for the session ([SyncController]).
  *
  * Alongside the steps, once per process (not on [retry]): once the app is first in the foreground, read the on-device
@@ -67,7 +71,8 @@ import javax.inject.Singleton
  * [StartupState.Failed] (never logged: nothing here may carry personal data); the app shell shows them with a
  * retry button that calls [retry].
  *
- * @param seedDemoHousehold the demo seeding, or null to skip it; set only when `BuildConfig.DEBUG`.
+ * @param seedDemoHousehold the demo seeding, or null to skip it; set only in debug and benchmark builds
+ *   ([BenchmarkSeed]).
  * @param reconcileSession steps 2: returns the session to run with, or null when there is none.
  */
 @Singleton
@@ -88,6 +93,7 @@ class AppInitializer internal constructor(
     private val chatStartup: suspend () -> Unit = {},
     private val sweepVoiceTempFiles: () -> Unit = {},
     private val refreshAiStatus: suspend () -> Unit = {},
+    private val scheduleM7: () -> Unit = {},
 ) : StartupStatus {
     @Inject
     @Suppress("LongParameterList") // One lazily built dependency per startup step.
@@ -107,14 +113,21 @@ class AppInitializer internal constructor(
         voiceTempFiles: Lazy<VoiceTempFiles>,
         ai: Lazy<AiGateway>,
         @AppForeground foreground: Flow<Boolean>,
+        benchmarkSeed: Lazy<BenchmarkSeed>,
+        chatPrunes: Lazy<ChatPruneScheduler>,
+        widgets: Lazy<WidgetDataObserver>,
     ) : this(
         scope = scope,
-        seedDemoHousehold = demoSeeding(householdBootstrap, BuildConfig.DEBUG),
+        seedDemoHousehold = if (BenchmarkSeed.enabled) {
+            { benchmarkSeed.get().seed() }
+        } else {
+            demoSeeding(householdBootstrap, BuildConfig.DEBUG)
+        },
         quarantineLedger = { ledger.get().quarantineUnverifiable() },
         planner = planner,
         scheduler = scheduler,
         clearPhotoCache = { photoCache.get().clear() },
-        initialiseFirebase = { firebase.get().initialise() },
+        initialiseFirebase = { if (BenchmarkSeed.usesFirebase) firebase.get().initialise() },
         reconcileSession = { reconciler.get().reconcile() },
         wasLinked = { preferences.get().wasLinked() },
         startSync = { sync.get().start() },
@@ -126,6 +139,10 @@ class AppInitializer internal constructor(
             foreground.first { it }
             val status = ai.get().status()
             Timber.tag("SproutAi").d("status=%s reason=%s", status.availability, status.reason)
+        },
+        scheduleM7 = {
+            chatPrunes.get().scheduleDaily()
+            widgets.get().start()
         },
     )
 
@@ -192,6 +209,7 @@ class AppInitializer internal constructor(
         if (removing()) return
         if (session?.isLocalTrial == true) planBestEffort()
         scheduler.get().scheduleDaily()
+        scheduleM7()
         if (removing()) return
         startSync()
     }

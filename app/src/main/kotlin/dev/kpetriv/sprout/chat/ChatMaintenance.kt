@@ -1,6 +1,7 @@
 package dev.kpetriv.sprout.chat
 
 import dagger.Lazy
+import dev.kpetriv.sprout.core.database.BlobCache
 import dev.kpetriv.sprout.core.database.Session
 import dev.kpetriv.sprout.core.database.SessionStore
 import dev.kpetriv.sprout.core.database.entity.RegistrationStatus
@@ -27,6 +28,7 @@ import javax.inject.Singleton
  * The M4 upkeep around sync (M4 §5.3), each step best effort and unlogged:
  *
  * At start-up ([atStartup], an `AppInitializer` step after the session check): the D-M2-14 orphan photo sweep, the
+ * blob cache's orphan files (D-M7-59, files a crash left behind without an index row), the
  * time bank reconcile (D-M4-8), the thread key upkeep on a parent device, the photo upload, and (on the app scope,
  * so a slow network never holds the start) the encryption key registration.
  *
@@ -50,6 +52,7 @@ class ChatMaintenance internal constructor(
     private val photosWaiting: suspend () -> Boolean,
     private val uploadPhotos: () -> Unit,
     private val requestSync: () -> Unit,
+    private val sweepBlobs: suspend () -> Unit = {},
 ) : SyncUpkeep {
     @Inject
     @Suppress("LongParameterList") // One collaborator per step.
@@ -66,6 +69,7 @@ class ChatMaintenance internal constructor(
         uploader: ChorePhotoUploader,
         uploads: PhotoUploadScheduler,
         sync: Lazy<SyncController>,
+        blobs: BlobCache,
     ) : this(
         scope = scope,
         session = sessions::get,
@@ -78,11 +82,13 @@ class ChatMaintenance internal constructor(
         photosWaiting = uploader::needed,
         uploadPhotos = uploads::enqueue,
         requestSync = { sync.get().requestSync() },
+        sweepBlobs = { blobs.sweepOrphans() },
     )
 
     /** The start-up steps. Returns once the local ones ran; the key registration continues on the app scope. */
     suspend fun atStartup() {
         bestEffort { sweepOrphans() }
+        bestEffort { sweepBlobs() }
         bestEffort { reconcileTimeBank().forEach(timeBankEnded) }
         val current = session() ?: return
         if (!current.isLocalTrial && current.deviceStatus == RegistrationStatus.ACTIVE) {

@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The widget picker's preview before Android 12 (previewImage): a rounded card with a balance bar and two chore
+     lines, no text (a drawable cannot hold any). -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+  android:width="110dp"
+  android:height="110dp"
+  android:viewportWidth="110"
+  android:viewportHeight="110">
+  <path
+    android:fillColor="#FFF4F8EE"
+    android:pathData="M16,0h78a16,16 0,0 1,16 16v78a16,16 0,0 1,-16 16h-78a16,16 0,0 1,-16 -16v-78a16,16 0,0 1,16 -16z" />
+  <path
+    android:fillColor="#FF4C662B"
+    android:pathData="M12,28h56v12h-56z" />
+  <path
+    android:fillColor="#FF75796C"
+    android:pathData="M12,14h30v6h-30zM12,82h70v6h-70zM12,94h50v6h-50z" />
+</vector>

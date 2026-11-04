@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.work.WorkManager
 import dagger.Lazy
 import dagger.hilt.android.qualifiers.ApplicationContext
+import dev.kpetriv.sprout.chat.PruneChatWorker
 import dev.kpetriv.sprout.core.common.Dispatcher
 import dev.kpetriv.sprout.core.common.SproutDispatchers
 import dev.kpetriv.sprout.core.crypto.BlobStorage
@@ -18,6 +19,8 @@ import dev.kpetriv.sprout.feature.lock.EncryptedParentPinStore
 import dev.kpetriv.sprout.feature.lock.ParentSession
 import dev.kpetriv.sprout.timebank.TimeBankNotifier
 import dev.kpetriv.sprout.timebank.WorkManagerTimeBankAutoStop
+import dev.kpetriv.sprout.widget.WidgetRefreshWorker
+import dev.kpetriv.sprout.widget.WidgetRefresher
 import dev.kpetriv.sprout.work.PlanScheduledActionsWorker
 import dev.kpetriv.sprout.work.UploadChorePhotosWorker
 import kotlinx.coroutines.CancellationException
@@ -38,8 +41,9 @@ fun interface HouseholdRemovals {
 }
 
 /**
- * The WorkManager work a removal cancels (sync, the daily planner, the chore photo upload and every time bank
- * auto-stop), and the time bank notifications it removes.
+ * The WorkManager work a removal cancels (sync, the daily planner, the chore photo upload, every time bank auto-stop,
+ * the chat prune and the widget's periodic refresh), and the time bank notifications it removes. The home screen
+ * widget is redrawn: with a removal stored it shows nothing (M7 §4).
  */
 fun interface BackgroundWork {
     fun cancelAll()
@@ -48,6 +52,7 @@ fun interface BackgroundWork {
 class WorkManagerBackgroundWork @Inject constructor(
     @param:ApplicationContext private val context: Context,
     private val timeBankNotifications: TimeBankNotifier,
+    private val widgets: WidgetRefresher,
 ) : BackgroundWork {
     override fun cancelAll() {
         val work = WorkManager.getInstance(context)
@@ -56,7 +61,11 @@ class WorkManagerBackgroundWork @Inject constructor(
         work.cancelUniqueWork(PlanScheduledActionsWorker.UNIQUE_NAME)
         work.cancelUniqueWork(UploadChorePhotosWorker.UNIQUE_NAME)
         work.cancelAllWorkByTag(WorkManagerTimeBankAutoStop.TAG)
+        work.cancelUniqueWork(PruneChatWorker.DAILY_NAME)
+        work.cancelUniqueWork(PruneChatWorker.SOON_NAME)
+        work.cancelUniqueWork(WidgetRefreshWorker.UNIQUE_NAME)
         timeBankNotifications.cancelAll()
+        widgets.refresh()
     }
 }
 

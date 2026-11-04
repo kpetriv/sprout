@@ -6,6 +6,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
@@ -27,6 +28,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextAlign
@@ -37,6 +39,7 @@ import dev.kpetriv.sprout.core.designsystem.theme.SproutTheme
 import dev.kpetriv.sprout.core.model.AgeBand
 import dev.kpetriv.sprout.core.model.KidId
 import dev.kpetriv.sprout.core.model.KidUiTier
+import dev.kpetriv.sprout.core.ui.contentWidth
 import dev.kpetriv.sprout.startup.StartupFailure
 
 /**
@@ -114,7 +117,11 @@ private fun TierLabel(text: String, modifier: Modifier = Modifier) {
 fun StartupErrorScreen(failure: StartupFailure, onRetry: () -> Unit, modifier: Modifier = Modifier) {
     Surface(modifier = modifier.fillMaxSize()) {
         Column(
-            modifier = Modifier.padding(24.dp).semantics { liveRegion = LiveRegionMode.Polite },
+            modifier = Modifier
+                .fillMaxHeight()
+                .contentWidth()
+                .padding(24.dp)
+                .semantics { liveRegion = LiveRegionMode.Polite },
             verticalArrangement = Arrangement.spacedBy(16.dp, Alignment.CenterVertically),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
@@ -122,6 +129,7 @@ fun StartupErrorScreen(failure: StartupFailure, onRetry: () -> Unit, modifier: M
                 text = stringResource(R.string.startup_failed_title),
                 style = MaterialTheme.typography.titleLarge,
                 textAlign = TextAlign.Center,
+                modifier = Modifier.semantics { heading() },
             )
             Text(
                 text = stringResource(failure.messageRes()),

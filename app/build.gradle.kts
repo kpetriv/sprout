@@ -6,6 +6,8 @@ plugins {
     alias(libs.plugins.sprout.hilt)
     alias(libs.plugins.kotlin.serialization)
     alias(libs.plugins.baselineprofile)
+    // Robolectric, Compose UI test and Roborazzi for the shell's goldens (M7 §7) and SecureAreaTest.
+    alias(libs.plugins.sprout.android.screenshot)
 }
 
 /**
@@ -266,6 +268,8 @@ dependencies {
     implementation(libs.androidx.lifecycle.viewmodel.navigation3)
     implementation(libs.androidx.navigation3.runtime)
     implementation(libs.androidx.navigation3.ui)
+    // ListDetailSceneStrategy: chat and chores list-detail on an Expanded window (M7 §5, D-M7-2).
+    implementation(libs.androidx.compose.material3.adaptive.navigation3)
     implementation(libs.androidx.profileinstaller)
     // Room's invalidation tracker on the outbox table is the sync trigger (OutboxSyncTrigger).
     implementation(libs.androidx.room.runtime)

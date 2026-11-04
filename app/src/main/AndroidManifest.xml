@@ -37,6 +37,20 @@
       </intent-filter>
     </activity>
 
+    <!-- The home screen widget (M7 §4, D-M7-1, ADR-0012): kid data only on that kid's own linked phone, "Open Sprout"
+         elsewhere. Exported for the launcher's APPWIDGET_UPDATE broadcasts (sent by the system). -->
+    <receiver
+      android:name=".widget.SproutWidgetReceiver"
+      android:exported="true"
+      android:label="@string/app_name">
+      <intent-filter>
+        <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+      </intent-filter>
+      <meta-data
+        android:name="android.appwidget.provider"
+        android:resource="@xml/sprout_widget_info" />
+    </receiver>
+
     <!-- WorkManager is initialised on demand through SproutApplication (Configuration.Provider), so Hilt can inject
          the workers; remove its androidx.startup initializer and keep the others (lifecycle-process, profileinstaller). -->
     <provider

@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The widget picker's preview on Android 12+ (previewLayout): sample data in the 2×2 layout of SproutWidget. Only
+     RemoteViews-safe views (LinearLayout, FrameLayout, TextView). -->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+  android:layout_width="match_parent"
+  android:layout_height="match_parent"
+  android:background="@drawable/sprout_widget_preview_background"
+  android:orientation="vertical"
+  android:padding="12dp">
+
+  <TextView
+    android:layout_width="wrap_content"
+    android:layout_height="wrap_content"
+    android:text="@string/widget_preview_name"
+    android:textColor="@color/widget_preview_text"
+    android:textSize="13sp" />
+
+  <TextView
+    android:layout_width="wrap_content"
+    android:layout_height="wrap_content"
+    android:text="@string/widget_preview_balance"
+    android:textColor="@color/widget_preview_primary"
+    android:textSize="24sp"
+    android:textStyle="bold" />
+
+  <!-- RemoteViews allow only a few view classes: an empty FrameLayout is the spacer. -->
+  <FrameLayout
+    android:layout_width="match_parent"
+    android:layout_height="0dp"
+    android:layout_weight="1" />
+
+  <TextView
+    android:layout_width="wrap_content"
+    android:layout_height="wrap_content"
+    android:text="@string/widget_preview_chores"
+    android:textColor="@color/widget_preview_text_secondary"
+    android:textSize="13sp" />
+</LinearLayout>

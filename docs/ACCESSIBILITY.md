@@ -8,7 +8,7 @@ How Sprout keeps its screens usable with TalkBack, large text and small fingers,
 
 1. an actionable node (clickable, long-clickable, toggleable, editable or adjustable) has no text, no content description and no labelled child, so TalkBack would say only "button";
 2. two enabled actionable siblings have the same label, so a TalkBack user cannot tell "Approve" from "Approve";
-3. an actionable node other than a text field is smaller than the minimum touch target in either direction: 72 dp Seedling, 56 dp Sprout, 48 dp Sapling and parent screens. The size is the node's unclipped size extended to the view configuration's minimum touch target, as Compose's hit testing does;
+3. an actionable node other than a text field is smaller than the minimum touch target in either direction: 72 dp Seedling, 56 dp Sprout, 48 dp Sapling and parent screens. The size is the node's unclipped size extended to the view configuration's minimum touch target, as Compose's hit testing does. Because that extension alone can never fail a placed node, two actionable nodes of one window whose extended areas overlap while their own bounds do not also fail (move them apart or make them larger; a node and its ancestor or descendant are exempt, D-M7-54);
 4. a `clearAndSetSemantics` hides an actionable node from accessibility services.
 
 It runs in two places:
@@ -48,3 +48,5 @@ Font scale 2.0 goldens: the parent dashboard (`parent_home_busy_font200`), the k
 ## Manual checks
 
 TalkBack is a manual smoke test (D-M7-5), done in the M7 verification walk: the PIN pad (digits and "Delete digit" announced, dots read as "3 of 6 digits entered"), a game round, the kid wallet and a chat thread. If `adb shell settings put secure enabled_accessibility_services …` is not available on the emulator, the walk notes it.
+
+M7 walk result (`docs/milestones/M7.md` "As built", step 9): TalkBack enabled on the API 33 emulator through `settings put secure enabled_accessibility_services`; the PIN screen's tree exposed the heading, "0 of 6 digits entered", every digit and "Delete digit", and the games hub "Play Numbers", "Play Memory" and "Play Word scramble". Spoken output was not observable, because adb's injected taps bypass TalkBack's touch exploration; a hands-on pass with TalkBack on a device is left for M8. The home screen widget's content is plain text; its blank state carries the description "Sprout".

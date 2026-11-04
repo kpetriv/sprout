@@ -14,6 +14,8 @@ It is one app with two roles. The parent area sits behind a PIN or biometric gat
 - **Dashboard:** per-kid balances (money and time), spend by category, goal progress, charts, and an on-device AI weekly summary.
 - **Rewards catalogue:** screen time, treats, outings, priced in credits.
 - **Chat and audit:** one encrypted thread per kid; an audit view of every ledger event with author and device.
+- **Data controls:** keep chat messages forever or for 30, 90 or 365 days on every phone and the server, delete the chat history now, and export the household with the chat in readable form (each behind the parent's fingerprint or PIN).
+- **Tablets and foldables:** list and detail side by side for settings, chat and chores, two dashboard columns, and content capped to a readable width.
 
 ### Kid mode
 
@@ -26,6 +28,8 @@ Every kid screen reads a `KidUiTier`. The tier is suggested from the kid's age a
 | Shop | Picture tiles, green/grey "can I get it?" | Prices and "days until affordable" | Full catalogue, wishlist with savings plan |
 | Chat | Presets, emoji, voice notes | Free text with kindness check | Free text, kindness nudge only |
 | Games | Counting, simple sums, picture memory | Multiplication, patterns, word scramble | Harder arithmetic, logic, optional timed mode |
+
+On the kid's own phone a home screen widget shows their balance, screen time and the chores still to do today; on any other phone it only says "Open Sprout" (the home screen is not protected from screenshots, [ADR-0012](docs/adr/0012-widget-data-exposure.md)).
 
 Screen-time purchases go into a visible time bank the kid starts and stops. Enforcement is on the honour system in v1; the app requests no Accessibility, UsageStats, overlay, or device-admin permissions.
 
@@ -45,8 +49,8 @@ core/
   sync-firebase/             — Firestore/Auth/AppCheck transport, client for the Sprout server
   ai/                        — AiGateway interface + Gemini Nano impl + rules-based fallback
   designsystem/              — theme, tier-scaled tokens, components, previews
-  ui/                        — shared composables (charts, balance jar/ring), window-size helpers
-  testing/                   — screenshot infra (fakes live in each module's testFixtures)
+  ui/                        — shared composables (charts, balance jar/ring), window-size helpers (width classes, content width, adaptive grids)
+  testing/                   — screenshot and accessibility test infra (fakes live in each module's testFixtures)
   time/                      — pure Kotlin: Clock over kotlin.time.Instant, FakeClock test fixture
   common/                    — dispatchers, Result, logging (PII-safe, M1)
 feature/
@@ -58,10 +62,10 @@ feature/
   games/                     — 3 games, tier difficulty, scoring → ledger events
   chat/                      — E2EE threads, kindness check, presets/voice for Seedling
   timebank/                  — kid time bank timer
-  settings/                  — kids & tiers, devices, PIN, data export, delete household
+  settings/                  — kids & tiers, devices, PIN, chat retention, readable data export, delete household
 server/                      — the Sprout server (TypeScript, Hono on Vercel): households, devices, link codes, parent keys, revocation, export, delete
 firestore/                   — security rules, indexes, rules tests
-widget/                      — Glance widget: kid balance + chores due
+widget/                      — Glance widget: kid balance + chores due, on the kid's own phone only
 benchmark/                   — Macrobenchmark + Baseline Profile generator
 docs/adr/                    — architecture decision records
 ```
@@ -114,20 +118,47 @@ npm --prefix server run dev        # http://127.0.0.1:8787, reached from an Andr
 
 Backend tests: `cd firestore && npm test` (rules) and `cd server && npm test` (every callable over HTTP against the emulators). Production setup, deployment and the rules summary are in [docs/FIREBASE.md](docs/FIREBASE.md). A release build needs your own `app/google-services.json`; it is not committed. Keystores, service-account files, `.env` files and `local.properties` are never committed either.
 
+## Performance
+
+Startup and scrolling are measured with Macrobenchmark (`benchmark/`) against the `benchmarkRelease` build, and the app ships a Baseline Profile and a startup profile (`app/src/main/generated/baselineProfiles/`, used by every release build) generated from the same journeys (D-M7-3, D-M7-41). The benchmark build types are release code under R8, debug-signed, with the demo household seeded offline: no Firebase, no sync, no App Check, and a placeholder server URL (`BenchmarkSeed`). The journeys choose the parent PIN on the first run and enter it after that: cold start to the parent dashboard, then in kid mode Zoe's wallet history (a lazy list of 60 seeded rows), today's chores, and the games hub to an arithmetic game.
+
+Results, 4 November 2026, 10 iterations each, on an **emulator** (`Sprout_Benchmark` AVD: Pixel 7 profile, API 33 Google Play arm64 image, 4 cores, 4 GB, host GPU via `-gpu host`) on an Apple M1 Pro laptop that was also running Gradle builds:
+
+| Benchmark | Metric | P50 | P90 |
+|---|---|---|---|
+| Cold start to first frame, no compilation (`CompilationMode.None`) | `timeToInitialDisplayMs` | 204.5 ms | 224.2 ms |
+| Cold start to first frame, Baseline Profile (`Partial(Require)`) | `timeToInitialDisplayMs` | 222.6 ms | 239.8 ms |
+| Kid wallet scroll, Baseline Profile | `frameDurationCpuMs` | 2.9 ms | 4.1 ms (P99 19.0 ms) |
+| Kid wallet scroll, Baseline Profile | `frameOverrunMs` | -11.3 ms | -7.6 ms (P99 4.7 ms) |
+
+APK size: `benchmarkRelease` 19.9 MB as measured; a `release` build of the same tree is 20.7 MB unsigned, of which the compiled profile (`assets/dexopt/baseline.prof`) is 21 KB.
+
+Read these with care. Emulator numbers are not device numbers (the emulator's CPU, storage and compilation behave differently from a phone's), and a second startup-only run gave 230.0 / 246.6 ms (no compilation) against 235.3 / 263.4 ms (profile), so the two startup modes are within noise of each other here. The first frame Macrobenchmark times is the shell's loading frame, drawn before the database and the PIN screen; the work the profile covers (Hilt graph, Room, the PIN screen, the dashboard) comes after it and is not in this metric, so the profile cannot show its value until the app reports when it is fully drawn (D-M7-43). With software rendering (the AVD's default `swangle` mode) the same scroll measured 41.5 ms P50 and 79.8 ms P99 of CPU per frame, so frame timing is only meaningful with the host GPU. A Pixel run is the next step for publishable figures.
+
+To reproduce (any API 33+ emulator or device without a lock screen, English locale, nothing else using UiAutomator):
+
+```
+./gradlew :app:generateBaselineProfile               # regenerates both profiles (about 10 minutes)
+./gradlew :benchmark:connectedBenchmarkReleaseAndroidTest \
+  -Pandroid.testInstrumentationRunnerArguments.androidx.benchmark.suppressErrors=EMULATOR
+```
+
+Results land in `benchmark/build/outputs/connected_android_test_additional_output/`. On a Google Play image, Play Protect asks to scan each reinstall; answer "Don't send" or the run stalls. `.github/workflows/benchmark.yml` runs the benchmarks on a Gradle Managed Device; it is manual and optional, not a required check.
+
 ## Roadmap
 
 Each milestone ends with green CI and a tagged build.
 
 | Milestone | Scope | Status |
 |---|---|---|
-| M0 Scaffold | Build logic, version catalog, module skeleton, Hilt, theme and tier tokens, CI, Renovate, ADRs, threat model | In progress |
+| M0 Scaffold | Build logic, version catalog, module skeleton, Hilt, theme and tier tokens, CI, Renovate, ADRs, threat model | Done |
 | M1 Ledger core and crypto | Event-sourced ledger with hash chain, Keystore keys and signing, SQLCipher Room, outbox, audit log, wallet (3 tiers) | Done |
 | M2 Chores, rewards, tiers | Parent CRUD, kid today and shop (3 tiers), submit/approve, allowance, savings and interest, PIN/biometric lock with fingerprint-signed money events | Done |
 | M3 Sync and identity | Sync engine, Firebase transport, App Check, Credential Manager, the Sprout server (Spark plan), Firestore rules and emulator tests, device registry with key attestation, controls matrix, runbook | Done |
-| M4 Chat and time bank | E2EE threads, key rotation, Seedling presets and voice notes, chore photo upload, time bank with an ongoing notification | In review |
-| M5 Games | Three games, tier difficulty, daily cap, signed scoring events | In review |
-| M6 AI | Gemini Nano integration, fallbacks, kindness check, suggestions, weekly summary, receipt prefill ([spec and as built](docs/milestones/M6.md), [ADR-0010](docs/adr/0010-on-device-ai.md)) | In review |
-| M7 Showcase polish | Glance widget, adaptive layouts, Baseline Profiles, full screenshot coverage, accessibility, retention, export/delete | In progress |
+| M4 Chat and time bank | E2EE threads, key rotation, Seedling presets and voice notes, chore photo upload, time bank with an ongoing notification | Done |
+| M5 Games | Three games, tier difficulty, daily cap, signed scoring events | Done |
+| M6 AI | Gemini Nano integration, fallbacks, kindness check, suggestions, weekly summary, receipt prefill ([spec and as built](docs/milestones/M6.md), [ADR-0010](docs/adr/0010-on-device-ai.md)) | Done |
+| M7 Showcase polish | Glance widget, adaptive layouts, Baseline Profiles, full screenshot coverage, accessibility, chat retention, readable export, structural `FLAG_SECURE` ([spec and as built](docs/milestones/M7.md)) | In review |
 | M8 Play release | Privacy policy, data-safety form, security review, app signing, staged tracks | Planned |
 
 ## Documentation
@@ -141,23 +172,29 @@ Each milestone ends with green CI and a tagged build.
   - [ADR-0006 Sync protocol and document envelope](docs/adr/0006-sync-protocol-and-document-envelope.md)
   - [ADR-0007 Identity, linking and the device registry](docs/adr/0007-identity-linking-and-device-registry.md)
   - [ADR-0008 Chat encryption and thread keys](docs/adr/0008-chat-encryption-and-thread-keys.md)
+  - [ADR-0009 Games scoring and credit](docs/adr/0009-games-scoring-and-credit.md)
+  - [ADR-0010 On-device AI](docs/adr/0010-on-device-ai.md)
+  - [ADR-0011 Chat retention and pruning](docs/adr/0011-chat-retention-and-pruning.md)
+  - [ADR-0012 Widget data exposure](docs/adr/0012-widget-data-exposure.md)
 - [Threat model](docs/THREAT_MODEL.md)
 - [Controls matrix (SOC 2 criteria)](docs/CONTROLS.md)
 - [Incident runbook](docs/RUNBOOK.md)
 - [Firebase backend and the Sprout server](docs/FIREBASE.md)
 - [Privacy policy draft](docs/PRIVACY.md)
+- [Screenshot tests](docs/SCREENSHOT_TESTS.md) (the screen × tier × state matrix) and the [accessibility checklist](docs/ACCESSIBILITY.md)
 - [M3 milestone spec and as-built notes](docs/milestones/M3.md)
 - [M4 milestone spec and as-built notes](docs/milestones/M4.md)
 - [M5 milestone spec and as-built notes](docs/milestones/M5.md) and [ADR-0009: games scoring and credit](docs/adr/0009-games-scoring-and-credit.md)
 - [M6 milestone spec and as-built notes](docs/milestones/M6.md) and [ADR-0010: on-device AI](docs/adr/0010-on-device-ai.md)
+- [M7 milestone spec and as-built notes](docs/milestones/M7.md)
 
 ## Engineering practices
 
 - **Convention plugins** in `build-logic/` configure Android, Compose, Hilt, testing, and lint once; modules apply them instead of repeating configuration.
 - **Dependency verification** with SHA-256 checksums in `gradle/verification-metadata.xml` (checksums only, no PGP signature verification; trust on first use). OWASP Dependency-Check runs in a separate workflow on a weekly schedule and on manual dispatch, not in the main CI.
 - **Renovate** with grouped update PRs against a single version catalog; a workflow refreshes the verification metadata on Renovate branches.
-- **Screenshot tests** with Roborazzi for every kid screen in every tier, diffed in CI (M7; Roborazzi and Robolectric are in the version catalog, no screenshot tests yet).
-- **Baseline Profiles and Macrobenchmark** for startup and scroll performance, with results recorded here (M7; none recorded yet).
+- **Screenshot tests** with Roborazzi on Robolectric for every screen: kid screens in every tier, parent screens light and dark, phone and tablet widths and a 200 % font scale for a subset, the widget too; diffed in CI, recorded on Linux only ([docs/SCREENSHOT_TESTS.md](docs/SCREENSHOT_TESTS.md)). Every screen test also runs an accessibility rule (labels, unique sibling labels, tier touch targets; [docs/ACCESSIBILITY.md](docs/ACCESSIBILITY.md)).
+- **Baseline Profiles and Macrobenchmark** for startup and scroll performance: profiles generated on an emulator and committed, journeys in `benchmark/`, numbers in [Performance](#performance).
 - **CI** on GitHub Actions (pinned by SHA): build, unit and screenshot tests, Android Lint, Detekt, ktlint; a `backend` job runs the Firestore rules and server tests against the emulators (not a required check yet). Secret scanning with push protection is enabled. A branch ruleset on `main` requires pull requests and the build check, and blocks force pushes and deletion.
 
 ## Licence

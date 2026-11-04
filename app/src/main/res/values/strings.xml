@@ -80,4 +80,10 @@
   <string name="timebank_channel_name">Screen time</string>
   <string name="timebank_notification_title">Screen time is running</string>
   <string name="timebank_notification_text">Press Stop in Sprout when you’re done.</string>
+
+  <!-- Parent confirmation before sensitive settings (M7 §2, §3): the fingerprint prompt's subtitle. -->
+  <string name="confirm_reason_export">Export the household, chats included</string>
+  <string name="confirm_reason_delete_chat">Delete every chat message</string>
+  <string name="confirm_reason_retention">Change how long chats are kept</string>
+  <string name="confirm_reason_game_cap">Change the daily game limit</string>
 </resources>

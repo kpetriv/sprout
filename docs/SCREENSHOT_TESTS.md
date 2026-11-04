@@ -88,7 +88,17 @@ The single source for what is covered. Rule: **parent screens light and dark; ki
 | onboarding | Onboarding | welcome, sign-in (debug), household, kid phone code (empty, half typed, refused), waiting for approval, trial data purge | L/D |
 | onboarding | Signing setup | PIN, wrong PIN | L/D |
 | settings | Settings (slice B1) | see `SettingsScreenshotTest`, `HouseholdScreenshotTest` | L/D, tablet hub |
-| app | Shell screens (slice C1) | KidPicker, SignInAgain + erase dialog, Removed, StartupError, shortcut bars | L/D |
+| app | Kid picker | three kids (`screen = true`) | L/D |
+| app | Kid picker | no kids | light |
+| app | Sign in again | checking, Google sign-in | L/D |
+| app | Sign in again | unreachable, wrong account | light |
+| app | Erase this phone's copy | dialog over the gate, phone without a parent PIN (`screen = true`; a PIN field in a dialog window never idles, D-M7-27) | L/D |
+| app | Removed | wiping | L/D |
+| app | Removed | wiped, failed | light |
+| app | Startup error | database | L/D |
+| app | Kid shortcut bar | Chat, Screen time, Games | phone and tablet per tier |
+| app | Parent shortcut bar | Chat | L/D |
+| widget | Home screen widget | kid 2×2, kid 4×2, "Open Sprout" (Glance `RemoteViews` in a Compose host) | light |
 
 ## Commands
 

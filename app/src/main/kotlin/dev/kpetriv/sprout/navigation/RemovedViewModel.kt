@@ -2,6 +2,7 @@ package dev.kpetriv.sprout.navigation
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Button
@@ -15,6 +16,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextAlign
@@ -25,6 +27,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dev.kpetriv.sprout.R
+import dev.kpetriv.sprout.core.ui.contentWidth
 import dev.kpetriv.sprout.sync.AppRestarter
 import dev.kpetriv.sprout.sync.Removal
 import dev.kpetriv.sprout.sync.RemovalHandler
@@ -104,7 +107,11 @@ internal fun RemovedScreen(
 ) {
     Surface(modifier = modifier.fillMaxSize()) {
         Column(
-            modifier = Modifier.padding(24.dp).semantics { liveRegion = LiveRegionMode.Polite },
+            modifier = Modifier
+                .fillMaxHeight()
+                .contentWidth()
+                .padding(24.dp)
+                .semantics { liveRegion = LiveRegionMode.Polite },
             verticalArrangement = Arrangement.spacedBy(16.dp, Alignment.CenterVertically),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
@@ -118,6 +125,7 @@ internal fun RemovedScreen(
                 ),
                 style = MaterialTheme.typography.headlineSmall,
                 textAlign = TextAlign.Center,
+                modifier = Modifier.semantics { heading() },
             )
             Text(
                 stringResource(

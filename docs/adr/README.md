@@ -15,5 +15,6 @@ Each ADR records one significant decision in the short format described by Micha
 | [0009](0009-games-scoring-and-credit.md) | Games scoring and credit | Accepted (implemented in M5) |
 | [0010](0010-on-device-ai.md) | On-device AI: gateway, router and validators | Accepted (implemented in M6) |
 | [0011](0011-chat-retention-and-pruning.md) | Chat retention and pruning | Accepted (implemented in M7) |
+| [0012](0012-widget-data-exposure.md) | Widget data exposure | Accepted (implemented in M7) |
 
 Related: [threat model](../THREAT_MODEL.md), [controls matrix](../CONTROLS.md), [incident runbook](../RUNBOOK.md), [Firebase backend](../FIREBASE.md), [privacy policy draft](../PRIVACY.md).

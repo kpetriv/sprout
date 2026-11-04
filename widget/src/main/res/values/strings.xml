@@ -1,4 +1,18 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
   <string name="widget_title">Sprout</string>
+  <string name="widget_open_app">Open Sprout</string>
+  <string name="widget_description">Your balance, screen time and today\'s chores, on your own phone.</string>
+  <!-- %1$s: minutes already formatted, e.g. "1 h 20 min". -->
+  <string name="widget_minutes">%1$s screen time</string>
+  <plurals name="widget_chores_to_do">
+    <item quantity="one">%d chore to do today</item>
+    <item quantity="other">%d chores to do today</item>
+  </plurals>
+  <string name="widget_chores_done">Nothing left to do today</string>
+  <string name="widget_no_chores">No chores today</string>
+  <!-- The widget picker's preview (res/layout/sprout_widget_preview.xml): sample data, no real kid. -->
+  <string name="widget_preview_name">Sam</string>
+  <string name="widget_preview_balance">£12.50</string>
+  <string name="widget_preview_chores">2 chores to do today</string>
 </resources>
