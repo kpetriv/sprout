@@ -159,7 +159,7 @@ Each milestone ends with green CI and a tagged build.
 | M5 Games | Three games, tier difficulty, daily cap, signed scoring events | Done |
 | M6 AI | Gemini Nano integration, fallbacks, kindness check, suggestions, weekly summary, receipt prefill ([spec and as built](docs/milestones/M6.md), [ADR-0010](docs/adr/0010-on-device-ai.md)) | Done |
 | M7 Showcase polish | Glance widget, adaptive layouts, Baseline Profiles, full screenshot coverage, accessibility, chat retention, readable export, structural `FLAG_SECURE` ([spec and as built](docs/milestones/M7.md)) | In review |
-| M8 Play release | Privacy policy, data-safety form, security review, app signing, staged tracks | Planned |
+| M8 Play release | Privacy policy, data-safety form, security review, app signing, staged tracks | In progress |
 
 ## Documentation
 
