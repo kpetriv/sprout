@@ -17,6 +17,7 @@ import dev.kpetriv.sprout.core.model.KidId
 import dev.kpetriv.sprout.core.model.SubmissionId
 import dev.kpetriv.sprout.core.model.SubmissionStatus
 import dev.kpetriv.sprout.core.model.YearMonth
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.TestScope
@@ -230,6 +231,25 @@ class ChoreEditorViewModelTest {
         assertNull(vm.state.value.suggestions, "a dismissed sheet stays closed")
         assertEquals(AgeBand.AGES_8_TO_11, suggestions.calls.last().second)
     }
+
+    @Test
+    fun `a cancellation thrown by the suggestion call shows the error instead of loading forever (review M6)`() =
+        runTest {
+            // An ML Kit future cancelled by AICore while the editor's own coroutine is still active.
+            suggestions.failure = CancellationException("aicore cancelled the request")
+            suggestions.delayMillis = 100
+            val vm = viewModel(kidId = "kid-leo")
+            vm.onEvent(ChoreEditorEvent.SuggestOpened)
+            assertEquals(SuggestionsUi.Loading, vm.state.value.suggestions)
+
+            advanceTimeBy(101)
+            assertEquals(SuggestionsUi.Failed, vm.state.value.suggestions)
+
+            suggestions.failure = null
+            vm.onEvent(ChoreEditorEvent.SuggestRetry)
+            advanceTimeBy(101)
+            assertIs<SuggestionsUi.Ready>(vm.state.value.suggestions)
+        }
 
     @Test
     fun `suggestions that take too long show the error`() = runTest {

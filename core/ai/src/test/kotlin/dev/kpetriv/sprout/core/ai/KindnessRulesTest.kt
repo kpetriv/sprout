@@ -37,7 +37,8 @@ class KindnessRulesTest {
         "get lost" to Category.HOSTILE,
         "I'll punch you" to Category.HOSTILE,
         "you're not my friend anymore" to Category.HOSTILE,
-        "what the hell" to Category.HOSTILE,
+        "what the hell" to Category.PROFANITY,
+        "bloody hell" to Category.PROFANITY,
         "this is shit" to Category.PROFANITY,
         "fuck" to Category.PROFANITY,
         "fucking annoying" to Category.PROFANITY,
@@ -73,6 +74,32 @@ class KindnessRulesTest {
         "i h8 u" to null,
         "You’re dumb" to Category.PUT_DOWN,
         "YOU ARE AN IDIOT" to Category.INSULT,
+        // Review M1: questions, "you + adjective", phrases and "mean".
+        "Are you stupid?" to Category.PUT_DOWN,
+        "are u dumb" to Category.PUT_DOWN,
+        "you stupid" to Category.PUT_DOWN,
+        "Are you so stupid?" to Category.PUT_DOWN,
+        "you so dumb" to Category.PUT_DOWN,
+        "Are you a nerd?" to Category.PUT_DOWN,
+        "kill yourself" to Category.HOSTILE,
+        "kill urself" to Category.HOSTILE,
+        "go kill your self" to Category.HOSTILE,
+        "you suck" to Category.HOSTILE,
+        "you are mean" to Category.PUT_DOWN,
+        "Ur so mean" to Category.PUT_DOWN,
+        "are you mean?" to Category.PUT_DOWN,
+        // Review M2: a negator in an earlier clause does not turn the phrase around.
+        "I don't care, I hate you" to Category.HOSTILE,
+        "I didn't do it, shut up!" to Category.HOSTILE,
+        "I don't know, shut up" to Category.HOSTILE,
+        "No. I don't care! I hate you" to Category.HOSTILE,
+        // Review M3: hitting and hurting with intent.
+        "I'll hit you" to Category.HOSTILE,
+        "im gonna hurt you" to Category.HOSTILE,
+        "I will hit u tomorrow" to Category.HOSTILE,
+        // Review L4: three marks with two "!".
+        "!!!" to Category.SHOUTING,
+        "what?!?!" to Category.SHOUTING,
     )
 
     /** Ordinary messages, several close to the lists, that must pass. */
@@ -109,8 +136,30 @@ class KindnessRulesTest {
         "Leave me alone please, I'm tired",
         "I feel sad today",
         "Mum, my brother keeps calling me names",
-        "Are you a nerd?",
         "can you get the thick blanket",
+        // Review M3: apologies, accidents and slang.
+        "Sorry I hurt you",
+        "Did the ball hit you?",
+        "I'll hit you up later",
+        "ill hit u up tmrw",
+        "I didn't mean to hurt you",
+        // Review L1: "ur" as "your".
+        "ur baby brother is so cute",
+        "ur joke was funny",
+        // Review L2: names and dogs.
+        "Shital is coming to my party",
+        "my shitzu is so fluffy",
+        "We saw a shih-tzu and a shihtzu",
+        // Review L4: questions are not shouting.
+        "Where are you???",
+        "really?!?",
+        // Verbs after "you".
+        "you mean the red one?",
+        "Can you trash the old box?",
+        // Negation in the same clause still counts.
+        "I don't hate you, you're my best friend",
+        "I didn't say shut up",
+        "Thank you, the weird dog is back",
         "The cockpit of the plane",
         "",
         "   ",
@@ -167,6 +216,29 @@ class KindnessRulesTest {
         val text = "COME TO DINNER NOW!!!"
         val suggestion = KindnessRules.suggestion(KindnessRules.check(text), KidUiTier.SAPLING, text)
         assertEquals("Come to dinner now!", suggestion)
+    }
+
+    @Test
+    fun marksAloneGetAFixedSuggestionNotABareMark() {
+        val suggestion = KindnessRules.suggestion(KindnessRules.check("!!!"), KidUiTier.SEEDLING, "!!!")
+        assertEquals("Can we talk?", suggestion)
+    }
+
+    @Test
+    fun theReviewsExamplesBothWaysThroughTheGateway() = runTest {
+        assertEquals(KindnessVerdict.Ok, gateway.kindness("Sorry I hurt you", KidUiTier.SPROUT))
+        assertIs<KindnessVerdict.Nudge>(gateway.kindness("Are you stupid?", KidUiTier.SPROUT))
+        assertEquals(KindnessVerdict.Ok, gateway.kindness("I'll hit you up later", KidUiTier.SAPLING))
+        assertIs<KindnessVerdict.Nudge>(gateway.kindness("kill yourself", KidUiTier.SAPLING))
+        assertEquals(KindnessVerdict.Ok, gateway.kindness("Where are you???", KidUiTier.SEEDLING))
+        assertIs<KindnessVerdict.Nudge>(gateway.kindness("I don't care, I hate you", KidUiTier.SPROUT))
+    }
+
+    @Test
+    fun aClauseEndsAtPunctuationButNotInsideAWord() {
+        val tokens = KindnessText.tokens("I don't care, I hate you! sh!t")
+        assertEquals(listOf(0, 0, 0, 1, 1, 1, 2), tokens.map { it.clause })
+        assertEquals("shit", tokens.last().key)
     }
 
     @Test

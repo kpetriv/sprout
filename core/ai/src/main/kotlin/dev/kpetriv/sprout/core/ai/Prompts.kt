@@ -102,10 +102,11 @@ internal object Prompts {
 
     fun summary(facts: WeeklyFacts, draft: String, locale: Locale): PromptRequest = PromptRequest(
         instructions = "You write a short, warm weekly summary for a parent about their family's chores and pocket " +
-            "money. Rewrite the draft in 2 to 4 sentences, at most $SUMMARY_TARGET_CHARACTERS characters, in the " +
-            "language of the locale ${locale.toLanguageTag()}. Use only facts from the data. Every number you write " +
-            "must appear in the facts, written exactly as in the draft (money with its symbol and all decimals). Do " +
-            "not add advice, praise of individual children over others, links or anything not in the facts. " +
+            "money. Rewrite the draft in English in 2 to 4 sentences, at most $SUMMARY_TARGET_CHARACTERS " +
+            "characters. Use only facts from the data. Write every number in digits, never in words. Every number " +
+            "you write must appear in the facts, written exactly as in the draft (money with its symbol and all " +
+            "decimals). If the draft mentions ledger warnings, keep that sentence with its number. Do not add " +
+            "advice, praise of individual children over others, links or anything not in the facts. " +
             DATA_RULE,
         input = "Facts: ${factsJson(facts, locale)}\nDraft: ${PromptText.json(draft)}",
         temperature = TEMPERATURE,

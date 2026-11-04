@@ -131,14 +131,61 @@ class GeminiNanoAiGatewayTest {
     @Test
     fun aSummaryWithAnInventedNumberGivesTheTemplate() = runTest {
         val facts = TestFacts.facts()
-        val good = "Leo had a great week. He earned £3.98 and played 4 games."
+        val good = "Leo had a great week. He earned £3.98 and played 4 games. 1 ledger warning needs a look."
         model.answer = { PromptResult.Success(SummaryOutput(good)) }
         assertEquals(WeeklySummary(good, AiPath.NANO), nano.weeklySummaryResult(facts))
-        val invented = "Leo had a great week. He earned £9.99 and played 4 games."
+        val invented = "Leo had a great week. He earned £9.99 and played 4 games. 1 ledger warning needs a look."
         model.answer = { PromptResult.Success(SummaryOutput(invented)) }
         assertEquals(rules.weeklySummaryResult(facts), nano.weeklySummaryResult(facts))
         val prompt = model.requests.last()
         assertTrue("\"name\": \"Leo\"" in prompt.input && "Draft: " in prompt.input)
+    }
+
+    @Test
+    fun theSummaryPromptAsksForEnglishInDigits() = runTest {
+        model.answer = { PromptResult.Failed(AiFailure.ERROR) }
+        nano.weeklySummaryResult(TestFacts.facts())
+        val instructions = model.requests.single().instructions
+        assertTrue("in English" in instructions && "every number in digits" in instructions, instructions)
+        assertTrue("ledger warnings, keep that sentence" in instructions)
+    }
+
+    @Test
+    fun theModelWritesNoSummaryOnANonEnglishDevice() = runTest {
+        val good = "Leo had a great week. He earned £3.98 and played 4 games. 1 ledger warning needs a look."
+        model.answer = { PromptResult.Success(SummaryOutput(good)) }
+        for (locale in listOf(Locale.FRANCE, Locale.GERMANY, Locale.forLanguageTag("ar-EG"))) {
+            val french = GeminiNanoAiGateway(model, rules, locale = { locale })
+            assertEquals(NanoAnswer.Failed(AiFailure.LANGUAGE), french.tryWeeklySummary(TestFacts.facts()))
+        }
+        assertTrue(model.requests.isEmpty())
+        val american = GeminiNanoAiGateway(model, rules, locale = { Locale.US })
+        assertIs<NanoAnswer.Answered<*>>(american.tryWeeklySummary(TestFacts.facts()))
+    }
+
+    @Test
+    fun lineBreaksBetweenSentencesAreNormalised() = runTest {
+        val text = "Leo had a great week.\nHe earned £3.98 and played 4 games.\r\n\n1 ledger warning needs a look.  "
+        model.answer = { PromptResult.Success(SummaryOutput(text)) }
+        assertEquals(
+            "Leo had a great week. He earned £3.98 and played 4 games. 1 ledger warning needs a look.",
+            nano.weeklySummaryResult(TestFacts.facts()).text,
+        )
+        val separator = "Leo had a great week.\u2028He earned £3.98. 1 ledger warning needs a look."
+        model.answer = { PromptResult.Success(SummaryOutput(separator)) }
+        assertEquals(AiPath.RULES, nano.weeklySummaryResult(TestFacts.facts()).path)
+    }
+
+    @Test
+    fun aSummaryThatDropsTheLedgerWarningGivesTheTemplate() = runTest {
+        val facts = TestFacts.facts()
+        model.answer = { PromptResult.Success(SummaryOutput("Leo had a great week. He earned £3.98.")) }
+        assertEquals(rules.weeklySummaryResult(facts), nano.weeklySummaryResult(facts))
+        model.answer = { PromptResult.Success(SummaryOutput("Leo had a great week. He earned £3.98. No warnings.")) }
+        assertEquals(rules.weeklySummaryResult(facts), nano.weeklySummaryResult(facts))
+        val quiet = TestFacts.facts(TestFacts.mia)
+        model.answer = { PromptResult.Success(SummaryOutput("Mia had a good week. She earned £0.50 from chores.")) }
+        assertEquals(AiPath.NANO, nano.weeklySummaryResult(quiet).path)
     }
 
     @Test

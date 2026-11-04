@@ -12,7 +12,7 @@
 - We collect the minimum the app needs to work: a first name, an avatar, a birth month and year, and the household's chores, rewards, and ledger.
 - Chat messages and chore photos are end-to-end encrypted. We cannot read them.
 - No ads. No analytics in v1. No location, no contacts, no advertising ID.
-- All AI features run on your device. Nothing is sent anywhere for AI.
+- All AI features run on your device. Nothing is sent anywhere for AI, and the usage-metrics uploader in Google's ML Kit libraries is switched off in Sprout.
 - You can export or delete your household's data at any time (from M3).
 
 ## Who this is for
@@ -73,7 +73,7 @@ Sprout's Play audience is adults (18+). Kid mode is a feature the parent configu
 ## What we do not collect
 
 - No advertising, no advertising ID, no ad SDKs.
-- No analytics in v1, from us or anyone else.
+- No analytics in v1, from us or anyone else. Google's ML Kit libraries include a usage-metrics uploader; Sprout removes it (see "On-device AI").
 - No location.
 - No contacts.
 - No child's surname, email address, phone number, school, or exact date of birth.
@@ -85,11 +85,13 @@ Sprout's Play audience is adults (18+). Kid mode is a feature the parent configu
 AI features (chore suggestions, the weekly parent summary, the "kindness check" before a child sends a message, and reading a receipt to prefill an adjustment) run entirely on your device, using Gemini Nano where the phone supports it and simple built-in rules where it does not. The kindness check only ever nudges the child; it never blocks a message and never reports it to anyone, including the parent.
 
 - **Nothing is sent to the network for AI,** to us or anyone else. There is no cloud AI in Sprout.
+- **ML Kit's usage metrics are switched off.** Sprout uses Google's ML Kit libraries for Gemini Nano and for text recognition. They include an uploader that would send Google usage metrics (device and app details, identifiers, timings and input and output sizes, never the text or the photo). Sprout removes that uploader from the app, and the build fails if it comes back, so no metrics leave the app. A network capture on a real phone is part of the pre-release security review (M8).
 - **What each feature gives the on-device model.** Kindness check: the message the child is about to send. Chore suggestions: the child's age band, the titles of their existing chores and the household currency. Weekly summary: that week's figures (amounts earned, spent and saved, chores done, games played) and each child's first name. Receipts never use the model: the photo is read by on-device text recognition (part of Google Play services) and parsed by built-in rules.
-- **The model.** Gemini Nano runs inside AICore, a Google system service on the phone. Sprout asks for the model to be downloaded only after a parent agrees once in Settings → On-device AI; the system then downloads it in the background on Wi-Fi. Until then, and on phones without AICore, the built-in rules do everything. AI can be switched off there too; the rules keep every feature working.
+- **The models.** Gemini Nano runs inside AICore, a Google system service on the phone. Sprout asks for the model to be downloaded only after a parent agrees once in Settings → On-device AI; the system then downloads it in the background, usually on Wi-Fi (Sprout cannot guarantee Wi-Fi). Until then, and on phones without AICore, the built-in rules do everything. The text-recognition model for receipts is downloaded by Google Play services when Sprout is installed; it holds no user data, and the receipt picture is handed to Play services on the phone to be read. AICore and Play services are Google system components: they download and run the models under Google's own terms, outside Sprout's control.
+- **The switch covers this phone only.** AI can be switched off in Settings → On-device AI; the rules keep every feature working. A child's own linked phone has no parent area, so in this version it always uses the built-in rules for the kindness check, whatever any switch says; a parent setting for kid phones comes later.
 - **Nothing is kept.** Suggestions, summaries and kindness results are worked out when shown and never stored or logged. A receipt prefill only fills the adjustment form: the amount and the shop's name (as "Receipt: <shop>") enter the ledger only if the parent reviews and signs it, and then the reason is plaintext like any other adjustment reason (see "Free text in ledger events"). The picked receipt photo is read in memory and not stored.
 - **Settings stay on the device.** The AI switch and the download consent are stored on each phone, not synced, and excluded from backups.
-- **Data-safety form note:** on-device AI processing is not "collection" (nothing leaves the device for it), so it adds no data type to the form; the receipt-derived reason is covered by the existing free-text row once the parent signs it.
+- **Data-safety form note:** on-device AI processing is not "collection" (nothing leaves the device for it), so it adds no data type to the form; the receipt-derived reason is covered by the existing free-text row once the parent signs it. This holds only while ML Kit's uploader stays removed (the build check); if it ever ships, the form must list device or other identifiers and app performance data collected by an SDK.
 
 ## Where your data is stored
 

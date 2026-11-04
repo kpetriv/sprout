@@ -11,6 +11,9 @@ import com.google.mlkit.genai.prompt.TextPart
 import com.google.mlkit.genai.prompt.generateTypedContentRequest
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.launch
 import kotlin.coroutines.cancellation.CancellationException
@@ -21,10 +24,17 @@ import kotlin.reflect.KClass
  * a device; JVM tests use a fake [PromptModel]. AICore serves foreground apps only and may answer `BUSY`; every
  * failure is mapped to a [PromptResult] and never thrown.
  *
+ * One [GenerativeModel] client serves every call. The Hilt binding is an app-lifetime singleton, so in the app the
+ * client lives as long as the process and is released with it; [close] releases it (and stops a download still being
+ * collected) for an owner with a shorter life (review L16).
+ *
  * @param scope where a requested download keeps being collected after [download] returns (the app's lifetime).
  */
-class MlKitPromptModel(private val scope: CoroutineScope) : PromptModel {
-    private val model: GenerativeModel by lazy { Generation.getClient() }
+internal class MlKitPromptModel(private val scope: CoroutineScope) :
+    PromptModel,
+    AutoCloseable {
+    private val client = lazy { Generation.getClient() }
+    private val model: GenerativeModel by client
 
     @Volatile
     private var systemInstructions: Boolean? = null
@@ -99,18 +109,25 @@ class MlKitPromptModel(private val scope: CoroutineScope) : PromptModel {
     private suspend fun supportsSystemInstructions(): Boolean =
         systemInstructions ?: model.isSystemPromptAvailable().also { systemInstructions = it }
 
+    override fun close() {
+        scope.cancel()
+        if (client.isInitialized()) model.close()
+    }
+
     /**
-     * Runs an AICore call; a [GenAiException] or any other runtime failure becomes [onError] of its error code
-     * ([UNKNOWN_ERROR] when there is none).
+     * Runs an AICore call; a [GenAiException] or any other failure becomes [onError] of its error code
+     * ([UNKNOWN_ERROR] when there is none). A [CancellationException] is rethrown only when the calling coroutine is
+     * cancelled: AICore cancelling its own future is a failure like any other (review M6).
      */
     @Suppress("TooGenericExceptionCaught", "SwallowedException") // Any AICore failure means "no model answer".
     private suspend fun <R> aicore(onError: (Int) -> R, block: suspend () -> R): R = try {
         block()
     } catch (cancelled: CancellationException) {
-        throw cancelled
+        currentCoroutineContext().ensureActive()
+        onError(UNKNOWN_ERROR)
     } catch (error: GenAiException) {
         onError(error.errorCode)
-    } catch (error: RuntimeException) {
+    } catch (error: Exception) {
         onError(UNKNOWN_ERROR)
     }
 

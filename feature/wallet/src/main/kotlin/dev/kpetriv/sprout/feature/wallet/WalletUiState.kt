@@ -147,7 +147,8 @@ enum class EventCategory {
  * @property prefill a scanned receipt's suggestion, until the form has taken it ([WalletEvent.PrefillApplied]): the
  *   amount as a debit and "Receipt: <merchant>" as the reason (M6 §3.4).
  * @property scanning a picked receipt is being read.
- * @property scanFailed the last receipt gave nothing usable; the sheet says so until the next scan.
+ * @property scanFailed the last receipt gave no total (nothing usable, or only a merchant: review L14); the sheet says
+ *   "No total found" until the next scan.
  */
 data class AdjustmentUi(
     val currency: Currency.Fiat,

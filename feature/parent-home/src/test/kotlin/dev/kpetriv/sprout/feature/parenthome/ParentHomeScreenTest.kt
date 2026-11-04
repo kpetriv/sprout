@@ -1,5 +1,12 @@
 package dev.kpetriv.sprout.feature.parenthome
 
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.test.SemanticsMatcher
+import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsNotEnabled
@@ -71,6 +78,28 @@ class ParentHomeScreenTest {
 
         assertEquals(ParentHomeEvent.SummaryWeekChanged(SummaryWeek.LAST_WEEK), events.last())
         assertEquals(listOf("ai settings"), opened)
+    }
+
+    @Test
+    fun `the summary is announced only after the parent switches the week (review L13)`() {
+        val summary = ParentHomePreviewData.summary()
+        var week by mutableStateOf(SummaryWeek.THIS_WEEK)
+        compose.setContent {
+            SproutTheme {
+                WeeklySummaryCard(
+                    summary = summary.copy(week = week),
+                    week = week,
+                    onWeekChange = { week = it },
+                    onDownloadModel = {},
+                )
+            }
+        }
+        val text = compose.onNodeWithText("So far this week", substring = true)
+        text.assert(SemanticsMatcher.keyNotDefined(SemanticsProperties.LiveRegion))
+
+        compose.onNodeWithText("Last week").performClick()
+
+        text.assert(SemanticsMatcher.expectValue(SemanticsProperties.LiveRegion, LiveRegionMode.Polite))
     }
 
     @Test

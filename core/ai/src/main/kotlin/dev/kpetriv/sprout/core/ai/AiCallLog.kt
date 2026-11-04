@@ -17,6 +17,9 @@ enum class AiFailure {
     /** The AI switch is off ([AiSettings.enabled]). */
     DISABLED,
 
+    /** A kid's linked phone: the rules only, whatever its switch says (D-M6-34). */
+    KID_DEVICE,
+
     /** The model is not available on this device (or not downloaded). */
     UNAVAILABLE,
 
@@ -25,6 +28,9 @@ enum class AiFailure {
 
     /** No answer within the budget ([AiTimeouts]). */
     TIMEOUT,
+
+    /** The device language is not one [AiOutputRules] can check the task's output in (D-M6-35). */
+    LANGUAGE,
 
     /** The answer did not parse or failed [AiOutputRules]. */
     INVALID_OUTPUT,

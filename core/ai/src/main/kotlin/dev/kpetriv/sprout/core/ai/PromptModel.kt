@@ -4,13 +4,15 @@ import kotlin.reflect.KClass
 
 /**
  * The on-device model behind [GeminiNanoAiGateway]: a thin seam over the ML Kit GenAI Prompt API
- * ([MlKitPromptModel]) so the gateway's logic runs in JVM tests with a fake.
+ * ([MlKitPromptModel]) so the gateway's logic runs in JVM tests with a fake. Internal: only [AiGateway] (the
+ * router) is bound outside `core/ai`, so nothing reaches the model without the router's switch and consent gates
+ * (audit L6).
  */
-interface PromptModel {
+internal interface PromptModel {
     /** AICore's feature status for the Prompt API. Never throws. */
     suspend fun status(): AiStatus
 
-    /** Asks AICore to download the model (it downloads on Wi-Fi). True when accepted or already there. */
+    /** Asks AICore to download the model (the system downloads it, usually on Wi-Fi). True when accepted or there. */
     suspend fun download(): Boolean
 
     /**
@@ -24,7 +26,7 @@ interface PromptModel {
  * One prompt. [instructions] go in the system instruction; [input] is the user turn, in which every piece of user
  * text is a JSON string literal ([PromptText.json]). [toString] never shows either.
  */
-data class PromptRequest(
+internal data class PromptRequest(
     val instructions: String,
     val input: String,
     val temperature: Float,
@@ -37,7 +39,7 @@ data class PromptRequest(
 }
 
 /** What [PromptModel.generate] returned. */
-sealed interface PromptResult<out T> {
+internal sealed interface PromptResult<out T> {
     data class Success<T>(val value: T) : PromptResult<T> {
         override fun toString(): String = "Success(value=$REDACTED)"
     }

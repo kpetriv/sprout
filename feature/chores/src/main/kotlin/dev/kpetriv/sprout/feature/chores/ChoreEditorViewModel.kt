@@ -33,6 +33,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 import java.util.UUID
@@ -280,19 +281,30 @@ class ChoreEditorViewModel @Inject constructor(
         suggesting?.cancel()
         mutableState.update { it.copy(suggestions = SuggestionsUi.Loading) }
         suggesting = viewModelScope.launch {
-            val existingTitles = attempt { chores.observeChores(kid.id).first().map { it.title } }
-                .getOrDefault(emptyList())
-            val items = attempt {
-                withTimeoutOrNull(SUGGEST_TIMEOUT_MILLIS.milliseconds) {
-                    suggestions.suggest(kid.id, kid.band, existingTitles)
+            val run = coroutineContext.job
+            try {
+                val existingTitles = attempt { chores.observeChores(kid.id).first().map { it.title } }
+                    .getOrDefault(emptyList())
+                val items = attemptAi {
+                    withTimeoutOrNull(SUGGEST_TIMEOUT_MILLIS.milliseconds) {
+                        suggestions.suggest(kid.id, kid.band, existingTitles)
+                    }
+                }.getOrNull()
+                val sheet = when {
+                    items == null -> SuggestionsUi.Failed
+                    items.isEmpty() -> SuggestionsUi.Empty
+                    else -> SuggestionsUi.Ready(items)
                 }
-            }.getOrNull()
-            val sheet = when {
-                items == null -> SuggestionsUi.Failed
-                items.isEmpty() -> SuggestionsUi.Empty
-                else -> SuggestionsUi.Ready(items)
+                mutableState.update { if (it.suggestions == null) it else it.copy(suggestions = sheet) }
+            } finally {
+                // Review M6: however this run ends, the sheet never stays on Loading. A run that was cancelled (the
+                // sheet dismissed, or a retry started a newer run) leaves the sheet to whoever cancelled it.
+                if (!run.isCancelled) {
+                    mutableState.update {
+                        if (it.suggestions == SuggestionsUi.Loading) it.copy(suggestions = SuggestionsUi.Failed) else it
+                    }
+                }
             }
-            mutableState.update { if (it.suggestions == null) it else it.copy(suggestions = sheet) }
         }
     }
 

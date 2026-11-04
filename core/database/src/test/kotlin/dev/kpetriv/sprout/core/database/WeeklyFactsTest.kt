@@ -11,14 +11,19 @@ import dev.kpetriv.sprout.core.domainhousehold.IsoWeek
 import dev.kpetriv.sprout.core.domainhousehold.KidWeeklyFacts
 import dev.kpetriv.sprout.core.domainhousehold.WeeklyFacts
 import dev.kpetriv.sprout.core.domainhousehold.previous
+import dev.kpetriv.sprout.core.domainledger.Account
+import dev.kpetriv.sprout.core.domainledger.AccountKind
+import dev.kpetriv.sprout.core.domainledger.AllowancePaid
 import dev.kpetriv.sprout.core.domainledger.AppendResult
 import dev.kpetriv.sprout.core.domainledger.ChoreRewarded
+import dev.kpetriv.sprout.core.domainledger.Currency
 import dev.kpetriv.sprout.core.domainledger.DeviceWriter
 import dev.kpetriv.sprout.core.domainledger.Fixtures
 import dev.kpetriv.sprout.core.domainledger.GamePlayed
 import dev.kpetriv.sprout.core.domainledger.Ledger
 import dev.kpetriv.sprout.core.domainledger.LedgerEvent
 import dev.kpetriv.sprout.core.domainledger.Money
+import dev.kpetriv.sprout.core.model.AccountId
 import dev.kpetriv.sprout.core.model.CalendarDate
 import dev.kpetriv.sprout.core.model.ChoreId
 import dev.kpetriv.sprout.core.model.ChoreSchedule
@@ -169,6 +174,92 @@ class WeeklyFactsCalculatorTest {
         assertEquals(1, copies.size)
         assertTrue(copies.single().any { it is ChoreRewarded } && copies.single().any { it is GamePlayed })
         assertEquals(Money(150), facts.kids.first().earned.chores)
+    }
+}
+
+/** Review L15: minutes used, other currencies, another kid's events and the household's midnight. */
+class WeeklyFactsEdgesTest {
+    private val leo = Kid(Fixtures.kid, Fixtures.household, "Leo", "avatar-1", YearMonth(2017, 3), KidUiTier.SPROUT)
+    private val week45 = IsoWeek(2026, 45)
+    private val euro = Account(AccountId("eur-1"), Fixtures.kid, Currency.Fiat("EUR"), AccountKind.MAIN)
+    private val otherKid = KidId("kid-9")
+    private val otherMain = Account(AccountId("main-9"), otherKid, Fixtures.gbp, AccountKind.MAIN)
+    private val accounts = Fixtures.accounts + euro + otherMain
+
+    /** Local dates at a fixed offset from UTC, like a household two hours ahead of UTC. */
+    private fun dateAt(offsetHours: Int) = { instant: Instant ->
+        val date = java.time.Instant.ofEpochMilli(instant.toEpochMilliseconds())
+            .atZone(ZoneOffset.ofHours(offsetHours)).toLocalDate()
+        CalendarDate(date.year, date.monthValue, date.dayOfMonth)
+    }
+
+    private fun facts(
+        events: List<LedgerEvent>,
+        through: CalendarDate = CalendarDate(2026, 11, 8),
+        dateOf: (Instant) -> CalendarDate = dateAt(0),
+        week: IsoWeek = week45,
+    ): KidWeeklyFacts = WeeklyFactsCalculator.compute(
+        week,
+        through,
+        Fixtures.gbp,
+        listOf(leo),
+        events,
+        Ledger.project(events, accounts, roleOf = Fixtures::roleOf),
+        emptyMap(),
+        dateOf,
+    ).kids.single()
+
+    @Test
+    fun minutesUsedAreTheTimeBankStopsOfTheWeek() {
+        val clock = FakeClock(Instant.parse("2026-11-01T12:00:00Z")) // Sunday, week 44.
+        val parent = DeviceWriter(Fixtures.parentPhone, clock = clock)
+        val kid = DeviceWriter(Fixtures.kidTablet, clock = clock)
+        parent.chore(60, account = Fixtures.minutes)
+        kid.timeStart("last-week")
+        kid.timeStop("last-week", 5)
+        clock.advanceBy(1.days) // Monday 2 November, week 45.
+        kid.timeStart("a")
+        kid.timeStop("a", 10)
+        kid.timeStart("b")
+        kid.timeStop("b", 15)
+
+        val leoFacts = facts(parent.written + kid.written)
+        assertEquals(Money(25), leoFacts.minutesUsed)
+        assertEquals(Money.ZERO, leoFacts.choreMinutes, "the minutes chore was last week")
+        val lastWeek = facts(parent.written + kid.written, CalendarDate(2026, 11, 1), week = week45.previous())
+        assertEquals(Money(5), lastWeek.minutesUsed)
+        assertEquals(Money(60), lastWeek.choreMinutes)
+    }
+
+    @Test
+    fun eventsInAnotherCurrencyAndOfOtherKidsAreLeftOut() {
+        val clock = FakeClock(Instant.parse("2026-11-02T08:00:00Z"))
+        val parent = DeviceWriter(Fixtures.parentPhone, clock = clock)
+        parent.chore(150)
+        parent.chore(700, account = euro)
+        parent.write(euro) { AllowancePaid(it, euro.currency, Money(300), "weekly", "2026-W45") }
+        parent.chore(999, account = otherMain)
+
+        val leoFacts = facts(parent.written)
+        assertEquals(EarnedByKind(chores = Money(150)), leoFacts.earned)
+    }
+
+    @Test
+    fun anEventBelongsToTheHouseholdsLocalDayAcrossMidnight() {
+        // 22:30 UTC on Sunday 1 November is 00:30 on Monday 2 November two hours ahead: week 45 there, 44 in UTC.
+        val clock = FakeClock(Instant.parse("2026-11-01T22:29:00Z"))
+        val parent = DeviceWriter(Fixtures.parentPhone, clock = clock)
+        parent.chore(100)
+        // 21:59 UTC on Sunday 1 November is 23:59 on Sunday two hours ahead: week 44 in both.
+        val early = DeviceWriter(Fixtures.parentTablet, clock = FakeClock(Instant.parse("2026-11-01T21:58:00Z")))
+        early.chore(40)
+        val events = parent.written + early.written
+
+        assertEquals(Money(100), facts(events, dateOf = dateAt(2)).earned.chores)
+        assertEquals(Money.ZERO, facts(events, dateOf = dateAt(0)).earned.chores)
+        val lastWeek = facts(events, CalendarDate(2026, 11, 1), dateAt(2), week45.previous())
+        assertEquals(Money(40), lastWeek.earned.chores)
+        assertEquals(Money(140), facts(events, CalendarDate(2026, 11, 1), dateAt(0), week45.previous()).earned.chores)
     }
 }
 

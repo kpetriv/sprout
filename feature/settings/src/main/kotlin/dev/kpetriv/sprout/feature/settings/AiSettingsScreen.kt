@@ -37,8 +37,9 @@ internal fun AiSettingsRoute(onBack: () -> Unit, modifier: Modifier = Modifier) 
 }
 
 /**
- * On-device AI: the status line, "Use on-device AI", the one-time "Download the model on Wi-Fi" consent (only while
- * the model can be downloaded, D-M6-6) and what the AI is used for.
+ * On-device AI: the status line (with the kid-phone note, D-M6-34), "Use on-device AI" (this phone only), the one-time
+ * "Download the model" consent (only with AI on and while the model can be downloaded, D-M6-6, audit L3) and what the
+ * AI is used for.
  */
 @Composable
 fun AiSettingsScreen(
@@ -71,11 +72,17 @@ private fun AiSettingsContent(state: AiSettingsUiState, settings: AiSettings, on
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
         Card(modifier = Modifier.fillMaxWidth()) {
-            Text(
-                text = stringResource(settings.status.textRes()),
-                style = MaterialTheme.typography.bodyLarge,
-                modifier = Modifier.padding(16.dp).semantics { liveRegion = LiveRegionMode.Polite },
-            )
+            Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    text = stringResource(settings.status.textRes()),
+                    style = MaterialTheme.typography.bodyLarge,
+                    modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
+                )
+                Text(
+                    text = stringResource(R.string.feature_settings_ai_kid_phones),
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+            }
         }
         SwitchRow(
             title = stringResource(R.string.feature_settings_ai_enabled_title),

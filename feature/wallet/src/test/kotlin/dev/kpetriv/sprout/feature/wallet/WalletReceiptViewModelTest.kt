@@ -7,6 +7,7 @@ import dev.kpetriv.sprout.core.database.usecase.RecordManualAdjustmentUseCase
 import dev.kpetriv.sprout.core.domainledger.Money
 import dev.kpetriv.sprout.core.model.KidUiTier
 import dev.kpetriv.sprout.core.ui.MoneyFormatter
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.test.runTest
 import org.junit.Rule
@@ -112,6 +113,66 @@ class WalletReceiptViewModelTest {
             assertTrue(sheet.scanFailed)
             assertFalse(sheet.scanning)
         }
+    }
+
+    @Test
+    fun `a merchant without a total prefills the reason and still says no total was found (review L14)`() = runTest {
+        TestData.seed(source, repository, KidUiTier.SPROUT)
+        scanner.result = AdjustmentPrefill(amount = null, merchant = "Corner Shop")
+        val viewModel = viewModel()
+
+        viewModel.state.test {
+            awaitReady()
+            viewModel.onEvent(WalletEvent.OpenAdjust)
+            viewModel.onEvent(WalletEvent.ReceiptPicked("content://a"))
+            val sheet = assertNotNull((expectMostRecentItem() as WalletUiState.Ready).adjustment)
+            assertTrue(sheet.scanFailed)
+            assertEquals(AdjustmentPrefill(null, "Corner Shop"), sheet.prefill)
+        }
+    }
+
+    @Test
+    fun `a cancellation thrown by the scanner ends the scan instead of leaving it running (review M6)`() = runTest {
+        TestData.seed(source, repository, KidUiTier.SPROUT)
+        // An ML Kit task cancelled by Play services while the wallet's own coroutine is still active.
+        scanner.failure = CancellationException("play services cancelled the task")
+        scanner.delayMillis = 100
+        val viewModel = viewModel()
+
+        viewModel.state.test {
+            awaitReady()
+            viewModel.onEvent(WalletEvent.OpenAdjust)
+            viewModel.onEvent(WalletEvent.ReceiptPicked("content://a"))
+            assertTrue(assertNotNull((expectMostRecentItem() as WalletUiState.Ready).adjustment).scanning)
+
+            testScheduler.advanceTimeBy(101)
+            val sheet = assertNotNull((expectMostRecentItem() as WalletUiState.Ready).adjustment)
+            assertFalse(sheet.scanning)
+            assertTrue(sheet.scanFailed)
+            assertNull(sheet.prefill)
+        }
+    }
+
+    @Test
+    fun `nothing is saved while a receipt is being read (audit L5)`() = runTest {
+        TestData.seed(source, repository, KidUiTier.SPROUT)
+        val gate = CompletableDeferred<Unit>()
+        scanner.gate = gate
+        scanner.result = AdjustmentPrefill(Money(1_249), "Corner Shop")
+        val viewModel = viewModel()
+
+        viewModel.state.test {
+            awaitReady()
+            viewModel.onEvent(WalletEvent.OpenAdjust)
+            viewModel.onEvent(WalletEvent.ReceiptPicked("content://a"))
+            viewModel.onEvent(WalletEvent.SubmitAdjust(500, AdjustmentSign.CREDIT, "Pocket money"))
+            val sheet = assertNotNull((expectMostRecentItem() as WalletUiState.Ready).adjustment)
+            assertTrue(sheet.scanning)
+            assertFalse(sheet.isSubmitting)
+            gate.complete(Unit)
+            cancelAndIgnoreRemainingEvents()
+        }
+        assertTrue(writer.appended.isEmpty())
     }
 
     @Test

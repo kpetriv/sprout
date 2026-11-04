@@ -3,6 +3,7 @@ package dev.kpetriv.sprout.ai
 import android.content.Context
 import dagger.hilt.android.qualifiers.ApplicationContext
 import dev.kpetriv.sprout.core.ai.AiAvailability
+import dev.kpetriv.sprout.core.ai.AiContext
 import dev.kpetriv.sprout.core.ai.AiGateway
 import dev.kpetriv.sprout.core.ai.AiPath
 import dev.kpetriv.sprout.core.ai.AiPreferences
@@ -10,6 +11,7 @@ import dev.kpetriv.sprout.core.ai.KindnessVerdict
 import dev.kpetriv.sprout.core.common.Dispatcher
 import dev.kpetriv.sprout.core.common.SproutDispatchers
 import dev.kpetriv.sprout.core.database.FiatCurrencyProvider
+import dev.kpetriv.sprout.core.database.SessionStore
 import dev.kpetriv.sprout.core.database.SproutDatabase
 import dev.kpetriv.sprout.core.database.usecase.WeeklyFactsUseCase
 import dev.kpetriv.sprout.core.domainhousehold.WeeklyFacts
@@ -17,6 +19,7 @@ import dev.kpetriv.sprout.core.domainhousehold.previous
 import dev.kpetriv.sprout.core.model.AgeBand
 import dev.kpetriv.sprout.core.model.KidId
 import dev.kpetriv.sprout.core.model.KidUiTier
+import dev.kpetriv.sprout.core.model.Role
 import dev.kpetriv.sprout.core.time.Clock
 import dev.kpetriv.sprout.core.ui.PickedImageReader
 import dev.kpetriv.sprout.feature.chat.FilterVerdict
@@ -57,6 +60,16 @@ import dev.kpetriv.sprout.feature.settings.AiSettings as AiSettingsUi
  * the rules everywhere). None of them logs or keeps text, image URIs, merchants or kid names (D-M6-7); the router logs
  * only task, path, latency bucket and failure kind.
  */
+
+/**
+ * [AiContext] from the stored session (D-M6-34): a KID session exists only on a kid's own linked phone (`AppMode.Kid`
+ * with `linkedDevice`), where there is no parent area to change the AI switch, so the router keeps that phone on the
+ * rules. Kid mode on a parent's phone keeps the parent's session (PARENT) and follows the parent's switch. Read on
+ * every call (one Room row); the router bounds it with the call's budget and takes the rules path if it fails.
+ */
+class SessionAiContext @Inject constructor(private val sessions: SessionStore) : AiContext {
+    override suspend fun isLinkedKidDevice(): Boolean = sessions.get()?.role == Role.KID
+}
 
 /**
  * Chat's kindness check ([OutgoingMessageFilter]) over [AiGateway.kindness], tier passed through. The suggestion is

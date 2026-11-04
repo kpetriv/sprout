@@ -74,6 +74,8 @@ class AiSettingsViewModelTest {
         assertFalse(state.value.showsDownloadConsent, "nothing to download")
         source.settings.value = AiSettings(AiModelStatus.DOWNLOADING, enabled = true, downloadConsent = true)
         assertTrue(state.value.showsDownloadConsent)
+        source.settings.value = AiSettings(AiModelStatus.DOWNLOADABLE, enabled = false, downloadConsent = false)
+        assertFalse(state.value.showsDownloadConsent, "AI off: nothing offers the download (audit L3)")
     }
 
     @Test
@@ -93,6 +95,7 @@ class AiSettingsViewModelTest {
 
         vm.onEvent(AiSettingsEvent.EnabledChanged(false))
         assertEquals(false, state.value.settings?.enabled)
+        assertFalse(state.value.showsDownloadConsent, "no download offered while AI is off (audit L3)")
         assertFalse(state.value.canChangeConsent)
 
         vm.onEvent(AiSettingsEvent.DownloadConsentChanged(true))

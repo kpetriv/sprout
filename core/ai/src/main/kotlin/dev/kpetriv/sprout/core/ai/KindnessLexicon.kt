@@ -9,10 +9,10 @@ package dev.kpetriv.sprout.core.ai
 internal object KindnessLexicon {
     /** What a match is, from most to least serious; [KindnessRules] picks the suggestion by the most serious one. */
     enum class Category {
-        /** Threats, "I hate you", "shut up", exclusion ("nobody likes you"). */
+        /** Threats, "I hate you", "shut up", "kill yourself", exclusion ("nobody likes you"). */
         HOSTILE,
 
-        /** Swear words and slurs. */
+        /** Swear words, slurs and mild oaths ("what the hell"). */
         PROFANITY,
 
         /** Name-calling that is unkind whatever the sentence ("idiot"). */
@@ -21,15 +21,21 @@ internal object KindnessLexicon {
         /** A [negative] word aimed at the reader: "you are (so) lazy", "you're a loser", "your drawing is ugly". */
         PUT_DOWN,
 
-        /** All capitals (at least [SHOUT_MIN_LETTERS] letters) or a run of [SHOUT_MIN_MARKS] `!` or `?`. */
+        /**
+         * All capitals (at least [SHOUT_MIN_LETTERS] letters), or a run of at least [SHOUT_MIN_MARKS] `!` and `?` with
+         * at least [SHOUT_MIN_BANGS] `!` ("!!!", "why?!?!"; "???" is only a question).
+         */
         SHOUTING,
     }
 
     /** Letters a message needs, all in capitals, to count as shouting. */
     const val SHOUT_MIN_LETTERS: Int = 8
 
-    /** Exclamation (or question) marks in a row that count as shouting. */
+    /** Exclamation and question marks in a row that may count as shouting. */
     const val SHOUT_MIN_MARKS: Int = 3
+
+    /** Exclamation marks such a run needs to count as shouting. */
+    const val SHOUT_MIN_BANGS: Int = 2
 
     /** Most filler words ("so", "such", "a", "really") between "you are" and a negative word. */
     const val MAX_FILLERS: Int = 3
@@ -68,7 +74,7 @@ internal object KindnessLexicon {
     val allowed: Set<String> = setOf(
         "shitake", "shiitake", "retardant", "retardants", "cocktail", "cocktails", "dickens", "assess", "assist",
         "class", "pass", "glass", "grass", "mass", "brass", "bass", "cockpit", "peacock", "scunthorpe", "dumbbell",
-        "dumbbells",
+        "dumbbells", "shital", "shitals", "shitzu", "shitzus", "shihtzu", "shihtzus", "shittim",
     )
 
     /** Negative words that are a put-down when aimed at the reader. */
@@ -77,8 +83,14 @@ internal object KindnessLexicon {
         "lame", "pathetic", "worthless", "useless", "annoying", "gross", "disgusting", "smelly", "stinky", "weird",
         "trash", "garbage", "horrible", "terrible", "awful", "rude", "lazy", "boring", "worst", "evil", "hopeless",
         "nasty", "selfish", "liar", "cheater", "babyish", "brainless", "clueless", "rubbish", "loser", "freak", "dummy",
-        "dumbo", "creep", "brat", "pig", "cow", "dork", "nerd", "baby", "fake", "failure", "joke",
+        "dumbo", "creep", "brat", "pig", "cow", "dork", "nerd", "baby", "fake", "failure", "joke", "mean", "meanest",
     )
+
+    /**
+     * [negative] words that are also verbs straight after "you" ("you mean the red one?", "can you trash the box?"):
+     * a put-down only after a verb ("you are mean", "are you mean?").
+     */
+    val verbs: Set<String> = setOf("mean", "trash", "fake")
 
     /** The [negative] words that also work as a name straight after "you" ("you pig", "you liar"). */
     val negativeNames: Set<String> = setOf(
@@ -86,11 +98,21 @@ internal object KindnessLexicon {
         "failure", "joke",
     )
 
-    /** "You": then a [copulas] verb, [fillers] and a [negative] word, or directly one of [negativeNames]. */
+    /**
+     * "You": then a [copulas] verb, [fillers] and a [negative] word ("you are so lazy"); directly a [negative] word
+     * ("you stupid", "you pig"); [fillers] and a [negative] word at the start of a clause ("you so dumb"); or, asked,
+     * after a [copulas] verb ("are you (so) stupid?").
+     */
     val you: Set<String> = setOf("you", "u", "ya", "yall")
 
-    /** "You are" in one word: followed by [fillers] and a [negative] word. */
+    /**
+     * "You are" in one word: followed by [fillers] and a [negative] word. "ur" is also "your", so "ur" directly before
+     * one of [negativeNames] reads as "your" ("ur baby brother", "ur joke was funny").
+     */
     val youAre: Set<String> = setOf("youre", "ur", "yer", "youare")
+
+    /** The [youAre] spelling that also means "your". */
+    const val UR: String = "ur"
 
     /** "Your": followed by up to [MAX_POSSESSED_WORDS] words, a [copulas] verb, [fillers] and a [negative] word. */
     val your: Set<String> = setOf("your", "yours", "ur")
@@ -115,12 +137,25 @@ internal object KindnessLexicon {
     /** [negators] that also turn a hostile phrase around; "no" does not ("no, I hate you"). */
     val phraseNegators: Set<String> = negators - "no"
 
-    /** Hostile phrases, as sequences of normalised words. */
-    val hostilePhrases: List<List<String>> = listOf(
-        "hate you", "hate u", "hate ya", "hate your", "hate yall", "shut up", "shutup", "get lost", "kill you",
-        "kill u", "hurt you", "punch you", "hit you", "kick you", "slap you", "beat you up", "nobody likes you",
-        "no one likes you", "noone likes you", "everyone hates you", "nobody wants you", "not your friend",
-        "not my friend", "go to hell", "drop dead", "wish you were dead", "you should die", "go die", "bloody hell",
-        "the hell",
-    ).map { it.split(' ') }
+    /**
+     * Hostile phrases, as sequences of normalised words. "Hit you" and "hurt you" only with an intent word before them,
+     * so "Sorry I hurt you" and "Did the ball hit you?" pass; see [upSlang] for "hit you up".
+     */
+    val hostilePhrases: List<List<String>> = (
+        listOf(
+            "hate you", "hate u", "hate ya", "hate your", "hate yall", "shut up", "shutup", "get lost", "kill you",
+            "kill u", "punch you", "kick you", "slap you", "beat you up", "nobody likes you", "no one likes you",
+            "noone likes you", "everyone hates you", "nobody wants you", "not your friend", "not my friend",
+            "go to hell", "drop dead", "wish you were dead", "you should die", "go die", "kill yourself", "kill urself",
+            "kill your self", "kill ur self", "kill yourselves", "you suck", "u suck", "ya suck",
+        ) + listOf("ill", "i will", "will", "gonna", "going to", "wanna", "want to").flatMap { intent ->
+            listOf("hit you", "hit u", "hurt you", "hurt u").map { "$intent $it" }
+        }
+        ).map { it.split(' ') }
+
+    /** Verbs whose hostile phrase is slang for "get in touch" when "up" follows ("I'll hit you up later"). */
+    val upSlang: Set<String> = setOf("hit")
+
+    /** Oaths that are swearing rather than hostility ("what the hell", "bloody hell"). */
+    val profanePhrases: List<List<String>> = listOf("the hell", "bloody hell").map { it.split(' ') }
 }

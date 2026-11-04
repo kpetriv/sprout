@@ -6,9 +6,11 @@ import dev.kpetriv.sprout.core.model.KidUiTier
 /**
  * One word of a message in the forms [KindnessRules] compares: [key] is lower case, letters only, with common
  * look-alike characters mapped back ("l0$er" to "loser"); [variants] adds the spellings with stretched letters folded
- * ("stuuupid", "fuuuck") and `1` read as `l` instead of `i`.
+ * ("stuuupid", "fuuuck") and `1` read as `l` instead of `i`; [clause] counts the clauses before it (a clause ends at
+ * `,`, `.`, `;`, `:`, `?` or a `!` that ends a word), so a negator in one clause never turns around a phrase in the
+ * next ("I don't care, I hate you").
  */
-internal class KindnessToken(val key: String, val variants: Set<String>)
+internal class KindnessToken(val key: String, val variants: Set<String>, val clause: Int = 0)
 
 /** Splits and normalises a message for [KindnessRules]. Pure; no locale is involved (keys are ASCII). */
 internal object KindnessText {
@@ -20,8 +22,13 @@ internal object KindnessText {
     /** Splits words; `!` is not a separator because it stands for `i` inside a word ("sh!t"). */
     private val separator = Regex("[\\s,;:.?()\\[\\]{}\"/\\\\]+")
 
-    /** The message's words, in order. */
-    fun tokens(text: String): List<KindnessToken> = text.split(separator).mapNotNull(::token)
+    /** Ends a clause: `,` `.` `;` `:` `?` `…`, a line break, or `!` at the end of a word (not "sh!t"). */
+    private val clauseBreak = Regex("[,.;:?\\u2026\\n]+|!+(?=[\\s,.;:?]|$)")
+
+    /** The message's words, in order, each with its clause number. */
+    fun tokens(text: String): List<KindnessToken> = text.split(clauseBreak).flatMapIndexed { clause, part ->
+        part.split(separator).mapNotNull { token(it, clause) }
+    }
 
     /** Runs of at least [KindnessLexicon.MIN_SPELLED_LETTERS] single-letter words, joined ("s t u p i d"). */
     fun spelledOut(tokens: List<KindnessToken>): List<String> {
@@ -39,7 +46,7 @@ internal object KindnessText {
     }
 
     @Suppress("ReturnCount") // Nothing left after trimming, or after mapping: both mean "not a word".
-    private fun token(raw: String): KindnessToken? {
+    private fun token(raw: String, clause: Int): KindnessToken? {
         val trimmed = raw.lowercase().replace(edge, "")
         if (trimmed.isEmpty()) return null
         val hasLetter = trimmed.any { it.isLetter() }
@@ -56,7 +63,7 @@ internal object KindnessText {
                 add(trimmed.map { if (it == '1') 'l' else leet[it] ?: it }.filter(::isKeyLetter).joinToString(""))
             }
         }
-        return KindnessToken(key, variants)
+        return KindnessToken(key, variants, clause)
     }
 
     private fun isKeyLetter(char: Char): Boolean = char in 'a'..'z'
@@ -99,7 +106,9 @@ internal object KindnessRules {
     /** How many words before a hostile phrase a negator turns it around ("I never said I hate you"). */
     private const val PHRASE_NEGATION_WINDOW = 3
     private const val MIN_MASK_LETTERS = 2
+    private const val UP = "up"
     private val marks = Regex("[!?]{${KindnessLexicon.SHOUT_MIN_MARKS},}")
+    private const val MIN_CALMED_LETTERS = 2
 
     fun check(text: String): KindnessFinding {
         if (text.isBlank()) return KindnessFinding.KIND
@@ -120,6 +129,7 @@ internal object KindnessRules {
                 ?.let { flag(it, word) }
         }
         hostilePhrases(tokens).forEach { flag(Category.HOSTILE, it) }
+        phrases(tokens, KindnessLexicon.profanePhrases).forEach { flag(Category.PROFANITY, it) }
         if (isShouting(text)) categories += Category.SHOUTING
         return KindnessFinding(categories, words)
     }
@@ -191,23 +201,50 @@ internal object KindnessRules {
     /** Whether the word at [index] is a [KindnessLexicon.negative] word aimed at the reader. */
     @Suppress("ReturnCount") // Not a negative word; nothing before the fillers; then the decision.
     private fun putDownAt(tokens: List<KindnessToken>, index: Int): Boolean {
-        if (tokens[index].variants.none { it in KindnessLexicon.negative }) return false
-        val isName = tokens[index].variants.any { it in KindnessLexicon.negativeNames }
-        // Walk back over fillers to the verb or to "you".
-        var cursor = index - 1
-        var fillers = 0
-        while (cursor >= 0 && tokens[cursor].key in KindnessLexicon.fillers && fillers < KindnessLexicon.MAX_FILLERS) {
-            cursor--
-            fillers++
-        }
-        if (cursor < 0) return false
+        val word = tokens[index]
+        if (word.variants.none { it in KindnessLexicon.negative }) return false
+        val isName = word.variants.any { it in KindnessLexicon.negativeNames }
+        val isVerb = word.variants.any { it in KindnessLexicon.verbs }
+        val fillers = fillersBefore(tokens, index)
+        val cursor = index - 1 - fillers
+        if (cursor < 0 || tokens[cursor].clause != word.clause) return false
         val before = tokens[cursor].key
+        // "ur" straight before a noun-like word is "your" ("ur baby brother").
         return when {
             before in KindnessLexicon.negators -> false
+            before == KindnessLexicon.UR && fillers == 0 && isName -> false
             before in KindnessLexicon.youAre -> true
-            before in KindnessLexicon.you -> isName && fillers == 0
+            before in KindnessLexicon.you -> aimedAtYou(tokens, cursor, fillers, isVerb)
             before in KindnessLexicon.copulas -> targetsReader(tokens, cursor)
             else -> false
+        }
+    }
+
+    /**
+     * How many [KindnessLexicon.fillers] (at most [KindnessLexicon.MAX_FILLERS]) come right before [index], within its
+     * clause.
+     */
+    private fun fillersBefore(tokens: List<KindnessToken>, index: Int): Int {
+        val clause = tokens[index].clause
+        var fillers = 0
+        while (fillers < KindnessLexicon.MAX_FILLERS) {
+            val before = tokens.getOrNull(index - 1 - fillers)
+            if (before == null || before.clause != clause || before.key !in KindnessLexicon.fillers) break
+            fillers++
+        }
+        return fillers
+    }
+
+    /**
+     * After "you" at [you] and [fillers] fillers: asked ("are you (so) stupid?"), direct ("you stupid", but not a verb:
+     * "you mean the red one?"), or with fillers at the start of a clause ("you so dumb", "you a loser").
+     */
+    private fun aimedAtYou(tokens: List<KindnessToken>, you: Int, fillers: Int, isVerb: Boolean): Boolean {
+        val previous = tokens.getOrNull(you - 1)?.takeIf { it.clause == tokens[you].clause }
+        return when {
+            previous?.key in KindnessLexicon.copulas -> true
+            fillers == 0 -> !isVerb
+            else -> previous == null && !isVerb
         }
     }
 
@@ -218,15 +255,32 @@ internal object KindnessRules {
                 tokens.getOrNull(verb - 1 - words)?.key in KindnessLexicon.your
             }
 
-    private fun hostilePhrases(tokens: List<KindnessToken>): List<String> = buildList {
+    /**
+     * The [KindnessLexicon.hostilePhrases] in [tokens], unless a [KindnessLexicon.phraseNegators] word comes up to
+     * [PHRASE_NEGATION_WINDOW] words before it in the same clause, or it is "hit you up" slang.
+     */
+    private fun hostilePhrases(tokens: List<KindnessToken>): List<String> =
+        phrases(tokens, KindnessLexicon.hostilePhrases) { start, phrase ->
+            val clause = tokens[start].clause
+            val negated = (1..PHRASE_NEGATION_WINDOW).any { back ->
+                tokens.getOrNull(start - back)?.takeIf { it.clause == clause }?.key in KindnessLexicon.phraseNegators
+            }
+            val slang = phrase.any { it in KindnessLexicon.upSlang } &&
+                tokens.getOrNull(start + phrase.size)?.key == UP
+            negated || slang
+        }
+
+    /** Every match of one of [phrases] in [tokens] (each word compared with its variants), except [skip]ped ones. */
+    private fun phrases(
+        tokens: List<KindnessToken>,
+        phrases: List<List<String>>,
+        skip: (start: Int, phrase: List<String>) -> Boolean = { _, _ -> false },
+    ): List<String> = buildList {
         val keys = tokens.map { it.key }
-        for (phrase in KindnessLexicon.hostilePhrases) {
+        for (phrase in phrases) {
             for (start in 0..keys.size - phrase.size) {
                 val matches = phrase.indices.all { offset -> phrase[offset] in tokens[start + offset].variants }
-                val negated = (1..PHRASE_NEGATION_WINDOW).any {
-                    keys.getOrNull(start - it) in KindnessLexicon.phraseNegators
-                }
-                if (matches && !negated) add(keys.subList(start, start + phrase.size).joinToString(" "))
+                if (matches && !skip(start, phrase)) add(keys.subList(start, start + phrase.size).joinToString(" "))
             }
         }
     }
@@ -235,15 +289,20 @@ internal object KindnessRules {
         val letters = text.filter { it.isLetter() }
         val cased = letters.filter { it.isUpperCase() || it.isLowerCase() }
         val allCaps = cased.length >= KindnessLexicon.SHOUT_MIN_LETTERS && cased.all { it.isUpperCase() }
-        return allCaps || marks.containsMatchIn(text)
+        val bangs = marks.findAll(text).any { run -> run.value.count { it == '!' } >= KindnessLexicon.SHOUT_MIN_BANGS }
+        return allCaps || bangs
     }
 
-    /** [text] in lower case (first letter capital) with runs of `!`/`?` cut to one, if it fits a suggestion. */
+    /**
+     * [text] in lower case (first letter capital) with runs of `!`/`?` cut to one, if it fits a suggestion and has at
+     * least [MIN_CALMED_LETTERS] letters ("!!!" alone would become "!").
+     */
     private fun calmed(text: String): String? {
         val lower = text.trim().lowercase().replace(Regex("([!?])[!?]+"), "$1")
         val sentence = lower.replaceFirstChar { it.uppercaseChar() }
         return sentence.takeIf {
-            it.isNotBlank() && it.codePointCount(0, it.length) <= AiGateway.MAX_SUGGESTION_LENGTH
+            it.count(Char::isLetter) >= MIN_CALMED_LETTERS &&
+                it.codePointCount(0, it.length) <= AiGateway.MAX_SUGGESTION_LENGTH
         }
     }
 }

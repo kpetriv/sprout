@@ -48,6 +48,11 @@ import kotlin.time.Instant
  * count: invalid ones, games over the daily cap or outside their played-on window and the losing copies of a
  * conflicting duplicate are left out. Money is the household currency ([FiatCurrencyProvider]); events in another
  * fiat currency are ignored.
+ *
+ * Cost (review L15): submissions are read per active kid; the ledger is read once as the verified snapshot, because
+ * only the household projection says which events were applied (caps, conflicts and invalid events span the stream).
+ * The calculator then keeps only the active kids' events of the week before folding. Recomputation is bounded by the
+ * app (D-M6-28: only when the facts' tables change while the card is shown).
  */
 class WeeklyFactsUseCase @Inject constructor(
     private val kids: KidRepository,
@@ -101,8 +106,10 @@ internal object WeeklyFactsCalculator {
         val from = week.monday()
         val days = from..through
         val inWeek = { instant: Instant -> dateOf(instant) in days }
-        val applied = appliedEvents(events, projection.anomalies).filter { inWeek(it.envelope.createdAt) }
-        val createdById = events.groupBy({ it.eventId }, { it.envelope.createdAt })
+        val kidIds = kids.mapTo(HashSet()) { it.id }
+        val ofKids = events.filter { it.envelope.kidId in kidIds }
+        val applied = appliedEvents(ofKids, projection.anomalies).filter { inWeek(it.envelope.createdAt) }
+        val createdById = ofKids.groupBy({ it.eventId }, { it.envelope.createdAt })
         val facts = kids.map { kid ->
             val anomalies = projection.anomaliesFor(kid.id).count { anomaly ->
                 anomaly.eventIds().any { id -> createdById[id].orEmpty().any(inWeek) }

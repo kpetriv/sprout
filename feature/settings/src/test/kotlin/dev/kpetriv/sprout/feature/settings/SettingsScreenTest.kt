@@ -57,7 +57,9 @@ class SettingsScreenTest {
 
         compose.onNodeWithText("This phone can run Gemini Nano", substring = true).assertIsDisplayed()
         compose.onNodeWithText("What it is used for").assertIsDisplayed()
-        compose.onNodeWithText("Download the model on Wi-Fi").performClick()
+        compose.onNodeWithText("Applies to this phone only", substring = true).assertIsDisplayed()
+        compose.onNodeWithText("the kindness check in chat uses the built-in rules", substring = true).assertIsDisplayed()
+        compose.onNodeWithText("Download the model").performClick()
         compose.onNodeWithText("Use on-device AI").performClick()
 
         assertEquals(
@@ -71,7 +73,7 @@ class SettingsScreenTest {
         show { AiSettingsScreen(SettingsPreviewData.ai(AiModelStatus.UNAVAILABLE), onEvent = {}, onBack = {}) }
 
         compose.onNodeWithText("Not available on this device", substring = true).assertIsDisplayed()
-        compose.onNodeWithText("Download the model on Wi-Fi").assertDoesNotExist()
+        compose.onNodeWithText("Download the model").assertDoesNotExist()
     }
 
     @Test

@@ -12,7 +12,8 @@ import dev.kpetriv.sprout.core.model.KidUiTier
  * On-device AI (M6, ADR-0010): four typed tasks. [RulesAiGateway] answers every one deterministically on any device;
  * [GeminiNanoAiGateway] answers the text tasks with Gemini Nano (ML Kit GenAI Prompt API on AICore) where the device
  * has it, and falls back to the rules result whenever the model is busy, missing, slow or wrong. [AiRouter] picks one
- * per call and is what the app injects. Nothing leaves the device.
+ * per call and is the only one the app can inject. Inference runs on the device and nothing Sprout gives it leaves the
+ * phone; the usage-metrics uploader ML Kit ships is removed from the app's manifest (D-M6-33).
  *
  * Every call may take up to its budget ([AiTimeouts]); call it from a ViewModel while the app is in the foreground
  * (AICore refuses background inference). Results are never persisted (D-M6-7) and their `toString` never shows text.
@@ -22,8 +23,8 @@ interface AiGateway {
     suspend fun status(): AiStatus
 
     /**
-     * Asks AICore to download the model; the system downloads it on Wi-Fi in the background. True when the request
-     * was accepted (or the model is already there), false when it was refused or nothing can be downloaded.
+     * Asks AICore to download the model; the system downloads it in the background, usually on Wi-Fi. True when the
+     * request was accepted (or the model is already there), false when it was refused or nothing can be downloaded.
      */
     suspend fun requestDownload(): Boolean
 
@@ -50,7 +51,8 @@ interface AiGateway {
 
     /**
      * Two to four sentences (at most [MAX_SUMMARY_LENGTH] code points) about [facts] for the parent dashboard, and
-     * which path wrote them. Every number in the text is one of the facts (D-M6-3).
+     * which path wrote them. Every number in the text is one of the facts (D-M6-3); the model writes it only on an
+     * English device (D-M6-35).
      */
     suspend fun weeklySummaryResult(facts: WeeklyFacts): WeeklySummary
 
@@ -74,12 +76,6 @@ interface AiGateway {
 
         /** Fewest and most chore suggestions in one answer. */
         val SUGGESTION_COUNT: IntRange = 3..5
-
-        /**
-         * What a nudge card says above the suggestion (rules lexicon: English). The suggestion itself is only the
-         * message the kid can send.
-         */
-        const val KINDNESS_PROMPT: String = "Could you say it in a kinder way? For example:"
     }
 }
 

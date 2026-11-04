@@ -29,18 +29,22 @@ data class AiSettingsUiState(
     val isSaving: Boolean = false,
     val message: SettingsMessage? = null,
 ) {
-    /** The consent row is offered while the model can be (or is being) downloaded. */
+    /**
+     * The consent row is offered only with AI on and while the model can be (or is being) downloaded: with AI off
+     * nothing offers a download (audit L3).
+     */
     val showsDownloadConsent: Boolean
-        get() = settings?.status == AiModelStatus.DOWNLOADABLE || settings?.status == AiModelStatus.DOWNLOADING
+        get() = settings?.enabled == true &&
+            (settings.status == AiModelStatus.DOWNLOADABLE || settings.status == AiModelStatus.DOWNLOADING)
 
-    /** The consent switch works only with AI on and nothing being written. */
-    val canChangeConsent: Boolean get() = settings?.enabled == true && !isSaving
+    /** The consent switch works only while it is offered and nothing is being written. */
+    val canChangeConsent: Boolean get() = showsDownloadConsent && !isSaving
 }
 
 sealed interface AiSettingsEvent {
     data class EnabledChanged(val enabled: Boolean) : AiSettingsEvent
 
-    /** On asks the system to download the model on Wi-Fi (D-M6-6); off withdraws the consent. */
+    /** On asks the system to download the model, usually on Wi-Fi (D-M6-6, D-M6-33); off withdraws the consent. */
     data class DownloadConsentChanged(val consent: Boolean) : AiSettingsEvent
 
     data object MessageShown : AiSettingsEvent

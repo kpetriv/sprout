@@ -16,6 +16,10 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
@@ -29,6 +33,9 @@ import androidx.compose.ui.unit.dp
  * The on-device weekly summary (M6 §3.3): "This week so far" / "Last week", the text with an "On-device" chip, and
  * "Download the on-device model" when the model can be fetched and the parent has not agreed yet. Fails soft: an
  * unavailable summary is one line, never an error for the dashboard.
+ *
+ * The text is announced (a polite live region) only once the parent has switched the week here, never just because the
+ * dashboard opened or the facts changed (review L13).
  */
 @Composable
 fun WeeklySummaryCard(
@@ -38,6 +45,7 @@ fun WeeklySummaryCard(
     onDownloadModel: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    var weekChanged by remember { mutableStateOf(false) }
     OutlinedCard(modifier = modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Row(
@@ -52,8 +60,11 @@ fun WeeklySummaryCard(
                 )
                 OnDeviceChip()
             }
-            WeekToggle(week, onWeekChange)
-            SummaryBody(summary, onDownloadModel)
+            WeekToggle(week) { picked ->
+                if (picked != week) weekChanged = true
+                onWeekChange(picked)
+            }
+            SummaryBody(summary, announce = weekChanged, onDownloadModel = onDownloadModel)
         }
     }
 }
@@ -97,7 +108,7 @@ private fun WeekToggle(week: SummaryWeek, onWeekChange: (SummaryWeek) -> Unit) {
 }
 
 @Composable
-private fun SummaryBody(summary: WeeklySummaryUi, onDownloadModel: () -> Unit) {
+private fun SummaryBody(summary: WeeklySummaryUi, announce: Boolean, onDownloadModel: () -> Unit) {
     when (summary) {
         WeeklySummaryUi.Loading -> Row(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -115,7 +126,7 @@ private fun SummaryBody(summary: WeeklySummaryUi, onDownloadModel: () -> Unit) {
             Text(
                 summary.text,
                 style = MaterialTheme.typography.bodyMedium,
-                modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
+                modifier = if (announce) Modifier.semantics { liveRegion = LiveRegionMode.Polite } else Modifier,
             )
             if (summary.offerModelDownload) {
                 TextButton(onClick = onDownloadModel) {

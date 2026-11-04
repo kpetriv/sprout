@@ -15,6 +15,7 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilledTonalIconButton
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -60,7 +61,8 @@ internal fun TextComposer(
         OutlinedTextField(
             value = state.draft,
             onValueChange = { onEvent(ChatEvent.DraftChanged(it)) },
-            enabled = state.canSend,
+            // Review M7: the text being checked is the text sent, so it cannot be edited while the check runs.
+            enabled = state.canSend && !state.checking,
             placeholder = { Text(stringResource(R.string.feature_chat_input_hint)) },
             maxLines = MAX_COMPOSER_LINES,
             modifier = Modifier.weight(1f),
@@ -88,6 +90,8 @@ private fun CheckingIndicator() {
                 contentDescription = checking
                 liveRegion = LiveRegionMode.Polite
             },
+        // Inside the disabled Send button: the button's (disabled) content colour, not the default primary (L13).
+        color = LocalContentColor.current,
         strokeWidth = 2.dp,
     )
 }

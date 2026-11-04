@@ -83,7 +83,9 @@ internal fun ManualAdjustmentSheet(
  *
  * With [onScanReceipt] the form offers "Scan a receipt" and says that the reason is stored as plain text; a
  * [AdjustmentUi.prefill] then fills the amount as a debit and the reason "Receipt: <merchant>" (at most
- * [MAX_REASON_LENGTH] characters) once, and [onPrefillApplied] tells the ViewModel it was taken.
+ * [MAX_REASON_LENGTH] characters) once, and [onPrefillApplied] tells the ViewModel it was taken. A field the parent
+ * changed after tapping "Scan a receipt" keeps the parent's value (audit L5): the amount, the reason, and the sign
+ * (a sign the parent tapped is never forced to a debit). Save is disabled while a receipt is being read.
  */
 @Composable
 internal fun ManualAdjustmentForm(
@@ -97,16 +99,29 @@ internal fun ManualAdjustmentForm(
     var amountText by rememberSaveable { mutableStateOf("") }
     var sign by rememberSaveable { mutableStateOf(AdjustmentSign.CREDIT) }
     var reason by rememberSaveable { mutableStateOf("") }
+    // What the parent changed since tapping "Scan a receipt": a late prefill leaves those fields alone (audit L5).
+    var amountEdited by rememberSaveable { mutableStateOf(false) }
+    var signEdited by rememberSaveable { mutableStateOf(false) }
+    var reasonEdited by rememberSaveable { mutableStateOf(false) }
     val digits = adjustment.currency.fractionDigits
     PrefillEffect(adjustment, onPrefillApplied) { amount, receiptReason ->
-        amount?.let { amountText = it }
-        sign = AdjustmentSign.DEBIT
-        reason = receiptReason
+        if (!amountEdited) amount?.let { amountText = it }
+        if (!signEdited) sign = AdjustmentSign.DEBIT
+        if (!reasonEdited) reason = receiptReason
+    }
+    val scan = onScanReceipt?.let { pick ->
+        {
+            amountEdited = false
+            signEdited = false
+            reasonEdited = false
+            pick()
+        }
     }
     val parsed = remember(amountText, digits) { MinorUnitsParser.parse(amountText, digits) }
     val amountMinor = (parsed as? MinorUnitsParser.Result.Valid)?.minorUnits
     val amountError = amountErrorText(parsed, digits)
-    val canSubmit = amountMinor != null && amountMinor > 0 && reason.isNotBlank() && !adjustment.isSubmitting
+    val canSubmit = amountMinor != null && amountMinor > 0 && reason.isNotBlank() && !adjustment.isSubmitting &&
+        !adjustment.scanning
 
     Column(
         modifier = modifier.verticalScroll(rememberScrollState()),
@@ -117,12 +132,15 @@ internal fun ManualAdjustmentForm(
             style = MaterialTheme.typography.headlineSmall,
             modifier = Modifier.semantics { heading() },
         )
-        ScanReceipt(adjustment, onScanReceipt)
+        ScanReceipt(adjustment, scan)
         SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
             AdjustmentSign.entries.forEachIndexed { index, option ->
                 SegmentedButton(
                     selected = sign == option,
-                    onClick = { sign = option },
+                    onClick = {
+                        sign = option
+                        signEdited = true // Even the one already selected: the parent chose it.
+                    },
                     shape = SegmentedButtonDefaults.itemShape(index, AdjustmentSign.entries.size),
                 ) {
                     Text(
@@ -138,7 +156,12 @@ internal fun ManualAdjustmentForm(
         }
         OutlinedTextField(
             value = amountText,
-            onValueChange = { input -> if (input.isAmountInput()) amountText = input },
+            onValueChange = { input ->
+                if (input.isAmountInput()) {
+                    amountText = input
+                    amountEdited = true
+                }
+            },
             label = { Text(stringResource(R.string.feature_wallet_adjust_amount)) },
             suffix = { Text(adjustment.currency.isoCode) },
             isError = amountError != null,
@@ -149,7 +172,12 @@ internal fun ManualAdjustmentForm(
         )
         OutlinedTextField(
             value = reason,
-            onValueChange = { if (it.length <= MAX_REASON_LENGTH) reason = it },
+            onValueChange = {
+                if (it.length <= MAX_REASON_LENGTH) {
+                    reason = it
+                    reasonEdited = true
+                }
+            },
             label = { Text(stringResource(R.string.feature_wallet_adjust_reason)) },
             placeholder = { Text(stringResource(R.string.feature_wallet_adjust_reason_hint)) },
             maxLines = REASON_MAX_LINES,
@@ -232,7 +260,10 @@ private fun ScanReceipt(adjustment: AdjustmentUi, onScan: (() -> Unit)?) {
                     modifier = Modifier
                         .padding(end = 8.dp)
                         .size(16.dp)
-                        .semantics { contentDescription = reading },
+                        .semantics {
+                            contentDescription = reading
+                            liveRegion = LiveRegionMode.Polite // Announced, as chat's check is (review L13).
+                        },
                     strokeWidth = 2.dp,
                 )
             }

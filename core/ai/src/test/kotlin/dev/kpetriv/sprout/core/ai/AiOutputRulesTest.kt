@@ -37,7 +37,51 @@ class AiOutputRulesTest {
             "Chores: 3 marked done, 2 approved and 1 sent back.",
             "Can we talk about it later?",
             "Tidy the room. Then read.",
+            "Tidy up, e.g. the desk, before 7 a.m. or after 5 p.m.",
+            "ok. can we talk later?",
+            "Due on 12/03/2026.",
+            "Feed the dog at 7.30 every day",
         ).forEach { assertTrue(AiOutputRules.isCleanText(it, 200), it) }
+    }
+
+    @Test
+    fun linksWithAnyDomainOrDisguisedDotsAreRejected() {
+        listOf(
+            "go to evil.ai",
+            "bit.do/x",
+            "shop at evil.store",
+            "see evil.shop now",
+            "evil.us",
+            "watch evil.tv",
+            "EVIL.COM",
+            "evil . com",
+            "evil [.] com",
+            "evil(.)com",
+            "evil\u3002com",
+            "evil\uFF0Ecom",
+            "evil dot com",
+            "evil (dot) com",
+            "Leo earned £3.50.He saved", // A missing space reads as a domain; the template is shown instead.
+        ).forEach { assertTrue(AiOutputRules.hasUrl(it), it) }
+    }
+
+    @Test
+    fun disguisedEmailsAndPhoneNumbersAreRejected() {
+        listOf("kid\uFF20mail.com", "kid @ mail.com").forEach { assertTrue(AiOutputRules.hasEmail(it), it) }
+        listOf(
+            "0794/600/0000",
+            "call \u0660\u0667\u0669\u0664\u0666\u0660\u0660\u0660\u0660\u0660\u0660", // Arabic-Indic digits.
+            "call \uFF10\uFF17\uFF19\uFF14 \uFF16\uFF10\uFF10 \uFF10\uFF10\uFF10\uFF10", // Full-width digits.
+        ).forEach { assertTrue(AiOutputRules.hasPhoneNumber(it), it) }
+        assertFalse(AiOutputRules.hasPhoneNumber("on 12/03/2026"), "a date")
+    }
+
+    @Test
+    fun lineAndParagraphSeparatorsPrivateUseAndLoneSurrogatesAreRejected() {
+        listOf("one\u2028two", "one\u2029two", "secret\uE000mark", "broken\uD800half", "tab\there").forEach {
+            assertTrue(AiOutputRules.hasControlCharacters(it), it)
+        }
+        assertFalse(AiOutputRules.hasControlCharacters("Well done 👍🏽 Leo"), "emoji are surrogate pairs, not lone")
     }
 
     @Test
@@ -119,7 +163,7 @@ class AiOutputRulesTest {
     fun summaryNumbersMustAllComeFromTheFacts() {
         val facts = TestFacts.facts()
         val good = "This week so far, Leo earned £3.98, with £1.50 from chores. He played 4 games and got 2 chores " +
-            "approved."
+            "approved. 1 ledger warning needs a look."
         assertTrue(AiOutputRules.isValidSummary(good, facts), "every number is a fact")
         assertTrue(AiOutputRules.numbersConsistent("Leo earned 3,98 in week 45 of 2026.", facts), "decimal comma")
         assertFalse(AiOutputRules.numbersConsistent("Leo earned £4.10 this week.", facts), "invented amount")
@@ -127,6 +171,39 @@ class AiOutputRulesTest {
         assertFalse(AiOutputRules.numbersConsistent("Leo played twelve games.", facts), "spelled-out invented count")
         assertTrue(AiOutputRules.numbersConsistent("Leo played four games and no one complained.", facts))
         assertTrue(AiOutputRules.numbersConsistent("Leo saved £0.50 and spent £1.", facts))
+    }
+
+    @Test
+    fun numbersInOtherScriptsAndUncheckableQuantityWordsAreRefused() {
+        val facts = TestFacts.facts()
+        listOf(
+            "Leo earned £\u0663\u066B\u0665\u0660.", // Arabic-Indic "3.50".
+            "Leo earned £\uFF13.\uFF15\uFF10.", // Full-width "3.50".
+            "Leo earned \u0968\u0966 rupees.", // Devanagari "20".
+            "Leo earned a hundred pounds.",
+            "Leo earned a thousand pounds.",
+            "Leo did a dozen chores.",
+            "Leo played for half an hour.",
+            "Leo played twice.",
+            "Leo played once.",
+            "Leo played thirty-two games.",
+            "Leo played thirty two games.",
+            "Leo did twenty-one chores.",
+        ).forEach { assertFalse(AiOutputRules.numbersConsistent(it, facts), it) }
+        assertTrue(AiOutputRules.numbersConsistent("Leo used thirty minutes and earned fifteen.", facts))
+        assertTrue(AiOutputRules.numbersConsistent("Leo did no one any harm.", facts))
+        assertEquals(listOf(setOf("32")), AiOutputRules.numbersIn("thirty-two"))
+        assertEquals(listOf(setOf("25"), setOf("4")), AiOutputRules.numbersIn("twenty five and four"))
+    }
+
+    @Test
+    fun theLedgerWarningMustStayWhenThereIsOne() {
+        val facts = TestFacts.facts()
+        assertTrue(AiOutputRules.keepsLedgerWarnings("Also, 1 ledger warning needs a look.", facts))
+        assertFalse(AiOutputRules.keepsLedgerWarnings("Leo had a good week.", facts))
+        assertFalse(AiOutputRules.keepsLedgerWarnings("0 ledger warnings need a look.", facts))
+        assertFalse(AiOutputRules.keepsLedgerWarnings("21 ledger warnings need a look.", facts))
+        assertTrue(AiOutputRules.keepsLedgerWarnings("Leo had a good week.", TestFacts.facts(TestFacts.mia)))
     }
 
     @Test

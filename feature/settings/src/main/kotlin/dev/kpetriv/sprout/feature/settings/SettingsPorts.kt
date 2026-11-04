@@ -119,8 +119,8 @@ interface AiSettingsSource {
     suspend fun setEnabled(enabled: Boolean)
 
     /**
-     * Records the parent's answer to "Download the model on Wi-Fi". True also asks AICore to download (the system
-     * waits for Wi-Fi); false only withdraws the consent (a downloaded model is managed by the system).
+     * Records the parent's answer to "Download the model". True also asks AICore to download (the system decides
+     * when, usually on Wi-Fi); false only withdraws the consent (a downloaded model is managed by the system).
      */
     suspend fun setDownloadConsent(consent: Boolean)
 }
@@ -136,7 +136,7 @@ enum class AiModelStatus {
     /** The device supports it; the model is not downloaded yet. */
     DOWNLOADABLE,
 
-    /** The system is downloading the model (on Wi-Fi). */
+    /** The system is downloading the model (when it chooses, usually on Wi-Fi). */
     DOWNLOADING,
 
     /** No AICore on this device: the built-in rules do everything. */

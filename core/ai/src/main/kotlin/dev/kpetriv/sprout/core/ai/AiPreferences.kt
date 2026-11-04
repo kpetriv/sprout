@@ -15,7 +15,8 @@ import java.io.IOException
 /**
  * The parent's AI settings (D-M6-6).
  *
- * @property enabled whether the on-device model may be used; the rules path runs either way. On by default.
+ * @property enabled whether the on-device model may be used on this phone; the rules path runs either way. On by
+ *   default. A kid's linked phone takes the rules whatever it says ([AiContext], D-M6-34).
  * @property downloadConsent whether the parent agreed to the model download (Settings asks once); until then
  *   [AiGateway.requestDownload] is never sent to AICore. Off by default.
  */

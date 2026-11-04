@@ -10,11 +10,13 @@ import kotlinx.coroutines.test.currentTime
 import kotlinx.coroutines.test.runTest
 import java.io.IOException
 import java.util.Locale
+import kotlin.coroutines.cancellation.CancellationException
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.seconds
+import kotlin.time.TestTimeSource
 
 class AiRouterTest {
     private val gbp = Currency.Fiat("GBP")
@@ -24,10 +26,13 @@ class AiRouterTest {
     private val preferences = InMemoryAiPreferences()
     private val calls = mutableListOf<Triple<AiTask, AiPath, AiFailure?>>()
     private val log = AiCallLog { task, path, _, failure -> calls += Triple(task, path, failure) }
-    private val router = AiRouter(nano, rules, preferences, log)
+    private val timeSource = TestTimeSource()
+    private var linkedKid = false
+    private val context = AiContext { linkedKid }
+    private val router = AiRouter(nano, rules, preferences, context, log, timeSource = timeSource)
 
     private val facts = TestFacts.facts()
-    private val modelSummary = "Leo had a good week. He earned £3.98 and played 4 games."
+    private val modelSummary = "Leo had a good week. He earned £3.98 and played 4 games. 1 ledger warning needs a look."
 
     private suspend fun summary() = router.weeklySummaryResult(facts)
 
@@ -97,7 +102,7 @@ class AiRouterTest {
         val hanging = object : PromptModel by model {
             override suspend fun status(): AiStatus = awaitCancellation()
         }
-        val router = AiRouter(GeminiNanoAiGateway(hanging, rules), rules, preferences, log)
+        val router = AiRouter(GeminiNanoAiGateway(hanging, rules), rules, preferences, context, log)
 
         val start = currentTime
         val expected = rules.suggestChores(AgeBand.AGES_8_TO_11, emptyList(), gbp)
@@ -114,7 +119,7 @@ class AiRouterTest {
             override suspend fun setDownloadConsent(consent: Boolean) = Unit
         }
         model.answer = { PromptResult.Success(SummaryOutput(modelSummary)) }
-        val router = AiRouter(nano, rules, broken, log)
+        val router = AiRouter(nano, rules, broken, context, log)
 
         assertEquals(rules.weeklySummaryResult(facts), router.weeklySummaryResult(facts))
         assertFalse(router.requestDownload())
@@ -166,6 +171,102 @@ class AiRouterTest {
             ),
             calls,
         )
+    }
+
+    @Test
+    fun aKidsLinkedPhoneTakesTheRulesWhateverTheSwitchSays() = runTest {
+        linkedKid = true
+        model.answer = { PromptResult.Success(KindnessOutput(true, "Please could you help me?")) }
+
+        assertEquals(KindnessVerdict.Ok, router.kindness("do it now u slug", KidUiTier.SPROUT))
+        assertEquals(
+            rules.kindness("you idiot", KidUiTier.SPROUT),
+            router.kindness("you idiot", KidUiTier.SPROUT),
+        )
+        assertTrue(model.requests.isEmpty())
+        assertEquals(0, model.statusCalls)
+        assertTrue(calls.all { it == Triple(AiTask.KINDNESS, AiPath.RULES, AiFailure.KID_DEVICE) })
+
+        preferences.setDownloadConsent(true)
+        model.status = AiStatus(AiAvailability.DOWNLOADABLE)
+        assertFalse(router.requestDownload())
+        assertEquals(0, model.downloads)
+    }
+
+    @Test
+    fun aSessionThatCannotSayMeansRules() = runTest {
+        val unsure = AiRouter(nano, rules, preferences, { error("no session") }, log)
+        model.answer = { PromptResult.Success(SummaryOutput(modelSummary)) }
+
+        assertEquals(rules.weeklySummaryResult(facts), unsure.weeklySummaryResult(facts))
+        assertEquals(Triple(AiTask.WEEKLY_SUMMARY, AiPath.RULES, AiFailure.ERROR), calls.single())
+    }
+
+    @Test
+    fun theDownloadNeedsTheSwitchOnToo() = runTest {
+        model.status = AiStatus(AiAvailability.DOWNLOADABLE)
+        preferences.setDownloadConsent(true)
+        preferences.setEnabled(false)
+
+        assertFalse(router.requestDownload())
+        assertEquals(0, model.downloads)
+    }
+
+    @Test
+    fun anAvailableStatusIsReusedForThirtySeconds() = runTest {
+        model.answer = { PromptResult.Success(KindnessOutput(false, "")) }
+
+        repeat(3) { router.kindness("hello", KidUiTier.SPROUT) }
+        assertEquals(1, model.statusCalls)
+
+        timeSource += AiRouter.STATUS_CACHE
+        router.kindness("hello", KidUiTier.SPROUT)
+        assertEquals(2, model.statusCalls)
+        assertEquals(4, model.requests.size)
+    }
+
+    @Test
+    fun aStatusThatIsNotAvailableIsAskedEveryTime() = runTest {
+        model.status = AiStatus(AiAvailability.DOWNLOADING)
+
+        repeat(3) { router.kindness("hello", KidUiTier.SPROUT) }
+        assertEquals(3, model.statusCalls)
+
+        model.status = AiStatus.AVAILABLE
+        router.kindness("hello", KidUiTier.SPROUT)
+        model.status = AiStatus(AiAvailability.UNAVAILABLE)
+        router.status()
+        router.kindness("hello", KidUiTier.SPROUT)
+        assertEquals(AiFailure.UNAVAILABLE, calls.last().third, "a fresh status read clears the cached AVAILABLE")
+    }
+
+    @Test
+    fun aFailingStatusReadIsAnAicoreErrorNotATimeout() = runTest {
+        model.statusFailure = IllegalStateException("binder")
+        assertEquals(AiStatus(AiAvailability.UNAVAILABLE, AiStatus.REASON_AICORE_ERROR), router.status())
+    }
+
+    @Test
+    fun aHangingSettingsReadCountsAgainstTheBudget() = runTest {
+        val hanging = object : AiPreferences {
+            override val settings: Flow<AiSettings> = flow { awaitCancellation() }
+            override suspend fun setEnabled(enabled: Boolean) = Unit
+            override suspend fun setDownloadConsent(consent: Boolean) = Unit
+        }
+        val router = AiRouter(nano, rules, hanging, context, log)
+
+        val start = currentTime
+        assertEquals(rules.kindness("you idiot", KidUiTier.SPROUT), router.kindness("you idiot", KidUiTier.SPROUT))
+        assertEquals(2_000, currentTime - start)
+        assertEquals(AiFailure.TIMEOUT, calls.single().third)
+    }
+
+    @Test
+    fun aCancellationFromTheModelThatIsNotOursFallsBackToTheRules() = runTest {
+        model.answer = { throw CancellationException("AICore cancelled the request") }
+
+        assertEquals(rules.weeklySummaryResult(facts), summary())
+        assertEquals(Triple(AiTask.WEEKLY_SUMMARY, AiPath.RULES, AiFailure.ERROR), calls.single())
     }
 
     @Test

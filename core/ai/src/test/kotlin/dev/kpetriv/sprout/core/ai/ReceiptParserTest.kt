@@ -30,6 +30,32 @@ class ReceiptParserTest {
     }
 
     @Test
+    fun aSubTotalBeforeADiscountIsNotThePayment() {
+        val dashed = rows("Big Grocer", "Sub-total 15.00", "Clubcard savings -3.00", "TOTAL 12.00")
+        assertEquals(ReceiptPrefill(Money(1200), "Big Grocer"), ReceiptParser.parse(dashed, gbp))
+        val spaced = rows("Big Grocer", "SUB TOTAL 15.00", "Discount 3.00", "Total to pay 12.00")
+        assertEquals(Money(1200), ReceiptParser.parse(spaced, gbp)?.amount)
+    }
+
+    @Test
+    fun aTotalIncludingVatIsThePaymentButAVatLineIsNot() {
+        val receipt = rows("Cafe", "VAT 20% 2.00", "TOTAL INC VAT £12.00")
+        assertEquals(ReceiptPrefill(Money(1200), "Cafe"), ReceiptParser.parse(receipt, gbp))
+        assertEquals(Money(1200), ReceiptParser.parse(rows("Cafe", "Total incl. tax 12.00"), gbp)?.amount)
+        assertEquals(null, ReceiptParser.parse(rows("Cafe", "VAT total 2.00"), gbp)?.amount)
+    }
+
+    @Test
+    fun threeDecimalCurrenciesReadOneGroupAsTheDecimals() {
+        val kwd = Currency.Fiat("KWD")
+        assertEquals(listOf(Money(12_500)), ReceiptParser.amountsIn("TOTAL 12.500", kwd))
+        assertEquals(listOf(Money(12_500)), ReceiptParser.amountsIn("TOTAL 12,500", kwd))
+        assertEquals(listOf(Money(1_250_500)), ReceiptParser.amountsIn("TOTAL 1,250.500", kwd))
+        assertEquals(listOf(Money(12_000)), ReceiptParser.amountsIn("TOTAL 12", kwd))
+        assertEquals(listOf(Money(1_250_000)), ReceiptParser.amountsIn("Total 12,500", gbp), "two decimals: thousands")
+    }
+
+    @Test
     fun aLabelAndItsAmountInTwoColumnsOfOneRowArePaired() {
         val receipt = listOf(
             RecognizedLine("MEGA MART", 0, 30, 100),

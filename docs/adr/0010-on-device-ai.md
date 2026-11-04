@@ -3,7 +3,7 @@
 - **Status:** Accepted
 - **Date:** 2026-11-04
 - **Milestone:** Decided and implemented in M6 (`core/ai`, `core/domain-household` `WeeklyFacts`, `core/database` `WeeklyFactsUseCase`)
-- **Related:** [ADR-0001](0001-architecture.md) (module layout), [ADR-0002](0002-ledger-as-events.md) (the ledger the facts come from), [M6 spec](../milestones/M6.md), [privacy policy draft](../PRIVACY.md), decisions D-M6-1 to D-M6-32, threat model T9 and T38
+- **Related:** [ADR-0001](0001-architecture.md) (module layout), [ADR-0002](0002-ledger-as-events.md) (the ledger the facts come from), [M6 spec](../milestones/M6.md), [privacy policy draft](../PRIVACY.md), decisions D-M6-1 to D-M6-42, threat model T9 and T38
 
 ## Context
 
@@ -11,7 +11,8 @@ Sprout has four jobs where a language model helps: a kindness nudge before a kid
 
 The only on-device model Android offers apps is Gemini Nano, through AICore and the ML Kit GenAI APIs. Its constraints shape everything here:
 
-- **Not everywhere.** Only some recent phones have AICore and Nano; the emulator never does. The model is downloaded by the system, on Wi-Fi, after an app asks.
+- **Not everywhere.** Only some recent phones have AICore and Nano; the emulator never does. The model is downloaded by the system, usually on Wi-Fi, after an app asks.
+- **Telemetry in the SDKs.** The ML Kit libraries (GenAI Prompt and text recognition) bring Google's usage-metrics uploader (Firelog/CCT), which sends device and app details, identifiers, timings and input and output sizes from the app process. Content never goes, but "nothing leaves the device" would be false with it in place.
 - **Not always.** AICore serves only the foreground app, has a per-app quota, and answers `BUSY` when either is hit. Latency varies by device and load.
 - **Beta.** The Prompt API (`com.google.mlkit:genai-prompt`) is beta; its structured output (a KSP-generated schema from `@Generable` classes) is alpha.
 - **Untrusted output.** A model can be wrong, can be talked into things by its input, and can invent numbers. Kid and parent text is exactly the input it sees.
@@ -25,7 +26,7 @@ The only on-device model Android offers apps is Gemini Nano, through AICore and 
 - **`RulesAiGateway`** is pure, deterministic Kotlin and runs on every device: a kindness lexicon we wrote (insults, swearing, hostile phrases, "you are + negative word", shouting), fixed kinder suggestions per category and tier, a curated chore catalogue (at least 12 per age band, D-M6-4), a weekly summary template, and a receipt parser over on-device text recognition. It is the reference behaviour, and its results are what users get on most devices.
 - **`GeminiNanoAiGateway`** runs the three text tasks on Gemini Nano through a small `PromptModel` seam (`MlKitPromptModel` on device, a fake in JVM tests). Receipts never use the model.
 
-**Gemini Nano is an optimisation of the rules path, never a dependency.** `AiRouter` (what the app injects) uses Nano only when the parent's switch is on (`AiPreferences.enabled`, default on) and `status()` is `AVAILABLE`; everything else, and every failure, gives the rules result. One budget covers the status check and the call: 2 s for kindness (the chat feature fails open after its own 2.5 s), 6 s for suggestions and summaries (D-M6-10). The router never throws for AICore or settings failures.
+**Gemini Nano is an optimisation of the rules path, never a dependency.** `AiRouter` (the only `AiGateway` the app can inject; the Nano gateway and `PromptModel` are internal to `core/ai`) uses Nano only when the parent's switch is on (`AiPreferences.enabled`, default on), the phone is not a kid's linked phone (`AiContext`, D-M6-34: no parent area there to change the switch, so the kindness check takes the rules until a parent-synced switch arrives in M7) and `status()` is `AVAILABLE` (reused for 30 s); everything else, and every failure, gives the rules result. One budget covers the settings and session reads, the status check and the call: 2 s for kindness (the chat feature fails open after its own 2.5 s), 6 s for suggestions and summaries (D-M6-10). The router never throws for AICore or settings failures.
 
 ### 2. The model only proposes; validators decide
 
@@ -33,7 +34,7 @@ Every model answer is parsed through structured output (one `@Generable` class p
 
 - **Kindness:** a message is nudged when the rules *or* the model find it unkind (D-M6-12). The model's suggestion is used only if it is clean (at most 200 code points, single line, no link, e-mail, phone number, instruction-like phrase or control character), passes the rules check itself, is not the original again and repeats none of the words the rules flagged. A nudge never blocks; nothing is reported to anyone (M4).
 - **Chore suggestions:** titles at most `MAX_TITLE_LENGTH`, descriptions at most `MAX_DESCRIPTION_LENGTH`, both clean and kind; money in (0, min(3 × the band's largest catalogue reward, `LedgerPolicy.maxAmount`)]; minutes 1 to 120; no title equal (ignoring case, spacing and punctuation) to an existing chore or another suggestion; three to five survivors or the catalogue answer. Filling the editor never saves.
-- **Weekly summary (D-M6-3):** the facts are computed deterministically (`WeeklyFactsUseCase`, below); the model only rewrites the template's draft. The text must be clean, 2 to 4 sentences, at most 600 code points, and **every number in it must be one of the facts** (digits read with either decimal convention, and spelled-out numbers from "two" up). An invented amount puts the template text on screen.
+- **Weekly summary (D-M6-3):** the facts are computed deterministically (`WeeklyFactsUseCase`, below); the model only rewrites the template's draft. The text must be clean, 2 to 4 sentences, at most 600 code points, and **every number in it must be one of the facts** (digits read with either decimal convention, and spelled-out numbers from "two" up, a compound such as "twenty-five" being one number). The checker reads English only, so the model writes the summary only on English devices and is told to write numbers in digits; any non-ASCII digit, or a quantity word it cannot pin to a fact ("a hundred", "a dozen", "half", "twice"), is refused (D-M6-35). When the week has ledger anomalies the text must still say how many (D-M6-41). An invented amount puts the template text on screen.
 
 ### 3. Prompt-injection stance
 
@@ -49,7 +50,7 @@ Suggestions, verdicts and summaries are recomputed when shown and never stored. 
 
 ### 5. Download with consent (D-M6-6)
 
-`requestDownload` reaches AICore only after the parent's one-time consent in Settings (`AiPreferences.downloadConsent`, default off); the router refuses it otherwise. AICore downloads on Wi-Fi in the background. The two settings live in a device-local DataStore file (`ai_preferences`) and are not synced: each device has its own model.
+`requestDownload` reaches AICore only after the parent's one-time consent in Settings (`AiPreferences.downloadConsent`, default off) and while AI is on, never from a kid's linked phone; the router refuses it otherwise. AICore downloads in the background, usually on Wi-Fi. The two settings live in a device-local DataStore file (`ai_preferences`) and are not synced: each device has its own model.
 
 ### 6. Weekly facts
 
@@ -67,5 +68,6 @@ Suggestions, verdicts and summaries are recomputed when shown and never stored. 
 - The app behaves the same on every device; Nano changes wording, not what a feature does. The Nano path is unverified on hardware until a run on a supported Pixel (D-M6-9); the JVM tests cover it through the `PromptModel` fake.
 - The rules lexicon is English and deliberately narrow (it targets insults at the reader, not negative words in general), so it misses some unkind messages and some spellings ("i h8 u"). A miss costs a nudge that did not happen; a false nudge costs trust in nudges. Both are accepted; the lexicon is ours to extend.
 - AICore is a Google system service running on the device. Text given to it is as sensitive as what the user typed, and is subject to AICore's own handling (PRIVACY.md, THREAT_MODEL T38).
+- **ML Kit's uploader is removed (D-M6-33).** The app manifest removes the CCT backend of the datatransport runtime and a build check fails if it reappears, so no usage metrics leave the app; a network capture on a real device is M8's security review item. Any future Firebase SDK that relies on the same transport (Crashlytics) would need it back and a fresh disclosure. **Residual:** Google Play services and AICore themselves, which download the text-recognition model (at install) and Gemini Nano (after consent) and run them under Google's terms, outside Sprout's control.
 - Structured output is alpha and needs the KSP schema compiler plus R8 keep rules (`core/ai/consumer-rules.pro`); an API change there is contained in `MlKitPromptModel` and `NanoOutputs.kt`.
 - Model budgets are wall-clock limits from a ViewModel; a summary or suggestion request can take up to 6 s before the rules answer appears. Callers show progress.

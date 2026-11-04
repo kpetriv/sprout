@@ -27,9 +27,14 @@ internal sealed interface NanoAnswer<out T> {
  * ([timeouts]) or an answer that fails validation gives the [rules] result instead. Receipts never use the model.
  *
  * Kindness combines both paths: the message is nudged when the rules or the model find it unkind, and the suggestion
- * is the model's when it passes [AiOutputRules.isValidSuggestion], otherwise the rules one.
+ * is the model's when it passes [AiOutputRules.isValidSuggestion], otherwise the rules one (D-M6-12, D-M6-36).
+ *
+ * The weekly summary is asked of the model only when [locale] is English, the one language [AiOutputRules] reads
+ * numbers in (D-M6-35); otherwise the template is the answer.
+ *
+ * Internal, like [PromptModel]: the app reaches it only through [AiRouter] (audit L6).
  */
-class GeminiNanoAiGateway(
+internal class GeminiNanoAiGateway(
     private val model: PromptModel,
     private val rules: RulesAiGateway,
     private val timeouts: AiTimeouts = AiTimeouts(),
@@ -87,9 +92,12 @@ class GeminiNanoAiGateway(
     }
 
     internal suspend fun tryWeeklySummary(facts: WeeklyFacts): NanoAnswer<WeeklySummary> {
+        val locale = locale()
+        if (locale.language != Locale.ENGLISH.language) return NanoAnswer.Failed(AiFailure.LANGUAGE)
         val draft = rules.weeklySummaryResult(facts).text
-        return call(Prompts.summary(facts, draft, locale()), SummaryOutput::class, timeouts.summary) { output ->
-            val text = output.text.trim().replace(Regex(" {2,}"), " ")
+        return call(Prompts.summary(facts, draft, locale), SummaryOutput::class, timeouts.summary) { output ->
+            // Line breaks between sentences are fine; any other control character still fails validation.
+            val text = output.text.replace(whitespace, " ").trim()
             WeeklySummary(text, AiPath.NANO).takeIf { AiOutputRules.isValidSummary(text, facts) }
         }
     }
@@ -137,5 +145,10 @@ class GeminiNanoAiGateway(
     private inline fun <T> NanoAnswer<T>.valueOr(fallback: () -> T): T = when (this) {
         is NanoAnswer.Answered -> value
         is NanoAnswer.Failed -> fallback()
+    }
+
+    private companion object {
+        /** ASCII whitespace runs, newlines included (`\s` without the Unicode flag). */
+        val whitespace = Regex("\\s+")
     }
 }

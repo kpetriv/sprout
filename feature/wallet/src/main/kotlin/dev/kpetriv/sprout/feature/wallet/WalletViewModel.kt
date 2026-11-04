@@ -27,6 +27,8 @@ import dev.kpetriv.sprout.core.model.KidUiTier
 import dev.kpetriv.sprout.core.ui.MoneyFormatter
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -176,24 +178,44 @@ class WalletViewModel @Inject constructor(
         val sheet = local.value.adjustment?.takeIf { !it.scanning && !it.isSubmitting } ?: return
         setAdjustment(sheet.copy(scanning = true, scanFailed = false, prefill = null))
         viewModelScope.launch {
-            val found = try {
-                withTimeoutOrNull(SCAN_TIMEOUT_MILLIS.milliseconds) { receiptScanner.scan(uri) }
-            } catch (e: CancellationException) {
-                throw e
-            } catch (@Suppress("TooGenericExceptionCaught") _: Exception) {
-                null // An unreadable image or a recogniser failure: the parent types the amount instead.
-            }
-            val usable = found?.takeIf { (it.amount?.minorUnits ?: 0) > 0 || !it.merchant.isNullOrBlank() }
-            local.update { state ->
-                val open = state.adjustment ?: return@update state // The sheet was dismissed meanwhile.
-                state.copy(adjustment = open.copy(scanning = false, scanFailed = usable == null, prefill = usable))
+            var found: AdjustmentPrefill? = null
+            try {
+                found = scanned(uri)
+            } finally {
+                // Review M6: however the scan ends (even with this coroutine cancelled), the sheet stops scanning.
+                // "No total found" (scanFailed) also when only a merchant was read (review L14); a merchant still
+                // prefills the reason.
+                val usable = found?.takeIf { it.hasTotal() || !it.merchant.isNullOrBlank() }
+                val noTotal = usable?.hasTotal() != true
+                local.update { state ->
+                    val open = state.adjustment ?: return@update state // The sheet was dismissed meanwhile.
+                    state.copy(adjustment = open.copy(scanning = false, scanFailed = noTotal, prefill = usable))
+                }
             }
         }
     }
 
+    /**
+     * The scanner's prefill, or null when it fails, times out or throws a [CancellationException] of its own (an ML Kit
+     * task cancelled by Play services while this coroutine is still active, review M6). Cancellation of this coroutine
+     * itself still propagates.
+     */
+    @Suppress("TooGenericExceptionCaught", "SwallowedException") // The parent types the amount instead; nothing logged.
+    private suspend fun scanned(uri: String): AdjustmentPrefill? = try {
+        withTimeoutOrNull(SCAN_TIMEOUT_MILLIS.milliseconds) { receiptScanner.scan(uri) }
+    } catch (e: CancellationException) {
+        currentCoroutineContext().ensureActive()
+        null
+    } catch (e: Exception) {
+        null // An unreadable image or a recogniser failure.
+    }
+
+    private fun AdjustmentPrefill.hasTotal(): Boolean = (amount?.minorUnits ?: 0) > 0
+
     private fun submitAdjust(event: WalletEvent.SubmitAdjust) {
         val current = local.value.adjustment
-        if (current == null || current.isSubmitting) return
+        // Audit L5: nothing is saved while a receipt is being read (the sheet's Save is disabled too).
+        if (current == null || current.isSubmitting || current.scanning) return
         val invalid = when {
             mode != WalletMode.PARENT -> AdjustmentError.NotAllowed
             event.amountMinor <= 0 -> AdjustmentError.InvalidAmount

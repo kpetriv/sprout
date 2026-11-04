@@ -1,5 +1,9 @@
 package dev.kpetriv.sprout.feature.wallet
 
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.ProgressBarRangeInfo
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.SemanticsMatcher
@@ -182,6 +186,35 @@ class WalletScreenTest {
     }
 
     @Test
+    fun `a late prefill keeps what the parent changed while the receipt was read, and Save waits (audit L5)`() {
+        var adjustment by mutableStateOf(WalletPreviewData.adjustment)
+        val submitted = mutableListOf<Triple<Long, AdjustmentSign, String>>()
+        compose.setContent {
+            SproutTheme {
+                ManualAdjustmentForm(
+                    adjustment = adjustment,
+                    onSubmit = { amount, sign, reason -> submitted += Triple(amount, sign, reason) },
+                    onCancel = {},
+                    onScanReceipt = { adjustment = adjustment.copy(scanning = true) },
+                    onPrefillApplied = { adjustment = adjustment.copy(prefill = null) },
+                )
+            }
+        }
+
+        compose.onNodeWithText("Scan a receipt").performClick()
+        compose.onNodeWithText("Add").performClick()
+        compose.onNode(hasSetTextAction() and hasText("Amount")).performTextInput("3")
+        compose.onNodeWithText("Save").assertIsNotEnabled()
+
+        adjustment = adjustment.copy(scanning = false, prefill = AdjustmentPrefill(Money(1_249), "Corner Shop"))
+        compose.waitForIdle()
+
+        compose.onNodeWithText("Add").assertIsSelected()
+        compose.onNodeWithText("Save").assertIsEnabled().performClick()
+        assertEquals(Triple(300L, AdjustmentSign.CREDIT, "Receipt: Corner Shop"), submitted.single())
+    }
+
+    @Test
     fun `a receipt with no total says so and a scan in progress is announced`() {
         compose.setContent {
             SproutTheme {
@@ -194,7 +227,9 @@ class WalletScreenTest {
             }
         }
         compose.onNodeWithText("No total found on that receipt. Type the amount instead.").assertIsDisplayed()
-        compose.onNodeWithContentDescription("Reading the receipt…").assertIsDisplayed()
+        compose.onNodeWithContentDescription("Reading the receipt…")
+            .assertIsDisplayed()
+            .assert(SemanticsMatcher.expectValue(SemanticsProperties.LiveRegion, LiveRegionMode.Polite))
         compose.onNodeWithText("Scan a receipt").assertIsNotEnabled()
     }
 

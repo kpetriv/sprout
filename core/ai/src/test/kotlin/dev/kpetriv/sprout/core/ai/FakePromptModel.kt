@@ -13,8 +13,16 @@ internal class FakePromptModel(
 ) : PromptModel {
     val requests = mutableListOf<PromptRequest>()
     var downloads = 0
+    var statusCalls = 0
 
-    override suspend fun status(): AiStatus = status
+    /** When set, [status] throws it instead of answering. */
+    var statusFailure: Exception? = null
+
+    override suspend fun status(): AiStatus {
+        statusCalls++
+        statusFailure?.let { throw it }
+        return status
+    }
 
     override suspend fun download(): Boolean {
         downloads++

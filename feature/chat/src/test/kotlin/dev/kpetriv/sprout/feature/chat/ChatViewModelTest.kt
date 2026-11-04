@@ -3,6 +3,7 @@ package dev.kpetriv.sprout.feature.chat
 import androidx.lifecycle.SavedStateHandle
 import dev.kpetriv.sprout.core.model.KidUiTier
 import dev.kpetriv.sprout.core.time.FakeClock
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceTimeBy
@@ -251,6 +252,45 @@ class ChatViewModelTest {
         vm.onEvent(ChatEvent.SendText)
 
         assertEquals(listOf<OutgoingMessage>(OutgoingMessage.Text("Hello")), sender.sent)
+    }
+
+    @Test
+    fun `a filter that throws its own cancellation fails open and never leaves the chat checking (review M6)`() =
+        runTest {
+            // An ML Kit future cancelled by AICore while this coroutine is still active.
+            filter.failure = CancellationException("aicore cancelled the request")
+            filter.delayMillis = 100
+            val vm = kid(KidUiTier.SPROUT)
+            val state = ready(vm)
+            vm.onEvent(ChatEvent.DraftChanged("Hello"))
+            vm.onEvent(ChatEvent.SendText)
+            assertTrue(state().checking)
+
+            advanceTimeBy(101)
+            assertFalse(state().checking)
+            assertNull(state().nudge)
+            assertEquals(listOf<OutgoingMessage>(OutgoingMessage.Text("Hello")), sender.sent)
+            assertEquals("", state().draft)
+        }
+
+    @Test
+    fun `the draft cannot change while the check runs and the checked text is the one sent (review M7)`() = runTest {
+        filter.delayMillis = 1_000
+        val vm = kid(KidUiTier.SAPLING)
+        val state = ready(vm)
+        vm.onEvent(ChatEvent.DraftChanged("See you at the park"))
+        vm.onEvent(ChatEvent.SendText)
+
+        vm.onEvent(ChatEvent.DraftChanged("See you at the pool"))
+        assertEquals("See you at the park", state().draft, "edits are ignored while checking")
+
+        advanceTimeBy(1_001)
+        assertEquals(listOf("See you at the park" to KidUiTier.SAPLING), filter.checked)
+        assertEquals(listOf<OutgoingMessage>(OutgoingMessage.Text("See you at the park")), sender.sent)
+        assertEquals("", state().draft)
+
+        vm.onEvent(ChatEvent.DraftChanged("Next one"))
+        assertEquals("Next one", state().draft, "editing works again once the check is over")
     }
 
     @Test

@@ -1,6 +1,7 @@
 package dev.kpetriv.sprout.ai
 
 import app.cash.turbine.test
+import dev.kpetriv.sprout.FakeSessionStore
 import dev.kpetriv.sprout.core.ai.AiAvailability
 import dev.kpetriv.sprout.core.ai.AiSettings
 import dev.kpetriv.sprout.core.ai.AiStatus
@@ -15,10 +16,14 @@ import dev.kpetriv.sprout.core.model.KidUiTier
 import dev.kpetriv.sprout.feature.chat.FilterVerdict
 import dev.kpetriv.sprout.feature.settings.AiModelStatus
 import dev.kpetriv.sprout.feature.wallet.AdjustmentPrefill
+import dev.kpetriv.sprout.kidSession
+import dev.kpetriv.sprout.parentSession
+import dev.kpetriv.sprout.trialSession
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runTest
 import org.junit.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
@@ -26,10 +31,27 @@ import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.seconds
 import dev.kpetriv.sprout.feature.settings.AiSettings as AiSettingsUi
 
-/** The M6 adapters that need no database: chat filter, chore suggestions, receipt scanner, AI settings. */
+/**
+ * The M6 adapters that need no database: the router's device context, chat filter, chore suggestions, receipt scanner,
+ * AI settings.
+ */
 class AiAdaptersTest {
     private val gateway = FakeAiGateway()
     private val eur = Currency.Fiat("EUR")
+
+    @Test
+    fun `only a kid's own linked phone counts as a kid device for the router (D-M6-34)`() = runTest {
+        val sessions = FakeSessionStore()
+        val context = SessionAiContext(sessions)
+
+        assertFalse(context.isLinkedKidDevice(), "no session yet")
+        sessions.session.value = trialSession()
+        assertFalse(context.isLinkedKidDevice(), "the trial household is a parent's")
+        sessions.session.value = parentSession()
+        assertFalse(context.isLinkedKidDevice(), "kid mode on a parent's phone keeps the parent's session")
+        sessions.session.value = kidSession()
+        assertTrue(context.isLinkedKidDevice())
+    }
 
     @Test
     fun `the message filter passes the tier through and maps the verdicts`() = runTest {

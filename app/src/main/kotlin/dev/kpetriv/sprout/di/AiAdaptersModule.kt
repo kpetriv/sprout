@@ -11,6 +11,8 @@ import dev.kpetriv.sprout.ai.GatewayReceiptScanner
 import dev.kpetriv.sprout.ai.GatewayWeeklySummarySource
 import dev.kpetriv.sprout.ai.HouseholdActivity
 import dev.kpetriv.sprout.ai.RoomHouseholdActivity
+import dev.kpetriv.sprout.ai.SessionAiContext
+import dev.kpetriv.sprout.core.ai.AiContext
 import dev.kpetriv.sprout.feature.chat.OutgoingMessageFilter
 import dev.kpetriv.sprout.feature.chores.ChoreSuggestions
 import dev.kpetriv.sprout.feature.parenthome.WeeklySummarySource
@@ -19,11 +21,14 @@ import dev.kpetriv.sprout.feature.wallet.ReceiptScanner
 
 /**
  * The on-device AI ports of the features (M6 §3) bound to `core/ai`'s `AiGateway` (`core/ai`'s own `AiModule` binds
- * it to the `AiRouter` and provides `AiPreferences`).
+ * it to the `AiRouter` and provides `AiPreferences`), and the router's [AiContext] from the session (D-M6-34).
  */
 @Module
 @InstallIn(SingletonComponent::class)
 internal abstract class AiAdaptersModule {
+    @Binds
+    abstract fun aiContext(impl: SessionAiContext): AiContext
+
     @Binds
     abstract fun outgoingMessageFilter(impl: GatewayOutgoingMessageFilter): OutgoingMessageFilter
 
