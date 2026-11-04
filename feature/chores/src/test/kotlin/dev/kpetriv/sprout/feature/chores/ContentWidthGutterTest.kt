@@ -1,11 +1,15 @@
 package dev.kpetriv.sprout.feature.chores
 
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.test.SemanticsMatcher
+import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.getBoundsInRoot
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.onParent
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.swipe
@@ -17,6 +21,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
+import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
 /**
@@ -45,10 +50,13 @@ class ContentWidthGutterTest {
     fun `the list stays a centred 640 dp column`() {
         showLongList()
 
-        val row = compose.onNodeWithText("Chore 1").getBoundsInRoot()
-        // 1280 dp window: 320 dp gutters, then the list's own 16 dp padding.
-        assertTrue(row.left >= 336.dp, "row starts at ${row.left}")
-        assertTrue(row.right <= 944.dp, "row ends at ${row.right}")
+        // The chore's card: the title's text node sits in the card's clickable column, which sits in the card.
+        val card = compose.onNodeWithText("Chore 1", useUnmergedTree = true).onParent().onParent()
+        card.assert(SemanticsMatcher.expectValue(SemanticsProperties.IsTraversalGroup, true))
+        val bounds = card.getBoundsInRoot()
+        // 1280 dp window: 320 dp gutters, then the list's own 16 dp padding on each side.
+        assertEquals(336f, bounds.left.value, 1f, "card starts at ${bounds.left}")
+        assertEquals(944f, bounds.right.value, 1f, "card ends at ${bounds.right}")
     }
 
     @Test

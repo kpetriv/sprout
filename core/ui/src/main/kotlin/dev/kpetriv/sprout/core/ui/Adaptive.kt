@@ -124,8 +124,10 @@ fun ContentWidth(
 
 /**
  * The left and right padding that centre a column at most [max] wide in [availableWidthPx], in whole pixels and
- * rounded as `Alignment.CenterHorizontally` rounds (so the column lands where the old centred box put it). Zero when
- * the width is at most [max] or unbounded. Pure, so it is unit tested.
+ * rounded as `Alignment.CenterHorizontally` rounds, so the column lands where the old centred box put it at integer
+ * densities. At a fractional density the gutters are converted to dp and added to the list's own dp padding before
+ * the list rounds the sum, so the column may sit 1 px off the old position (cosmetic). Zero when the width is at
+ * most [max] or unbounded. Pure, so it is unit tested.
  */
 fun Density.contentWidthGutters(availableWidthPx: Int, max: Dp = ContentWidthDefaults.Max): PaddingValues {
     val spare = if (availableWidthPx == Constraints.Infinity) 0 else availableWidthPx - max.roundToPx()

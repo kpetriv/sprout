@@ -248,6 +248,10 @@ class AiOutputRulesTest {
             "Leo ganhou mil libras.", // Portuguese and Spanish thousand
             "Leo heeft twee spellen gespeeld.", // Dutch
             "Leo earned hundert pounds.", // German hundred inside English
+            "Leo hat dreißig Pfund verdient.", // German tens, ß read as ss
+            "Leo hat dreissig Pfund verdient.", // German tens, Swiss spelling
+            "Leo a gagné quarante livres.", // French tens
+            "Leo heeft tachtig punten.", // Dutch tens
             "Leo earned £3.98 and played VIER games.", // Upper case
         ).forEach { assertFalse(AiOutputRules.numbersConsistent(it, facts), it) }
     }
