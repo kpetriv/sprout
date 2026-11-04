@@ -18,4 +18,6 @@ data class ParentHomeLinks(
     val onReviewDevice: (DeviceId) -> Unit = {},
     /** "Signing key not registered with the household": Settings → Security, where "Retry" renews the key. */
     val onRegisterSigningKey: () -> Unit = {},
+    /** The summary card's "Download the on-device model": Settings → On-device AI, where the consent row is (M6). */
+    val onOpenAiSettings: () -> Unit = {},
 )

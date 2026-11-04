@@ -42,6 +42,17 @@ object ParentHomePreviewData {
             KidSummaryUi(zoe, MoneyUi(Money(4_210), gbp), Money(120), CalendarDate(2026, 12, 1), anomalies = 0),
         ),
         signing = signing,
+        summary = summary(),
+    )
+
+    /** The rules summary of this week so far, with the model download on offer. */
+    fun summary(offerModelDownload: Boolean = true) = WeeklySummaryUi.Ready(
+        text = "So far this week Mia, Leo and Zoe earned £9.00 between them, mostly from 6 chores. Leo spent £2.50 " +
+            "in the shop and Zoe moved £5.00 into savings.",
+        week = SummaryWeek.THIS_WEEK,
+        path = SummaryPath.RULES,
+        generatedAt = Instant.parse("2026-11-04T09:00:00Z"),
+        offerModelDownload = offerModelDownload,
     )
 
     /** The trial household on a fresh install: the banner offering "Set up sync". */

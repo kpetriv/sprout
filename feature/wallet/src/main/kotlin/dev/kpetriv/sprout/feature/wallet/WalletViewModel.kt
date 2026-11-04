@@ -42,7 +42,9 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import javax.inject.Inject
+import kotlin.time.Duration.Companion.milliseconds
 
 /**
  * Wallet screen state for one kid. Reads the kid ([WalletDataSource]), balances, anomalies and recent events
@@ -55,6 +57,9 @@ import javax.inject.Inject
  * ([ParentAuthUnavailableException]) the use case falls back per D-M2-1 to an unsigned append when the household
  * policy has parent signatures off (the sheet warns about it up front), and refuses otherwise. A failed adjustment
  * shows its error in the sheet, or in a snackbar if the sheet was dismissed while it was saving.
+ *
+ * "Scan a receipt" (M6 §3.4) hands the picked image to [ReceiptScanner] (within [SCAN_TIMEOUT_MILLIS]) and puts what it
+ * found into [AdjustmentUi.prefill] for the form to take; the parent still reviews and signs.
  *
  * Arguments come from the [SavedStateHandle]: [KID_ID_KEY] (required) and [MODE_KEY] (a [WalletMode] name,
  * default [WalletMode.KID], the safe choice); [WalletRoute] sets both.
@@ -72,6 +77,7 @@ class WalletViewModel @Inject constructor(
     private val authorizations: ParentAuthorizationRequester,
     private val promptText: AdjustmentPromptText,
     private val formatter: MoneyFormatter,
+    private val receiptScanner: ReceiptScanner,
 ) : ViewModel() {
     private val kidId = KidId(checkNotNull(savedStateHandle.get<String>(KID_ID_KEY)) { "kidId argument missing" })
     private val mode = savedStateHandle.get<String>(MODE_KEY)?.let(WalletMode::valueOf) ?: WalletMode.KID
@@ -93,6 +99,8 @@ class WalletViewModel @Inject constructor(
             WalletEvent.OpenAdjust -> openAdjust()
             WalletEvent.DismissAdjust -> local.update { it.copy(adjustment = null) }
             is WalletEvent.SubmitAdjust -> submitAdjust(event)
+            is WalletEvent.ReceiptPicked -> scanReceipt(event.uri)
+            WalletEvent.PrefillApplied -> local.update { it.copy(adjustment = it.adjustment?.copy(prefill = null)) }
             is WalletEvent.FilterChanged -> local.update { it.copy(filter = event.category) }
             WalletEvent.MessageShown -> local.update { it.copy(message = null) }
         }
@@ -160,6 +168,26 @@ class WalletViewModel @Inject constructor(
         viewModelScope.launch {
             val currency = mainAccount()?.currency as? Currency.Fiat ?: return@launch
             local.update { it.copy(adjustment = AdjustmentUi(currency)) }
+        }
+    }
+
+    private fun scanReceipt(uri: String) {
+        if (mode != WalletMode.PARENT) return
+        val sheet = local.value.adjustment?.takeIf { !it.scanning && !it.isSubmitting } ?: return
+        setAdjustment(sheet.copy(scanning = true, scanFailed = false, prefill = null))
+        viewModelScope.launch {
+            val found = try {
+                withTimeoutOrNull(SCAN_TIMEOUT_MILLIS.milliseconds) { receiptScanner.scan(uri) }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (@Suppress("TooGenericExceptionCaught") _: Exception) {
+                null // An unreadable image or a recogniser failure: the parent types the amount instead.
+            }
+            val usable = found?.takeIf { (it.amount?.minorUnits ?: 0) > 0 || !it.merchant.isNullOrBlank() }
+            local.update { state ->
+                val open = state.adjustment ?: return@update state // The sheet was dismissed meanwhile.
+                state.copy(adjustment = open.copy(scanning = false, scanFailed = usable == null, prefill = usable))
+            }
         }
     }
 
@@ -301,6 +329,9 @@ class WalletViewModel @Inject constructor(
 
         /** [SavedStateHandle] key of the [WalletMode] name. */
         const val MODE_KEY = "walletMode"
+
+        /** How long reading a receipt may take before the sheet says it found nothing. */
+        const val SCAN_TIMEOUT_MILLIS = 10_000L
 
         private const val STOP_TIMEOUT_MILLIS = 5_000L
     }

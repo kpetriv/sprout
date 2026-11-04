@@ -58,6 +58,7 @@ import java.time.format.FormatStyle
  *   returning its single-use authorisation; the app passes `feature/lock`'s requester.
  * @param onOpenKid the kid's wallet in parent view, where their ledger anomalies are listed.
  * @param onRegisterSigningKey "Signing key not registered with the household: Retry": Settings → Security.
+ * @param onOpenAiSettings the summary card's "Download the on-device model": Settings → On-device AI.
  */
 @Suppress("LongParameterList") // One callback per destination the dashboard links to.
 @Composable
@@ -73,6 +74,7 @@ fun ParentHomeRoute(
     onSetUpSync: () -> Unit = {},
     onReviewDevice: (DeviceId) -> Unit = {},
     onRegisterSigningKey: () -> Unit = {},
+    onOpenAiSettings: () -> Unit = {},
 ) {
     val links = ParentHomeLinks(
         onOpenChores,
@@ -84,6 +86,7 @@ fun ParentHomeRoute(
         onSetUpSync,
         onReviewDevice,
         onRegisterSigningKey,
+        onOpenAiSettings,
     )
     val viewModel: ParentHomeViewModel = hiltViewModel()
     val state by viewModel.state.collectAsStateWithLifecycle()
@@ -122,12 +125,7 @@ fun ParentHomeScreen(
                     modifier = Modifier.align(Alignment.Center),
                 )
 
-                is ParentHomeUiState.Ready -> Dashboard(
-                    state,
-                    onSignNow,
-                    onDismiss = { onEvent(ParentHomeEvent.Dismiss(it)) },
-                    links,
-                )
+                is ParentHomeUiState.Ready -> Dashboard(state, onSignNow, onEvent, links)
             }
         }
     }
@@ -145,7 +143,7 @@ fun ParentHomeScreen(
 private fun Dashboard(
     state: ParentHomeUiState.Ready,
     onSignNow: () -> Unit,
-    onDismiss: (String) -> Unit,
+    onEvent: (ParentHomeEvent) -> Unit,
     links: ParentHomeLinks,
 ) {
     Column(
@@ -155,14 +153,19 @@ private fun Dashboard(
         HouseholdCards(state.household, links)
         ApprovalsCard(state.pendingApprovals, links.onOpenApprovals)
         PendingActionsCard(state.pendingActions, state.signing, onSignNow)
-        if (state.attention.isNotEmpty()) AttentionCard(state.attention, onDismiss)
+        if (state.attention.isNotEmpty()) AttentionCard(state.attention) { onEvent(ParentHomeEvent.Dismiss(it)) }
         AnomaliesCard(state, links.onOpenKid)
         SectionTitle(stringResource(R.string.feature_parent_home_kids_title))
         if (state.kids.isEmpty()) {
             Text(stringResource(R.string.feature_parent_home_kids_none), style = MaterialTheme.typography.bodyMedium)
         }
         state.kids.forEach { KidCard(it, onOpen = { links.onOpenKid(it.kid.id) }) }
-        WeeklySummaryCard()
+        WeeklySummaryCard(
+            summary = state.summary,
+            week = state.summaryWeek,
+            onWeekChange = { onEvent(ParentHomeEvent.SummaryWeekChanged(it)) },
+            onDownloadModel = links.onOpenAiSettings,
+        )
         QuickLinks(links)
     }
 }

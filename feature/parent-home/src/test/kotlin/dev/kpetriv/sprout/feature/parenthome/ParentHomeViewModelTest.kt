@@ -50,6 +50,7 @@ class ParentHomeViewModelTest {
     private val signer = FakeSigner(queue)
     private val householdStatus = MutableStateFlow(HouseholdStatus())
     private var statusFails = false
+    private val summaries = FakeWeeklySummarySource()
 
     private val authorization = ParentAuthorization { payload -> payload }
 
@@ -57,7 +58,18 @@ class ParentHomeViewModelTest {
         val status = HouseholdStatusSource {
             if (statusFails) flow { error("registry unreadable") } else householdStatus
         }
-        val vm = ParentHomeViewModel(kids, accounts, ledger, chores, allowances, queue, signer, fixedToday(), status)
+        val vm = ParentHomeViewModel(
+            kids,
+            accounts,
+            ledger,
+            chores,
+            allowances,
+            queue,
+            signer,
+            fixedToday(),
+            status,
+            summaries,
+        )
         backgroundScope.launch(main.dispatcher) { vm.state.collect {} }
         return vm
     }
@@ -338,6 +350,38 @@ class ParentHomeViewModelTest {
         assertEquals("permission-denied", ready.household.sync?.blockedCode)
         householdStatus.value = HouseholdStatus(trial = true)
         assertEquals(true, vm.ready().household.trial)
+    }
+
+    @Test
+    fun `the summary starts loading, then shows this week, and the toggle switches to last week`() = test {
+        val vm = viewModel()
+        assertEquals(WeeklySummaryUi.Loading, vm.ready().summary)
+        assertEquals(SummaryWeek.THIS_WEEK, vm.ready().summaryWeek)
+
+        val thisWeek = summaries.emit(SummaryWeek.THIS_WEEK, "This week so far")
+        assertEquals(thisWeek, vm.ready().summary)
+
+        vm.onEvent(ParentHomeEvent.SummaryWeekChanged(SummaryWeek.LAST_WEEK))
+        assertEquals(SummaryWeek.LAST_WEEK, vm.ready().summaryWeek)
+        assertEquals(WeeklySummaryUi.Loading, vm.ready().summary, "a new week starts from loading")
+        val lastWeek = summaries.emit(SummaryWeek.LAST_WEEK, "Last week")
+        assertEquals(lastWeek, vm.ready().summary)
+        assertEquals(listOf(SummaryWeek.THIS_WEEK, SummaryWeek.LAST_WEEK), summaries.requested)
+    }
+
+    @Test
+    fun `a failing summary source shows unavailable and the dashboard stays`() = test {
+        summaries.fails = true
+        val vm = viewModel()
+        assertEquals(WeeklySummaryUi.Unavailable, vm.ready().summary)
+        assertEquals(listOf("Leo", "Zoe"), vm.ready().kids.map { it.kid.firstName })
+    }
+
+    @Test
+    fun `summary text stays out of toString`() {
+        val ready =
+            WeeklySummaryUi.Ready("Leo earned £3.00", SummaryWeek.THIS_WEEK, SummaryPath.NANO, Instant.DISTANT_PAST)
+        assertEquals(false, ready.toString().contains("Leo"))
     }
 
     @Test

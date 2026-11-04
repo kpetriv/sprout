@@ -13,6 +13,11 @@ class SettingsScreenshotTest : ScreenshotTest() {
     }
 
     @Test
+    fun `on-device AI, model downloadable`() = screenshot.captureLightDark("settings_ai") {
+        AiSettingsScreen(SettingsPreviewData.ai(), onEvent = {}, onBack = {})
+    }
+
+    @Test
     fun interest() = screenshot.captureLightDark("settings_interest") {
         InterestSettingsScreen(SettingsPreviewData.interest(), onEvent = {}, onBack = {})
     }

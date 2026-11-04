@@ -20,6 +20,8 @@ sealed interface ParentHomeUiState {
      * @property signing progress while "Sign now" runs; null otherwise.
      * @property signResult how the last "Sign now" ended, until acknowledged.
      * @property household the trial banner, the sync line, refused events and phones waiting for approval (M3).
+     * @property summaryWeek the week the summary card shows.
+     * @property summary the on-device weekly summary of [summaryWeek] (M6); its own failures never fail the dashboard.
      */
     data class Ready(
         val pendingApprovals: Int,
@@ -29,6 +31,8 @@ sealed interface ParentHomeUiState {
         val signing: SigningProgress? = null,
         val signResult: SignResult? = null,
         val household: HouseholdStatus = HouseholdStatus(),
+        val summaryWeek: SummaryWeek = SummaryWeek.THIS_WEEK,
+        val summary: WeeklySummaryUi = WeeklySummaryUi.Loading,
     ) : ParentHomeUiState {
         /** Ledger anomalies across every kid. */
         val anomaliesTotal: Int get() = kids.sumOf { it.anomalies }
@@ -146,4 +150,7 @@ sealed interface ParentHomeEvent {
 
     /** Withdraw the failed or skipped payment [key] from the "need attention" card. */
     data class Dismiss(val key: String) : ParentHomeEvent
+
+    /** The summary card's "This week so far" / "Last week" toggle. */
+    data class SummaryWeekChanged(val week: SummaryWeek) : ParentHomeEvent
 }

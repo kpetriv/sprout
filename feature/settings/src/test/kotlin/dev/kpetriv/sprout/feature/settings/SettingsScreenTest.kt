@@ -42,12 +42,36 @@ class SettingsScreenTest {
         val opened = mutableListOf<SettingsSection>()
         show { SettingsScreen(onOpen = { opened += it }, onBack = {}) }
 
-        listOf("Kids", "Allowance", "Savings goals", "Interest", "Parent security", "About").forEach {
+        listOf("Kids", "Allowance", "Savings goals", "Interest", "Parent security", "On-device AI", "About").forEach {
             compose.onNodeWithText(it).assertIsDisplayed()
         }
         compose.onNodeWithText("Interest").performClick()
 
         assertEquals(listOf(SettingsSection.INTEREST), opened)
+    }
+
+    @Test
+    fun `on-device AI shows the status, the switch and the download consent`() {
+        val events = mutableListOf<AiSettingsEvent>()
+        show { AiSettingsScreen(SettingsPreviewData.ai(), onEvent = { events += it }, onBack = {}) }
+
+        compose.onNodeWithText("This phone can run Gemini Nano", substring = true).assertIsDisplayed()
+        compose.onNodeWithText("What it is used for").assertIsDisplayed()
+        compose.onNodeWithText("Download the model on Wi-Fi").performClick()
+        compose.onNodeWithText("Use on-device AI").performClick()
+
+        assertEquals(
+            listOf(AiSettingsEvent.DownloadConsentChanged(true), AiSettingsEvent.EnabledChanged(false)),
+            events,
+        )
+    }
+
+    @Test
+    fun `on-device AI on a phone without AICore says so and offers no download`() {
+        show { AiSettingsScreen(SettingsPreviewData.ai(AiModelStatus.UNAVAILABLE), onEvent = {}, onBack = {}) }
+
+        compose.onNodeWithText("Not available on this device", substring = true).assertIsDisplayed()
+        compose.onNodeWithText("Download the model on Wi-Fi").assertDoesNotExist()
     }
 
     @Test

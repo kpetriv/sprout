@@ -101,7 +101,12 @@
 
   <!-- Weekly summary (M6) -->
   <string name="feature_parent_home_summary_title">Weekly summary</string>
-  <string name="feature_parent_home_summary_placeholder">A short on-device summary of the family\'s week is coming in a later update.</string>
+  <string name="feature_parent_home_summary_on_device">On-device</string>
+  <string name="feature_parent_home_summary_this_week">This week so far</string>
+  <string name="feature_parent_home_summary_last_week">Last week</string>
+  <string name="feature_parent_home_summary_loading">Summing up the week…</string>
+  <string name="feature_parent_home_summary_unavailable">The summary is not available right now.</string>
+  <string name="feature_parent_home_summary_download">Download the on-device model</string>
 
   <!-- Quick links -->
   <string name="feature_parent_home_links_title">Go to</string>

@@ -18,6 +18,7 @@ import dev.kpetriv.sprout.core.domainledger.EventId
 import dev.kpetriv.sprout.core.domainledger.Money
 import dev.kpetriv.sprout.core.domainledger.ParentAuthorization
 import dev.kpetriv.sprout.core.domainledger.ParentAuthorizationRequester
+import dev.kpetriv.sprout.core.model.AgeBand
 import dev.kpetriv.sprout.core.model.CalendarDate
 import dev.kpetriv.sprout.core.model.ChoreId
 import dev.kpetriv.sprout.core.model.ChoreSchedule
@@ -37,6 +38,7 @@ import dev.kpetriv.sprout.core.time.HouseholdCalendar
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.map
@@ -264,4 +266,20 @@ class FakeImageBitmap : androidx.compose.ui.graphics.ImageBitmap {
         bufferOffset: Int,
         stride: Int,
     ) = Unit
+}
+
+class FakeChoreSuggestions : ChoreSuggestions {
+    var result: List<ChoreSuggestionUi> = ChoresPreviewData.suggestions
+    var failure: Throwable? = null
+
+    /** How long each call takes (virtual time). */
+    var delayMillis: Long = 0
+    val calls = mutableListOf<Triple<KidId, AgeBand, List<String>>>()
+
+    override suspend fun suggest(kidId: KidId, band: AgeBand, existing: List<String>): List<ChoreSuggestionUi> {
+        calls += Triple(kidId, band, existing)
+        if (delayMillis > 0) delay(delayMillis)
+        failure?.let { throw it }
+        return result
+    }
 }

@@ -28,12 +28,14 @@ import dev.kpetriv.sprout.core.model.KidId
 
 /**
  * The settings feature: the hub and its sections, navigated inside this route (system back returns to the hub).
- * Must sit behind the parent lock. The app binds [PinChanger], [ParentKeyRegistrar], [LockPreferences] and the
- * household ports ([DeviceAdmin], [KidLinking], [AccountControl], [HouseholdData], [ExportWriter]).
+ * Must sit behind the parent lock. The app binds [PinChanger], [ParentKeyRegistrar], [LockPreferences],
+ * [AiSettingsSource] and the household ports ([DeviceAdmin], [KidLinking], [AccountControl], [HouseholdData],
+ * [ExportWriter]).
  *
  * @param appVersion shown in About (the app's `versionName`).
  * @param onBack leaves settings from the hub (or from [initialSection] when settings opened straight on it).
- * @param initialSection open this section directly (the dashboard's "New device waiting" opens Devices).
+ * @param initialSection open this section directly (the dashboard's "New device waiting" opens Devices, the summary
+ *   card's "Download the on-device model" opens [SettingsSection.AI]).
  * @param reviewDeviceId with [SettingsSection.DEVICES]: open this PENDING device's approval sheet.
  */
 @Composable
@@ -98,6 +100,7 @@ private fun SectionRoute(
         SettingsSection.DEVICES -> DevicesRoute(onBack = onBack, reviewDeviceId = reviewDeviceId, modifier = modifier)
         SettingsSection.ACCOUNT -> AccountRoute(onBack = onBack, modifier = modifier)
         SettingsSection.DATA -> DataRoute(onBack = onBack, modifier = modifier)
+        SettingsSection.AI -> AiSettingsRoute(onBack = onBack, modifier = modifier)
         SettingsSection.ABOUT -> AboutScreen(appVersion = appVersion, onBack = onBack, modifier = modifier)
     }
 }

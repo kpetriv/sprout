@@ -143,6 +143,62 @@ class WalletScreenTest {
     }
 
     @Test
+    fun `the adjustment sheet offers a receipt scan and says the reason is plain text`() {
+        show(WalletPreviewData.ready(KidUiTier.SPROUT, adjustment = WalletPreviewData.adjustment))
+        compose.onNodeWithText("Scan a receipt").assertIsDisplayed()
+        compose.onNodeWithText("saved in the ledger as plain text", substring = true).assertIsDisplayed()
+    }
+
+    @Test
+    fun `a prefill fills a debit and the receipt reason once`() {
+        var applied = 0
+        var scans = 0
+        val submitted = mutableListOf<Triple<Long, AdjustmentSign, String>>()
+        compose.setContent {
+            SproutTheme {
+                ManualAdjustmentForm(
+                    adjustment = WalletPreviewData.adjustment.copy(
+                        prefill = AdjustmentPrefill(Money(1_249), "Corner Shop " + "x".repeat(300)),
+                    ),
+                    onSubmit = { amount, sign, reason -> submitted += Triple(amount, sign, reason) },
+                    onCancel = {},
+                    onScanReceipt = { scans++ },
+                    onPrefillApplied = { applied++ },
+                )
+            }
+        }
+
+        compose.onNodeWithText("Take away").assertIsSelected()
+        compose.onNodeWithText("Scan a receipt").performClick()
+        compose.onNodeWithText("Save").performClick()
+
+        assertEquals(1, applied)
+        assertEquals(1, scans)
+        val (amount, sign, reason) = submitted.single()
+        assertEquals(1_249L, amount)
+        assertEquals(AdjustmentSign.DEBIT, sign)
+        assertEquals(MAX_REASON_LENGTH, reason.length)
+        assertTrue(reason.startsWith("Receipt: Corner Shop"))
+    }
+
+    @Test
+    fun `a receipt with no total says so and a scan in progress is announced`() {
+        compose.setContent {
+            SproutTheme {
+                ManualAdjustmentForm(
+                    adjustment = WalletPreviewData.adjustment.copy(scanFailed = true, scanning = true),
+                    onSubmit = { _, _, _ -> },
+                    onCancel = {},
+                    onScanReceipt = {},
+                )
+            }
+        }
+        compose.onNodeWithText("No total found on that receipt. Type the amount instead.").assertIsDisplayed()
+        compose.onNodeWithContentDescription("Reading the receipt…").assertIsDisplayed()
+        compose.onNodeWithText("Scan a receipt").assertIsNotEnabled()
+    }
+
+    @Test
     fun `adjustment sheet explains an unavailable or dismissed parent check`() {
         show(
             WalletPreviewData.ready(

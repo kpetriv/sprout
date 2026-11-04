@@ -98,6 +98,13 @@
   <string name="feature_wallet_adjust_failed">Couldn\'t save the adjustment. Try again.</string>
   <!-- Parent prompt subtitle. %1$s is the kid's first name, %2$s the signed amount ("+£2.50"). -->
   <string name="feature_wallet_adjust_prompt">Adjust %1$s\'s balance by %2$s</string>
+  <!-- "Scan a receipt" (parent only, M6): on-device text recognition fills the amount and the reason. -->
+  <string name="feature_wallet_receipt_scan">Scan a receipt</string>
+  <string name="feature_wallet_receipt_scanning">Reading the receipt…</string>
+  <string name="feature_wallet_receipt_note">The receipt is read on this phone. The shop\'s name goes into the reason, which is saved in the ledger as plain text; check both before you save.</string>
+  <string name="feature_wallet_receipt_failed">No total found on that receipt. Type the amount instead.</string>
+  <string name="feature_wallet_receipt_reason">Receipt: %1$s</string>
+  <string name="feature_wallet_receipt_reason_no_merchant">Receipt</string>
   <string name="feature_wallet_adjust_unsigned_warning">Parent signatures are off: this change is saved unsigned.</string>
   <string name="feature_wallet_adjust_auth_unavailable">This device can\'t confirm a parent, and this household needs one for changes</string>
   <string name="feature_wallet_adjust_auth_failed">Parent check didn\'t finish. Nothing was saved.</string>

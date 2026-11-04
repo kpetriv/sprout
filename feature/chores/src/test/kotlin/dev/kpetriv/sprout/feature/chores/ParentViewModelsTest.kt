@@ -7,6 +7,7 @@ import dev.kpetriv.sprout.core.domainhousehold.ChoreSubmissions
 import dev.kpetriv.sprout.core.domainledger.AppendResult
 import dev.kpetriv.sprout.core.domainledger.EventId
 import dev.kpetriv.sprout.core.domainledger.Money
+import dev.kpetriv.sprout.core.model.AgeBand
 import dev.kpetriv.sprout.core.model.CalendarDate
 import dev.kpetriv.sprout.core.model.ChoreId
 import dev.kpetriv.sprout.core.model.ChoreSchedule
@@ -15,10 +16,12 @@ import dev.kpetriv.sprout.core.model.DayOfWeek
 import dev.kpetriv.sprout.core.model.KidId
 import dev.kpetriv.sprout.core.model.SubmissionId
 import dev.kpetriv.sprout.core.model.SubmissionStatus
+import dev.kpetriv.sprout.core.model.YearMonth
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
+import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runTest
 import org.junit.Rule
 import org.junit.Test
@@ -90,6 +93,7 @@ class ChoreEditorViewModelTest {
 
     private val kids = FakeKidRepository(listOf(TestData.kid("kid-leo", "Leo"), TestData.kid("kid-mia", "Mia")))
     private val chores = FakeChoreRepository()
+    private val suggestions = FakeChoreSuggestions()
 
     private fun viewModel(choreId: String? = null, kidId: String? = null) = ChoreEditorViewModel(
         savedStateHandle = SavedStateHandle(
@@ -103,7 +107,140 @@ class ChoreEditorViewModelTest {
         fiat = { TestData.gbp },
         clock = TestData.clock(),
         calendar = TestData.calendar(),
+        suggestions = suggestions,
     )
+
+    @Test
+    fun `kid options carry this month's age band`() = runTest {
+        kids.kids.value = listOf(
+            TestData.kid("kid-leo", "Leo"),
+            TestData.kid("kid-tom", "Tom").copy(birthYearMonth = YearMonth(2022, 1)),
+            TestData.kid("kid-new", "New").copy(birthYearMonth = YearMonth(2027, 1)),
+        )
+        val bands = viewModel().state.value.kids.associate { it.name to it.band }
+        assertEquals(
+            mapOf("Leo" to AgeBand.AGES_8_TO_11, "Tom" to AgeBand.UNDER_5, "New" to AgeBand.UNDER_5),
+            bands,
+            "a birth month in the future counts as this month",
+        )
+    }
+
+    @Test
+    fun `suggest asks for the picked kid's band and their chore titles, and picking one fills the form`() = runTest {
+        chores.chores.value = listOf(
+            TestData.chore("c1", "kid-leo", "Make bed"),
+            TestData.chore("c2", "kid-mia", "Tidy toys"),
+        )
+        val vm = viewModel(kidId = "kid-leo")
+        assertTrue(vm.state.value.canSuggest)
+
+        vm.onEvent(ChoreEditorEvent.SuggestOpened)
+
+        assertEquals(listOf(Triple(KidId("kid-leo"), AgeBand.AGES_8_TO_11, listOf("Make bed"))), suggestions.calls)
+        val sheet = assertIs<SuggestionsUi.Ready>(vm.state.value.suggestions)
+        assertEquals(ChoresPreviewData.suggestions, sheet.items)
+
+        vm.onEvent(ChoreEditorEvent.SuggestionPicked(sheet.items[1]))
+
+        val state = vm.state.value
+        assertNull(state.suggestions)
+        assertEquals("Hoover your room", state.title)
+        assertEquals("", state.description)
+        assertEquals("1.50", state.moneyText)
+        assertEquals("15", state.minutesText)
+        assertEquals(ScheduleKind.WEEKLY, state.schedule.kind)
+        assertEquals(DayOfWeek.SATURDAY, state.schedule.weeklyDay)
+        assertTrue(chores.chores.value.none { it.title == "Hoover your room" }, "picking never saves")
+
+        vm.onEvent(ChoreEditorEvent.Save)
+        assertEquals(ChoreSchedule.Weekly(DayOfWeek.SATURDAY), chores.chores.value.last().schedule)
+    }
+
+    @Test
+    fun `a daily suggestion sets exactly its days and clears amounts it does not have`() = runTest {
+        val vm = viewModel(kidId = "kid-leo")
+        vm.onEvent(ChoreEditorEvent.MinutesChanged("30"))
+        vm.onEvent(ChoreEditorEvent.DailyDayToggled(DayOfWeek.MONDAY))
+        vm.onEvent(ChoreEditorEvent.SuggestOpened)
+        val idea = ChoreSuggestionUi(
+            title = "Water the plants",
+            description = "Just the ones on the windowsill",
+            money = Money(75),
+            minutes = null,
+            schedule = ChoreSchedule.Daily(setOf(DayOfWeek.MONDAY, DayOfWeek.THURSDAY)),
+        )
+
+        vm.onEvent(ChoreEditorEvent.SuggestionPicked(idea))
+
+        val state = vm.state.value
+        assertEquals("Just the ones on the windowsill", state.description)
+        assertEquals("0.75", state.moneyText)
+        assertEquals("", state.minutesText)
+        assertEquals(ScheduleKind.DAILY, state.schedule.kind)
+        assertEquals(setOf(DayOfWeek.MONDAY, DayOfWeek.THURSDAY), state.schedule.dailyDays)
+    }
+
+    @Test
+    fun `picking a suggestion after a failed save re-validates the form`() = runTest {
+        val vm = viewModel(kidId = "kid-leo")
+        vm.onEvent(ChoreEditorEvent.Save)
+        assertTrue(EditorError.TITLE_BLANK in vm.state.value.errors)
+        vm.onEvent(ChoreEditorEvent.SuggestOpened)
+
+        vm.onEvent(ChoreEditorEvent.SuggestionPicked(ChoresPreviewData.suggestions.first()))
+
+        assertTrue(vm.state.value.errors.isEmpty())
+    }
+
+    @Test
+    fun `no suggestions without a kid or when editing`() = runTest {
+        val noKid = viewModel()
+        assertEquals(false, noKid.state.value.canSuggest)
+        noKid.onEvent(ChoreEditorEvent.SuggestOpened)
+        assertNull(noKid.state.value.suggestions)
+
+        chores.chores.value = listOf(TestData.chore("c1", "kid-mia", "Tidy toys"))
+        val editing = viewModel(choreId = "c1")
+        assertEquals(false, editing.state.value.canSuggest)
+        editing.onEvent(ChoreEditorEvent.SuggestOpened)
+        assertNull(editing.state.value.suggestions)
+        assertTrue(suggestions.calls.isEmpty())
+    }
+
+    @Test
+    fun `loading, empty, failure with retry, and dismiss`() = runTest {
+        suggestions.delayMillis = 1_000
+        suggestions.result = emptyList()
+        val vm = viewModel(kidId = "kid-mia")
+        vm.onEvent(ChoreEditorEvent.SuggestOpened)
+        assertEquals(SuggestionsUi.Loading, vm.state.value.suggestions)
+        advanceTimeBy(1_001)
+        assertEquals(SuggestionsUi.Empty, vm.state.value.suggestions)
+
+        suggestions.failure = IllegalStateException("no model")
+        vm.onEvent(ChoreEditorEvent.SuggestRetry)
+        advanceTimeBy(1_001)
+        assertEquals(SuggestionsUi.Failed, vm.state.value.suggestions)
+
+        suggestions.failure = null
+        suggestions.result = ChoresPreviewData.suggestions
+        vm.onEvent(ChoreEditorEvent.SuggestRetry)
+        vm.onEvent(ChoreEditorEvent.SuggestDismissed)
+        advanceTimeBy(1_001)
+        assertNull(vm.state.value.suggestions, "a dismissed sheet stays closed")
+        assertEquals(AgeBand.AGES_8_TO_11, suggestions.calls.last().second)
+    }
+
+    @Test
+    fun `suggestions that take too long show the error`() = runTest {
+        suggestions.delayMillis = ChoreEditorViewModel.SUGGEST_TIMEOUT_MILLIS + 1_000
+        val vm = viewModel(kidId = "kid-leo")
+        vm.onEvent(ChoreEditorEvent.SuggestOpened)
+
+        advanceTimeBy(ChoreEditorViewModel.SUGGEST_TIMEOUT_MILLIS + 1)
+
+        assertEquals(SuggestionsUi.Failed, vm.state.value.suggestions)
+    }
 
     @Test
     fun `no errors before the first save, then every problem`() = runTest {

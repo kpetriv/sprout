@@ -254,6 +254,102 @@ class ChatViewModelTest {
     }
 
     @Test
+    fun `a check in progress shows checking and blocks a second send`() = runTest {
+        filter.delayMillis = 1_000
+        val vm = kid(KidUiTier.SPROUT)
+        val state = ready(vm)
+        vm.onEvent(ChatEvent.DraftChanged("See you at the park"))
+        vm.onEvent(ChatEvent.SendText)
+
+        assertTrue(state().checking)
+        assertFalse(state().canSendDraft)
+        vm.onEvent(ChatEvent.SendText)
+        assertEquals(1, filter.checked.size, "one check at a time")
+
+        advanceTimeBy(1_001)
+        assertFalse(state().checking)
+        assertEquals(listOf<OutgoingMessage>(OutgoingMessage.Text("See you at the park")), sender.sent)
+        assertEquals("", state().draft)
+    }
+
+    @Test
+    fun `a check that takes longer than the budget fails open`() = runTest {
+        filter.verdict = FilterVerdict.Nudge("never shown")
+        filter.delayMillis = 10_000
+        val vm = kid(KidUiTier.SAPLING)
+        val state = ready(vm)
+        vm.onEvent(ChatEvent.DraftChanged("Hello"))
+        vm.onEvent(ChatEvent.SendText)
+
+        advanceTimeBy(ChatViewModel.FILTER_TIMEOUT_MILLIS - 1)
+        assertTrue(state().checking)
+        assertTrue(sender.sent.isEmpty())
+
+        advanceTimeBy(2)
+        assertFalse(state().checking)
+        assertNull(state().nudge)
+        assertEquals(listOf<OutgoingMessage>(OutgoingMessage.Text("Hello")), sender.sent)
+    }
+
+    @Test
+    fun `a check that answers within the budget is honoured`() = runTest {
+        filter.verdict = FilterVerdict.Nudge("Can we talk later?")
+        filter.delayMillis = ChatViewModel.FILTER_TIMEOUT_MILLIS - 100
+        val vm = kid(KidUiTier.SPROUT)
+        val state = ready(vm)
+        vm.onEvent(ChatEvent.DraftChanged("Whatever"))
+        vm.onEvent(ChatEvent.SendText)
+
+        advanceTimeBy(ChatViewModel.FILTER_TIMEOUT_MILLIS)
+        assertEquals(NudgeUi("Whatever", "Can we talk later?"), state().nudge)
+        assertTrue(sender.sent.isEmpty())
+    }
+
+    @Test
+    fun `an accepted suggestion is sent without a second check (D-M6-2)`() = runTest {
+        filter.verdict = FilterVerdict.Nudge("Can we talk later?")
+        val vm = kid(KidUiTier.SPROUT)
+        val state = ready(vm)
+        vm.onEvent(ChatEvent.DraftChanged("Whatever"))
+        vm.onEvent(ChatEvent.SendText)
+        vm.onEvent(ChatEvent.NudgeUseSuggestion)
+
+        vm.onEvent(ChatEvent.SendText)
+
+        assertEquals(listOf("Whatever" to KidUiTier.SPROUT), filter.checked, "the suggestion is not checked again")
+        assertEquals(listOf<OutgoingMessage>(OutgoingMessage.Text("Can we talk later?")), sender.sent)
+        assertEquals("", state().draft)
+        assertNull(state().nudge)
+
+        // The next message is checked as usual.
+        vm.onEvent(ChatEvent.DraftChanged("Can we talk later?"))
+        vm.onEvent(ChatEvent.SendText)
+        assertEquals(2, filter.checked.size)
+    }
+
+    @Test
+    fun `an edited suggestion is checked again`() = runTest {
+        filter.verdict = FilterVerdict.Nudge("Can we talk later?")
+        val vm = kid(KidUiTier.SAPLING)
+        val state = ready(vm)
+        vm.onEvent(ChatEvent.DraftChanged("Whatever"))
+        vm.onEvent(ChatEvent.SendText)
+        vm.onEvent(ChatEvent.NudgeUseSuggestion)
+
+        vm.onEvent(ChatEvent.DraftChanged("Can we talk later? Idiot"))
+        vm.onEvent(ChatEvent.SendText)
+
+        assertEquals("Can we talk later? Idiot" to KidUiTier.SAPLING, filter.checked.last())
+        assertTrue(sender.sent.isEmpty())
+        assertEquals(NudgeUi("Can we talk later? Idiot", "Can we talk later?"), state().nudge)
+
+        // Editing back to exactly the suggestion does not restore the bypass: it was cleared by the edit.
+        vm.onEvent(ChatEvent.DraftChanged("Can we talk later?"))
+        vm.onEvent(ChatEvent.SendText)
+        assertEquals(3, filter.checked.size)
+    }
+
+    @Test
     fun `seedling has no free text and sends its picked preset with the picked emoji`() = runTest {
         val vm = kid(KidUiTier.SEEDLING)
         val state = ready(vm)

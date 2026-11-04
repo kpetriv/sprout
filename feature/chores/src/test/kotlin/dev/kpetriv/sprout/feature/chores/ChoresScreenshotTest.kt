@@ -1,7 +1,10 @@
 package dev.kpetriv.sprout.feature.chores
 
 import android.graphics.Bitmap
+import androidx.compose.foundation.layout.padding
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.unit.dp
 import dev.kpetriv.sprout.core.testing.screenshot.ScreenshotTest
 import dev.kpetriv.sprout.core.ui.ReadAloud
 import org.junit.Test
@@ -61,6 +64,17 @@ class ChoresScreenshotTest : ScreenshotTest() {
                 setOf(EditorError.NO_KID, EditorError.TITLE_BLANK, EditorError.MONEY_INVALID, EditorError.NO_DAYS),
             ),
             onEvent = {},
+        )
+    }
+
+    @Test
+    fun `chore editor, suggestions sheet`() = screenshot.captureLightDark("chores_editor_suggestions") {
+        ChoreSuggestionsContent(
+            sheet = SuggestionsUi.Ready(ChoresPreviewData.suggestions),
+            kidName = "Leo",
+            currency = ChoresPreviewData.gbp,
+            onEvent = {},
+            modifier = Modifier.padding(24.dp),
         )
     }
 

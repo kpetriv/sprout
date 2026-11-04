@@ -1,5 +1,8 @@
 package dev.kpetriv.sprout.feature.wallet
 
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -14,6 +17,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
@@ -22,6 +26,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -41,21 +46,33 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import dev.kpetriv.sprout.core.ui.MinorUnitsParser
 
-/** Parent-only sheet for a manual credit or debit on the kid's main money account. */
+/**
+ * Parent-only sheet for a manual credit or debit on the kid's main money account. "Scan a receipt" opens the system
+ * photo picker; the picked image goes to [onReceiptPicked] and the result comes back as [AdjustmentUi.prefill].
+ */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun ManualAdjustmentSheet(
     adjustment: AdjustmentUi,
     onSubmit: (amountMinor: Long, sign: AdjustmentSign, reason: String) -> Unit,
     onDismiss: () -> Unit,
+    onReceiptPicked: (uri: String) -> Unit,
+    onPrefillApplied: () -> Unit,
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    val pickReceipt = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
+        uri?.let { onReceiptPicked(it.toString()) }
+    }
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheetState) {
         ManualAdjustmentForm(
             adjustment = adjustment,
             onSubmit = onSubmit,
             onCancel = onDismiss,
             modifier = Modifier.padding(start = 24.dp, end = 24.dp, bottom = 24.dp),
+            onScanReceipt = {
+                pickReceipt.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+            },
+            onPrefillApplied = onPrefillApplied,
         )
     }
 }
@@ -63,6 +80,10 @@ internal fun ManualAdjustmentSheet(
 /**
  * The sheet's form. The amount is typed as text and parsed straight into minor units with [MinorUnitsParser]
  * (never through a floating-point number) using the currency's fraction digits.
+ *
+ * With [onScanReceipt] the form offers "Scan a receipt" and says that the reason is stored as plain text; a
+ * [AdjustmentUi.prefill] then fills the amount as a debit and the reason "Receipt: <merchant>" (at most
+ * [MAX_REASON_LENGTH] characters) once, and [onPrefillApplied] tells the ViewModel it was taken.
  */
 @Composable
 internal fun ManualAdjustmentForm(
@@ -70,11 +91,18 @@ internal fun ManualAdjustmentForm(
     onSubmit: (amountMinor: Long, sign: AdjustmentSign, reason: String) -> Unit,
     onCancel: () -> Unit,
     modifier: Modifier = Modifier,
+    onScanReceipt: (() -> Unit)? = null,
+    onPrefillApplied: () -> Unit = {},
 ) {
     var amountText by rememberSaveable { mutableStateOf("") }
     var sign by rememberSaveable { mutableStateOf(AdjustmentSign.CREDIT) }
     var reason by rememberSaveable { mutableStateOf("") }
     val digits = adjustment.currency.fractionDigits
+    PrefillEffect(adjustment, onPrefillApplied) { amount, receiptReason ->
+        amount?.let { amountText = it }
+        sign = AdjustmentSign.DEBIT
+        reason = receiptReason
+    }
     val parsed = remember(amountText, digits) { MinorUnitsParser.parse(amountText, digits) }
     val amountMinor = (parsed as? MinorUnitsParser.Result.Valid)?.minorUnits
     val amountError = amountErrorText(parsed, digits)
@@ -89,6 +117,7 @@ internal fun ManualAdjustmentForm(
             style = MaterialTheme.typography.headlineSmall,
             modifier = Modifier.semantics { heading() },
         )
+        ScanReceipt(adjustment, onScanReceipt)
         SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
             AdjustmentSign.entries.forEachIndexed { index, option ->
                 SegmentedButton(
@@ -171,6 +200,76 @@ internal fun ManualAdjustmentForm(
     }
 }
 
+/**
+ * Applies [AdjustmentUi.prefill] once: [apply] gets the amount as input text (null when the receipt had no positive
+ * total, so the typed amount stays) and the receipt reason; then [onApplied] clears the prefill in the ViewModel.
+ */
+@Composable
+private fun PrefillEffect(
+    adjustment: AdjustmentUi,
+    onApplied: () -> Unit,
+    apply: (amountText: String?, reason: String) -> Unit,
+) {
+    val prefill = adjustment.prefill ?: return
+    val reason = receiptReason(prefill.merchant)
+    val digits = adjustment.currency.fractionDigits
+    LaunchedEffect(prefill) {
+        val amount = prefill.amount?.minorUnits?.takeIf { it > 0 }?.let { MinorUnitsParser.toInputText(it, digits) }
+        apply(amount, reason)
+        onApplied()
+    }
+}
+
+/** "Scan a receipt", its plain-text note (PRIVACY.md) and the last scan's outcome; hidden without [onScan]. */
+@Composable
+private fun ScanReceipt(adjustment: AdjustmentUi, onScan: (() -> Unit)?) {
+    val onScanReceipt = onScan ?: return
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        OutlinedButton(onClick = onScanReceipt, enabled = !adjustment.scanning && !adjustment.isSubmitting) {
+            if (adjustment.scanning) {
+                val reading = stringResource(R.string.feature_wallet_receipt_scanning)
+                CircularProgressIndicator(
+                    modifier = Modifier
+                        .padding(end = 8.dp)
+                        .size(16.dp)
+                        .semantics { contentDescription = reading },
+                    strokeWidth = 2.dp,
+                )
+            }
+            Text(stringResource(R.string.feature_wallet_receipt_scan))
+        }
+        Text(
+            text = stringResource(R.string.feature_wallet_receipt_note),
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            style = MaterialTheme.typography.bodySmall,
+        )
+        if (adjustment.scanFailed) {
+            Text(
+                text = stringResource(R.string.feature_wallet_receipt_failed),
+                color = MaterialTheme.colorScheme.error,
+                style = MaterialTheme.typography.bodyMedium,
+                modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
+            )
+        }
+    }
+}
+
+/** "Receipt: Corner Shop" ("Receipt" without a merchant), cut to the reason's limit without splitting a character. */
+@Composable
+private fun receiptReason(merchant: String?): String {
+    val text = merchant?.trim()?.takeIf { it.isNotEmpty() }
+        ?.let { stringResource(R.string.feature_wallet_receipt_reason, it) }
+        ?: stringResource(R.string.feature_wallet_receipt_reason_no_merchant)
+    return text.truncatedTo(MAX_REASON_LENGTH)
+}
+
+/** This text cut to at most [maxChars] UTF-16 units without leaving half a surrogate pair. */
+internal fun String.truncatedTo(maxChars: Int): String {
+    if (length <= maxChars) return this
+    val end = if (maxChars > 0 && Character.isHighSurrogate(this[maxChars - 1])) maxChars - 1 else maxChars
+    return substring(0, end)
+}
+
 /** Inline error under the amount field; null while the amount is empty or fine. */
 @Composable
 private fun amountErrorText(parsed: MinorUnitsParser.Result, fractionDigits: Int): String? = when (parsed) {
@@ -187,5 +286,5 @@ private fun String.isAmountInput(): Boolean =
     length <= MAX_AMOUNT_LENGTH && all { it in '0'..'9' || it == '.' || it == ',' }
 
 private const val MAX_AMOUNT_LENGTH = 15
-private const val MAX_REASON_LENGTH = 200
+internal const val MAX_REASON_LENGTH = 200
 private const val REASON_MAX_LINES = 3

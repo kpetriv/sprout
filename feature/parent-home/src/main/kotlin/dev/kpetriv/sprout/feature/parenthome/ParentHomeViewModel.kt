@@ -46,10 +46,14 @@ import javax.inject.Inject
  * review, the queue of payments waiting for the parent's signature, and the payments that need attention (failed or
  * skipped). "Sign now" drains the queue through [PendingActionSigner] with the requester the app passes in: one
  * fingerprint prompt per payment, each naming the kid, the amount and the period (ADR-0004 amendments).
+ *
+ * The on-device weekly summary ([WeeklySummarySource], M6) is collected only while the dashboard is, for the week the
+ * card's toggle picks; it starts as [WeeklySummaryUi.Loading] and a failing source becomes
+ * [WeeklySummaryUi.Unavailable] without touching the rest of the dashboard.
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 @HiltViewModel
-@Suppress("LongParameterList") // One repository per dashboard card, plus the signer and the calendar.
+@Suppress("LongParameterList") // One repository or source per dashboard card, plus the signer and the calendar.
 class ParentHomeViewModel @Inject constructor(
     private val kids: KidRepository,
     private val accounts: AccountRepository,
@@ -60,10 +64,17 @@ class ParentHomeViewModel @Inject constructor(
     private val signer: PendingActionSigner,
     private val calendar: HouseholdCalendar,
     private val householdStatus: HouseholdStatusSource,
+    private val summaries: WeeklySummarySource,
 ) : ViewModel() {
     private val local = MutableStateFlow(LocalState())
+    private val summaryWeek = MutableStateFlow(SummaryWeek.THIS_WEEK)
 
-    val state: StateFlow<ParentHomeUiState> = combine(dashboard(), local, household()) { loaded, localState, status ->
+    val state: StateFlow<ParentHomeUiState> = combine(
+        dashboard(),
+        local,
+        household(),
+        summary(),
+    ) { loaded, localState, status, summary ->
         when (loaded) {
             Loaded.Loading -> ParentHomeUiState.Loading
 
@@ -73,6 +84,8 @@ class ParentHomeViewModel @Inject constructor(
                 signing = localState.signing,
                 signResult = localState.signResult,
                 household = status,
+                summaryWeek = summary.first,
+                summary = summary.second,
             )
         }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MILLIS), ParentHomeUiState.Loading)
@@ -82,7 +95,16 @@ class ParentHomeViewModel @Inject constructor(
             is ParentHomeEvent.SignNow -> signNow(event.requester)
             ParentHomeEvent.SignResultShown -> local.update { it.copy(signResult = null) }
             is ParentHomeEvent.Dismiss -> dismiss(event.key)
+            is ParentHomeEvent.SummaryWeekChanged -> summaryWeek.value = event.week
         }
+    }
+
+    /** The summary of the picked week; a new pick starts again from Loading. Never fails the dashboard. */
+    private fun summary(): Flow<Pair<SummaryWeek, WeeklySummaryUi>> = summaryWeek.flatMapLatest { week ->
+        summaries.observe(week)
+            .onStart { emit(WeeklySummaryUi.Loading) }
+            .catch { emit(WeeklySummaryUi.Unavailable) }
+            .map { week to it }
     }
 
     /** The household cards are extras: a failing source hides them instead of failing the dashboard. */

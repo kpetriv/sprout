@@ -47,6 +47,15 @@
   <string name="feature_chores_save">Save</string>
   <string name="feature_chores_editor_not_found">This chore no longer exists.</string>
   <string name="feature_chores_editor_save_failed">The chore could not be saved.</string>
+  <!-- Parent: "Suggest chores" (on-device ideas per age band, M6). Nothing is saved until the parent presses Save. -->
+  <string name="feature_chores_suggest">Suggest chores</string>
+  <string name="feature_chores_suggest_title">Chore ideas</string>
+  <string name="feature_chores_suggest_title_for">Chore ideas for %1$s</string>
+  <string name="feature_chores_suggest_hint">Ideas for this age, made on this phone. Tap one to fill in the form; you can change anything before you save.</string>
+  <string name="feature_chores_suggest_loading">Finding ideas…</string>
+  <string name="feature_chores_suggest_empty">No new ideas right now. Every idea for this age is already one of their chores.</string>
+  <string name="feature_chores_suggest_failed">Ideas could not be loaded.</string>
+  <string name="feature_chores_suggest_close">Close</string>
   <string name="feature_chores_field_kid">For</string>
   <string name="feature_chores_field_title">Title</string>
   <string name="feature_chores_field_description">Description (optional)</string>
