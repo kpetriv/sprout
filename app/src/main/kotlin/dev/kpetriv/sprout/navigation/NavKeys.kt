@@ -47,6 +47,10 @@ data class DevicesKey(val reviewDeviceId: DeviceId? = null) : NavKey
 @Serializable
 data object SecurityKey : NavKey
 
+/** Settings → On-device AI, opened from the weekly summary card's "Download the on-device model" (M6). */
+@Serializable
+data object AiSettingsKey : NavKey
+
 // Kid area (no lock).
 
 /** Kid mode's landing screen: the kid's own wallet. */

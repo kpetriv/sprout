@@ -3,7 +3,7 @@
 - **Status:** Accepted
 - **Date:** 2026-11-04
 - **Milestone:** Decided and implemented in M6 (`core/ai`, `core/domain-household` `WeeklyFacts`, `core/database` `WeeklyFactsUseCase`)
-- **Related:** [ADR-0001](0001-architecture.md) (module layout), [ADR-0002](0002-ledger-as-events.md) (the ledger the facts come from), [M6 spec](../milestones/M6.md), [privacy policy draft](../PRIVACY.md), decisions D-M6-1 to D-M6-20, threat model T9 and T38
+- **Related:** [ADR-0001](0001-architecture.md) (module layout), [ADR-0002](0002-ledger-as-events.md) (the ledger the facts come from), [M6 spec](../milestones/M6.md), [privacy policy draft](../PRIVACY.md), decisions D-M6-1 to D-M6-32, threat model T9 and T38
 
 ## Context
 

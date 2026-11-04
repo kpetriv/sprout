@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Android 11 and lower (API 28-30). Backup is already off via allowBackup="false"; this excludes everything as well. -->
+<!-- Android 11 and lower (API 28-30). Backup is already off via allowBackup="false"; this excludes everything as well,
+     the on-device AI settings (files/datastore/ai_preferences.preferences_pb, M6) included. -->
 <full-backup-content>
   <exclude domain="root" path="." />
   <exclude domain="file" path="." />

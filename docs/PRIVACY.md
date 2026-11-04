@@ -36,7 +36,7 @@ Sprout's Play audience is adults (18+). Kid mode is a feature the parent configu
 |---|---|---|
 | Chores and rewards | The core of the app: what needs doing, what it earns, what can be bought | Titles and amounts the parent writes |
 | Ledger events | Every credit and debit of pocket money and screen-time minutes, with who made it, from which device, and when | Signed, so tampering is detectable |
-| Free text in ledger events | A parent's reason for a manual adjustment, and an optional note when covering an overdraft | Up to 200 characters each. **Not end-to-end encrypted**: like the rest of the ledger, readable by the household's cloud backend from M3. Please don't put sensitive details in these notes. |
+| Free text in ledger events | A parent's reason for a manual adjustment (from M6 it may be prefilled from a receipt as "Receipt: <shop>", which the parent reviews before signing), and an optional note when covering an overdraft | Up to 200 characters each. **Not end-to-end encrypted**: like the rest of the ledger, readable by the household's cloud backend from M3. Please don't put sensitive details in these notes. |
 | Game results | Score and credit for each brain game played | One signed ledger event per play (from M5): which game and difficulty, how many rounds were right, the credit and the day played. The questions, answers and timings stay on the phone and are not stored. Credit is subject to a daily cap. |
 | Time bank sessions | When screen time was started and stopped | Recorded only; the app does not control the device |
 
@@ -82,7 +82,14 @@ Sprout's Play audience is adults (18+). Kid mode is a feature the parent configu
 
 ## On-device AI
 
-AI features (chore suggestions, the weekly parent summary, the "kindness check" before a child sends a message, and reading a receipt to prefill an adjustment) run entirely on your device, using Gemini Nano where the phone supports it and simple built-in rules where it does not. The kindness check only ever nudges the child; it never blocks a message and never reports it to anyone, including the parent. **TODO (M6/M8):** describe the on-device model download (Wi-Fi, with consent).
+AI features (chore suggestions, the weekly parent summary, the "kindness check" before a child sends a message, and reading a receipt to prefill an adjustment) run entirely on your device, using Gemini Nano where the phone supports it and simple built-in rules where it does not. The kindness check only ever nudges the child; it never blocks a message and never reports it to anyone, including the parent.
+
+- **Nothing is sent to the network for AI,** to us or anyone else. There is no cloud AI in Sprout.
+- **What each feature gives the on-device model.** Kindness check: the message the child is about to send. Chore suggestions: the child's age band, the titles of their existing chores and the household currency. Weekly summary: that week's figures (amounts earned, spent and saved, chores done, games played) and each child's first name. Receipts never use the model: the photo is read by on-device text recognition (part of Google Play services) and parsed by built-in rules.
+- **The model.** Gemini Nano runs inside AICore, a Google system service on the phone. Sprout asks for the model to be downloaded only after a parent agrees once in Settings → On-device AI; the system then downloads it in the background on Wi-Fi. Until then, and on phones without AICore, the built-in rules do everything. AI can be switched off there too; the rules keep every feature working.
+- **Nothing is kept.** Suggestions, summaries and kindness results are worked out when shown and never stored or logged. A receipt prefill only fills the adjustment form: the amount and the shop's name (as "Receipt: <shop>") enter the ledger only if the parent reviews and signs it, and then the reason is plaintext like any other adjustment reason (see "Free text in ledger events"). The picked receipt photo is read in memory and not stored.
+- **Settings stay on the device.** The AI switch and the download consent are stored on each phone, not synced, and excluded from backups.
+- **Data-safety form note:** on-device AI processing is not "collection" (nothing leaves the device for it), so it adds no data type to the form; the receipt-derived reason is covered by the existing free-text row once the parent signs it.
 
 ## Where your data is stored
 

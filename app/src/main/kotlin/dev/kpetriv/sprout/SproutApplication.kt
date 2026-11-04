@@ -6,10 +6,12 @@ import androidx.work.Configuration
 import dagger.hilt.android.HiltAndroidApp
 import dev.kpetriv.sprout.di.FirebaseModule
 import dev.kpetriv.sprout.startup.AppInitializer
+import timber.log.Timber
 import javax.inject.Inject
 
 /**
- * Checks a release build's server configuration, starts the process-start work ([AppInitializer]) and provides
+ * Plants Timber's DebugTree in debug builds only (release plants none, so nothing is logged; D-M6-18), checks a release
+ * build's server configuration, starts the process-start work ([AppInitializer]) and provides
  * WorkManager's configuration, so workers are created by Hilt ([HiltWorkerFactory]). The manifest removes
  * WorkManager's own androidx.startup initializer.
  */
@@ -28,6 +30,7 @@ class SproutApplication :
 
     override fun onCreate() {
         super.onCreate()
+        if (BuildConfig.DEBUG && Timber.treeCount == 0) Timber.plant(Timber.DebugTree())
         // Fail fast: a release build that cannot reach the server must not start (audit Low 5).
         FirebaseModule.requireFunctionsBaseUrl(BuildConfig.DEBUG, BuildConfig.FUNCTIONS_BASE_URL)
         appInitializer.start()

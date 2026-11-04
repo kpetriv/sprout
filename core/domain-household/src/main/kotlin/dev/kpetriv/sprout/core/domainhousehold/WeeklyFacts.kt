@@ -99,8 +99,14 @@ data class KidWeeklyFacts(
         val counts = listOf(choresSubmitted, choresApproved, choresRejected, gamesPlayed, anomalies)
         require(counts.all { it >= 0 }) { "counts must not be negative" }
         val amounts = listOf(
-            earned.chores, earned.allowance, earned.games, earned.interest,
-            choreMinutes, spentOnRewards, minutesUsed, movedToSavings,
+            earned.chores,
+            earned.allowance,
+            earned.games,
+            earned.interest,
+            choreMinutes,
+            spentOnRewards,
+            minutesUsed,
+            movedToSavings,
         )
         require(amounts.none { it.isNegative }) { "amounts must not be negative" }
     }

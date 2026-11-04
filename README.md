@@ -82,14 +82,14 @@ The full design is in [ADR-0003](docs/adr/0003-security-model.md) and the [threa
 
 ## On-device AI
 
-All AI runs locally through an `AiGateway` interface. The primary implementation uses ML Kit GenAI APIs on Gemini Nano where the device supports it; a rules-based fallback keeps every feature working on every device. Uses:
+All AI runs on the phone through one `AiGateway` (`core/ai`, [ADR-0010](docs/adr/0010-on-device-ai.md)). `AiRouter` uses **Gemini Nano** (ML Kit GenAI Prompt API on AICore, structured output) where the device has it and the parent has not switched it off, and a deterministic **rules** implementation everywhere else and whenever the model is busy, slow or wrong. The rules path is the reference behaviour: every feature works the same on the emulator and in CI, and Nano only improves the wording.
 
-- **Kindness check:** before a kid sends a message, the plaintext is checked on device and an unkind message gets a gentle nudge. It never blocks and never reports.
-- **Weekly parent summary** of chores, earnings, and spending.
-- **Chore suggestions** by age band.
-- **Receipt to manual adjustment:** prefill an adjustment from a photographed receipt.
+- **Kindness check:** before a Sprout or Sapling kid sends a message, it is checked on device; an unkind one gets a gentle nudge with a kinder message the kid can send with "Use this". It never blocks and never reports (2.5 s, then it sends).
+- **Weekly parent summary:** facts computed deterministically from the ledger (`WeeklyFactsUseCase`) and written up in 2 to 4 sentences, "This week so far" or "Last week", with an "On-device" chip. Every number in a model-written summary must be one of the facts, or the template text is shown.
+- **Chore suggestions** by age band in the chore editor: three to five ideas from a curated catalogue (or the model, validated against it) that fill the form; the parent saves.
+- **Receipt to manual adjustment:** on-device text recognition reads a picked receipt photo; the total and shop prefill the adjustment, which the parent reviews and signs. Never the model.
 
-No data leaves the device for AI in v1, and the privacy policy says so.
+Model output is untrusted: user text goes in as data, answers are validated (`AiOutputRules`) and replaced by the rules result when they fail, and nothing AI produces is stored or reaches the ledger without a parent. The model is downloaded only after a parent's consent in Settings → On-device AI (the system downloads it on Wi-Fi). No data leaves the device for AI, and the [privacy policy](docs/PRIVACY.md#on-device-ai) says so. The Nano path is unverified on hardware until a run on a supported Pixel.
 
 ## Build and run
 
@@ -126,7 +126,7 @@ Each milestone ends with green CI and a tagged build.
 | M3 Sync and identity | Sync engine, Firebase transport, App Check, Credential Manager, the Sprout server (Spark plan), Firestore rules and emulator tests, device registry with key attestation, controls matrix, runbook | Done |
 | M4 Chat and time bank | E2EE threads, key rotation, Seedling presets and voice notes, chore photo upload, time bank with an ongoing notification | In review |
 | M5 Games | Three games, tier difficulty, daily cap, signed scoring events | In review |
-| M6 AI | Gemini Nano integration, fallbacks, kindness check, suggestions, weekly summary | In progress |
+| M6 AI | Gemini Nano integration, fallbacks, kindness check, suggestions, weekly summary, receipt prefill ([spec and as built](docs/milestones/M6.md), [ADR-0010](docs/adr/0010-on-device-ai.md)) | In review |
 | M7 Showcase polish | Glance widget, adaptive layouts, Baseline Profiles, full screenshot coverage, accessibility, retention, export/delete | Planned |
 | M8 Play release | Privacy policy, data-safety form, security review, app signing, staged tracks | Planned |
 

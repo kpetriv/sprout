@@ -218,6 +218,7 @@ private fun ParentArea(
                             onSetUpSync = onSetUpSync,
                             onReviewDevice = { deviceId -> backStack.push(DevicesKey(deviceId)) },
                             onRegisterSigningKey = { backStack.push(SecurityKey) },
+                            onOpenAiSettings = { backStack.push(AiSettingsKey) },
                         )
                     }
                 }
@@ -291,6 +292,13 @@ private fun EntryProviderScope<NavKey>.parentEntries(backStack: NavBackStack<Nav
             onBack = pop,
             appVersion = BuildConfig.VERSION_NAME,
             initialSection = SettingsSection.PARENT_SECURITY,
+        )
+    }
+    entry<AiSettingsKey> {
+        SettingsRoute(
+            onBack = pop,
+            appVersion = BuildConfig.VERSION_NAME,
+            initialSection = SettingsSection.AI,
         )
     }
     entry<ChatThreadsKey> {

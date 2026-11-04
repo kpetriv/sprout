@@ -113,6 +113,8 @@ baselineProfile {
 }
 
 dependencies {
+    // AiGateway (the AiRouter) and AiPreferences behind the M6 feature ports (chat, chores, dashboard, wallet, settings).
+    implementation(projects.core.ai)
     implementation(projects.core.common)
     // ParentAuthorizer, ParentAuthUnavailableException and verifyParentSignature for the settings adapters.
     implementation(projects.core.crypto)
@@ -160,6 +162,8 @@ dependencies {
     implementation(libs.androidx.hilt.work)
     ksp(libs.androidx.hilt.compiler)
     implementation(libs.kotlinx.serialization.core)
+    // A DebugTree in debug builds only (D-M6-18); release plants no tree, so nothing is logged there.
+    implementation(libs.timber)
     // Callable payloads (device proofs, the export bundle).
     implementation(libs.kotlinx.serialization.json)
 
