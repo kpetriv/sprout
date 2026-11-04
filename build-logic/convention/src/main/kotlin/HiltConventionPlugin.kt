@@ -15,5 +15,12 @@ class HiltConventionPlugin : Plugin<Project> {
             add("implementation", libs.library("hilt-android"))
             add("ksp", libs.library("hilt-compiler"))
         }
+
+        // KSP outputs restored from the Gradle build cache have come back empty (no generated sources), which leaves
+        // Hilt's aggregated deps and the Hilt_* base classes missing and fails hiltJavaCompile* or R8 (D-M3-21). KSP
+        // therefore always runs; its inputs are small and the compile tasks downstream stay cacheable.
+        tasks.matching { it.name.startsWith("ksp") }.configureEach {
+            outputs.cacheIf("KSP outputs restored from the build cache can be empty (D-M3-21)") { false }
+        }
     }
 }
