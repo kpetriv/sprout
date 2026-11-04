@@ -87,6 +87,7 @@ internal fun ManualAdjustmentSheet(
  * changed after tapping "Scan a receipt" keeps the parent's value (audit L5): the amount, the reason, and the sign
  * (a sign the parent tapped is never forced to a debit). Save is disabled while a receipt is being read.
  */
+@Suppress("CyclomaticComplexMethod") // Field state, the receipt prefill and the parent's edits, each a flat branch.
 @Composable
 internal fun ManualAdjustmentForm(
     adjustment: AdjustmentUi,

@@ -69,7 +69,8 @@ object AiOutputRules {
         Regex("(?i)\\b(?:system|developer|assistant|user)\\s*(?:prompt|message|instructions?)?\\s*:"),
         Regex("(?i)\\b(?:as an ai|language model|i am an ai|i'm an ai|my instructions|system prompt|jailbreak)\\b"),
         Regex("(?i)\\byou (?:are|must|should) now\\b"),
-        Regex("<\\|?/?[a-zA-Z_|]+\\|?>|\\[/?INST]|```|\\{\\{|}}|<script", RegexOption.IGNORE_CASE),
+        // Braces and brackets escaped: Android's ICU regex engine rejects a bare "}" that the JVM accepts.
+        Regex("<\\|?/?[a-zA-Z_|]+\\|?>|\\[/?INST\\]|```|\\{\\{|\\}\\}|<script", RegexOption.IGNORE_CASE),
     )
 
     /** Length in Unicode code points (what the limits count), not UTF-16 units. */

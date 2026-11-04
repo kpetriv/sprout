@@ -89,10 +89,12 @@ class ChatViewModel @Inject constructor(
         when (event) {
             // Review M7: the field is disabled while the check runs, and an edit that still arrives is ignored, so
             // the text checked is the text sent.
-            is ChatEvent.DraftChanged -> if (!local.value.checking) local.update {
-                val draft = event.text.truncatedTo(OutgoingMessage.MAX_TEXT_LENGTH)
-                val accepted = it.acceptedSuggestion?.takeIf { suggestion -> suggestion == draft }
-                it.copy(draft = draft, nudge = null, acceptedSuggestion = accepted)
+            is ChatEvent.DraftChanged -> if (!local.value.checking) {
+                local.update {
+                    val draft = event.text.truncatedTo(OutgoingMessage.MAX_TEXT_LENGTH)
+                    val accepted = it.acceptedSuggestion?.takeIf { suggestion -> suggestion == draft }
+                    it.copy(draft = draft, nudge = null, acceptedSuggestion = accepted)
+                }
             }
 
             ChatEvent.SendText -> sendDraft()

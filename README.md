@@ -149,6 +149,7 @@ Each milestone ends with green CI and a tagged build.
 - [M3 milestone spec and as-built notes](docs/milestones/M3.md)
 - [M4 milestone spec and as-built notes](docs/milestones/M4.md)
 - [M5 milestone spec and as-built notes](docs/milestones/M5.md) and [ADR-0009: games scoring and credit](docs/adr/0009-games-scoring-and-credit.md)
+- [M6 milestone spec and as-built notes](docs/milestones/M6.md) and [ADR-0010: on-device AI](docs/adr/0010-on-device-ai.md)
 
 ## Engineering practices
 

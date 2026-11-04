@@ -18,6 +18,7 @@ import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
+@Suppress("LargeClass") // One test per ChatViewModel behaviour, sharing the fakes below.
 class ChatViewModelTest {
     @get:Rule
     val main = MainDispatcherRule()

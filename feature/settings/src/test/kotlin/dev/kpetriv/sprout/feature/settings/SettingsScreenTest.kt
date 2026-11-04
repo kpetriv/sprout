@@ -58,7 +58,8 @@ class SettingsScreenTest {
         compose.onNodeWithText("This phone can run Gemini Nano", substring = true).assertIsDisplayed()
         compose.onNodeWithText("What it is used for").assertIsDisplayed()
         compose.onNodeWithText("Applies to this phone only", substring = true).assertIsDisplayed()
-        compose.onNodeWithText("the kindness check in chat uses the built-in rules", substring = true).assertIsDisplayed()
+        compose.onNodeWithText("the kindness check in chat uses the built-in rules", substring = true)
+            .assertIsDisplayed()
         compose.onNodeWithText("Download the model").performClick()
         compose.onNodeWithText("Use on-device AI").performClick()
 
