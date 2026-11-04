@@ -10,9 +10,14 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
+    "build:static": "tsx scripts/build-static.ts",
+    "check:static": "tsx scripts/build-static.ts --check",
+    "check:deploy": "tsx scripts/check-deploy.ts",
     "dev": "tsx watch src/dev.ts",
     "lint": "eslint . && tsc --noEmit -p tsconfig.json",
-    "test": "firebase emulators:exec --only auth,firestore --project demo-sprout \"vitest run\""
+    "test": "firebase emulators:exec --only auth,firestore --project demo-sprout \"vitest run\"",
+    "operator": "tsx scripts/operator.ts",
+    "audit": "node scripts/audit.mjs"
   },
   "dependencies": {
     "@hono/node-server": "2.1.4",

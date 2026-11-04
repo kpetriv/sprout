@@ -113,7 +113,7 @@ describe('devices and members', () => {
 
 describe('top-level collections are closed', () => {
   for (const path of ['linkCodes/abc', `challenges/${PARENT_UID}`, 'deletionRecords/r1', 'rateLimits/b1',
-    `userHouseholds/${PARENT_UID}`]) {
+    'recoveries/r1', `userHouseholds/${PARENT_UID}`]) {
     it(`${path} is unreadable and unwritable, even by members`, async () => {
       await assertFails(getDoc(doc(asParent(env), path)));
       await assertFails(getDoc(doc(asKid(env), path)));

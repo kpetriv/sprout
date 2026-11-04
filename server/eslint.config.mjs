@@ -44,4 +44,10 @@ export default tseslint.config(
     files: ['eslint.config.mjs'],
     ...tseslint.configs.disableTypeChecked,
   },
+  {
+    // Plain JavaScript run by node from server/ and firestore/ (npm run audit).
+    files: ['scripts/**/*.mjs'],
+    ...tseslint.configs.disableTypeChecked,
+    languageOptions: { ...tseslint.configs.disableTypeChecked.languageOptions, globals: { process: 'readonly' } },
+  },
 );

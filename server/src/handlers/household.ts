@@ -121,20 +121,27 @@ export interface ExportBundle {
   blobs: Record<string, unknown>[];
 }
 
-/**
- * exportHousehold({ callerDeviceId, signature }) → the household's data as one JSON bundle (right of access and
- * portability, PRIVACY.md; D-M3-7). Chat is exported as stored, end-to-end encrypted: message envelopes with their
- * ciphertext and blob chunk headers without their bytes (D-M4-6); a plaintext export is a device's job (M7). Signed by an ACTIVE parent device over
- * `"sprout/export-household/v2" || 0x00 || hid || 0x00 || sha256(raw ID token) || 0x00 || {}` (crypto.ts
- * `callablePayload`). Refused with `resource-exhausted` above 4 MB (config.ts `MAX_EXPORT_BYTES`), below the host's
- * 4.5 MB response limit, or above `MAX_EXPORT_MESSAGES` messages (read in pages, D-M4-17).
- */
+/** The bounds of an export: the callable's ([CALLABLE_EXPORT_LIMITS]), or none (the operator script, D-M8-14). */
+export interface ExportLimits {
+  readonly maxBytes: number;
+  readonly maxMessages: number;
+}
+
+/** exportHousehold's bounds: the host's response limit and the paged message cap (D-M3-7, D-M4-17). */
+export const CALLABLE_EXPORT_LIMITS: ExportLimits = { maxBytes: MAX_EXPORT_BYTES, maxMessages: MAX_EXPORT_MESSAGES };
+
+/** No bounds (server/scripts/operator.ts `export-household` writes a local file, not a response). */
+export const UNLIMITED_EXPORT: ExportLimits = {
+  maxBytes: Number.POSITIVE_INFINITY,
+  maxMessages: Number.POSITIVE_INFINITY,
+};
+
 /**
  * The household's messages ordered by (lamport, id), read [EXPORT_PAGE_SIZE] at a time (audit L5). Stops reading and
- * answers `resource-exhausted` as soon as more than [MAX_EXPORT_MESSAGES] exist, so a long history is never loaded
- * whole into one instance.
+ * answers `resource-exhausted` as soon as more than [maxMessages] exist, so a long history is never loaded whole into
+ * one instance.
  */
-async function exportedMessages(hid: string, ref: DocumentReference): Promise<DocumentSnapshot[]> {
+async function exportedMessages(hid: string, ref: DocumentReference, maxMessages: number): Promise<DocumentSnapshot[]> {
   const rows: DocumentSnapshot[] = [];
   let last: DocumentSnapshot | undefined;
   for (;;) {
@@ -142,11 +149,11 @@ async function exportedMessages(hid: string, ref: DocumentReference): Promise<Do
     if (last) query = query.startAfter(last);
     const page = await query.get();
     rows.push(...page.docs);
-    if (rows.length > MAX_EXPORT_MESSAGES) {
-      log.warn('household.export.tooManyMessages', { hid, limit: MAX_EXPORT_MESSAGES });
+    if (rows.length > maxMessages) {
+      log.warn('household.export.tooManyMessages', { hid, limit: maxMessages });
       throw new HttpsError(
         'resource-exhausted',
-        `The chat history has more than ${MAX_EXPORT_MESSAGES} messages and cannot be exported in one response`,
+        `The chat history has more than ${maxMessages} messages and cannot be exported in one response`,
       );
     }
     if (page.size < EXPORT_PAGE_SIZE) return rows;
@@ -154,12 +161,26 @@ async function exportedMessages(hid: string, ref: DocumentReference): Promise<Do
   }
 }
 
-export async function exportHousehold(request: CallableRequest): Promise<ExportBundle> {
-  const caller = await parent(request, 'exportHousehold');
-  await requireDeviceProof(caller, dataOf(request), 'exportHousehold', {});
-  const ref = db.doc(`households/${caller.hid}`);
+/** What an export read: counts for the log line, never content. */
+export interface ExportStats {
+  readonly events: number;
+  readonly documents: number;
+  readonly messages: number;
+  readonly blobs: number;
+  readonly bytes: number;
+}
+
+/**
+ * The export bundle of household [hid] within [limits] (`resource-exhausted` above them), with its counts. Shared by
+ * the exportHousehold callable and the operator script; neither logs or prints anything of the bundle but counts.
+ */
+export async function householdExport(
+  hid: string,
+  limits: ExportLimits = CALLABLE_EXPORT_LIMITS,
+): Promise<{ bundle: ExportBundle; stats: ExportStats }> {
+  const ref = db.doc(`households/${hid}`);
   const names = Object.keys(DOCUMENT_COLLECTIONS);
-  const messages = await exportedMessages(caller.hid, ref);
+  const messages = await exportedMessages(hid, ref, limits.maxMessages);
   const [household, members, devices, parentKeys, events, blobs, ...documents] = await Promise.all([
     ref.get(),
     ref.collection('members').get(),
@@ -186,19 +207,33 @@ export async function exportHousehold(request: CallableRequest): Promise<ExportB
     blobs: blobs.docs.map(row),
   };
   const bytes = Buffer.byteLength(JSON.stringify(bundle), 'utf8');
-  const documentCount = documents.reduce((n, snap) => n + snap.size, 0);
-  if (bytes > MAX_EXPORT_BYTES) {
-    log.warn('household.export.tooLarge', { hid: caller.hid, bytes });
+  if (bytes > limits.maxBytes) {
+    log.warn('household.export.tooLarge', { hid, bytes });
     throw new HttpsError('resource-exhausted', 'The household is too large to export in one response');
   }
-  log.info('household.exported', {
-    hid: caller.hid,
+  const stats: ExportStats = {
     events: events.size,
-    documents: documentCount,
+    documents: documents.reduce((n, snap) => n + snap.size, 0),
     messages: messages.length,
     blobs: blobs.size,
     bytes,
-  });
+  };
+  return { bundle, stats };
+}
+
+/**
+ * exportHousehold({ callerDeviceId, signature }) → the household's data as one JSON bundle (right of access and
+ * portability, PRIVACY.md; D-M3-7). Chat is exported as stored, end-to-end encrypted: message envelopes with their
+ * ciphertext and blob chunk headers without their bytes (D-M4-6); a plaintext export is a device's job (M7). Signed by an ACTIVE parent device over
+ * `"sprout/export-household/v2" || 0x00 || hid || 0x00 || sha256(raw ID token) || 0x00 || {}` (crypto.ts
+ * `callablePayload`). Refused with `resource-exhausted` above 4 MB (config.ts `MAX_EXPORT_BYTES`), below the host's
+ * 4.5 MB response limit, or above `MAX_EXPORT_MESSAGES` messages (read in pages, D-M4-17).
+ */
+export async function exportHousehold(request: CallableRequest): Promise<ExportBundle> {
+  const caller = await parent(request, 'exportHousehold');
+  await requireDeviceProof(caller, dataOf(request), 'exportHousehold', {});
+  const { bundle, stats } = await householdExport(caller.hid);
+  log.info('household.exported', { hid: caller.hid, ...stats });
   return bundle;
 }
 
@@ -226,16 +261,41 @@ export async function deleteHousehold(request: CallableRequest): Promise<{ delet
   if (Date.now() - caller.authTime * 1000 > RECENT_SIGN_IN_MS) {
     throw new HttpsError('failed-precondition', 'Sign in again to delete the household');
   }
-  const hid = caller.hid;
+  const outcome = await deleteHouseholdData(caller.hid);
+  log.info('household.deleted', {
+    hidHash: outcome.hidHash,
+    ...outcome.counts,
+    usersDeleted: outcome.usersDeleted,
+    userDeleteFailures: outcome.userDeleteFailures,
+  });
+  return { deleted: true };
+}
+
+/** What a household deletion removed: counts and the id's hash only. */
+export interface DeletionCounts {
+  readonly members: number;
+  readonly devices: number;
+  readonly events: number;
+  readonly documents: number;
+}
+
+/** The members, devices and counts a deletion of [hid] would remove, read without writing anything. */
+export async function householdFootprint(
+  hid: string,
+): Promise<{ exists: boolean; counts: DeletionCounts; uids: string[]; memberRefs: DocumentReference[] }> {
   const ref = db.doc(`households/${hid}`);
-  const [members, deviceRows] = await Promise.all([ref.collection('members').get(), ref.collection('devices').get()]);
+  const [household, members, deviceRows] = await Promise.all([
+    ref.get(),
+    ref.collection('members').get(),
+    ref.collection('devices').get(),
+  ]);
   const count = async (name: string) => (await ref.collection(name).count().get()).data().count;
   const [events, parentKeys, ...documents] = await Promise.all([
     count('events'),
     count('parentKeys'),
     ...Object.keys(DOCUMENT_COLLECTIONS).map(count),
   ]);
-  const counts = {
+  const counts: DeletionCounts = {
     members: members.size,
     devices: deviceRows.size,
     events,
@@ -247,12 +307,29 @@ export async function deleteHousehold(request: CallableRequest): Promise<{ delet
       ...deviceRows.docs.map((d) => d.get('uid') as unknown).filter((u): u is string => typeof u === 'string'),
     ]),
   ];
+  return {
+    exists: household.exists || members.size > 0 || deviceRows.size > 0,
+    counts,
+    uids,
+    memberRefs: members.docs.map((m) => m.ref),
+  };
+}
+
+/**
+ * Deletes household [hid] as described on [deleteHousehold], after the caller's checks: shared by the callable and the
+ * operator script (`delete-household`, RUNBOOK §4), which differ only in how the request is authorised.
+ */
+export async function deleteHouseholdData(
+  hid: string,
+): Promise<{ hidHash: string; counts: DeletionCounts; usersDeleted: number; userDeleteFailures: number }> {
+  const ref = db.doc(`households/${hid}`);
+  const { counts, uids, memberRefs } = await householdFootprint(hid);
 
   const hidHash = sha256Hex(hid);
   await db.collection('deletionRecords').add({ hidHash, at: FieldValue.serverTimestamp(), counts });
 
   const memberWriter = db.bulkWriter();
-  members.docs.forEach((m) => void memberWriter.delete(m.ref));
+  memberRefs.forEach((m) => void memberWriter.delete(m));
   await memberWriter.close();
 
   await db.recursiveDelete(ref);
@@ -267,12 +344,5 @@ export async function deleteHousehold(request: CallableRequest): Promise<{ delet
   await writer.close();
 
   const result = uids.length > 0 ? await auth.deleteUsers(uids) : { successCount: 0, failureCount: 0 };
-
-  log.info('household.deleted', {
-    hidHash,
-    ...counts,
-    usersDeleted: result.successCount,
-    userDeleteFailures: result.failureCount,
-  });
-  return { deleted: true };
+  return { hidHash, counts, usersDeleted: result.successCount, userDeleteFailures: result.failureCount };
 }

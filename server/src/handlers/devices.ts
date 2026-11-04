@@ -1,4 +1,9 @@
-import { FieldValue } from 'firebase-admin/firestore';
+import {
+  FieldValue,
+  type DocumentReference,
+  type DocumentSnapshot,
+  type Transaction,
+} from 'firebase-admin/firestore';
 import { HttpsError, type CallableRequest } from '../https.js';
 import {
   callablePayload,
@@ -133,27 +138,8 @@ export async function revokeDevice(
     const [own, target] = await Promise.all([tx.get(devices.doc(proof.deviceId)), tx.get(devices.doc(deviceId))]);
     verifyDeviceProof(own, caller, payload, proof.signature);
     if (!target.exists) throw new HttpsError('not-found', 'No such device');
-    const uid = target.get('uid') as string;
-    const role = target.get('role') as string;
-    if (target.get('status') === 'REVOKED') {
-      return {
-        revokedAtLamport: lamportOf(target.get('revokedAtLamport')),
-        uid,
-        role,
-        kidUid: undefined,
-        sessionsPending: role === 'PARENT' && target.get('sessionsRevokedAt') === undefined,
-        already: true,
-      };
-    }
-    const revokedAtLamport = nextLamport(await maxLamport(tx, household, deviceId));
-    const keys = await tx.get(household.collection('parentKeys').where('deviceId', '==', deviceId));
-    const member = await tx.get(household.collection('members').doc(uid));
-
-    tx.update(target.ref, { status: 'REVOKED', revokedAt: FieldValue.serverTimestamp(), revokedAtLamport });
-    keys.docs.forEach((k) => tx.update(k.ref, { revokedAtLamport }));
-    const kidUid = member.exists && member.get('role') === 'KID' ? uid : undefined;
-    if (kidUid !== undefined) tx.delete(member.ref);
-    return { revokedAtLamport, uid, role, kidUid, sessionsPending: role === 'PARENT', already: false };
+    const plan = await planRevocation(tx, household, target);
+    return applyRevocation(tx, plan);
   });
 
   if (outcome.kidUid !== undefined) {
@@ -174,11 +160,93 @@ export async function revokeDevice(
   return { deviceId, revokedAtLamport: outcome.revokedAtLamport };
 }
 
+/** What revoking one device does, read inside a transaction by [planRevocation] and written by [applyRevocation]. */
+export interface RevocationPlan {
+  readonly target: DocumentSnapshot;
+  readonly uid: string;
+  readonly role: string;
+  /** True when the device is already REVOKED: nothing is written, only a pending session revocation is completed. */
+  readonly already: boolean;
+  readonly revokedAtLamport: number;
+  readonly parentKeys: readonly DocumentReference[];
+  /** The kid member row to delete (a KID device), else undefined. */
+  readonly kidMember: DocumentReference | undefined;
+}
+
+/** The outcome of [applyRevocation]: what the caller still does outside the transaction. */
+export interface RevocationOutcome {
+  readonly revokedAtLamport: number;
+  readonly uid: string;
+  readonly role: string;
+  /** The kid's uid whose user is to be disabled and its tokens revoked, else undefined. */
+  readonly kidUid: string | undefined;
+  /** True when the owner's parent sessions are still to be revoked ([revokeParentSessions]). */
+  readonly sessionsPending: boolean;
+  readonly already: boolean;
+}
+
+/**
+ * Reads, inside [tx], everything revoking the existing device row [target] of [household] needs: its
+ * `revokedAtLamport` (one above the highest lamport it wrote, [maxLamport]), its parent keys and, for a kid device,
+ * the member row. Writes nothing, so several devices can be planned before the first write of one transaction (the
+ * operator's `recover-household`).
+ */
+export async function planRevocation(
+  tx: Transaction,
+  household: DocumentReference,
+  target: DocumentSnapshot,
+): Promise<RevocationPlan> {
+  const uid = target.get('uid') as string;
+  const role = target.get('role') as string;
+  if (target.get('status') === 'REVOKED') {
+    return {
+      target,
+      uid,
+      role,
+      already: true,
+      revokedAtLamport: lamportOf(target.get('revokedAtLamport')),
+      parentKeys: [],
+      kidMember: undefined,
+    };
+  }
+  const revokedAtLamport = nextLamport(await maxLamport(tx, household, target.id));
+  const keys = await tx.get(household.collection('parentKeys').where('deviceId', '==', target.id));
+  const member = await tx.get(household.collection('members').doc(uid));
+  const kidMember = member.exists && member.get('role') === 'KID' ? member.ref : undefined;
+  return { target, uid, role, already: false, revokedAtLamport, parentKeys: keys.docs.map((k) => k.ref), kidMember };
+}
+
+/** Writes [plan] in [tx]: the device REVOKED, its parent keys stamped, a kid's member row deleted. */
+export function applyRevocation(tx: Transaction, plan: RevocationPlan): RevocationOutcome {
+  if (plan.already) {
+    return {
+      revokedAtLamport: plan.revokedAtLamport,
+      uid: plan.uid,
+      role: plan.role,
+      kidUid: undefined,
+      sessionsPending: plan.role === 'PARENT' && plan.target.get('sessionsRevokedAt') === undefined,
+      already: true,
+    };
+  }
+  const { revokedAtLamport } = plan;
+  tx.update(plan.target.ref, { status: 'REVOKED', revokedAt: FieldValue.serverTimestamp(), revokedAtLamport });
+  plan.parentKeys.forEach((k) => tx.update(k, { revokedAtLamport }));
+  if (plan.kidMember !== undefined) tx.delete(plan.kidMember);
+  return {
+    revokedAtLamport,
+    uid: plan.uid,
+    role: plan.role,
+    kidUid: plan.kidMember === undefined ? undefined : plan.uid,
+    sessionsPending: plan.role === 'PARENT',
+    already: false,
+  };
+}
+
 /**
  * Revokes [uid]'s refresh tokens and mirrors the cut-off into `members/{uid}.tokensValidAfter` (epoch seconds, the
  * Auth backend's own `tokensValidAfterTime`), which the rules and parent() compare with the ID token's `auth_time`.
  */
-async function revokeParentSessions(hid: string, uid: string, deviceId: string): Promise<void> {
+export async function revokeParentSessions(hid: string, uid: string, deviceId: string): Promise<void> {
   await auth.revokeRefreshTokens(uid);
   const user = await auth.getUser(uid);
   const fromAuth = user.tokensValidAfterTime ? Date.parse(user.tokensValidAfterTime) : NaN;

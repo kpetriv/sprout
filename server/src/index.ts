@@ -14,6 +14,7 @@ import * as encryptionKeys from './handlers/encryptionKeys.js';
 import * as household from './handlers/household.js';
 import * as linking from './handlers/linking.js';
 import * as parentKeys from './handlers/parentKeys.js';
+import { serveStatic } from './static.js';
 
 export const createHousehold = callable('createHousehold', household.createHousehold);
 export const beginDeviceRegistration = callable('beginDeviceRegistration', devices.beginDeviceRegistration);
@@ -47,7 +48,17 @@ export const callables = [
   deviceStatus,
 ] as const;
 
-/** The server's Hono app; [options] substitute the App Check verifier in tests. */
-export function createApp(options: CallableAppOptions = {}): Hono {
-  return createCallableApp(callables, options);
+export interface AppOptions extends CallableAppOptions {
+  /** The directory of the static pages (src/static.ts); defaults to `server/public`. */
+  readonly publicDir?: string;
+}
+
+/**
+ * The server's Hono app: the callables and the static pages (src/static.ts); [options] substitute the App Check
+ * verifier and the public directory in tests.
+ */
+export function createApp(options: AppOptions = {}): Hono {
+  const app = createCallableApp(callables, options);
+  serveStatic(app, options.publicDir);
+  return app;
 }

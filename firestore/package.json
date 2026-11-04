@@ -9,7 +9,8 @@
   },
   "scripts": {
     "test": "firebase emulators:exec --only firestore --project demo-sprout \"vitest run\"",
-    "lint": "tsc --noEmit -p ."
+    "lint": "tsc --noEmit -p .",
+    "audit": "node ../server/scripts/audit.mjs"
   },
   "devDependencies": {
     "@firebase/rules-unit-testing": "6.0.0",
@@ -18,5 +19,8 @@
     "firebase-tools": "15.34.0",
     "typescript": "6.0.3",
     "vitest": "5.0.5"
+  },
+  "overrides": {
+    "@grpc/grpc-js": "1.14.7"
   }
 }
