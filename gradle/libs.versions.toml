@@ -69,6 +69,14 @@ argon2kt = "1.6.0"
 tinkAndroid = "1.24.0"
 # SQLCipher for Android (core/database). The 4.x line on Maven Central; ships native libs, so JVM tests use plain Room.
 sqlcipherAndroid = "4.20.0"
+# On-device AI (core/ai, M6). ML Kit GenAI Prompt API (Gemini Nano on AICore), beta: the version the "Get started"
+# guide shows; its structured output needs the matching schema compiler (KSP), alpha. Both move together.
+mlkitGenaiPrompt = "1.0.0-beta4"
+mlkitGenaiSchemaCompiler = "1.0.0-alpha1"
+# Receipt prefill: unbundled (Google Play services) on-device Latin text recognition.
+playServicesMlkitTextRecognition = "19.0.2"
+# AiPreferences (core/ai): the AI switch and the model download consent.
+androidxDatastore = "1.3.0"
 
 [libraries]
 androidx-activity-compose = { module = "androidx.activity:activity-compose", version.ref = "androidxActivity" }
@@ -144,6 +152,10 @@ timber = { module = "com.jakewharton.timber:timber", version.ref = "timber" }
 argon2kt = { module = "com.lambdapioneer.argon2kt:argon2kt", version.ref = "argon2kt" }
 tink-android = { module = "com.google.crypto.tink:tink-android", version.ref = "tinkAndroid" }
 sqlcipher-android = { module = "net.zetetic:sqlcipher-android", version.ref = "sqlcipherAndroid" }
+mlkit-genai-prompt = { module = "com.google.mlkit:genai-prompt", version.ref = "mlkitGenaiPrompt" }
+mlkit-genai-schema-compiler = { module = "com.google.mlkit:genai-schema-compiler", version.ref = "mlkitGenaiSchemaCompiler" }
+play-services-mlkit-text-recognition = { module = "com.google.android.gms:play-services-mlkit-text-recognition", version.ref = "playServicesMlkitTextRecognition" }
+androidx-datastore-preferences = { module = "androidx.datastore:datastore-preferences", version.ref = "androidxDatastore" }
 
 # Only for the detekt configuration (see detektKotlin above).
 detekt-kotlin-compiler = { module = "org.jetbrains.kotlin:kotlin-compiler-embeddable", version.ref = "detektKotlin" }
