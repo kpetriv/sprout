@@ -83,9 +83,26 @@ val checkReleaseConfiguration = tasks.register("checkReleaseConfiguration") {
         }
     }
 }
+
+/**
+ * The benchmark build types are debug-signed release copies with a placeholder backend and the demo household
+ * (D-M7-41): never a Play upload. Their bundle tasks depend on this check, which always fails (M7 audit 2 I3); their
+ * APKs (`assemble…`, what the benchmarks install) are unaffected.
+ */
+val checkNotForPlay = tasks.register("checkNotForPlay") {
+    description = "Refuses to bundle a benchmark build type: those builds are never uploaded to Play."
+    doLast {
+        throw GradleException(
+            "Benchmark build types (nonMinifiedRelease, benchmarkRelease) are debug-signed, seed a demo " +
+                "household and have no backend: they are never bundled for Play. Use bundleRelease for an upload.",
+        )
+    }
+}
 tasks.configureEach {
     // A local Play bundle runs the release checks too, not only CI's `check` (audit 2 I-a).
     if (name == "bundleRelease") dependsOn(checkReleaseConfiguration, "checkMergedManifestForTelemetryRelease")
+    val benchmarkBundles = benchmarkBuildTypes.map { "bundle" + it.replaceFirstChar(Char::titlecase) }
+    if (name in benchmarkBundles) dependsOn(checkNotForPlay)
 }
 
 /**

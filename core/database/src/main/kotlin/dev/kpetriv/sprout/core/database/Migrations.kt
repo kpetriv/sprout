@@ -98,6 +98,17 @@ object Migrations {
         }
     }
 
+    /**
+     * 8 to 9 (M7 fix pass 2, audit 2 N3, D-M7-80): `messages.serverReceivedAtEpochMs`, the backend's stamp of a
+     * pulled message, so the chat prune watermark is compared with the server's clock. Existing rows keep null: a gap
+     * after one of them waits for the held-gap timeout, as before M7.
+     */
+    val MIGRATION_8_9: Migration = object : Migration(8, 9) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            VERSION_9_STATEMENTS.forEach(db::execSQL)
+        }
+    }
+
     val ALL: Array<Migration> = arrayOf(
         MIGRATION_1_2,
         MIGRATION_2_3,
@@ -106,6 +117,11 @@ object Migrations {
         MIGRATION_5_6,
         MIGRATION_6_7,
         MIGRATION_7_8,
+        MIGRATION_8_9,
+    )
+
+    private val VERSION_9_STATEMENTS: List<String> = listOf(
+        "ALTER TABLE `messages` ADD COLUMN `serverReceivedAtEpochMs` INTEGER",
     )
 
     private val VERSION_8_STATEMENTS: List<String> = listOf(

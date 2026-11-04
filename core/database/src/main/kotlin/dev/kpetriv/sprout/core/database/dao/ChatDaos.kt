@@ -103,6 +103,26 @@ interface MessageDao {
     )
     suspend fun storedAt(author: DeviceId, threadId: String, seq: Long): MessageEntity?
 
+    /**
+     * The stored (not held) message of [author] in [threadId] with the highest `seq` below [seq], quarantined ones
+     * included: the author's last message before a `seq` gap (D-M7-80).
+     */
+    @Query(
+        """
+        SELECT * FROM messages WHERE status != 'HELD' AND authorDeviceId = :author AND threadId = :threadId
+        AND seq < :seq ORDER BY seq DESC LIMIT 1
+        """,
+    )
+    suspend fun lastStoredBefore(author: DeviceId, threadId: String, seq: Long): MessageEntity?
+
+    /** How many messages of [threadId] are stored (not held), quarantined ones included. */
+    @Query("SELECT COUNT(*) FROM messages WHERE status != 'HELD' AND threadId = :threadId")
+    suspend fun countStoredIn(threadId: String): Int
+
+    /** The earliest server stamp among the stored (not held) messages of [threadId]; null when none has one. */
+    @Query("SELECT MIN(serverReceivedAtEpochMs) FROM messages WHERE status != 'HELD' AND threadId = :threadId")
+    suspend fun oldestServerStampIn(threadId: String): Long?
+
     /** The visible message of [author] in [threadId] with the highest `seq` below [seq] (a late one's predecessor). */
     @Query(
         """

@@ -13,12 +13,13 @@ import dev.kpetriv.sprout.core.syncfirebase.FirebaseAuthSession
 import dev.kpetriv.sprout.core.syncfirebase.FirebaseConfig
 import dev.kpetriv.sprout.di.ApplicationScope
 import dev.kpetriv.sprout.household.HouseholdAdminFunctions
+import dev.kpetriv.sprout.widget.WidgetRefresher
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.flow.getAndUpdate
 import kotlinx.coroutines.launch
 import java.util.concurrent.atomic.AtomicBoolean
 import javax.inject.Inject
@@ -122,6 +123,10 @@ class FirebaseGateAuth @Inject constructor(private val auth: FirebaseAuthSession
  * resume. The parent can also erase this phone's copy from the gate instead ([eraseInstead], after the confirmation
  * [SignInAgainViewModel][dev.kpetriv.sprout.navigation.SignInAgainViewModel] asks for), but not while a status check
  * or a sign-in is in flight. A phone that never comes online stays gated with its encrypted copy (THREAT_MODEL T7).
+ *
+ * Going behind the gate and leaving it ask the home screen widget to redraw ([WidgetRefresher], audit 2 N2), so it is
+ * blank while the gate is up (ADR-0012). The gate is in memory only: after a process restart it is down until the
+ * next credential check raises it again.
  */
 @Singleton
 @Suppress("TooManyFunctions") // One function per gate action.
@@ -135,6 +140,7 @@ internal constructor(
     private val removals: HouseholdRemovals,
     private val syncNow: suspend () -> Unit,
     private val pause: SyncPause,
+    private val widgets: WidgetRefresher = WidgetRefresher.None,
 ) : CredentialCheck {
     @Inject
     @Suppress("LongParameterList") // One collaborator per gate step.
@@ -146,6 +152,7 @@ internal constructor(
         removals: HouseholdRemovals,
         sync: Lazy<SyncController>,
         pause: SyncPause,
+        widgets: WidgetRefresher,
     ) : this(
         scope = scope,
         sessions = sessions,
@@ -154,6 +161,7 @@ internal constructor(
         removals = removals,
         syncNow = { sync.get().syncNow() },
         pause = pause,
+        widgets = widgets,
     )
 
     private val mutableState = MutableStateFlow<GateState?>(null)
@@ -181,7 +189,7 @@ internal constructor(
 
     override fun credentialsLost() {
         var started = false
-        mutableState.update { current ->
+        change { current ->
             if (current == null || current == GateState.Unreachable) {
                 started = true
                 GateState.Checking
@@ -214,31 +222,40 @@ internal constructor(
     fun signInWithEmailPassword(email: String, password: String) =
         signIn { auth.signInWithEmailPassword(email, password) }
 
-    fun dismissFailure() = mutableState.update { (it as? GateState.SignInRequired)?.copy(failure = null) ?: it }
+    fun dismissFailure() = change { (it as? GateState.SignInRequired)?.copy(failure = null) ?: it }
+
+    /**
+     * Moves the gate with [transform]; when that raises or lowers it, the widget redraws (blank while it is up, audit 2
+     * N2). Every change of [mutableState] goes through here.
+     */
+    private inline fun change(transform: (GateState?) -> GateState?) {
+        val previous = mutableState.getAndUpdate(transform)
+        if ((previous == null) != (mutableState.value == null)) widgets.refresh()
+    }
 
     private suspend fun check() {
         val session = realSession()
         if (session == null) {
-            mutableState.value = null
+            change { null }
             return
         }
         val answer = guarded { deviceStatus() }?.getOrNull()
         when {
-            answer == null -> mutableState.value = GateState.Unreachable
+            answer == null -> change { GateState.Unreachable }
             answer.householdGone -> removals.remove(RemovalReason.HOUSEHOLD_GONE)
             answer.status == DeviceStatusValue.REVOKED -> removals.remove(RemovalReason.DEVICE_REVOKED)
-            answer.status == DeviceStatusValue.UNKNOWN -> mutableState.value = GateState.Unreachable
-            else -> mutableState.value = GateState.SignInRequired(auth.usesEmailPassword)
+            answer.status == DeviceStatusValue.UNKNOWN -> change { GateState.Unreachable }
+            else -> change { GateState.SignInRequired(auth.usesEmailPassword) }
         }
     }
 
     private fun signIn(block: suspend () -> Result<Unit>) {
         val current = mutableState.value as? GateState.SignInRequired ?: return
         if (current.busy) return
-        mutableState.value = current.copy(busy = true, failure = null)
+        change { current.copy(busy = true, failure = null) }
         scope.launch {
             val failure = attemptSignIn(block)
-            mutableState.update { state ->
+            change { state ->
                 when {
                     failure == null -> null
                     state is GateState.SignInRequired -> state.copy(busy = false, failure = failure)

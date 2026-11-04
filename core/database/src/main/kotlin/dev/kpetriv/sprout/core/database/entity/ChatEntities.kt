@@ -49,6 +49,10 @@ enum class MessageStatus {
  * @property displayedAtEpochMs the time the screens show (audit M4): the signed `createdAt`, raised to the previous
  *   message's of the same author in the thread when it is earlier, so an author cannot backdate a message.
  * @property late accepted for a `seq` this device had already skipped (audit L3): the gap timed out before it came.
+ * @property serverReceivedAtEpochMs the backend's `serverReceivedAt` stamp it was pulled with (schema version 9,
+ *   D-M7-80): the server's clock, compared with the chat prune watermark when a `seq` gap may be a prune's. Null for
+ *   this device's own messages until they come back from the server, rows stored before version 9, and transports
+ *   without stamps.
  */
 @Entity(
     tableName = "messages",
@@ -81,6 +85,7 @@ class MessageEntity(
     val receivedAtEpochMs: Long,
     val displayedAtEpochMs: Long = createdAtEpochMs,
     val late: Boolean = false,
+    val serverReceivedAtEpochMs: Long? = null,
 ) {
     /** The envelope this row holds, or null for a quarantined row (or one that no longer passes its own checks). */
     fun toEnvelope(): MessageEnvelope? = if (status == MessageStatus.QUARANTINED) {
@@ -117,10 +122,11 @@ class MessageEntity(
         receivedAtEpochMs: Long = this.receivedAtEpochMs,
         ciphertext: String = this.ciphertext,
         signature: String? = this.signature,
+        serverReceivedAtEpochMs: Long? = this.serverReceivedAtEpochMs,
     ): MessageEntity = MessageEntity(
         messageId, householdId, threadId, authorUid, authorDeviceId, authorRole, seq, lamport, createdAtEpochMs,
         epoch, kind, ciphertext, blobId, signature, schemaVersion, plaintext, status, reason, receivedAtEpochMs,
-        displayedAtEpochMs, late,
+        displayedAtEpochMs, late, serverReceivedAtEpochMs,
     )
 
     override fun equals(other: Any?): Boolean = other is MessageEntity && fields() == other.fields() &&
@@ -130,7 +136,7 @@ class MessageEntity(
     private fun fields(): List<Any?> = listOf(
         messageId, householdId, threadId, authorUid, authorDeviceId, authorRole, seq, lamport, createdAtEpochMs,
         epoch, kind, ciphertext, blobId, signature, schemaVersion, status, reason, receivedAtEpochMs,
-        displayedAtEpochMs, late,
+        displayedAtEpochMs, late, serverReceivedAtEpochMs,
     )
 
     override fun hashCode(): Int = messageId.hashCode()
@@ -150,6 +156,7 @@ class MessageEntity(
             receivedAtEpochMs: Long,
             displayedAtEpochMs: Long = envelope.createdAt.toEpochMilliseconds(),
             late: Boolean = false,
+            serverReceivedAtEpochMs: Long? = null,
         ): MessageEntity = MessageEntity(
             messageId = envelope.messageId.value,
             householdId = envelope.householdId,
@@ -172,6 +179,7 @@ class MessageEntity(
             receivedAtEpochMs = receivedAtEpochMs,
             displayedAtEpochMs = displayedAtEpochMs,
             late = late,
+            serverReceivedAtEpochMs = serverReceivedAtEpochMs,
         )
     }
 }

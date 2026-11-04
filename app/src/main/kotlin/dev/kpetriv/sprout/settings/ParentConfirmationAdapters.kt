@@ -12,6 +12,7 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import dev.kpetriv.sprout.R
 import dev.kpetriv.sprout.core.crypto.LockoutDecision
 import dev.kpetriv.sprout.core.crypto.ParentKeyInvalidatedException
+import dev.kpetriv.sprout.core.domainledger.ParentAuthorization
 import dev.kpetriv.sprout.di.ApplicationScope
 import dev.kpetriv.sprout.feature.lock.BiometricCancelledException
 import dev.kpetriv.sprout.feature.lock.ParentAuthorizationPrompt
@@ -53,33 +54,41 @@ import javax.inject.Singleton
  * through [PinConfirmationHost] under the PIN lockout. A dismissed prompt is [ConfirmationOutcome.CANCELLED]; no host
  * activity, a lockout or any failure is [ConfirmationOutcome.FAILED]. Nothing is logged.
  */
-class PromptParentConfirmation @Inject constructor(
-    private val host: ParentPromptHost,
-    private val prompt: ParentAuthorizationPrompt,
-    private val pins: PinConfirmationHost,
+class PromptParentConfirmation internal constructor(
+    /** The strong-biometric authorisation for a purpose, or null when no host activity can show the prompt. */
+    private val authorize: suspend (ConfirmationPurpose) -> ParentAuthorization?,
+    /** The parent PIN fallback ([PinConfirmationHost.confirm]). */
+    private val pinFallback: suspend (ConfirmationPurpose) -> ConfirmationOutcome,
 ) : ParentConfirmation {
-    @Suppress("TooGenericExceptionCaught", "SwallowedException") // Any other failure: nothing is confirmed.
-    override suspend fun confirm(purpose: ConfirmationPurpose): ConfirmationOutcome {
-        val activity = host.current() ?: return ConfirmationOutcome.FAILED
-        return try {
-            when (val authorization = prompt.authorize(activity, activity.getString(purpose.reason()))) {
-                is UnavailableParentAuthorization -> pins.confirm(purpose)
+    @Inject
+    constructor(host: ParentPromptHost, prompt: ParentAuthorizationPrompt, pins: PinConfirmationHost) : this(
+        authorize = { purpose ->
+            host.current()?.let { activity -> prompt.authorize(activity, activity.getString(purpose.reason())) }
+        },
+        pinFallback = pins::confirm,
+    )
 
-                else -> {
-                    authorization.sign(challenge(purpose))
-                    ConfirmationOutcome.CONFIRMED
-                }
+    @Suppress("TooGenericExceptionCaught", "SwallowedException") // Any other failure: nothing is confirmed.
+    override suspend fun confirm(purpose: ConfirmationPurpose): ConfirmationOutcome = try {
+        when (val authorization = authorize(purpose)) {
+            null -> ConfirmationOutcome.FAILED
+
+            is UnavailableParentAuthorization -> pinFallback(purpose)
+
+            else -> {
+                authorization.sign(challenge(purpose))
+                ConfirmationOutcome.CONFIRMED
             }
-        } catch (cancellation: CancellationException) {
-            throw cancellation
-        } catch (cancelled: BiometricCancelledException) {
-            ConfirmationOutcome.CANCELLED
-        } catch (changed: ParentKeyInvalidatedException) {
-            // Fingerprints changed (or the key is not the registered one): the PIN still proves the parent.
-            pins.confirm(purpose)
-        } catch (failure: Exception) {
-            ConfirmationOutcome.FAILED
         }
+    } catch (cancellation: CancellationException) {
+        throw cancellation
+    } catch (cancelled: BiometricCancelledException) {
+        ConfirmationOutcome.CANCELLED
+    } catch (changed: ParentKeyInvalidatedException) {
+        // Fingerprints changed (or the key is not the registered one): the PIN still proves the parent.
+        pinFallback(purpose)
+    } catch (failure: Exception) {
+        ConfirmationOutcome.FAILED
     }
 
     private fun challenge(purpose: ConfirmationPurpose): ByteArray =

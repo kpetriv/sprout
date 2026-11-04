@@ -2,6 +2,7 @@ package dev.kpetriv.sprout.settings
 
 import android.app.Application
 import dev.kpetriv.sprout.core.database.ChatPruneScheduler
+import dev.kpetriv.sprout.core.database.NoHouseholdPolicyYetException
 import dev.kpetriv.sprout.core.database.TestHousehold
 import dev.kpetriv.sprout.core.model.HouseholdId
 import dev.kpetriv.sprout.core.sync.SyncTransport
@@ -17,6 +18,7 @@ import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
 import java.lang.reflect.Proxy
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -60,6 +62,16 @@ class PolicyAdaptersTest {
 
         assertEquals(HouseholdRulesState(chatRetentionDays = 30, dailyGameCapMinor = 120), rules.observe().first())
         assertEquals(1, pruneRequests)
+    }
+
+    @Test
+    fun `without a policy row the setters let the refusal through and prune nothing`() = runTest {
+        // Settings shows "Waiting for the household policy to sync" for it (D-M7-57, audit 2 I1).
+        assertFailsWith<NoHouseholdPolicyYetException> { rules.setChatRetentionDays(30) }
+        assertFailsWith<NoHouseholdPolicyYetException> { rules.setDailyGameCap(120) }
+
+        assertEquals(0, pruneRequests)
+        assertNull(withTimeoutOrNull(100) { rules.observe().first() }, "and no policy was created")
     }
 
     @Test

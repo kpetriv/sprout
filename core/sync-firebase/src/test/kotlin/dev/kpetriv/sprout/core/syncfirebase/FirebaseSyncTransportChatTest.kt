@@ -80,6 +80,9 @@ class FirebaseSyncTransportChatTest {
         val page = transport().pull(SyncCursor.START)
         assertEquals(listOf(message), page.messages)
         assertNotNull(page.next.perCollection[FirestoreLayout.MESSAGES])
+        // The server stamp comes along by message id, for the prune watermark's gap check (D-M7-80).
+        val stamp = assertIs<ServerTime>(stored[FirestoreFacade.SERVER_RECEIVED_AT])
+        assertEquals(mapOf("m1" to stamp.toInstant()), page.messageStamps)
     }
 
     @Test

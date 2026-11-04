@@ -338,7 +338,9 @@ class FakeBackend(val householdId: HouseholdId, private val pageSize: Int = DEFA
 
     /**
      * The household's chat prune watermark (server `households/{hid}.chatPrune.prunedBefore`, D-M7-53): the latest cut
-     * any [pruneMessages] applied, never moved back; null before the first prune. Every pull page carries it.
+     * any [pruneMessages] applied, never moved back; null before the first prune. Every pull page carries it here;
+     * the Firebase transport reads it only for pages that carry messages (audit 2 I7), which is all the engine needs:
+     * a gap can only show when messages come.
      */
     @get:Synchronized
     var chatPrunedBefore: Instant? = null
@@ -420,23 +422,30 @@ class FakeBackend(val householdId: HouseholdId, private val pageSize: Int = DEFA
         checkReachable(caller.deviceId)
         var hasMore = false
         val next = cursor.perCollection.toMutableMap()
-        fun <T> page(collection: String, source: Map<*, Stored<T>>, readable: (T) -> Boolean = { true }): List<T> {
+        fun <T> stored(collection: String, source: Map<*, Stored<T>>, readable: (T) -> Boolean): List<Stored<T>> {
             val after = cursor.perCollection[collection]?.toLongOrNull() ?: 0
             val newer = source.values.filter { it.seq > after && readable(it.value) }.sortedBy { it.seq }
             if (newer.size > pageSize) hasMore = true
             val taken = newer.take(pageSize)
             taken.lastOrNull()?.let { next[collection] = it.seq.toString() }
-            return taken.map { it.value }
+            return taken
         }
+        fun <T> page(collection: String, source: Map<*, Stored<T>>): List<T> =
+            stored(collection, source) { true }.map { it.value }
+        val pulledMessages = stored(MESSAGES, messages) { mayReadThread(caller, it.string(THREAD_ID)) }
         return PullPage(
             devices = page(DEVICES, devices),
             parentKeys = page(PARENT_KEYS, parentKeys),
             documents = page(DOCUMENTS, documents),
             events = page(EVENTS, events),
-            messages = page(MESSAGES, messages) { mayReadThread(caller, it.string(THREAD_ID)) },
+            messages = pulledMessages.map { it.value },
             next = SyncCursor(next),
             hasMore = hasMore,
             chatPrunedBefore = chatPrunedBefore,
+            // Each message's server stamp (when it was stored), as the Firebase transport reads `serverReceivedAt`.
+            messageStamps = pulledMessages.mapNotNull { row ->
+                row.value.string(MESSAGE_ID)?.let { it to Instant.fromEpochMilliseconds(row.at) }
+            }.toMap(),
         )
     }
 

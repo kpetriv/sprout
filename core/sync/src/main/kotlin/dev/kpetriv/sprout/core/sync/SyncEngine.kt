@@ -183,7 +183,7 @@ class SyncEngine(
             }
             if (page.events.isNotEmpty()) pulled.events += applier.applyEvents(page.events)
             page.chatPrunedBefore?.let { applier.applyChatPrune(it) }
-            if (page.messages.isNotEmpty()) pulled.messages += applier.applyMessages(page.messages)
+            if (page.messages.isNotEmpty()) pulled.messages += applier.applyMessages(page.messages, page.messageStamps)
             applier.saveCursor(page.next)
             pulled.add(page)
             cursor = page.next

@@ -17,6 +17,7 @@ import dev.kpetriv.sprout.sync.RemovalHandler
 import dev.kpetriv.sprout.sync.SessionReconciler
 import dev.kpetriv.sprout.sync.ShellPreferences
 import dev.kpetriv.sprout.sync.SyncController
+import dev.kpetriv.sprout.widget.WidgetBlanker
 import dev.kpetriv.sprout.widget.WidgetDataObserver
 import dev.kpetriv.sprout.work.PlanScheduler
 import dev.kpetriv.sprout.work.ScheduledActionsPlanner
@@ -61,8 +62,10 @@ import javax.inject.Singleton
  * call. It never asks for a download (that needs the parent's consent, D-M6-6) and logs only the availability and
  * reason code, at DEBUG.
  *
- * A removal ([RemovalHandler]) stops the work: one stored by an earlier process resumes its wipe before step 2, and one
- * reported during startup (step 2, or sync elsewhere) skips every remaining step, checked between steps. Startup
+ * A removal ([RemovalHandler]) stops the work: one stored by an earlier process first draws the home screen widget
+ * blank ([WidgetBlanker], before step 0, audit 2 N1: a process that died during the wipe, or exited before the widget
+ * redrew, left the kid's last drawing there) and then resumes its wipe before step 2; one reported during startup
+ * (step 2, or sync elsewhere) skips every remaining step, checked between steps. Startup
  * then ends [StartupState.Ready], never [StartupState.Failed] (a step that fails because the wipe closed the
  * database counts as removed), and the shell shows the removed screen.
  *
@@ -94,6 +97,7 @@ class AppInitializer internal constructor(
     private val sweepVoiceTempFiles: () -> Unit = {},
     private val refreshAiStatus: suspend () -> Unit = {},
     private val scheduleM7: () -> Unit = {},
+    private val blankWidgets: suspend () -> Unit = {},
 ) : StartupStatus {
     @Inject
     @Suppress("LongParameterList") // One lazily built dependency per startup step.
@@ -116,6 +120,7 @@ class AppInitializer internal constructor(
         benchmarkSeed: Lazy<BenchmarkSeed>,
         chatPrunes: Lazy<ChatPruneScheduler>,
         widgets: Lazy<WidgetDataObserver>,
+        widgetBlanker: Lazy<WidgetBlanker>,
     ) : this(
         scope = scope,
         seedDemoHousehold = if (BenchmarkSeed.enabled) {
@@ -144,6 +149,7 @@ class AppInitializer internal constructor(
             chatPrunes.get().scheduleDaily()
             widgets.get().start()
         },
+        blankWidgets = { widgetBlanker.get().blankNow() },
     )
 
     private val started = AtomicBoolean(false)
@@ -190,6 +196,7 @@ class AppInitializer internal constructor(
     /** The steps; returns early once a removal is set. */
     @Suppress("ReturnCount") // One check between each pair of steps.
     private suspend fun steps() {
+        blankWidgetsIfRemovedBestEffort()
         clearPhotoCacheBestEffort()
         sweepVoiceTempFilesBestEffort()
         initialiseFirebaseBestEffort()
@@ -239,6 +246,21 @@ class AppInitializer internal constructor(
     private suspend fun chatStartupBestEffort() {
         try {
             chatStartup()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (expected: Exception) {
+            // Nothing to show or log.
+        }
+    }
+
+    /**
+     * With a removal stored, the widget is drawn blank first. Best effort, the removal check included: a failure here
+     * never fails startup or changes what the later steps do (they read the removal again).
+     */
+    @Suppress("TooGenericExceptionCaught", "SwallowedException")
+    private suspend fun blankWidgetsIfRemovedBestEffort() {
+        try {
+            if (removing()) blankWidgets()
         } catch (e: CancellationException) {
             throw e
         } catch (expected: Exception) {

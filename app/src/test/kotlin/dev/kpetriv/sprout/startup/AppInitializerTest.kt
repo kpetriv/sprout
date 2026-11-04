@@ -13,6 +13,7 @@ import kotlinx.coroutines.test.runTest
 import org.junit.Test
 import java.security.GeneralSecurityException
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 
 class AppInitializerTest {
     private val scope = TestScope(StandardTestDispatcher())
@@ -68,6 +69,7 @@ class AppInitializerTest {
             storedRemoval
         },
         removing = { removing || storedRemoval },
+        blankWidgets = { steps += "blank widget" },
     )
 
     @Test
@@ -136,8 +138,40 @@ class AppInitializerTest {
             advanceUntilIdle()
             assertEquals(StartupState.Ready, state.value)
         }
-        assertEquals(listOf("firebase", "resume wipe"), steps)
+        assertEquals(listOf("blank widget", "firebase", "resume wipe"), steps, "the widget first (audit 2 N1)")
     }
+
+    @Test
+    fun `a stored removal blanks the widget even when that fails, and a start without one never does`() =
+        scope.runTest {
+            storedRemoval = true
+            AppInitializer(
+                scope = scope,
+                seedDemoHousehold = null,
+                quarantineLedger = { },
+                planner = planner,
+                scheduler = scheduler,
+                resumeRemoval = {
+                    steps += "resume wipe"
+                    true
+                },
+                removing = { true },
+                blankWidgets = { error("no widget host") },
+            ).apply {
+                start()
+                advanceUntilIdle()
+                assertEquals(StartupState.Ready, state.value)
+            }
+            assertEquals(listOf("resume wipe"), steps)
+
+            steps.clear()
+            storedRemoval = false
+            withSession(parentSession()).apply {
+                start()
+                advanceUntilIdle()
+            }
+            assertFalse("blank widget" in steps)
+        }
 
     @Test
     fun `a removal found while reconciling skips the rest and still ends Ready`() = scope.runTest {

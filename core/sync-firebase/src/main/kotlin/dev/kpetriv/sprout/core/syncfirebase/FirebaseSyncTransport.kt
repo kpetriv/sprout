@@ -34,6 +34,7 @@ import kotlinx.coroutines.flow.merge
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.contentOrNull
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -583,22 +584,39 @@ internal constructor(
         }
         malformed += eventPage.size - events.size
 
-        val messages = when (val scope = messageScope(hid, deviceDocs)) {
-            MessageScope.Skip -> emptyList()
-
-            is MessageScope.Read -> {
-                val messagePage = page(hid, FirestoreLayout.MESSAGES, cursor, next, scope.where)
-                hasMore = hasMore || messagePage.size >= pageSize
-                messagePage.map { StoredShapes.messageOf(it.data) }
-            }
-        }
+        val messagePage = messagePage(hid, deviceDocs, cursor, next)
+        hasMore = hasMore || messagePage.size >= pageSize
+        val messages = messagePage.map { StoredShapes.messageOf(it.data) }
 
         // Read only with messages: a gap a prune left can only show when messages come (one read per such page).
         val chatPrunedBefore = if (messages.isEmpty()) null else chatPrunedBefore(hid)
         return PullPage(
             devices, parentKeys, documents, events, SyncCursor(next), hasMore, messages, malformed, chatPrunedBefore,
+            messageStamps(messagePage, messages),
         )
     }
+
+    /** The `messages` page this session may read ([messageScope]); empty when it skips the lane. */
+    private suspend fun messagePage(
+        hid: HouseholdId,
+        deviceDocs: List<FacadeDocument>?,
+        cursor: SyncCursor,
+        next: MutableMap<String, String>,
+    ): List<FacadeDocument> = when (val scope = messageScope(hid, deviceDocs)) {
+        MessageScope.Skip -> emptyList()
+        is MessageScope.Read -> page(hid, FirestoreLayout.MESSAGES, cursor, next, scope.where)
+    }
+
+    /**
+     * Each pulled message's server stamp by its id (the document id, which must equal the tree's `messageId`), so the
+     * gap check compares the prune watermark with the server's clock (audit 2 N3, D-M7-80).
+     */
+    private fun messageStamps(page: List<FacadeDocument>, trees: List<JsonObject>): Map<String, kotlin.time.Instant> =
+        page.zip(trees).mapNotNull { (doc, tree) ->
+            val stamp = doc.serverReceivedAt?.toInstant()
+            val id = doc.id.takeIf { (tree[MESSAGE_ID] as? JsonPrimitive)?.contentOrNull == it }
+            if (stamp == null || id == null) null else id to stamp
+        }.toMap()
 
     /**
      * The household's chat prune watermark, `households/{hid}.chatPrune.prunedBefore` (written by the server's
@@ -856,6 +874,7 @@ internal constructor(
 
         private const val REVOKED = "REVOKED"
         private const val THREAD_ID = "threadId"
+        private const val MESSAGE_ID = "messageId"
 
         /** Most chunks of one blob (core/domain-ledger `ChatLimits.MAX_BLOB_CHUNKS`). */
         private const val MAX_BLOB_CHUNKS = 2

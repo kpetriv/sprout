@@ -1,9 +1,14 @@
 package dev.kpetriv.sprout.widget
 
+import android.appwidget.AppWidgetManager
+import android.content.ComponentName
 import android.content.Context
+import android.widget.RemoteViews
+import androidx.glance.appwidget.ExperimentalGlanceRemoteViewsApi
 import androidx.glance.appwidget.GlanceAppWidget
 import androidx.glance.appwidget.GlanceAppWidgetManager
 import androidx.glance.appwidget.GlanceAppWidgetReceiver
+import androidx.glance.appwidget.GlanceRemoteViews
 import androidx.glance.appwidget.updateAll
 import androidx.hilt.work.HiltWorker
 import androidx.work.CoroutineWorker
@@ -32,7 +37,8 @@ import javax.inject.Singleton
 /**
  * Asks the home screen widget to redraw (M7 §4). Called after a successful sync (`SyncReportProcessor`), on local
  * ledger, chore and kid writes ([WidgetDataObserver]), after a time bank stop (`UseCaseTimeBankControl`), after a
- * removal's wipe (`WorkManagerBackgroundWork`), and by the 6-hourly [WidgetRefreshWorker].
+ * removal's work cancel (`WorkManagerBackgroundWork`), when the "Sign in again" gate goes up or down
+ * (`CredentialGate`), and by the 6-hourly [WidgetRefreshWorker]. A removal also blanks it at once ([WidgetBlanker]).
  */
 fun interface WidgetRefresher {
     fun refresh()
@@ -86,6 +92,54 @@ class GlanceWidgetRefresher internal constructor(
         const val DEBOUNCE_MS: Long = 500
     }
 }
+
+/**
+ * Draws every placed Sprout widget blank at once (audit 2 N1, D-M7-81), for a removal: the wipe's last step before a
+ * background process exits, and process start while a removal is stored. Unlike [WidgetRefresher] it neither waits
+ * for a quiet period nor goes through Glance's session work, so the blank drawing reaches the launcher even when the
+ * process ends right after.
+ */
+fun interface WidgetBlanker {
+    suspend fun blankNow()
+
+    companion object {
+        val None: WidgetBlanker = WidgetBlanker { }
+    }
+}
+
+/**
+ * [WidgetBlanker] over [AppWidgetManager]: Glance composes [SproutWidgetContent] for [WidgetState.Blank] into
+ * [RemoteViews] ([GlanceRemoteViews], the same content a Glance update draws for Blank, a tap still opens the app),
+ * and the views are pushed to every placed widget id in one synchronous call. Nothing when no widget is placed.
+ */
+class RemoteViewsWidgetBlanker internal constructor(
+    private val placedIds: () -> IntArray,
+    private val compose: suspend () -> RemoteViews,
+    private val push: (IntArray, RemoteViews) -> Unit,
+) : WidgetBlanker {
+    @Inject
+    constructor(@ApplicationContext context: Context) : this(
+        placedIds = {
+            AppWidgetManager.getInstance(context)
+                .getAppWidgetIds(ComponentName(context, SproutWidgetReceiver::class.java))
+        },
+        compose = { blankWidgetViews(context) },
+        push = { ids, views -> AppWidgetManager.getInstance(context).updateAppWidget(ids, views) },
+    )
+
+    override suspend fun blankNow() {
+        val ids = placedIds()
+        if (ids.isEmpty()) return
+        push(ids, compose())
+    }
+}
+
+/** The widget's Blank drawing as [RemoteViews] (no household data; a tap opens the app). */
+@OptIn(ExperimentalGlanceRemoteViewsApi::class)
+internal suspend fun blankWidgetViews(context: Context): RemoteViews =
+    GlanceRemoteViews().compose(context, SproutWidget.SMALL) {
+        SproutWidgetContent(WidgetState.Blank, SproutWidget.openAppAction(context))
+    }.remoteViews
 
 /** The widget's periodic fallback refresh ([WidgetRefreshWorker]). */
 interface WidgetRefreshScheduler {

@@ -91,7 +91,8 @@ import kotlinx.coroutines.launch
  *   text-to-speech too), each in the kid's tier. On a parent's phone back at the root (system back or the wallet's
  *   back arrow) opens `KidModeExitGate`; a successful unlock returns to the parent area. On a kid's own linked phone
  *   there is no parent area: back at the root leaves the app.
- * - **SignInAgain**: the "Sign in again" gate for a phone whose sign-in ended; no household data behind it.
+ * - **SignInAgain**: the "Sign in again" gate for a phone whose sign-in ended; no household data behind it, but it
+ *   takes credentials, so it is `FLAG_SECURE` too.
  * - **Removed**: the blocking wipe screen.
  *
  * @param requester the per-event parent prompt (`feature/lock`), for the dashboard's "Sign now": each prompt shows
@@ -155,12 +156,13 @@ fun SproutApp(requester: ParentAuthorizationRequester, modifier: Modifier = Modi
 }
 
 /**
- * The area for [mode]. `FLAG_SECURE` is structural (D-M7-6, D-M7-7, threat model T15): the onboarding, parent and kid
- * areas each call `SecureWindow()` at their root, here, before any of their screens, so no screen inside them (nor a
- * dialog or sheet they open, which inherits the window's flag or sets its own) can forget it; the onboarding area
- * shows the link code (a credential), the parent and kid areas names and balances. Loading, "Sign in again" and the
- * removed screen show no household data and stay capturable. The areas are slots so `SecureAreaTest` can check the
- * flag per mode.
+ * The area for [mode]. `FLAG_SECURE` is structural (D-M7-6, D-M7-7, threat model T15): the onboarding, parent, kid and
+ * "Sign in again" areas each call `SecureWindow()` at their root, here, before any of their screens, so no screen
+ * inside them (nor a dialog or sheet they open, which inherits the window's flag or sets its own) can forget it; the
+ * onboarding area shows the link code (a credential), the parent and kid areas names and balances, and "Sign in again"
+ * takes the account e-mail and password and, in its erase dialog, the parent PIN (audit 2 N4, D-M7-82). Loading and
+ * the removed screen show no household data and take nothing, so they stay capturable. The areas are slots so
+ * `SecureAreaTest` can check the flag per mode.
  */
 @Composable
 internal fun AppModeContent(
@@ -192,7 +194,10 @@ internal fun AppModeContent(
             kid(mode)
         }
 
-        is AppMode.SignInAgain -> signInAgain(mode)
+        is AppMode.SignInAgain -> {
+            SecureWindow()
+            signInAgain(mode)
+        }
 
         is AppMode.Removed -> removed(mode)
     }

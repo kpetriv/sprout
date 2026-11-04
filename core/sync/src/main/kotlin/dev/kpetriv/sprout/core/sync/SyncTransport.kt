@@ -182,6 +182,12 @@ class PullPage(
      * [RemoteApplier.applyChatPrune] receives it before the page's messages.
      */
     val chatPrunedBefore: Instant? = null,
+    /**
+     * The backend's `serverReceivedAt` stamp of each of [messages], by `messageId` (audit 2 N3, D-M7-80): kept with
+     * the message so a `seq` gap is judged against the prune watermark ([chatPrunedBefore]) on the server's clock,
+     * never this device's. A message missing here is stored without a stamp (test transports, older data).
+     */
+    val messageStamps: Map<String, Instant> = emptyMap(),
 )
 
 /**

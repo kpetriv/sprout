@@ -654,8 +654,9 @@ class RoomRemoteApplier internal constructor(
 
     override suspend fun applyEvents(events: List<PulledEvent>): EventApplyReport = ledger.ingest(events)
 
-    /** Verifies and stores pulled chat messages; see [ChatApplier]. */
-    override suspend fun applyMessages(messages: List<JsonObject>): MessageApplyReport = chat.applyMessages(messages)
+    /** Verifies and stores pulled chat messages with their server stamps (D-M7-80); see [ChatApplier]. */
+    override suspend fun applyMessages(messages: List<JsonObject>, stamps: Map<String, Instant>): MessageApplyReport =
+        chat.applyMessages(messages, stamps)
 
     /** Remembers the household's chat prune watermark; see [ChatApplier.applyChatPrune]. */
     override suspend fun applyChatPrune(prunedBefore: Instant) = chat.applyChatPrune(prunedBefore)
