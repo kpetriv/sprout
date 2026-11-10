@@ -1,8 +1,8 @@
 # Release checklist (owner)
 
-Every step between the M8 tree and Sprout on the Play production track that needs a console, a key, a real device or a legal decision. The autonomous run prepared the code, documents and assets for each; nothing here has been done yet. Work top to bottom: later items depend on earlier ones.
+Every step between the M8 tree and Sprout on the Play production track that needs a console, a key, a real device or a legal decision. The autonomous run prepared the code, documents and assets for each; items ticked "(done 2026-11-10)" were done in the owner's session that day (evidence in the SECURITY_REVIEW log), the rest is still to do. Work top to bottom: later items depend on earlier ones.
 
-- **Conventions:** commands run from the repository root unless they `cd`. `sprout-3e1c7` is the Firebase project (FIREBASE.md). `<host>` is the production server's host (the Vercel production URL or a custom domain); `<hid>` a household id. On macOS `base64 -i <file>`, on Linux `base64 -w0 <file>`.
+- **Conventions:** commands run from the repository root unless they `cd`. `sprout-3e1c7` is the Firebase project (FIREBASE.md). `<host>` is the production server's host (the Vercel production URL or a custom domain); `<hid>` a household id. Production host since 2026-11-10: `sprout-server-kpetriv.vercel.app`. On macOS `base64 -i <file>`, on Linux `base64 -w0 <file>`.
 - **Never commit** the keystore, its passwords, `google-services.json`, a service-account key, `docs/privacy.properties` or the PCAPs. All of them stay outside the repository or in gitignored paths (CLAUDE.md).
 - **Evidence:** each item ends with the line to paste into [SECURITY_REVIEW.md](SECURITY_REVIEW.md#evidence-log) (or into the item's notes here). No personal data in evidence.
 - **Related:** [FIREBASE.md "Production project checklist"](FIREBASE.md#production-project-checklist) (the console steps in detail), [RUNBOOK.md](RUNBOOK.md), [DATA_SAFETY.md](DATA_SAFETY.md), [play/listing/README.md](../play/listing/README.md).
@@ -10,8 +10,9 @@ Every step between the M8 tree and Sprout on the Play production track that need
 ### 1. Prerequisites and project facts
 
 - [ ] Tools: JDK 17, Android SDK (API 37 platform), Node 24, Python 3.9+, `gcloud`, `gh`, `bundletool` (`brew install bundletool`).
-- [ ] The Firebase project `sprout-3e1c7` is on **Spark** and its Firestore database is in **`eur3`** (Firebase console → Firestore → Settings, or `gcloud firestore databases describe --project sprout-3e1c7 --format='value(locationId)'` → `eur3`).
-- [ ] Authentication providers **Google** and **Anonymous** are enabled (FIREBASE.md step 3).
+- [x] The Firebase project `sprout-3e1c7` is on **Spark** and its Firestore database is in **`eur3`** (Firebase console → Firestore → Settings, or `gcloud firestore databases describe --project sprout-3e1c7 --format='value(locationId)'` → `eur3`). (done 2026-11-10: `firebase firestore:databases:get` → `(default)` in `eur3`)
+- [x] Authentication provider **Google** is enabled (FIREBASE.md step 3). (done 2026-11-10: the config carries the web OAuth client and the debug and upload Android clients)
+- [ ] **Remaining:** confirm the **Anonymous** provider is enabled (kid devices; Firebase console → Authentication → Sign-in method); not verified by the 2026-11-10 session.
 
 Evidence to paste: "Firestore location: eur3 (checked <date>)" → CONTROLS DP-11.
 
@@ -34,15 +35,17 @@ sprout.upload.keyAlias=sprout-upload
 sprout.upload.keyPassword=<from the password manager>
 ```
 
+Done 2026-11-10 by the owner: `~/.sprout/sprout-upload.jks`, alias `sprout-upload`.
+
 Evidence to paste: "Upload keystore created <date>; SHA-256 <first 8 hex>…" (the fingerprint is not secret, but the prefix is enough).
 
 ### 3. Register fingerprints and the OAuth web client id
 
-- [ ] Debug and upload key fingerprints: `tools/release/print-signing-fingerprints.sh ~/.sprout/sprout-upload.jks` (or `./gradlew :app:signingReport` for the debug key).
-- [ ] Firebase console → Project settings → Your apps → `dev.kpetriv.sprout` → Add fingerprint: SHA-1 **and** SHA-256 of the **upload key** (item 2) and of the **debug key** (FIREBASE.md step 10). The **app signing key** is added after the first upload (item 9).
-- [ ] Download `google-services.json` again to `app/` (gitignored).
-- [ ] Google Cloud console → APIs & Services → Credentials → "Web client (auto created by Google Service)" → copy its client id (FIREBASE.md step 12). Add to `~/.gradle/gradle.properties`: `sprout.googleServerClientId=<id>.apps.googleusercontent.com`.
-- [ ] Also there: `sprout.functionsBaseUrl=https://<host>` and, if the privacy page is not `<host>/privacy`, `sprout.privacyUrl=https://<host>/privacy`.
+- [x] Debug and upload key fingerprints: `tools/release/print-signing-fingerprints.sh ~/.sprout/sprout-upload.jks` (or `./gradlew :app:signingReport` for the debug key). (done 2026-11-10)
+- [x] Firebase console → Project settings → Your apps → `dev.kpetriv.sprout` → Add fingerprint: SHA-1 **and** SHA-256 of the **upload key** (item 2) and of the **debug key** (FIREBASE.md step 10). The **app signing key** is added after the first upload (item 9). (done 2026-11-10 for the upload and debug keys)
+- [x] Download `google-services.json` again to `app/` (gitignored). (done 2026-11-10)
+- [x] Google Cloud console → APIs & Services → Credentials → "Web client (auto created by Google Service)" → copy its client id (FIREBASE.md step 12). Add to `~/.gradle/gradle.properties`: `sprout.googleServerClientId=<id>.apps.googleusercontent.com`. (done 2026-11-10; also the `release` secret, item 9)
+- [x] Also there: `sprout.functionsBaseUrl=https://<host>` and, if the privacy page is not `<host>/privacy`, `sprout.privacyUrl=https://<host>/privacy`. (done 2026-11-10; also the `release` secrets, item 9)
 
 Check: `./gradlew :app:checkReleaseConfiguration` → BUILD SUCCESSFUL (it lists every missing value otherwise).
 
@@ -84,7 +87,8 @@ curl -s  https://<host>/.well-known/security.txt      # Contact, Expires (a year
 curl -s -o /dev/null -w '%{http_code}\n' -X POST https://<host>/deviceStatus -H 'Content-Type: application/json' -d '{"data":{}}'   # 401
 ```
 
-- [ ] Deploy the Firestore rules and indexes: `npx --no-install --prefix firestore firebase deploy --only firestore --project sprout-3e1c7`.
+- [x] Server deployed and verified as above (done 2026-11-10: Vercel project `sprout-server`, `https://sprout-server-kpetriv.vercel.app`, region `fra1`; all four checks as expected; Deployment Protection "Only Preview Deployments", Node.js 24.x and the `jose` override, FIREBASE.md "Deploying the server (Vercel)", D-REL-1, D-REL-3).
+- [x] Deploy the Firestore rules and indexes: `npx --no-install --prefix firestore firebase deploy --only firestore --project sprout-3e1c7`. (done 2026-11-10; one compiler warning at `firestore.rules:588:108`, follow-up D-REL-2)
 
 - [ ] **Yearly reminder:** put a calendar reminder 60 days before the `Expires` date `security.txt` shows (a year after `EFFECTIVE_DATE`): set a new `EFFECTIVE_DATE` (or `SECURITY_TXT_EXPIRES`) in `docs/privacy.properties`, re-render, `npm --prefix server run build:static`, redeploy as above. `check:deploy` warns from 60 days before and refuses an expired file.
 
@@ -133,9 +137,9 @@ Evidence to paste: "Data safety submitted <date> from DATA_SAFETY.md at <commit>
 
 **The `release` environment** (D-M8-42, audit M2). The repository is public: a repository-wide secret could be read by any workflow on any branch, so the signing secrets live only in a protected environment. Once:
 
-- [ ] GitHub → the repository → Settings → Environments → **New environment** `release` → *Deployment branches and tags*: **Selected branches and tags** → add `main` only → *Required reviewers*: yourself → *Prevent self-review* off (you are the only reviewer) → Save. With `gh` (your numeric id: `gh api user --jq .id`): `gh api -X PUT repos/<owner>/<repo>/environments/release -F 'deployment_branch_policy[protected_branches]=false' -F 'deployment_branch_policy[custom_branch_policies]=true' -f 'reviewers[][type]=User' -F 'reviewers[][id]=<your id>'`, then `gh api -X POST repos/<owner>/<repo>/environments/release/deployment-branch-policies -f name=main -f type=branch`. Check in Settings → Environments that it shows `main` and you as reviewer.
+- [x] GitHub → the repository → Settings → Environments → **New environment** `release` → *Deployment branches and tags*: **Selected branches and tags** → add `main` only → *Required reviewers*: yourself → *Prevent self-review* off (you are the only reviewer) → Save. With `gh` (your numeric id: `gh api user --jq .id`): `gh api -X PUT repos/<owner>/<repo>/environments/release -F 'deployment_branch_policy[protected_branches]=false' -F 'deployment_branch_policy[custom_branch_policies]=true' -f 'reviewers[][type]=User' -F 'reviewers[][id]=<your id>'`, then `gh api -X POST repos/<owner>/<repo>/environments/release/deployment-branch-policies -f name=main -f type=branch`. Check in Settings → Environments that it shows `main` and you as reviewer. (done 2026-11-10)
 - [ ] Delete any repository-level copies of these secrets (`gh secret list`; `gh secret delete <name>`).
-- [ ] Optional: a tag ruleset (Settings → Rules → Rulesets → New tag ruleset, target `v*`, restrict creations to yourself).
+- [x] Optional: a tag ruleset (Settings → Rules → Rulesets → New tag ruleset, target `v*`, restrict creations to yourself). (done 2026-11-10: "Release tags", `v*` creation, update and deletion by the admin role only)
 
 Environment secrets (names as in `.github/workflows/release.yml`), set once with `gh` (each `gh secret set` without `--body` asks for the value; never type it on the command line):
 
@@ -153,6 +157,9 @@ gh secret set SPROUT_SECURITY_URL --env release --body 'https://<host>/security'
 # optional, publishes to the internal track (off unless set): a Play service account with release permissions
 gh secret set PLAY_SERVICE_ACCOUNT_JSON --env release < play-service-account.json && rm play-service-account.json
 ```
+
+- [x] `SPROUT_FUNCTIONS_BASE_URL`, `SPROUT_PRIVACY_URL`, `SPROUT_SECURITY_URL`, `SPROUT_GOOGLE_SERVER_CLIENT_ID` (done 2026-11-10).
+- [ ] The keystore and password secrets (`SPROUT_UPLOAD_KEYSTORE_BASE64`, `SPROUT_UPLOAD_KEYSTORE_PASSWORD`, `SPROUT_UPLOAD_KEY_ALIAS`, `SPROUT_UPLOAD_KEY_PASSWORD`): the owner.
 
 Tag a commit on `main` that CI built green, and run the workflow from `main` (the version name comes from the tag; see "Versioning" below):
 
@@ -181,6 +188,8 @@ git switch --detach v1.0.0
 ```
 
 `-Psprout.allowUnconfiguredRelease=true` waives the configuration check for a local test bundle only; never upload one built that way.
+
+Local signed `bundleRelease` proof (2026-11-10): signed AAB 18.7 MB by CN=kpetriv (alias sprout-upload), versionCode 91, versionName from a temporary local v0.1.0-rc.1 tag (deleted; never pushed), jarsigner verified, mapping.txt present, checkReleaseConfiguration/checkMergedManifestForTelemetryRelease/checkReleaseMapping/checkReleaseAppCheck all ran
 
 - [ ] After the first upload: Play Console → Test and release → App integrity → App signing → copy the **app signing key** SHA-1 and SHA-256 → add both in Firebase (item 3) and download `google-services.json` again; update the secret: `base64 -i app/google-services.json | gh secret set GOOGLE_SERVICES_JSON_B64 --env release`.
 - [ ] Keep `mapping.txt` with the release (Play Console also takes it for deobfuscated crash stacks).

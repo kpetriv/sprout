@@ -6,7 +6,7 @@
   "type": "module",
   "main": "dist/index.js",
   "engines": {
-    "node": "22.x"
+    "node": "24.x"
   },
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
@@ -38,5 +38,10 @@
     "typescript": "6.0.3",
     "typescript-eslint": "8.72.0",
     "vitest": "5.0.5"
+  },
+  "overrides": {
+    "jwks-rsa": {
+      "jose": "^5.10.0"
+    }
   }
 }
