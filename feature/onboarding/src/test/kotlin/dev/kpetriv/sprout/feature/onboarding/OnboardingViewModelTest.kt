@@ -7,6 +7,7 @@ import dev.kpetriv.sprout.core.domainledger.Currency
 import dev.kpetriv.sprout.core.model.DeviceId
 import dev.kpetriv.sprout.core.model.HouseholdId
 import dev.kpetriv.sprout.core.model.Role
+import dev.kpetriv.sprout.core.model.UserId
 import dev.kpetriv.sprout.core.time.FakeClock
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -35,6 +36,11 @@ class OnboardingViewModelTest {
     private val sessions = FakeSessionStore(log)
     private val household = FakeOnboardingHousehold(log, sessions)
     private val keys = InMemoryDeviceKeyStore(clock)
+
+    init {
+        // Every registry row belongs to the signed-in account unless a test says otherwise (D-REL-22).
+        household.ownerOf = { auth.lastClaims?.let { RegisteredOwner(it.uid, it.role ?: Role.PARENT, it.kidId) } }
+    }
 
     private fun viewModel() = OnboardingViewModel(auth, backend, household, keys, sessions, clock)
 
@@ -433,26 +439,62 @@ class OnboardingViewModelTest {
     }
 
     @Test
-    fun `a restored key that belongs to another parent account is erased again`() {
+    fun `a restore reads the device's registry row before anything is saved or synced and puts its stash back`() {
         auth.claims[0] = parentClaims()
+        val device = currentDevice()
         backend.statuses[RegistrationKey.CURRENT] = RegistryStatus.ACTIVE
+        household.onSync = { household.activeDevice = device }
         val viewModel = viewModel()
         viewModel.signIn()
-        assertTrue("erase" in log.calls)
-        assertFalse("erase" in household.chatKeyForgotten.single(), "the chat key goes too, before the erase")
+
+        val (read, before) = household.ownerReads.single()
+        assertEquals(device, read)
+        assertFalse(before.any { it.startsWith("saveSession") || it == "sync" }, "checked first (D-REL-22)")
+        assertEquals(listOf(device), household.chatKeysRestored, "a stash of this device id comes back (D-REL-24)")
+    }
+
+    @Test
+    fun `another parent account's device on this phone restores nothing, syncs nothing and keeps its chat key`() {
+        auth.claims[0] = parentClaims()
+        backend.statuses[RegistrationKey.CURRENT] = RegistryStatus.ACTIVE
+        household.ownerOf = { RegisteredOwner(UserId("co-parent"), Role.PARENT) }
+        val viewModel = viewModel()
+        viewModel.signIn()
+
+        assertFalse(log.calls.any { it.startsWith("saveSession") }, "nothing saved")
+        assertFalse("sync" in log.calls, "nothing synced, so no thread key is unwrapped as this device")
+        assertFalse("erase" in log.calls || "eraseAnotherAccount" in log.calls)
+        assertTrue(household.chatKeyForgotten.isEmpty() && household.chatKeysRestored.isEmpty(), "the owner keeps it")
+        assertTrue("signOut" in log.calls)
+        assertEquals(OnboardingStep.Welcome, viewModel.state.value.step)
         assertEquals(OnboardingFailure.NOT_ALLOWED, viewModel.state.value.failure)
+        assertFalse(viewModel.state.value.busy)
         assertNull(sessions.session.value)
     }
 
     @Test
-    fun `a restored key of another account is erased even when its chat key cannot be deleted`() {
+    fun `a device row that cannot be read is a network failure, never a restore`() {
         auth.claims[0] = parentClaims()
         backend.statuses[RegistrationKey.CURRENT] = RegistryStatus.ACTIVE
-        household.forgetFailure = IOException("stuck")
+        household.ownerFailure = OnboardingException(OnboardingFailure.NETWORK)
         val viewModel = viewModel()
         viewModel.signIn()
-        assertTrue("erase" in log.calls)
+
+        assertEquals(OnboardingFailure.NETWORK, viewModel.state.value.failure)
+        assertFalse(log.calls.any { it.startsWith("saveSession") })
+        assertEquals(0, keys.registrations, "and never a new registration over it")
+    }
+
+    @Test
+    fun `a restored device whose synced mirror names another account is erased without keeping its chat key`() {
+        auth.claims[0] = parentClaims()
+        backend.statuses[RegistrationKey.CURRENT] = RegistryStatus.ACTIVE
+        val viewModel = viewModel()
+        viewModel.signIn()
+        assertTrue("eraseAnotherAccount" in log.calls)
+        assertFalse("erase" in log.calls)
         assertEquals(OnboardingFailure.NOT_ALLOWED, viewModel.state.value.failure)
+        assertNull(sessions.session.value)
     }
 
     @Test
@@ -547,6 +589,7 @@ class OnboardingViewModelTest {
             household.chatKeyForgotten.single(),
             "a kid linked on this phone never inherits a parent's kept chat key (D-REL-7)",
         )
+        assertEquals(1, household.stashesDropped, "accepted: the stash of the old device id goes (D-REL-24)")
         assertTrue(viewModel.state.value.finished)
     }
 
@@ -570,6 +613,27 @@ class OnboardingViewModelTest {
             log.calls,
         )
         assertEquals(pending, keys.publicKey())
+        assertEquals(1, keys.registrations)
+        assertTrue(viewModel.state.value.finished)
+    }
+
+    @Test
+    fun `a kid account is never restored onto a device id whose row names another account or role (D-REL-26)`() {
+        // This phone's current key is a parent's device (kept by a sign-out); the anonymous user already has claims.
+        claimsSequence(AccountClaims(KID_UID, HOUSEHOLD, Role.KID, LEO), NEW_KID_CLAIMS)
+        backend.statuses[RegistrationKey.CURRENT] = RegistryStatus.ACTIVE
+        household.ownerOf = { RegisteredOwner(PARENT_UID, Role.PARENT) }
+        val parentDevice = currentDevice()
+        val viewModel = viewModel()
+        viewModel.redeem()
+
+        assertEquals(
+            parentDevice to listOf("signInAnonymously", "refreshClaims", "status:PENDING", "status:CURRENT"),
+            household.ownerReads.first(),
+        )
+        assertFalse("saveSession:KID:ACTIVE" in log.calls.take(5), "not restored")
+        assertTrue("signOut" in log.calls, "a fresh anonymous user links instead")
+        assertEquals(1, household.chatKeyForgotten.size, "and the parent's key is stashed before that link")
         assertEquals(1, keys.registrations)
         assertTrue(viewModel.state.value.finished)
     }

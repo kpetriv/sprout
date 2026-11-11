@@ -3,6 +3,7 @@ package dev.kpetriv.sprout.core.syncfirebase
 import app.cash.turbine.test
 import dev.kpetriv.sprout.core.domainledger.AttestationLevel
 import dev.kpetriv.sprout.core.domainledger.DeviceStatus
+import dev.kpetriv.sprout.core.model.DeviceId
 import dev.kpetriv.sprout.core.model.HouseholdId
 import dev.kpetriv.sprout.core.model.KidId
 import dev.kpetriv.sprout.core.model.Role
@@ -339,5 +340,28 @@ class FirebaseSyncTransportPullTest {
             SyncError.Unauthenticated,
             assertFailsWith<SyncException> { transport().pull(SyncCursor.START) }.error,
         )
+    }
+
+    @Test
+    fun `one registry row is read by path for any household, before a session exists (D-REL-22)`() = runTest {
+        hid = null
+        val parent = TestData.DEVICE
+        firestore.seed("households/h2/devices/$parent", device("p-uid", "PARENT", "ACTIVE"))
+        // A row whose key is not its id's (audit H1) reads as no row.
+        firestore.seed("households/h2/devices/${"f".repeat(64)}", device("p-uid", "PARENT", "ACTIVE"))
+
+        val row = transport().registeredDevice(HouseholdId("h2"), DeviceId(parent))
+
+        assertEquals(UserId("p-uid"), row?.uid)
+        assertEquals(Role.PARENT, row?.role)
+        assertEquals(DeviceStatus.Active, row?.status)
+        assertNull(transport().registeredDevice(HID, DeviceId(parent)))
+        assertNull(transport().registeredDevice(HouseholdId("h2"), DeviceId("f".repeat(64))))
+
+        firestore.readFailures["households/h2/devices/$parent"] = FirestoreCode.UNAVAILABLE
+        val failure = assertFailsWith<SyncException> {
+            transport().registeredDevice(HouseholdId("h2"), DeviceId(parent))
+        }
+        assertEquals(SyncError.Transient(), failure.error, "an unreadable row is never \"no row\"")
     }
 }

@@ -2,11 +2,15 @@ package dev.kpetriv.sprout.sync
 
 import dev.kpetriv.sprout.FakeSessionStore
 import dev.kpetriv.sprout.FakeShellPreferences
+import dev.kpetriv.sprout.core.database.Session
+import dev.kpetriv.sprout.core.database.entity.RegistrationStatus
 import dev.kpetriv.sprout.core.sync.SyncError
 import dev.kpetriv.sprout.core.sync.SyncReport
 import dev.kpetriv.sprout.core.time.FakeClock
+import dev.kpetriv.sprout.kidSession
 import dev.kpetriv.sprout.parentSession
 import dev.kpetriv.sprout.testPause
+import dev.kpetriv.sprout.trialSession
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
@@ -30,6 +34,7 @@ class RemovalHandlerTest {
     private var foreground = true
     private var erased = true
     private val keptIdentity = mutableListOf<Boolean>()
+    private var session: Session? = parentSession()
 
     private fun TestScope.handler() = RemovalHandler(
         scope = CoroutineScope(backgroundScope.coroutineContext + UnconfinedTestDispatcher(testScheduler)),
@@ -44,6 +49,7 @@ class RemovalHandlerTest {
         inForeground = { foreground },
         exitProcess = { steps += "exit" },
         blankWidgets = { steps += "blank widgets" },
+        session = { session },
     )
 
     @Test
@@ -56,8 +62,14 @@ class RemovalHandlerTest {
             steps,
             "in the foreground the shell shows it",
         )
-        assertEquals(Removal(RemovalReason.DEVICE_REVOKED, wiped = true), preferences.storedRemoval)
-        assertEquals(Removal(RemovalReason.DEVICE_REVOKED, wiped = true), handler.state.value)
+        assertEquals(
+            Removal(RemovalReason.DEVICE_REVOKED, wiped = true, keepDeviceIdentity = false),
+            preferences.storedRemoval,
+        )
+        assertEquals(
+            Removal(RemovalReason.DEVICE_REVOKED, wiped = true, keepDeviceIdentity = false),
+            handler.state.value,
+        )
         assertNull(preferences.linkedDigest, "no rows are left to belong to anyone")
         assertNull(preferences.parentSetup)
         assertEquals(1, preferences.wipes, "the first pull is forgotten and the digest key replaced")
@@ -70,12 +82,22 @@ class RemovalHandlerTest {
         val handler = handler()
         handler.remove(RemovalReason.HOUSEHOLD_GONE)
 
-        assertEquals(Removal(RemovalReason.HOUSEHOLD_GONE, wiped = false), preferences.storedRemoval)
-        assertEquals(Removal(RemovalReason.HOUSEHOLD_GONE, wiped = false), handler.state.value)
+        assertEquals(
+            Removal(RemovalReason.HOUSEHOLD_GONE, wiped = false, keepDeviceIdentity = false),
+            preferences.storedRemoval,
+        )
+        assertEquals(
+            Removal(RemovalReason.HOUSEHOLD_GONE, wiped = false, keepDeviceIdentity = false),
+            handler.state.value,
+        )
         assertTrue(handler.failed.value)
         assertEquals(0, preferences.wipes, "nothing is marked wiped")
         handler.acknowledge()
-        assertEquals(Removal(RemovalReason.HOUSEHOLD_GONE, wiped = false), preferences.storedRemoval, "kept")
+        assertEquals(
+            Removal(RemovalReason.HOUSEHOLD_GONE, wiped = false, keepDeviceIdentity = false),
+            preferences.storedRemoval,
+            "kept",
+        )
 
         // The next start: the wipe runs again, and this time it erases everything.
         steps.clear()
@@ -83,7 +105,10 @@ class RemovalHandlerTest {
         val next = handler()
         assertTrue(next.resume())
         assertEquals(listOf("stop sync", "cancel work", "erase", "blank widgets"), steps)
-        assertEquals(Removal(RemovalReason.HOUSEHOLD_GONE, wiped = true), preferences.storedRemoval)
+        assertEquals(
+            Removal(RemovalReason.HOUSEHOLD_GONE, wiped = true, keepDeviceIdentity = false),
+            preferences.storedRemoval,
+        )
         assertFalse(next.failed.value)
     }
 
@@ -139,20 +164,48 @@ class RemovalHandlerTest {
     }
 
     @Test
-    fun `only a sign-out keeps this phone's chat key with its device identity (D-REL-6)`() = runTest {
+    fun `only the sign-out of a parent session, ACTIVE or PENDING, keeps this phone's chat key (D-REL-23)`() = runTest {
+        val sessions = listOf(
+            parentSession() to true,
+            parentSession(RegistrationStatus.PENDING) to true,
+            parentSession(RegistrationStatus.REVOKED) to false,
+            kidSession() to false,
+            trialSession() to false,
+            null to false,
+        )
         for (reason in RemovalReason.entries) {
-            preferences.storedRemoval = null
-            keptIdentity.clear()
-            handler().remove(reason)
-            assertEquals(listOf(reason == RemovalReason.SIGNED_OUT), keptIdentity, reason.name)
+            for ((current, keeps) in sessions) {
+                preferences.storedRemoval = null
+                keptIdentity.clear()
+                session = current
+                handler().remove(reason)
+                val expected = reason == RemovalReason.SIGNED_OUT && keeps
+                assertEquals(listOf(expected), keptIdentity, "${reason.name} $current")
+                assertEquals(expected, preferences.storedRemoval?.keepDeviceIdentity, "stored with the removal")
+            }
         }
     }
 
     @Test
-    fun `a resumed sign-out wipe still keeps the chat key`() = runTest {
-        preferences.storedRemoval = Removal(RemovalReason.SIGNED_OUT)
+    fun `a resumed wipe uses the decision stored with the removal, not the session it finds then`() = runTest {
+        // The process died after the session was erased: the stored answer still keeps the key.
+        session = null
+        preferences.storedRemoval = Removal(RemovalReason.SIGNED_OUT, keepDeviceIdentity = true)
         assertTrue(handler().resume())
         assertEquals(listOf(true), keptIdentity)
+
+        keptIdentity.clear()
+        session = parentSession()
+        preferences.storedRemoval = Removal(RemovalReason.SIGNED_OUT, keepDeviceIdentity = false)
+        assertTrue(handler().resume())
+        assertEquals(listOf(false), keptIdentity)
+    }
+
+    @Test
+    fun `a decision that cannot be stored keeps nothing`() = runTest {
+        preferences.failSetRemoval = { it.keepDeviceIdentity != null }
+        handler().remove(RemovalReason.SIGNED_OUT)
+        assertEquals(listOf(false), keptIdentity)
     }
 
     @Test
@@ -219,6 +272,9 @@ class RemovalHandlerTest {
 
         assertEquals(BackgroundSyncOutcome.DONE, outcome)
         assertEquals(listOf("stop sync", "cancel work", "erase", "blank widgets", "exit"), steps)
-        assertEquals(Removal(RemovalReason.HOUSEHOLD_GONE, wiped = true), preferences.storedRemoval)
+        assertEquals(
+            Removal(RemovalReason.HOUSEHOLD_GONE, wiped = true, keepDeviceIdentity = false),
+            preferences.storedRemoval,
+        )
     }
 }

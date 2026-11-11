@@ -15,4 +15,7 @@ class InMemoryBlobStorage : BlobStorage {
     override suspend fun delete(name: String) {
         blobs.remove(name)
     }
+
+    /** The names stored, for tests. */
+    fun names(): Set<String> = blobs.keys.toSet()
 }

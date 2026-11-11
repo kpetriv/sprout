@@ -34,10 +34,11 @@ import kotlin.time.Instant
  * Sends chat messages (M4 §1.3). In one transaction under the device clock lock: picks the key this device may send
  * with ([ThreadKeyStore.sendingKey], M4 §1.2, checked there so a rotation or a withdrawn key between the screen's
  * check and the write cannot slip through), encrypts, allocates the next `seq` of this device in the thread and the
- * next device lamport, signs the envelope with the device key ([MessageSigner]), stores it as SENT_LOCAL (with its
- * plaintext, for this device's own view) and queues it in the outbox (`MESSAGE`), with a `MESSAGE_SENT` audit row (ids
- * only). A VOICE or PHOTO message goes through [sendWithBlob]: its blob's chunks are queued in the same transaction,
- * before the message (the outbox sends the blob first), so a send that fails leaves no chunks behind (audit A2-L4).
+ * next device lamport (both at least what this device used before a sign-out, [ChatIdentityKeeper.seed], D-REL-25),
+ * signs the envelope with the device key ([MessageSigner]), stores it as SENT_LOCAL (with its plaintext, for this
+ * device's own view) and queues it in the outbox (`MESSAGE`), with a `MESSAGE_SENT` audit row (ids only). A VOICE or
+ * PHOTO message goes through [sendWithBlob]: its blob's chunks are queued in the same transaction, before the message
+ * (the outbox sends the blob first), so a send that fails leaves no chunks behind (audit A2-L4).
  */
 @Suppress("LongParameterList") // The writer's collaborators.
 class MessageWrites @Inject constructor(
@@ -197,7 +198,9 @@ class MessageWrites @Inject constructor(
         )
         val ciphertext = key.use { crypto.messages.encrypt(it, header, plaintext) }
         val previous = messages.seq(threadId.value, author.deviceId)
-        val seq = previous?.nextSeq ?: 1
+        // A restored phone never reuses a seq it sent before its sign-out, even one the server lost (D-REL-25).
+        val floor = database.ownSeqFloor(session.householdId, threadId) ?: 1
+        val seq = maxOf(previous?.nextSeq ?: 1, floor)
         val lamport = deviceClock.takeNext(author.deviceId)
         val now = clock.now().toEpochMilliseconds()
         val displayed = maxOf(now, previous?.lastDisplayedAtEpochMs ?: 0)

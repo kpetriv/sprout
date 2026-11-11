@@ -144,6 +144,10 @@ interface MessageDao {
     @Query("SELECT * FROM message_seq WHERE threadId = :threadId AND authorDeviceId = :author")
     suspend fun seq(threadId: String, author: DeviceId): MessageSeqEntity?
 
+    /** Every `message_seq` row (the sign-out record reads this device's own, D-REL-25). */
+    @Query("SELECT * FROM message_seq")
+    suspend fun allSeqs(): List<MessageSeqEntity>
+
     @Upsert
     suspend fun upsertSeq(seq: MessageSeqEntity)
 

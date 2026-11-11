@@ -24,7 +24,7 @@
   <string name="feature_chat_waiting_kid">Waiting for a parent device. You can send messages once a parent\'s phone has set up this chat.</string>
   <string name="feature_chat_key_conflict_kid">This phone\'s chat key was replaced. Ask a parent to remove and re-link it.</string>
   <!-- A parent's own phone whose chat key no longer matches the household's registry: no parent to ask, so the steps. -->
-  <string name="feature_chat_key_conflict_parent">Chat can\'t be used on this phone until it is set up again. On another parent\'s phone, remove this phone in Settings → Devices, then sign in here again. If there is no other parent phone, contact us.</string>
+  <string name="feature_chat_key_conflict_parent">Chat can\'t be used on this phone until it is set up again. On another parent\'s phone, remove this phone in Settings → Devices, sign in here again, then approve this phone on that one. No other parent phone? Contact us: the address is in the privacy policy (Settings → About).</string>
   <string name="feature_chat_waiting_parent">Setting up secure chat. It is ready once this phone has the chat key.</string>
   <string name="feature_chat_locked">Waiting for a parent device</string>
   <string name="feature_chat_sending">Sending…</string>

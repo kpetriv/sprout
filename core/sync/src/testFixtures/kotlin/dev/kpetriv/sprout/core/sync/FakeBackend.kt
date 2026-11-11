@@ -389,6 +389,18 @@ class FakeBackend(val householdId: HouseholdId, private val pageSize: Int = DEFA
 
     // ---- what transports call ----
 
+    /**
+     * One registry row, as `households/{hid}/devices/{deviceId}` reads for a signed-in member: null for another
+     * household, an unknown device or a caller who is not a member (no registered device of its uid); a partitioned
+     * caller fails transiently.
+     */
+    @Synchronized
+    internal fun registeredDevice(caller: Caller, hid: HouseholdId, deviceId: DeviceId): RegisteredDevice? {
+        checkReachable(caller.deviceId)
+        if (hid != householdId || devices.values.none { it.value.uid == caller.uid }) return null
+        return devices[deviceId]?.value
+    }
+
     @Synchronized
     internal fun isAvailable(caller: DeviceId): Boolean = !gone && caller !in partitioned
 

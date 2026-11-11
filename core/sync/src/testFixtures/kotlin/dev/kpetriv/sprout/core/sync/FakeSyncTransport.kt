@@ -1,7 +1,9 @@
 package dev.kpetriv.sprout.core.sync
 
+import dev.kpetriv.sprout.core.domainledger.RegisteredDevice
 import dev.kpetriv.sprout.core.model.BlobId
 import dev.kpetriv.sprout.core.model.DeviceId
+import dev.kpetriv.sprout.core.model.HouseholdId
 import dev.kpetriv.sprout.core.model.Role
 import dev.kpetriv.sprout.core.model.UserId
 import kotlinx.coroutines.flow.Flow
@@ -41,6 +43,9 @@ class FakeSyncTransport(private val backend: FakeBackend, val deviceId: DeviceId
         fetches.incrementAndGet()
         return backend.fetchBlob(caller, blobId)
     }
+
+    override suspend fun registeredDevice(householdId: HouseholdId, deviceId: DeviceId): RegisteredDevice? =
+        backend.registeredDevice(caller, householdId, deviceId)
 
     override fun changes(): Flow<RemoteChange> = backend.writes
         .filter { it.author != deviceId && it.collection != FakeBackend.BLOBS && !backend.isPartitioned(deviceId) }

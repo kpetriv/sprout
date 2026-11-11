@@ -70,7 +70,34 @@ class AppInitializerTest {
         },
         removing = { removing || storedRemoval },
         blankWidgets = { steps += "blank widget" },
+        checkKeptChatKey = {
+            keptKeyChecks += 1
+            keptKeyCheck()
+        },
     )
+
+    private var keptKeyChecks = 0
+    private var keptKeyCheck: suspend () -> Unit = {}
+
+    @Test
+    fun `only a start without a session checks a chat key a sign-out kept, and its failure never fails startup`() =
+        scope.runTest {
+            keptKeyCheck = { error("offline") }
+            withSession(null, linked = true).apply {
+                start()
+                advanceUntilIdle()
+                assertEquals(StartupState.Ready, state.value)
+            }
+            assertEquals(1, keptKeyChecks)
+            assertEquals(listOf("firebase", "session", "check", "schedule", "sync"), steps)
+
+            keptKeyChecks = 0
+            withSession(parentSession()).apply {
+                start()
+                advanceUntilIdle()
+            }
+            assertEquals(0, keptKeyChecks, "a session owns the key: nothing to check (D-REL-28)")
+        }
 
     @Test
     fun `a real household's session is not seeded and plans only after its first pull, then sync starts`() =

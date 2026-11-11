@@ -21,7 +21,7 @@ import { clientIp, dataOf, parent, requireAppCheck, requireDeviceId, requireId, 
 import { log } from '../log.js';
 import { hit, LIMITS, noIpLimit } from '../rateLimit.js';
 import { attestDevice, issueChallenge } from '../registration.js';
-import { encryptionKeyClaimOf, verifiedEncryptionKey } from '../encryptionKeys.js';
+import { encryptionKeyClaimOf, requireKeyNotBoundElsewhere, verifiedEncryptionKey } from '../encryptionKeys.js';
 import { deviceDocument } from './registry.js';
 
 /**
@@ -41,7 +41,8 @@ export async function beginDeviceRegistration(request: CallableRequest): Promise
  * { deviceId, fingerprint }: a second device of a parent (same account) is registered PENDING until an ACTIVE parent
  * device approves it (T8). Registering the same key again while it is pending is idempotent. The optional encryption
  * key (M4 §1.1) must be bound by the submitted device key to the caller's household and this device id
- * (`permission-denied` otherwise); a pending retry adds it when the row has none yet.
+ * (`permission-denied` otherwise) and must not be held by another device row of the household (`failed-precondition`,
+ * D-REL-27); a pending retry adds it when the row has none yet.
  */
 export async function registerParentDevice(
   request: CallableRequest,
@@ -58,11 +59,15 @@ export async function registerParentDevice(
     if (existing.exists) {
       if (existing.get('uid') === caller.uid && existing.get('status') === 'PENDING') {
         if (encryptionKey !== undefined && existing.get('encryptionKey') === undefined) {
+          await requireKeyNotBoundElsewhere(tx, caller.hid, key.deviceId, encryptionKey.encryptionKey);
           tx.update(ref, { ...encryptionKey });
         }
         return;
       }
       throw new HttpsError('already-exists', 'Device already registered');
+    }
+    if (encryptionKey !== undefined) {
+      await requireKeyNotBoundElsewhere(tx, caller.hid, key.deviceId, encryptionKey.encryptionKey);
     }
     tx.create(ref, deviceDocument(caller.uid, 'PARENT', key, attestation, 'PENDING', undefined, encryptionKey));
   });

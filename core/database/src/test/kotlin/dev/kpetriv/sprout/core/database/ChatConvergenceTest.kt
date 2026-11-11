@@ -1,8 +1,10 @@
 package dev.kpetriv.sprout.core.database
 
 import dev.kpetriv.sprout.core.crypto.TinkX25519KeyAgreement
+import dev.kpetriv.sprout.core.database.entity.AuditAction
 import dev.kpetriv.sprout.core.database.entity.MessageStatus
 import dev.kpetriv.sprout.core.database.entity.ThreadKeyEntity
+import dev.kpetriv.sprout.core.database.usecase.WipeLocalDataUseCase
 import dev.kpetriv.sprout.core.domainledger.JvmSha256Hasher
 import dev.kpetriv.sprout.core.domainledger.LedgerJson
 import dev.kpetriv.sprout.core.domainledger.chat.ChatPhotoRef
@@ -15,6 +17,7 @@ import dev.kpetriv.sprout.core.sync.FakeSyncClock
 import dev.kpetriv.sprout.core.sync.FakeSyncTransport
 import dev.kpetriv.sprout.core.sync.SyncEngine
 import dev.kpetriv.sprout.core.sync.SyncReport
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.JsonObject
 import org.junit.After
@@ -29,11 +32,13 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import kotlin.time.Instant
 
 /**
  * Chat between two (then three) real Room devices over one [FakeBackend] (M4 §7): parent and kid exchange messages
  * and a photo; the backend only ever holds ciphertext; revoking the kid device rotates the thread key so the revoked
- * device cannot read the next epoch; a parent device added later reads the current epoch only (D-M4-10).
+ * device cannot read the next epoch; a parent device added later reads the current epoch only (D-M4-10); a parent
+ * phone signed out and restored reads what the server kept and goes on above what the kid has seen (D-REL-25).
  */
 @RunWith(RobolectricTestRunner::class)
 class ChatConvergenceTest {
@@ -236,5 +241,88 @@ class ChatConvergenceTest {
         assertEquals(0, parent.threadKeyMaintenance())
         assertEquals(0, secondParent.threadKeyMaintenance())
         oldKid.close()
+    }
+
+    /**
+     * The parent's sign-out wipe keeping its device identity, then the same parent restoring the same phone: a fresh
+     * database for the same device key and secret store, seeded from the kept record, with its own sync engine.
+     */
+    private suspend fun signOutAndRestoreParent(): Pair<TestHousehold, SyncEngine> {
+        val wipe = WipeLocalDataUseCase(
+            parent.database,
+            parent.sessions,
+            parent.files,
+            parent.chatIdentity,
+            Dispatchers.Unconfined,
+        )
+        assertTrue(wipe(keepDeviceIdentity = true))
+        val restored = TestHousehold(
+            RuntimeEnvironment.getApplication(),
+            keyStore = parent.keyStore,
+            sessionFor = TestHousehold.parentSession(HOME, PARENT_UID),
+            secretStore = parent.secretStore,
+        )
+        assertEquals(parent.deviceId, restored.deviceId)
+        restored.chatIdentity.seed(restored.session)
+        assertNull(restored.chatIdentity.kept(), "the record is used once")
+        val engine = SyncEngine(
+            FakeSyncTransport(backend, restored.deviceId, restored.session.uid, Role.PARENT),
+            restored.outbox,
+            restored.applier,
+            clock,
+        )
+        return restored to engine
+    }
+
+    /**
+     * The parent signs out (Settings → Sign out: a wipe that keeps the device identity, D-REL-6) after the server lost
+     * its own messages (here "Delete chat history now"; a retention prune does the same), and signs in again on the
+     * same phone: a fresh database for the same device id and the same secret store (D-REL-25, review H2, M1).
+     */
+    @Test
+    fun aParentRestoredAfterASignOutReadsTheHistoryLeftAndSendsAboveWhatTheKidHasSeen() = runTest {
+        var serverNow = 1_800_000_000_000L
+        backend.nowEpochMs = { serverNow }
+        household()
+        val first = parent.messageWrites.send(THREAD_X, text("one"))
+        val second = parent.messageWrites.send(THREAD_X, text("two"))
+        parent.syncWith(parentEngine)
+        kidEngine.synced()
+        assertEquals(text("two"), kid.row(second.value)?.content())
+        val seenByKid = requireNotNull(kid.database.messageDao().seq(THREAD_X.value, parent.deviceId))
+        assertEquals(3, seenByKid.nextSeq)
+        serverNow += 60_000
+        val fromKid = kid.messageWrites.send(THREAD_X, text("from the kid"))
+        kidEngine.synced()
+        parent.syncWith(parentEngine)
+
+        // Everything the parent sent is deleted on the server; the kid's later message stays.
+        backend.pruneMessages(parent.deviceId, Instant.fromEpochMilliseconds(serverNow - 30_000), purge = true)
+            .getOrThrow()
+        assertEquals(1, backend.messages().size)
+
+        val (restored, restoredEngine) = signOutAndRestoreParent()
+        try {
+            restored.syncWith(restoredEngine)
+
+            // The history the server still has comes back readable; what it deleted does not.
+            assertEquals(MessageStatus.RECEIVED, restored.row(fromKid.value)?.status)
+            assertEquals(text("from the kid"), restored.row(fromKid.value)?.content())
+            assertNull(restored.row(first.value))
+
+            val third = restored.messageWrites.send(THREAD_X, text("three"))
+            val sent = requireNotNull(restored.row(third.value))
+            assertEquals(3, sent.seq, "never a seq the kid already has from this device")
+            assertTrue(sent.lamport > seenByKid.lastLamport, "and a lamport above the last one the kid accepted")
+            restored.syncWith(restoredEngine)
+            kidEngine.synced()
+
+            assertEquals(MessageStatus.RECEIVED, kid.row(third.value)?.status)
+            assertEquals(text("three"), kid.row(third.value)?.content())
+            assertEquals(0, kid.database.auditLogDao().countSince(AuditAction.MESSAGE_EQUIVOCATION, third.value, 0))
+            assertEquals(0, kid.database.auditLogDao().countSince(AuditAction.MESSAGE_QUARANTINED, third.value, 0))
+        } finally {
+            restored.close()
+        }
     }
 }

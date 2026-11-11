@@ -123,4 +123,52 @@ class WrappedSecretStoreTest {
         val replacement = store.getOrCreate("db", createIfMissing = true).use { it.copyBytes() }
         assertFalse(original.contentEquals(replacement))
     }
+
+    @Test
+    fun `a record round-trips, is wrapped and never opens as a secret`() = runTest {
+        assertNull(store.readRecord("chat.identity.v1"))
+        val record = "household h1, device d1".encodeToByteArray()
+        store.writeRecord("chat.identity.v1", record)
+
+        assertContentEquals(record, store.readRecord("chat.identity.v1"))
+        val blob = assertNotNull(storage.read("chat.identity.v1"))
+        assertEquals(2, blob[0].toInt())
+        assertFalse(blob.decodeToString().contains("household"))
+        assertFailsWith<SecretUnavailableException> { store.getOrCreate("chat.identity.v1", createIfMissing = false) }
+    }
+
+    @Test
+    fun `a renamed secret opens only once it is moved back, and a renamed record only under its first name`() =
+        runTest {
+            val secret = store.getOrCreate("chat.x25519.v1").use { it.copyBytes() }
+            store.writeRecord("chat.identity.v1", byteArrayOf(7))
+
+            assertTrue(store.rename("chat.x25519.v1", "chat.x25519.v1.stash"))
+            assertTrue(store.rename("chat.identity.v1", "chat.identity.v1.stash"))
+
+            assertNull(storage.read("chat.x25519.v1"))
+            assertFailsWith<SecretUnavailableException> { store.getOrCreate("chat.x25519.v1.stash") }
+            assertFailsWith<SecretUnavailableException> { store.readRecord("chat.identity.v1.stash") }
+            assertContentEquals(
+                byteArrayOf(7),
+                store.readRecord("chat.identity.v1.stash", boundTo = "chat.identity.v1"),
+            )
+
+            assertTrue(store.rename("chat.x25519.v1.stash", "chat.x25519.v1"))
+            assertContentEquals(
+                secret,
+                store.getOrCreate("chat.x25519.v1", createIfMissing = false).use {
+                    it.copyBytes()
+                },
+            )
+            assertFalse(store.rename("chat.x25519.v1.stash", "chat.x25519.v1"), "nothing left to move")
+        }
+
+    @Test
+    fun `delete removes a secret and nothing stored is not a failure`() = runTest {
+        store.getOrCreate("a").close()
+        store.delete("a")
+        store.delete("a")
+        assertNull(storage.read("a"))
+    }
 }

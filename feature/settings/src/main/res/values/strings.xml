@@ -222,7 +222,7 @@
   <string name="feature_settings_account_household">Household %1$s</string>
   <string name="feature_settings_account_sign_out">Sign out</string>
   <string name="feature_settings_account_sign_out_title">Sign out of this phone?</string>
-  <string name="feature_settings_account_sign_out_text">Signing out erases this phone’s copy of the household. Your household stays in the cloud.</string>
+  <string name="feature_settings_account_sign_out_text">Signing out erases this phone’s copy of the household except its chat key, which stays until Sprout is set up again here, this phone is removed from the household, or Sprout is uninstalled. Your household stays in the cloud. This phone stays in the household. To give it away, remove it in Settings → Devices or uninstall Sprout.</string>
 
   <!-- Household data: sign in again to confirm a deletion -->
   <string name="feature_settings_data_reauth_title">Sign in again to confirm</string>

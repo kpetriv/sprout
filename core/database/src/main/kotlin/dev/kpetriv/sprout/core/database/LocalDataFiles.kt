@@ -12,9 +12,10 @@ import java.io.File
  * @property photoDirectory the encrypted chore photos (`noBackupFilesDir/photos`).
  * @property secretsDirectory the wrapped `SecretStore` blobs (`noBackupFilesDir/sprout_secrets`, core/crypto's
  *   `FilesDirBlobStorage`): every name in [SECRET_NAMES] (the database key, the photo and blob cache keys, the chat
- *   X25519 private key, the PIN lockout state). Keystore keys (the device signing key and the key that wraps these
- *   blobs) are not files and are never touched. The chat X25519 private key belongs to the device identity
- *   ([DEVICE_IDENTITY_SECRETS]): a sign-out keeps it, every other removal deletes it.
+ *   X25519 private key with its record and stash, the PIN lockout state). Keystore keys (the device signing key and
+ *   the key that wraps these blobs) are not files and are never touched. The chat X25519 private key and its record
+ *   belong to the device identity ([DEVICE_IDENTITY_SECRETS]): the sign-out of a parent session keeps them, every
+ *   other removal deletes them (D-REL-6, D-REL-23).
  * @property blobDirectory the encrypted chat and chore photo blob cache (`noBackupFilesDir/blobs`, M4 §2).
  */
 class LocalDataFiles(
@@ -51,16 +52,21 @@ class LocalDataFiles(
             EncryptedPhotoStore.PHOTO_KEY_SECRET,
             BlobCache.BLOB_KEY_SECRET,
             EncryptionKeyStore.SECRET_NAME,
+            ChatIdentityKeeper.RECORD,
+            ChatIdentityKeeper.STASH_KEY,
+            ChatIdentityKeeper.STASH_RECORD,
             EncryptedLockoutStateStore.SECRET_NAME,
         )
 
         /**
          * The secrets that belong to this device's identity rather than to its copy of the household: the chat X25519
-         * private key, registered with the household against this device id (M4 §1.1). Like the Keystore device
-         * signing key, they survive a sign-out wipe on this phone, so the same device restored by the same parent
-         * finds its registered key again; they are deleted by every other removal and before this phone registers
-         * as a new device (`ForgetChatKeyUseCase`).
+         * private key, registered with the household against this device id (M4 §1.1), and its record (household,
+         * device id and this device's own chat counters, [ChatIdentityKeeper], D-REL-25). Like the Keystore device
+         * signing key, they survive the sign-out wipe of a parent session on this phone, so the same device restored
+         * by the same parent finds its registered key again; every other removal deletes them, and before this phone
+         * registers as a new device they are moved to a stash (`ForgetChatKeyUseCase`, D-REL-24). A stash is never
+         * kept by a wipe.
          */
-        val DEVICE_IDENTITY_SECRETS: List<String> = listOf(EncryptionKeyStore.SECRET_NAME)
+        val DEVICE_IDENTITY_SECRETS: List<String> = listOf(EncryptionKeyStore.SECRET_NAME, ChatIdentityKeeper.RECORD)
     }
 }

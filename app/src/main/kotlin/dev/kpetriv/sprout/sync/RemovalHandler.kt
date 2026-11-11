@@ -12,8 +12,12 @@ import dev.kpetriv.sprout.core.crypto.EncryptedLockoutStateStore
 import dev.kpetriv.sprout.core.crypto.FilesDirBlobStorage
 import dev.kpetriv.sprout.core.crypto.ParentAuthorizer
 import dev.kpetriv.sprout.core.database.LocalDataFiles
+import dev.kpetriv.sprout.core.database.Session
+import dev.kpetriv.sprout.core.database.SessionStore
 import dev.kpetriv.sprout.core.database.SproutDatabase
+import dev.kpetriv.sprout.core.database.entity.RegistrationStatus
 import dev.kpetriv.sprout.core.model.HouseholdId
+import dev.kpetriv.sprout.core.model.Role
 import dev.kpetriv.sprout.di.ApplicationScope
 import dev.kpetriv.sprout.feature.lock.EncryptedParentPinStore
 import dev.kpetriv.sprout.feature.lock.ParentSession
@@ -79,9 +83,13 @@ class WorkManagerBackgroundWork @Inject constructor(
  * stored unwiped, [failed] is set, and the wipe runs again at the next start ([resume]). The first reason reported
  * wins. A process that dies half-way resumes the wipe at the next start too.
  *
- * Only [RemovalReason.SIGNED_OUT] keeps this phone's device identity: its chat encryption key stays with the device
- * key, so the same parent signing in again restores a device whose registered key is still here (D-REL-6). A revoked
- * device and a household that is gone erase it too.
+ * Only a [RemovalReason.SIGNED_OUT] of a PARENT session that is ACTIVE or PENDING keeps this phone's device identity:
+ * its chat encryption key stays with the device key, so the same parent signing in again restores a device whose
+ * registered key is still here (D-REL-6). A kid session, the gate's erase while the registry was unreachable
+ * ([RemovalReason.ERASED_UNVERIFIED]), another account found by onboarding, a revoked device and a household that is
+ * gone erase it too (D-REL-23). The answer is taken once, from the session, before the wipe's first step, and stored
+ * with the removal ([Removal.keepDeviceIdentity]); a resumed wipe uses the stored answer, and one whose answer could
+ * not be stored keeps nothing.
  *
  * The database is closed after the wipe, so the process must not go on using it: in the foreground the shell shows
  * the removed screen, whose "Continue" [acknowledge]s and restarts; in the background the process exits (the next
@@ -100,6 +108,7 @@ class RemovalHandler internal constructor(
     private val inForeground: () -> Boolean,
     private val exitProcess: () -> Unit,
     private val blankWidgets: suspend () -> Unit = {},
+    private val session: suspend () -> Session? = { null },
 ) : HouseholdRemovals {
     @Inject
     @Suppress("LongParameterList") // One collaborator per step of the wipe.
@@ -111,6 +120,7 @@ class RemovalHandler internal constructor(
         eraser: LocalDataEraser,
         foreground: ForegroundState,
         widgets: WidgetBlanker,
+        sessions: Lazy<SessionStore>,
     ) : this(
         scope = scope,
         preferences = preferences,
@@ -120,6 +130,7 @@ class RemovalHandler internal constructor(
         inForeground = foreground::isForeground,
         exitProcess = { Runtime.getRuntime().exit(0) },
         blankWidgets = widgets::blankNow,
+        session = { sessions.get().get() },
     )
 
     private val mutableState = MutableStateFlow(preferences.removal())
@@ -163,11 +174,11 @@ class RemovalHandler internal constructor(
         scope.launch { wipe(removal) }
     }
 
-    private suspend fun wipe(removal: Removal) {
+    private suspend fun wipe(started: Removal) {
+        val removal = decided(started)
         bestEffort { stopSync() }
         bestEffort { work.cancelAll() }
-        val keepDeviceIdentity = removal.reason == RemovalReason.SIGNED_OUT
-        if (bestEffort { eraser.erase(keepDeviceIdentity) } == true) {
+        if (bestEffort { eraser.erase(removal.keepDeviceIdentity == true) } == true) {
             bestEffort { preferences.wipe() }
             val wiped = removal.copy(wiped = true)
             bestEffort { preferences.setRemoval(wiped) }
@@ -182,6 +193,18 @@ class RemovalHandler internal constructor(
         if (!inForeground()) exitProcess()
     }
 
+    /**
+     * [removal] with [Removal.keepDeviceIdentity] decided and stored: from the session while it is still there (before
+     * any step of the wipe), unless an earlier attempt stored it already. Not stored means not kept.
+     */
+    private suspend fun decided(removal: Removal): Removal {
+        if (removal.keepDeviceIdentity != null) return removal
+        val keep = removal.reason.mayKeepDeviceIdentity && keepsDeviceIdentity(bestEffort { session() })
+        val decided = removal.copy(keepDeviceIdentity = keep)
+        val stored = bestEffort { preferences.setRemoval(decided) } != null
+        return (if (stored) decided else removal.copy(keepDeviceIdentity = false)).also { mutableState.value = it }
+    }
+
     // Each step runs whatever the previous one did; a failure is dropped unlogged (it may carry personal data).
     @Suppress("TooGenericExceptionCaught", "SwallowedException")
     private suspend fun <T> bestEffort(step: suspend () -> T): T? = try {
@@ -193,14 +216,20 @@ class RemovalHandler internal constructor(
     }
 }
 
+/** A sign-out keeps the chat key only for a real PARENT session that is ACTIVE or PENDING (D-REL-23). */
+internal fun keepsDeviceIdentity(session: Session?): Boolean = session != null && !session.isLocalTrial &&
+    session.role == Role.PARENT &&
+    (session.deviceStatus == RegistrationStatus.ACTIVE || session.deviceStatus == RegistrationStatus.PENDING)
+
 /**
  * Clears every table (chat messages and thread keys included), the photos and the cached chat blobs in place,
  * without closing the database (D-M3-47): used when a session of another account or household is about to be saved
  * over rows a wipe did not remove. The previous parent's secrets go too ([ParentSecrets]: the PIN hash, its lockout
  * state and the parent signing key, audit L10), so their PIN never guards the new account. The database, photo and
  * blob cache keys stay, and so does this device's chat encryption key (like its device key, it belongs to the
- * device id): onboarding deletes it before this phone registers as a new device (`ForgetChatKeyUseCase`, D-REL-7),
- * so a new household, parent or kid never inherits it.
+ * device id): onboarding moves it to a stash before this phone registers as a new device (`ForgetChatKeyUseCase`,
+ * D-REL-7, D-REL-24) and restores a device only for the account its registry row names (D-REL-22), so a new
+ * household, parent or kid never inherits it.
  */
 class LocalHouseholdRows @Inject constructor(
     private val database: SproutDatabase,

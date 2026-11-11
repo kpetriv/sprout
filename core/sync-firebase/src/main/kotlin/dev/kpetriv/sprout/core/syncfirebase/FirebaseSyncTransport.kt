@@ -2,6 +2,7 @@ package dev.kpetriv.sprout.core.syncfirebase
 
 import dev.kpetriv.sprout.core.domainledger.RegisteredDevice
 import dev.kpetriv.sprout.core.model.BlobId
+import dev.kpetriv.sprout.core.model.DeviceId
 import dev.kpetriv.sprout.core.model.HouseholdId
 import dev.kpetriv.sprout.core.model.Role
 import dev.kpetriv.sprout.core.sync.BlobChunkJson
@@ -90,6 +91,9 @@ import javax.inject.Singleton
  * determined and that is not known to be a parent skips the messages lane and its listener instead of issuing a query
  * the rules refuse. Blob chunks are never pulled:
  * [fetchBlob] reads one blob's chunks by id.
+ *
+ * **One registry row** ([registeredDevice], D-REL-22) is read by path for onboarding, before a session exists: the
+ * household and device are the caller's, never the session's.
  *
  * **Changes** come from snapshot listeners (messages included, scoped like the pull), open only while [foreground]
  * is true.
@@ -539,6 +543,16 @@ internal constructor(
         } catch (failure: FirestoreFailure) {
             throw SyncException(readErrorOf(hid, failure.code))
         }
+    }
+
+    // SyncException carries the code only, never the SDK failure (codes only, no free text).
+    @Suppress("SwallowedException")
+    override suspend fun registeredDevice(householdId: HouseholdId, deviceId: DeviceId): RegisteredDevice? = try {
+        call { get(FirestoreLayout.document(householdId, FirestoreLayout.DEVICES, deviceId.value)) }
+            ?.takeIf { it.id == deviceId.value }
+            ?.let { StoredShapes.deviceOf(it, householdId) }
+    } catch (failure: FirestoreFailure) {
+        throw SyncException(syncErrorOf(failure.code))
     }
 
     private suspend fun pullPage(hid: HouseholdId, cursor: SyncCursor): PullPage {

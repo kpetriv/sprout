@@ -3,6 +3,8 @@ package dev.kpetriv.sprout.core.sync
 import dev.kpetriv.sprout.core.domainledger.RegisteredDevice
 import dev.kpetriv.sprout.core.domainledger.RegisteredParentKey
 import dev.kpetriv.sprout.core.model.BlobId
+import dev.kpetriv.sprout.core.model.DeviceId
+import dev.kpetriv.sprout.core.model.HouseholdId
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.serialization.Serializable
@@ -17,8 +19,8 @@ import kotlin.time.Instant
  * Failures are reported by throwing [SyncException] (never another exception type, never free text): a whole call
  * that fails throws, and per-item outcomes of a push come back in [PushResult].
  *
- * [push], [pull], [fetchBlob] and [changes] have fail-closed defaults (nothing sent, nothing received) only so a
- * partial transport keeps compiling; every real transport overrides them.
+ * [push], [pull], [fetchBlob], [registeredDevice] and [changes] have fail-closed defaults (nothing sent, nothing
+ * received) only so a partial transport keeps compiling; every real transport overrides them.
  */
 interface SyncTransport {
     /**
@@ -69,6 +71,15 @@ interface SyncTransport {
      */
     suspend fun fetchBlob(blobId: BlobId): Result<List<BlobChunkJson>> =
         Result.failure(SyncException(SyncError.Transient()))
+
+    /**
+     * The registry row of [deviceId] in [householdId] as the server holds it, read with the signed-in account's
+     * credentials (a member of [householdId]) whether or not a session is stored yet; null when there is no such row,
+     * or it does not parse. Onboarding reads it before it restores a device (D-REL-22): a device the registry knows is
+     * restored only for the account and role that registered it. Any failure is a [SyncException] (never "no row").
+     */
+    suspend fun registeredDevice(householdId: HouseholdId, deviceId: DeviceId): RegisteredDevice? =
+        throw SyncException(SyncError.Transient())
 
     /** Emits while connected whenever another device writes something this device should pull (messages included). */
     fun changes(): Flow<RemoteChange> = emptyFlow()

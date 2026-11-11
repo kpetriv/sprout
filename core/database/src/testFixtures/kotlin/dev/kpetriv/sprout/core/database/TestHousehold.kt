@@ -14,6 +14,7 @@ import dev.kpetriv.sprout.core.crypto.InMemoryKeyWrapper
 import dev.kpetriv.sprout.core.crypto.JceEcdsaVerifier
 import dev.kpetriv.sprout.core.crypto.JceX25519KeyAgreement
 import dev.kpetriv.sprout.core.crypto.ParentSigner
+import dev.kpetriv.sprout.core.crypto.SecretStore
 import dev.kpetriv.sprout.core.crypto.SecretStoreEncryptionKeyStore
 import dev.kpetriv.sprout.core.crypto.WrappedSecretStore
 import dev.kpetriv.sprout.core.crypto.X25519KeyAgreement
@@ -90,6 +91,9 @@ class TestHousehold(
     val keyStore: DeviceKeyStore = InMemoryDeviceKeyStore(clock),
     sessionFor: (DeviceId) -> Session = { Session.localTrial(it, clock.now()) },
     agreement: (SecureRandom) -> X25519KeyAgreement = ::JceX25519KeyAgreement,
+    /** This device's wrapped `SecretStore` (in memory); pass one to keep a phone's secrets across a wipe. */
+    val secretStore: SecretStore =
+        WrappedSecretStore(InMemoryKeyWrapper(), InMemoryBlobStorage(), SecureRandom(), Dispatchers.Unconfined),
 ) : AutoCloseable {
     val database: SproutDatabase = inMemoryDatabase(context)
     val gbp = Currency.Fiat("GBP")
@@ -110,8 +114,6 @@ class TestHousehold(
     val outbox = RoomOutboxSource(database, clock)
     private val random = SecureRandom()
     private val aead = AesGcmAead(random)
-    private val secretStore =
-        WrappedSecretStore(InMemoryKeyWrapper(), InMemoryBlobStorage(), random, Dispatchers.Unconfined)
 
     /** This device's X25519 chat key (`chat.x25519.v1`), in memory. */
     val encryptionKeys: EncryptionKeyStore = SecretStoreEncryptionKeyStore(secretStore, agreement(random))
@@ -122,6 +124,9 @@ class TestHousehold(
         encryptionKeys,
     )
     val applier = RoomRemoteApplier(database, ledger, clock, signatureCheck, chatCrypto)
+
+    /** The chat key's lifecycle across a sign-out on this phone ([ChatIdentityKeeper]). */
+    val chatIdentity = ChatIdentityKeeper(database, secretStore)
 
     val photoDirectory = newPhotoDirectory(context)
     val blobDirectory = File(context.noBackupFilesDir, "blobs-${UUID.randomUUID()}")

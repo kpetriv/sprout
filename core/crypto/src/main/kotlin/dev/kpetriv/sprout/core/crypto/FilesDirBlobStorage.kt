@@ -36,7 +36,20 @@ class FilesDirBlobStorage(context: Context, private val dispatcher: CoroutineDis
         }
     }
 
+    /** Deletes every file of [name]: the base file and the `.new` and `.bak` siblings [AtomicFile] may leave. */
     override suspend fun delete(name: String) = withContext(dispatcher) { fileFor(name).delete() }
+
+    /**
+     * [BlobStorage.rename]'s copy through [AtomicFile]: a read that recovers an interrupted write, an atomic write
+     * of [to], then [delete] of [from] with its siblings. A crash in between leaves both copies; running it again
+     * finishes.
+     */
+    override suspend fun rename(from: String, to: String): Boolean {
+        val blob = read(from) ?: return false
+        write(to, blob)
+        delete(from)
+        return true
+    }
 
     private fun fileFor(name: String): AtomicFile {
         require(WrappedSecretStore.isValidName(name)) { "Invalid blob name" }

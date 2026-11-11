@@ -94,7 +94,10 @@ internal object ChatPreviewData {
     /** This phone's chat key was replaced in the registry (audit I2): ask a parent to remove and re-link it. */
     fun kidKeyConflict(tier: KidUiTier) = kidLocked(tier).copy(keyState = ThreadKeyState.KEY_CONFLICT)
 
-    /** A parent's phone whose chat key the registry does not list: the steps to set it up again, not "ask a parent". */
+    /**
+     * A parent's phone whose chat key the registry does not list: the steps to set it up again (remove, sign in,
+     * approve on the other phone) and where to contact us, not "ask a parent" (D-REL-8, D-REL-29).
+     */
     fun parentKeyConflict() = parentLocked().copy(keyState = ThreadKeyState.KEY_CONFLICT)
 
     /** Seedling mid-recording; other tiers show the thread (they have no microphone). */

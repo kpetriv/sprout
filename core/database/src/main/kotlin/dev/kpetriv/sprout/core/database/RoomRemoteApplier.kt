@@ -680,7 +680,10 @@ class RoomRemoteApplier internal constructor(
         val household = syncedHousehold() ?: return SyncCursor(emptyMap())
         return SyncCursor(
             database.syncCursorDao().all(household)
-                .filter { it.collection != ChatApplier.CHAT_PRUNED_BEFORE }
+                .filter {
+                    it.collection != ChatApplier.CHAT_PRUNED_BEFORE &&
+                        !it.collection.startsWith(ChatIdentityKeeper.FLOOR_PREFIX)
+                }
                 .associate { it.collection to it.cursor },
         )
     }
