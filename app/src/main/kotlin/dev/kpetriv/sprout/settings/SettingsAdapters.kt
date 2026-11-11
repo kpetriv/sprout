@@ -124,7 +124,13 @@ class HouseholdParentKeyRegistry @Inject constructor(
         if (!session.isLocalTrial) registrar.register(publicKey.encoded, attestationChain)
     }
 
+    /**
+     * The D-M2-1 state is a policy without a parent key. Only the trial household's policy is created here: a real
+     * household's comes from household creation or the first pull, never from this phone's locale (D-REL-11), and
+     * without a row the ledger default (signatures not required) applies anyway.
+     */
     override suspend fun recordSigningUnavailable() {
-        policies.ensure(currency.fiatCurrency())
+        if (sessions.get()?.isLocalTrial != true) return
+        policies.ensure(currency.currentFiatCurrency())
     }
 }

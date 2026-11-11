@@ -228,8 +228,11 @@ class KidTodayViewModel @Inject constructor(
                         chores.observeChores(kidId),
                         chores.observeSubmissions(SubmissionFilter.ForKid(kidId)),
                         calendar.todayUpdates(),
-                    ) { choreList, submissions, today ->
-                        Loaded.Ready(Data(kid.firstName, kid.householdId, choreList, submissions, today)) as Loaded
+                        // The household policy's currency, again when a pull brings it (D-REL-10).
+                        fiat.observeFiatCurrency(),
+                    ) { choreList, submissions, today, currency ->
+                        Loaded.Ready(Data(kid.firstName, kid.householdId, choreList, submissions, today, currency))
+                            as Loaded
                     }
                 }
             }.catch { emit(Loaded.Failed(KidTodayError.LOAD_FAILED)) }
@@ -298,7 +301,7 @@ class KidTodayViewModel @Inject constructor(
     }
 
     private fun ready(data: Data, localState: Local): KidTodayUiState.Ready {
-        val currency = fiat.fiatCurrency()
+        val currency = data.currency
         val active = data.chores.filter { it.state == ChoreState.ACTIVE }
         val today = KidToday.occurrences(data.chores, data.submissions, data.today).map { todayItem(it, currency) }
         val upcoming = if (tier == KidUiTier.SEEDLING) {
@@ -466,7 +469,7 @@ class KidTodayViewModel @Inject constructor(
             moneyText = sheet.moneyText,
             minutesText = sheet.minutesText,
             schedule = ScheduleForm(kind = ScheduleKind.ONCE),
-            currency = fiat.fiatCurrency(),
+            currency = data.currency,
             today = data.today,
         )
         val errors = errorsOf(form)
@@ -502,7 +505,7 @@ class KidTodayViewModel @Inject constructor(
     private fun currentToday(choreId: ChoreId): TodayChoreUi? {
         val data = latest ?: return null
         val chore = data.chores.firstOrNull { it.id == choreId && it.state == ChoreState.ACTIVE } ?: return null
-        return todayItem(chore, data, fiat.fiatCurrency())
+        return todayItem(chore, data, data.currency)
     }
 
     private fun closeSheet() {
@@ -553,6 +556,7 @@ class KidTodayViewModel @Inject constructor(
         val chores: List<Chore>,
         val submissions: List<ChoreSubmission>,
         val today: CalendarDate,
+        val currency: Currency.Fiat,
     )
 
     private sealed interface Loaded {

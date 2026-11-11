@@ -92,7 +92,11 @@ interface HouseholdPolicyRepository {
 
     suspend fun get(): HouseholdPolicy?
 
-    /** The policy, creating it with [fiatCurrency] and no parent key if there is none yet. */
+    /**
+     * The policy, creating it with [fiatCurrency] and no parent key if there is none yet. Only household creation and
+     * the trial call it: on a real household's phone without its policy row it would publish defaults over the
+     * household's real policy (D-REL-11).
+     */
     suspend fun ensure(fiatCurrency: Currency.Fiat): HouseholdPolicy
 
     /**
@@ -105,6 +109,13 @@ interface HouseholdPolicyRepository {
      * callable (D-M3-34; clients cannot write `parentKeys`) and then calls [recordServerRegisteredKey]. The local
      * `parent_keys` row written here (valid from the next local lamport) only lets this device verify its own parent
      * signatures before the first registry pull. No `parent_key` document is queued.
+     *
+     * Never creates a real household's policy (D-REL-11): a phone restored or linked before its first pull would
+     * publish its locale's currency and signatures off over the household's real policy. Only the trial household's
+     * policy is created here (with the locale's currency).
+     *
+     * @throws NoHouseholdPolicyYetException when this device has no policy row yet in a real household; nothing is
+     *   written or queued.
      */
     suspend fun registerParentKey(publicKeyDer: ByteArray): HouseholdPolicy
 
@@ -162,12 +173,13 @@ interface HouseholdPolicyRepository {
  * cap are the synced `household_policy` document (docId = household id); the registered parent key is this device's
  * own and reaches other devices through the server registry (`registerParentKey`, D-M3-34), never as a document.
  * Every write keeps the settings it does not change. A changed game cap rebuilds the ledger's balance caches through
- * [ledger].
+ * [ledger]. [trialCurrency] is the currency of a trial policy created by [registerParentKey] (never a
+ * [FiatCurrencyProvider], which reads this repository).
  */
 class RoomHouseholdPolicyRepository @Inject constructor(
     private val database: SproutDatabase,
     private val authors: SessionAuthorProvider,
-    private val currency: FiatCurrencyProvider,
+    private val trialCurrency: LocaleFiatCurrencyProvider,
     private val clock: Clock,
     signer: DeviceSigner,
     private val ledger: RoomLedgerRepository,
@@ -188,7 +200,12 @@ class RoomHouseholdPolicyRepository @Inject constructor(
         require(publicKeyDer.isNotEmpty()) { "parent public key must not be empty" }
         val author = authors.currentAuthor()
         return writes.transaction {
-            val current = policies.get()?.toDomain() ?: create(author, currency.fiatCurrency())
+            val current = policies.get()?.toDomain()
+                ?: if (author.householdId == LocalTrial.HOUSEHOLD) {
+                    create(author, trialCurrency.fiatCurrency())
+                } else {
+                    throw NoHouseholdPolicyYetException()
+                }
             val validFrom = writes.peekLamport()
             val from = current.parentSignatureFromLamport ?: validFrom
             val fingerprint = JvmSha256Hasher.sha256(publicKeyDer).toHex()
@@ -350,8 +367,9 @@ internal fun HouseholdPolicyEntity.toDomain() = HouseholdPolicy(
 )
 
 /**
- * A policy setting was changed on a device that has no `household_policy` row yet (a newly linked phone before its
- * first pull, or a pulled policy that is still held): refused, so it never publishes defaults over the household's
- * real policy (D-M7-57). The screen says it is waiting for the household policy to sync.
+ * A policy setting was changed, or a parent key registered, on a device that has no `household_policy` row yet (a
+ * newly linked or restored phone before its first pull, or a pulled policy that is still held): refused, so it never
+ * publishes defaults over the household's real policy (D-M7-57, D-REL-11). The screen says it is waiting for the
+ * household policy to sync.
  */
 class NoHouseholdPolicyYetException : IllegalStateException("no household policy yet")

@@ -20,6 +20,7 @@ import dev.kpetriv.sprout.core.database.DatabaseFactory
 import dev.kpetriv.sprout.core.database.EncryptedPhotoStore
 import dev.kpetriv.sprout.core.database.EnglishPendingActionDescriber
 import dev.kpetriv.sprout.core.database.FiatCurrencyProvider
+import dev.kpetriv.sprout.core.database.HouseholdFiatCurrencyProvider
 import dev.kpetriv.sprout.core.database.HouseholdPolicyRepository
 import dev.kpetriv.sprout.core.database.InterestPolicyRepository
 import dev.kpetriv.sprout.core.database.KidRepository
@@ -123,6 +124,10 @@ internal abstract class DatabaseModule {
     @Binds
     abstract fun deviceRegistry(impl: RoomDeviceRegistry): DeviceRegistry
 
+    /** The household policy's currency (D-REL-10). */
+    @Binds
+    abstract fun fiatCurrencyProvider(impl: HouseholdFiatCurrencyProvider): FiatCurrencyProvider
+
     @Binds
     abstract fun remoteApplier(impl: RoomRemoteApplier): RemoteApplier
 
@@ -144,8 +149,9 @@ internal abstract class DatabaseModule {
         fun database(@ApplicationContext context: Context, secretStore: SecretStore): SproutDatabase =
             DatabaseFactory.encrypted(context, secretStore)
 
+        /** The locale's currency: the trial's, and the fallback until a real household's policy is pulled. */
         @Provides
-        fun fiatCurrencyProvider(): FiatCurrencyProvider = LocaleFiatCurrencyProvider()
+        fun localeFiatCurrencyProvider(): LocaleFiatCurrencyProvider = LocaleFiatCurrencyProvider()
 
         /** The files the purge and the wipe delete (M3 §6). */
         @Provides

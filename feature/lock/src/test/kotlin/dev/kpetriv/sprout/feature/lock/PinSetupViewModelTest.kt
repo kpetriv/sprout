@@ -96,6 +96,24 @@ class PinSetupViewModelTest {
     }
 
     @Test
+    fun `the banner is re-checked when the screen resumes`() = test {
+        val fixture = SessionFixture(backgroundScope)
+        fixture.authorizer.availability = ParentAuthAvailability.NOT_ENROLLED
+        val viewModel = fixture.setupViewModel()
+        assertEquals(ParentAuthAvailability.NOT_ENROLLED, viewModel.state.value.signingAvailability)
+
+        // The parent enrolled a fingerprint in system settings and came back.
+        fixture.authorizer.availability = ParentAuthAvailability.STRONG_BIOMETRIC_AVAILABLE
+        viewModel.onEvent(PinSetupEvent.RefreshAvailability)
+
+        assertEquals(ParentAuthAvailability.STRONG_BIOMETRIC_AVAILABLE, viewModel.state.value.signingAvailability)
+        viewModel.type(PIN)
+        viewModel.type(PIN)
+        runCurrent()
+        assertNotNull(fixture.registry.key, "the new PIN turns signing on with the fingerprint enrolled meanwhile")
+    }
+
+    @Test
     fun `without a strong biometric setup shows the banner and records unsigned parent events`() = test {
         val fixture = SessionFixture(backgroundScope)
         fixture.authorizer.availability = ParentAuthAvailability.NO_HARDWARE

@@ -118,6 +118,16 @@ class SettingsAdaptersTest {
     }
 
     @Test
+    fun `a real household's phone never creates the policy when signing is unavailable`() = runTest {
+        sessions.session.value = parentSession()
+
+        registry.recordSigningUnavailable()
+
+        // A restored phone before its first pull: the household's policy (its currency) comes from the pull (D-REL-11).
+        assertNull(policies.policy.value)
+    }
+
+    @Test
     fun `key change results map onto the settings outcomes`() {
         val wait = LockoutDecision.Wait(30.seconds)
         assertEquals(SigningKeyOutcome.Registered, ParentKeyChangeResult.Registered.toOutcome())

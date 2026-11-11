@@ -249,7 +249,7 @@ class ChoreEditorViewModel @Inject constructor(
         val options = kidList.map { kid ->
             KidOption(kid.id, kid.firstName, AgeBand.of(minOf(kid.birthYearMonth, month), month))
         }
-        val currency = fiat.fiatCurrency()
+        val currency = attempt { fiat.currentFiatCurrency() }.getOrElse { fiat.fiatCurrency() }
         val chore = choreId?.let { id -> attempt { chores.get(id) }.getOrNull() }
         existing = chore
         mutableState.update { current ->

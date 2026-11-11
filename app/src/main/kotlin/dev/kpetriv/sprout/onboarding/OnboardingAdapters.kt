@@ -9,9 +9,9 @@ import dev.kpetriv.sprout.core.crypto.DeviceSigner
 import dev.kpetriv.sprout.core.crypto.EncryptionKeyStore
 import dev.kpetriv.sprout.core.crypto.JceEcdsaSigner
 import dev.kpetriv.sprout.core.crypto.chat.EncryptionKeyBinding
-import dev.kpetriv.sprout.core.database.FiatCurrencyProvider
 import dev.kpetriv.sprout.core.database.HouseholdPolicyRepository
 import dev.kpetriv.sprout.core.database.LocalTrial
+import dev.kpetriv.sprout.core.database.LocaleFiatCurrencyProvider
 import dev.kpetriv.sprout.core.database.Session
 import dev.kpetriv.sprout.core.database.SessionStore
 import dev.kpetriv.sprout.core.database.SproutDatabase
@@ -187,7 +187,7 @@ class RoomOnboardingHousehold @Inject constructor(
     private val sessions: SessionStore,
     private val purge: PurgeLocalHouseholdUseCase,
     private val policies: HouseholdPolicyRepository,
-    private val currencies: FiatCurrencyProvider,
+    private val currencies: LocaleFiatCurrencyProvider,
     private val sync: SyncController,
     private val signer: DeviceSigner,
     private val preferences: ShellPreferences,
@@ -195,6 +195,7 @@ class RoomOnboardingHousehold @Inject constructor(
     private val removals: HouseholdRemovals,
     private val localRows: LocalHouseholdRows,
 ) : OnboardingHousehold {
+    /** A new household's suggested currency: the locale's (the parent picks it; it is then the policy's). */
     override fun defaultCurrency(): Currency.Fiat = currencies.fiatCurrency()
 
     override suspend fun hasTrialData(): Boolean =

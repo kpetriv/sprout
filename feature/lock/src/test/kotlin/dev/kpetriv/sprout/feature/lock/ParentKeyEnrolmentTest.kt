@@ -6,7 +6,9 @@ import dev.kpetriv.sprout.core.crypto.ParentAuthAvailability
 import dev.kpetriv.sprout.core.crypto.PinLockoutPolicy
 import dev.kpetriv.sprout.feature.lock.SessionFixture.Companion.PIN
 import dev.kpetriv.sprout.feature.lock.SessionFixture.Companion.WRONG_PIN
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.runTest
@@ -43,6 +45,35 @@ class ParentKeyEnrolmentTest {
         assertTrue(pin.all { it == '\u0000' })
         assertEquals(ParentKeyStatus.READY, f.session.parentKeyStatus())
         assertIs<BiometricUnlockRequest.Ready>(f.session.unlockWithBiometric())
+    }
+
+    @Test
+    fun `a background enrolment is in progress from the hand-off until it ended`() = test {
+        val f = unlocked()
+        val progress: ParentKeyChangeProgress = f.provisioner
+        val gate = CompletableDeferred<Unit>()
+        f.prompter.gate = gate
+        assertFalse(progress.observeInProgress().first())
+
+        val job = f.enrolment.enrolInBackground(PIN.toCharArray())
+
+        // The dashboard hides its signing cards meanwhile (D-REL-12).
+        assertEquals(1, f.prompter.prompts, "the proof prompt is open")
+        assertTrue(progress.observeInProgress().first())
+        gate.complete(Unit)
+        job.join()
+        assertFalse(progress.observeInProgress().first())
+        assertNotNull(f.registry.key)
+    }
+
+    @Test
+    fun `a failed enrolment is no longer in progress`() = test {
+        val f = unlocked()
+        f.prompter.answer = { throw BiometricCancelledException(errorCode = 10) }
+
+        assertEquals(ParentKeyChangeResult.Cancelled, f.enrolment.enrol(PIN.toCharArray()))
+
+        assertFalse(f.provisioner.observeInProgress().first())
     }
 
     @Test

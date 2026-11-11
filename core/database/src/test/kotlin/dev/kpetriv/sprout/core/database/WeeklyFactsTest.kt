@@ -43,6 +43,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import java.time.ZoneOffset
+import java.util.Locale
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
@@ -312,5 +313,36 @@ class WeeklyFactsUseCaseTest {
         val lastWeek = facts(facts.currentWeek().previous())
         assertEquals(thisWeek.copy(through = CalendarDate(2026, 11, 8), complete = true), lastWeek)
         assertFailsWith<IllegalArgumentException> { facts(IsoWeek(2026, 47)) }
+    }
+
+    @Test
+    fun theFactsAreInTheHouseholdPolicysCurrencyOnAPhoneWithAnotherLocale() = runTest {
+        // The app's provider on a German phone (EUR) of a GBP household: GBP events must count (D-REL-10).
+        val onGermanPhone = WeeklyFactsUseCase(
+            household.kids,
+            household.chores,
+            household.ledger,
+            household.calendar,
+            HouseholdFiatCurrencyProvider(household.policies, LocaleFiatCurrencyProvider { Locale.GERMANY }),
+        )
+        val (kid, _) = household.addKid()
+        household.registerParentKey()
+        val chore = Chore(
+            ChoreId("tidy"),
+            LocalTrial.HOUSEHOLD,
+            kid.id,
+            "Tidy your room",
+            reward = ChoreReward(money = Money(50)),
+            schedule = ChoreSchedule.Weekly(DayOfWeek.MONDAY),
+            createdAt = household.clock.now(),
+        )
+        household.chores.upsert(chore)
+        val submission = household.chores.submit(chore.id, CalendarDate(2026, 11, 2))
+        assertTrue(household.approve(submission.id) { household.authorization() } is ApprovalResult.Approved)
+
+        val read = onGermanPhone()
+
+        assertEquals(household.gbp, read.currency)
+        assertEquals(EarnedByKind(chores = Money(50)), read.kids.single().earned, "the GBP payment counts")
     }
 }

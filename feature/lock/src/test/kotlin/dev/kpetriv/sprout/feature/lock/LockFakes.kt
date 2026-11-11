@@ -10,6 +10,7 @@ import dev.kpetriv.sprout.core.crypto.Pbkdf2PinHasher
 import dev.kpetriv.sprout.core.crypto.PinLockoutPolicy
 import dev.kpetriv.sprout.core.crypto.PublicKeyBytes
 import dev.kpetriv.sprout.core.time.FakeClock
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -143,8 +144,12 @@ class FakeProofPrompter : ParentKeyProofPrompter {
 
     var answer: (Signature) -> Signature = { it }
 
+    /** When set, the prompt stays open until it completes (the parent has not touched the sensor yet). */
+    var gate: CompletableDeferred<Unit>? = null
+
     override suspend fun prompt(signature: Signature): Signature {
         prompts++
+        gate?.await()
         return answer(signature)
     }
 }
@@ -207,7 +212,7 @@ class SessionFixture(
         ioDispatcher = dispatcher,
     )
 
-    private val provisioner = ParentKeyProvisioner(
+    internal val provisioner = ParentKeyProvisioner(
         session = session,
         authorizer = authorizer,
         signer = ParentSigner(),

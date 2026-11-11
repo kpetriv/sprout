@@ -9,6 +9,7 @@ import dev.kpetriv.sprout.core.database.SproutDatabase
 import dev.kpetriv.sprout.core.database.entity.RegistrationStatus
 import dev.kpetriv.sprout.core.model.DeviceId
 import dev.kpetriv.sprout.core.model.Role
+import dev.kpetriv.sprout.feature.lock.ParentKeyChangeProgress
 import dev.kpetriv.sprout.feature.parenthome.DeviceLabel
 import dev.kpetriv.sprout.feature.parenthome.HouseholdStatus
 import dev.kpetriv.sprout.feature.parenthome.HouseholdStatusSource
@@ -28,6 +29,9 @@ import javax.inject.Inject
  * ([HouseholdPolicyRepository.observeServerRegistrationPending], D-M3-39). Sync never retries that registration (the
  * server needs a fresh attestation challenge and the parent's fingerprint); the card stays until the parent retries.
  * "Fingerprint signing is off" shows while the household policy has no parent key for this parent phone (D-M3-46).
+ * Neither signing card shows while a parent key change runs ([ParentKeyChangeProgress], D-REL-12): right after the PIN
+ * setup the enrolment's fingerprint prompt and its server registration run over the dashboard, and the policy passes
+ * through "no key" and "key not registered yet" on the way; only an enrolment that ended leaves a state worth a card.
  */
 @Suppress("LongParameterList") // One source per card.
 class SyncHouseholdStatusSource @Inject constructor(
@@ -38,14 +42,21 @@ class SyncHouseholdStatusSource @Inject constructor(
     private val database: SproutDatabase,
     private val kids: KidRepository,
     private val policies: HouseholdPolicyRepository,
+    private val keyChanges: ParentKeyChangeProgress,
 ) : HouseholdStatusSource {
     override fun observe(): Flow<HouseholdStatus> = combine(
         combine(sessions.observe(), sync.status, outbox.observeBlocked(), ::Triple),
         ledger.observeQuarantined(),
         database.deviceDao().observeAll(),
         kids.observeKids(),
-        combine(policies.observeServerRegistrationPending(), policies.observe(), ::Pair),
-    ) { (session, status, blocked), quarantined, devices, kidList, (keyPending, policy) ->
+        combine(
+            policies.observeServerRegistrationPending(),
+            policies.observe(),
+            keyChanges.observeInProgress(),
+            ::Triple,
+        ),
+    ) { (session, status, blocked), quarantined, devices, kidList, (keyPending, policy, enrolling) ->
+        val parent = session?.role == Role.PARENT && !enrolling
         val trial = session?.isLocalTrial ?: false
         val byId = devices.associateBy { it.deviceId }
         val names = kidList.associate { it.id to it.firstName }
@@ -74,9 +85,9 @@ class SyncHouseholdStatusSource @Inject constructor(
                         it.deviceId != session?.deviceId
                 }
                 .map { PendingDevice(it.deviceId, label(it.deviceId).fingerprint) },
-            signingKeyNotRegistered = keyPending && session?.role == Role.PARENT,
+            signingKeyNotRegistered = keyPending && parent,
             // A real household's parent phone whose policy exists without its parent key (D-M3-46).
-            signingOff = !trial && session?.role == Role.PARENT && policy != null && !policy.hasParentKey,
+            signingOff = !trial && parent && policy != null && !policy.hasParentKey,
         )
     }
 

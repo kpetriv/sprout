@@ -64,6 +64,23 @@ class HouseholdPolicyV2Test {
         }
     }
 
+    @Test
+    fun aRestoredPhoneWithoutThePolicyYetRefusesToRegisterAParentKey() = runTest {
+        // A wiped phone signed in again: enrolment must not publish this phone's locale and defaults (D-REL-11).
+        val fresh = parentDevice()
+        try {
+            val key = fresh.parentAuthorizer.createParentKey().encoded
+            assertFailsWith<NoHouseholdPolicyYetException> { fresh.registerKey.register(key) }
+            assertNull(fresh.policies.get())
+            assertEquals(0, fresh.database.outboxDao().count(), "nothing queued")
+            assertEquals(emptyList(), fresh.database.parentKeyDao().all())
+            assertEquals(emptyList(), fresh.database.auditLogDao().withAction(AuditAction.PARENT_KEY_REGISTERED))
+            assertEquals(emptyList(), fresh.database.auditLogDao().withAction(AuditAction.HOUSEHOLD_POLICY_UPDATED))
+        } finally {
+            fresh.close()
+        }
+    }
+
     private suspend fun policyDocument(on: TestHousehold) =
         assertNotNull(on.queuedDocuments().lastOrNull { it.docType == DocTypes.HOUSEHOLD_POLICY })
 

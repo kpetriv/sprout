@@ -14,6 +14,11 @@ import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -53,6 +58,16 @@ sealed interface ParentKeyChangeResult {
 
     /** Storage, Keystore, prompt or proof failure. No new key was kept or registered. */
     data object Failed : ParentKeyChangeResult
+}
+
+/**
+ * Whether a parent key is being created, proved and registered right now ([ParentKeyEnrolment], [ParentKeyRenewal]),
+ * from the moment the PIN setup hands its PIN to the background enrolment until the registration ended. The
+ * dashboard's "Fingerprint signing is off" and "Signing key not registered" cards wait for it (D-REL-12): the proof
+ * prompt runs over the dashboard, and those states are only true once the enrolment failed or was skipped.
+ */
+fun interface ParentKeyChangeProgress {
+    fun observeInProgress(): Flow<Boolean>
 }
 
 /**
@@ -126,14 +141,28 @@ internal class ParentKeyProvisioner @Inject constructor(
     private val random: SecureRandom,
     @LockScope private val scope: CoroutineScope,
     @Dispatcher(SproutDispatchers.IO) private val ioDispatcher: CoroutineDispatcher,
-) {
+) : ParentKeyChangeProgress {
     private val mutex = Mutex()
 
-    fun launch(block: suspend () -> ParentKeyChangeResult): Job = scope.launch { block() }
+    /** Key changes launched or running: counted from [launch] (before the coroutine starts) to the end of each. */
+    private val running = MutableStateFlow(0)
+
+    override fun observeInProgress(): Flow<Boolean> = running.map { it > 0 }.distinctUntilChanged()
+
+    fun launch(block: suspend () -> ParentKeyChangeResult): Job {
+        running.update { it + 1 }
+        // invokeOnCompletion also runs for a job cancelled before it started.
+        return scope.launch { block() }.apply { invokeOnCompletion { running.update { it - 1 } } }
+    }
 
     @Suppress("TooGenericExceptionCaught")
     suspend fun provision(pin: CharArray, renew: Boolean): ParentKeyChangeResult = try {
-        mutex.withLock { provisionLocked(pin, renew) }
+        running.update { it + 1 }
+        try {
+            mutex.withLock { provisionLocked(pin, renew) }
+        } finally {
+            running.update { it - 1 }
+        }
     } catch (e: CancellationException) {
         throw e
     } catch (expected: BiometricCancelledException) {

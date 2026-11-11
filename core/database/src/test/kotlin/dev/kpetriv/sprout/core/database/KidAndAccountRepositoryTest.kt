@@ -50,7 +50,7 @@ class KidAndAccountRepositoryTest {
         policies = RoomHouseholdPolicyRepository(
             database,
             authors,
-            { gbp },
+            LocaleFiatCurrencyProvider { Locale.UK },
             clock,
             signer,
             RoomLedgerRepository(database, clock, signer, JceEcdsaVerifier()),

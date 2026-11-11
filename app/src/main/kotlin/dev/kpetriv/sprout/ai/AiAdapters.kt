@@ -93,7 +93,7 @@ class GatewayChoreSuggestions @Inject constructor(
     private val currency: FiatCurrencyProvider,
 ) : ChoreSuggestions {
     override suspend fun suggest(kidId: KidId, band: AgeBand, existing: List<String>): List<ChoreSuggestionUi> =
-        gateway.suggestChores(band, existing, currency.fiatCurrency()).map { idea ->
+        gateway.suggestChores(band, existing, currency.currentFiatCurrency()).map { idea ->
             ChoreSuggestionUi(
                 title = idea.title,
                 description = idea.description.takeIf { it.isNotBlank() },
@@ -110,12 +110,14 @@ fun interface HouseholdActivity {
 }
 
 /**
- * [HouseholdActivity] over Room's invalidation tracker: the ledger, submissions, kids and anomalies tables. A sync
- * stamp write also fires it; [GatewayWeeklySummarySource] drops recomputed facts that did not change.
+ * [HouseholdActivity] over Room's invalidation tracker: the ledger, submissions, kids and anomalies tables, and the
+ * household policy (its currency is the facts' currency, D-REL-10). A sync stamp write also fires it;
+ * [GatewayWeeklySummarySource] drops recomputed facts that did not change.
  */
 class RoomHouseholdActivity @Inject constructor(private val database: SproutDatabase) : HouseholdActivity {
-    override fun changes(): Flow<Unit> =
-        database.invalidationTracker.createFlow("ledger_events", "chore_submissions", "kids", "anomalies").map { }
+    override fun changes(): Flow<Unit> = database.invalidationTracker
+        .createFlow("ledger_events", "chore_submissions", "kids", "anomalies", "household_policy")
+        .map { }
 }
 
 /**
@@ -214,7 +216,7 @@ class GatewayReceiptScanner internal constructor(
         null
     } else {
         readImage(imageUri)
-            ?.let { jpeg -> gateway.receiptPrefill(jpeg, currency.fiatCurrency()) }
+            ?.let { jpeg -> gateway.receiptPrefill(jpeg, currency.currentFiatCurrency()) }
             ?.let { prefill -> AdjustmentPrefill(amount = prefill.amount, merchant = prefill.merchant) }
     }
 }

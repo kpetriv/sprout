@@ -33,6 +33,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
@@ -105,6 +106,40 @@ class ConvergenceTest {
         assertIs<ApprovalResult.Approved>(parent.approve(submission.id) { parent.authorization() })
         parentEngine.synced()
         kidEngine.synced()
+    }
+
+    @Test
+    fun aRestoredPhoneThatEnrolsBeforeItsFirstPullKeepsTheHouseholdsCurrency() = runTest {
+        // The household was created in yen; the restored phone (a wiped one signed in again) is a UK phone.
+        backend.registerDevice(parent.registered())
+        parent.policies.ensure(Currency.Fiat("JPY"))
+        parentEngine.synced()
+        val restored = parentDevice()
+        try {
+            backend.registerDevice(restored.registered())
+            val restoredEngine = SyncEngine(
+                FakeSyncTransport(backend, restored.deviceId, restored.session.uid, Role.PARENT),
+                restored.outbox,
+                restored.applier,
+                clock,
+            )
+
+            // PIN setup's enrolment before the first pull is refused, and publishes nothing (D-REL-11).
+            val key = restored.parentAuthorizer.createParentKey().encoded
+            assertFailsWith<NoHouseholdPolicyYetException> { restored.registerKey.register(key) }
+            assertEquals(0, restored.database.outboxDao().count())
+
+            restoredEngine.synced()
+            assertEquals(Currency.Fiat("JPY"), restored.policies.get()?.fiatCurrency)
+            // Enrolment after the pull keeps the household's currency, here and on the other phone.
+            assertEquals(Currency.Fiat("JPY"), restored.registerKey.register(key).fiatCurrency)
+            restoredEngine.synced()
+            parentEngine.synced()
+            assertEquals(Currency.Fiat("JPY"), parent.policies.get()?.fiatCurrency)
+            assertEquals(Currency.Fiat("JPY"), restored.policies.get()?.fiatCurrency)
+        } finally {
+            restored.close()
+        }
     }
 
     @Test

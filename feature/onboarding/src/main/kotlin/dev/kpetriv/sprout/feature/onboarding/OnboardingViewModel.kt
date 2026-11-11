@@ -39,6 +39,8 @@ import javax.inject.Inject
  *   else the token-less `deviceStatus` for the pending and then the current key: ACTIVE restores the session, PENDING
  *   goes back to waiting); otherwise this device registers PENDING with a pending key, saves a PENDING session and
  *   waits (one sync every [POLL_INTERVAL_MS]; the sync mirrors the registry into the session) until a parent approves.
+ *   Every way into the PIN and signing step from an existing household (restored, approved, resumed) first pulls the
+ *   household ([OnboardingStep.FirstSync]), so enrolment finds the household's policy (D-REL-11).
  * - **Kid device**: the 8-character code → anonymous sign-in → (an anonymous user already linked whose key the
  *   registry has ACTIVE is restored) → pending key → `redeemLinkCode` → fingerprint check → promote → save the KID
  *   session → claims refresh (best effort) → first sync → kid mode.
@@ -147,7 +149,7 @@ class OnboardingViewModel @Inject constructor(
                 if (pending) {
                     // The ID token may predate the household's claims (the process died before the refresh).
                     attemptOrNull { auth.refreshClaims() }
-                    show(OnboardingStep.ParentLock)
+                    parentLockAfterPull()
                 }
             }
 
@@ -252,6 +254,7 @@ class OnboardingViewModel @Inject constructor(
         household.activeDeviceOf(uid, householdId)?.let { active ->
             purgeTrialDataIfAny()
             saveActiveParent(uid, householdId, active)
+            parentLockAfterPull()
             return true
         }
         for (key in listOf(RegistrationKey.PENDING, RegistrationKey.CURRENT)) {
@@ -264,7 +267,10 @@ class OnboardingViewModel @Inject constructor(
             purgeTrialDataIfAny()
             if (status == RegistryStatus.ACTIVE) {
                 saveActiveParent(uid, householdId, deviceId)
+                // The first pull runs before the PIN and signing step (D-REL-11): see parentLockAfterPull.
+                show(OnboardingStep.FirstSync)
                 confirmRestored(uid, householdId)
+                show(OnboardingStep.ParentLock)
             } else {
                 household.saveSession(
                     Session(uid, householdId, Role.PARENT, null, deviceId, RegistrationStatus.PENDING, now()),
@@ -281,6 +287,19 @@ class OnboardingViewModel @Inject constructor(
         household.saveSession(
             Session(uid, householdId, Role.PARENT, null, deviceId, RegistrationStatus.ACTIVE, now()),
         )
+    }
+
+    /**
+     * One pull ([OnboardingStep.FirstSync]), then the PIN and signing step (D-REL-11): fingerprint enrolment registers
+     * the parent key in the household policy, and a phone that joined or came back to an existing household must have
+     * that policy (its currency, its signature setting) before it does, or the enrolment is refused rather than
+     * publishing this phone's defaults over it. Offline the pull fails quietly and the PIN can still be set; signing
+     * then stays off ("Fingerprint signing is off" on the dashboard once the policy arrives) until the parent turns it
+     * on in Settings.
+     */
+    private suspend fun parentLockAfterPull() {
+        show(OnboardingStep.FirstSync)
+        attemptOrNull { household.syncNow() }
         show(OnboardingStep.ParentLock)
     }
 
@@ -291,6 +310,8 @@ class OnboardingViewModel @Inject constructor(
     private suspend fun confirmRestored(uid: UserId, householdId: HouseholdId) {
         if (attemptOrNull { household.syncNow() } == true && household.activeDeviceOf(uid, householdId) == null) {
             household.eraseLocalHousehold()
+            claims = null
+            show(OnboardingStep.Welcome)
             throw OnboardingException(OnboardingFailure.NOT_ALLOWED)
         }
     }
@@ -321,7 +342,8 @@ class OnboardingViewModel @Inject constructor(
             poll.cancel()
             if (status == RegistrationStatus.ACTIVE) {
                 attemptOrNull { household.startParentSetup(householdId) }
-                show(OnboardingStep.ParentLock)
+                // A PENDING phone cannot read the household's documents: pull them now that it is ACTIVE.
+                parentLockAfterPull()
             } else {
                 // Revoked while waiting (or the session went): whatever the sync pulled is erased, not kept.
                 leavePending(householdId)
