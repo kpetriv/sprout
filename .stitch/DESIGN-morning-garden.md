@@ -139,7 +139,8 @@ Text on any tint keeps 4.5:1; state is never colour alone.
 - **Parent attention rows:** one white card listing three rows, each a Honey-tint circle with the count in Outfit, title and detail, and a pill action on the right (Botanical for "Sign now", Linen for "Review").
 - **Kid cards (parent):** avatar circle with the initial on a per-kid tint (Leaf, Honey, Linen), name and age, Linen stat chips with a small Botanical icon, a Linen goal panel with a thin track.
 - **Chips:** pills on Linen with hairline; selected on Leaf tint with Botanical-deep text.
-- **Top app bar:** cream, back arrow, Outfit title, at most one trailing icon. No bottom navigation bar in Sprout.
+- **Top app bar:** cream, back arrow (none on a top-level destination), Outfit title, at most one trailing icon.
+- **Bottom navigation bar:** white with a Hairline on top, three to five items with Material Symbols Outlined icons (filled when selected) and always-visible labels; the selected item sits on a Leaf-tint pill. Parent: Home, Chores, Chat, Settings. Kid (Sprout, Sapling): Wallet, Chores, Shop, Games, Chat. Seedling: Wallet, Chores, Shop at 72px with pictogram icons. A rail replaces it on tablets.
 - **Motion:** buttons scale to 0.96 on press; confetti in Botanical, Honey and Sky; reduced motion honoured.
 
 ## Never
