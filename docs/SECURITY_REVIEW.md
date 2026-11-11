@@ -268,6 +268,7 @@ Fill one row per run. A row with "pass" lets the coordinator update the CONTROLS
 
 | Procedure | Date | Build (versionName, versionCode) | Device, Android | Result | Evidence (links, counts; no personal data) | Rows to update |
 |---|---|---|---|---|---|---|
+| Legal review and consoles (checklist items 1, 4, 7) | 2026-11-11 | n/a (documents) | n/a | pass (owner review, no lawyer) | PRIVACY.md and SECURITY.md notes resolved, D-M6-51 decided, Anonymous provider confirmed, Play app created and Cloud project linked, trader status non-trader; pages re-rendered with `EFFECTIVE_DATE` 2026-11-11 and redeployed (D-REL-4, D-REL-5) | DP-12, SC-6 |
 | P1 Network capture | to be filled | | | | | DP-16, CR-8, D-M6-51, D-M8-32 |
 | P1 part A, **emulator** | 2026-11-04 | debug, snapshot of 06706ae (`0.1.0-dev`, build 1) | `Sprout_Benchmark`, API 33 Play image, Wi-Fi off | Emulator only; part B on a Pixel still to do | [v1 walk](milestones/M8.md#v1-emulator-walk-slice-w-2026-11-04) step 7: the app's own new hosts were `firebaseappcheck.googleapis.com` (debug provider) and `firebaseinstallations.googleapis.com` (installation id); Play services looked up `android.apis.google.com` in the same second; no connection during the AI steps; no ML Kit, logging or model host; no `Firebase-Instance-ID-Token` header on the callables; cleartext only to `10.0.2.2` and Android's connectivity probe; no distinct upload after the receipt scan within 13 minutes | none (emulator) |
 | P2 Release build | to be filled | | | | | SE-6, LM-1 |

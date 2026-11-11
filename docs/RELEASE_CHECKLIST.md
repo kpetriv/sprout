@@ -12,7 +12,7 @@ Every step between the M8 tree and Sprout on the Play production track that need
 - [ ] Tools: JDK 17, Android SDK (API 37 platform), Node 24, Python 3.9+, `gcloud`, `gh`, `bundletool` (`brew install bundletool`).
 - [x] The Firebase project `sprout-3e1c7` is on **Spark** and its Firestore database is in **`eur3`** (Firebase console → Firestore → Settings, or `gcloud firestore databases describe --project sprout-3e1c7 --format='value(locationId)'` → `eur3`). (done 2026-11-10: `firebase firestore:databases:get` → `(default)` in `eur3`)
 - [x] Authentication provider **Google** is enabled (FIREBASE.md step 3). (done 2026-11-10: the config carries the web OAuth client and the debug and upload Android clients)
-- [ ] **Remaining:** confirm the **Anonymous** provider is enabled (kid devices; Firebase console → Authentication → Sign-in method); not verified by the 2026-11-10 session.
+- [x] The **Anonymous** provider is enabled (kid devices; Firebase console → Authentication → Sign-in method). (done 2026-11-11 by the owner)
 
 Evidence to paste: "Firestore location: eur3 (checked <date>)" → CONTROLS DP-11.
 
@@ -53,9 +53,9 @@ Evidence to paste: "Fingerprints registered (upload, debug) <date>; checkRelease
 
 ### 4. Privacy policy values, legal review and rendering
 
-- [ ] Legal review of [PRIVACY.md](PRIVACY.md) and [SECURITY.md](SECURITY.md): every **Owner (legal)** note (controller identity, lawful bases, parental consent D-M8-33, processors, retention figures, the 30-day e-mail deletion, safe harbour). Change the Markdown, not the rendered page.
-- [ ] Decide the D-M6-51 question ([DATA_SAFETY.md](DATA_SAFETY.md#the-d-m6-51-question-owner-and-legal-review)) and confirm the Firebase Instance ID disclosure (D-M8-32: it cannot be excluded, D-M8-41).
-- [ ] Fill the values and render:
+- [x] Legal review of [PRIVACY.md](PRIVACY.md) and [SECURITY.md](SECURITY.md): every **Owner (legal)** note (controller identity, lawful bases, parental consent D-M8-33, processors, retention figures, the 30-day e-mail deletion, safe harbour). Change the Markdown, not the rendered page. (done 2026-11-11 by the owner, without a lawyer; every note resolved in the Markdown, D-REL-4)
+- [x] Decide the D-M6-51 question ([DATA_SAFETY.md](DATA_SAFETY.md#the-d-m6-51-question-owner-and-legal-review)) and confirm the Firebase Instance ID disclosure (D-M8-32: it cannot be excluded, D-M8-41). (done 2026-11-11: the event is listed as recommended; the installation id stays disclosed, D-REL-4)
+- [x] Fill the values and render (done 2026-11-10; re-rendered and redeployed 2026-11-11 with `EFFECTIVE_DATE=2026-11-11` after the legal review):
 
 ```
 cp docs/privacy.properties.example docs/privacy.properties
@@ -114,21 +114,25 @@ Evidence to paste: "App Check enforced on Firestore <date> (verified <n> %); TTL
 
 ### 7. Play Console: the app, signing and policy declarations
 
-- [ ] Create the app: name "Sprout", default language English (United Kingdom), app, free. Enrol in **Play App Signing** (the default; FIREBASE.md step 9).
-- [ ] Play Console → Test and release → App integrity → Play Integrity API → **Link a Cloud project** → `sprout-3e1c7` (FIREBASE.md step 11).
-- [ ] App content: **Privacy policy** URL `https://<host>/privacy`.
+Menu names as of November 2026 (the console was reorganised; the old "App access" form is now "Sign-in details").
+
+- [x] Create the app (Play Console home → **Create app**): name "Sprout", default language English (United Kingdom), app, free, contact e-mail the privacy contact. The same form accepts the Developer Program Policies, US export laws and the **Play App Signing** terms; signing itself is configured on the first release (item 9; FIREBASE.md step 9). (done 2026-11-11 by the owner)
+- [x] Play Console → Test and release → App integrity → Play Integrity API → **Link a Cloud project** → `sprout-3e1c7` (FIREBASE.md step 11). (done 2026-11-11 by the owner)
+- [x] **Trader status** (Manage account → Account details → About you; every account must declare it, new accounts at creation): **non-trader** (free app, nothing sold; EEA and UK users see a notice that consumer-rights laws do not apply). (done 2026-11-11 by the owner)
+- [ ] The declarations below are cards on **Monitor and improve → Policy and programs → App content** ("Start declaration" or "Start", later "Manage"). **Privacy policy:** `https://sprout-server-kpetriv.vercel.app/privacy` (public, no login, not a PDF; also linked from the store listing and inside the app).
 - [ ] **Target audience and content:** ages **18 and over** only; the app is not designed for children (kid mode is a parent-configured feature; PLAN "Play policy notes"). Answer "No" to appealing to children; expect no Families Policy obligations.
-- [ ] **Content rating** questionnaire (IARC): category "Utility, productivity, communication or other"; user-to-user communication: **yes** (chat within a household, not public); shares location: no; digital purchases: no; unrestricted internet: no. Expected rating: low (PEGI 3 / Everyone, with an "Users interact" notice).
-- [ ] **Ads:** no. **App access:** provide a test path for reviewers ("Sign in with Google; any Google account creates a new household; the parent PIN is chosen on first run"), or a demo account if review asks.
-- [ ] **Financial features:** "My app doesn't provide any financial features". **Health:** none. **Government:** no. **News:** no.
+- [ ] **Content ratings** questionnaire (IARC): category "Utility, productivity, communication or other"; user-to-user communication: **yes** (chat within a household, not public); shares location: no; digital purchases: no; unrestricted internet: no. Expected rating: low (PEGI 3 / Everyone, with an "Users interact" notice).
+- [ ] **Ads:** no.
+- [ ] **Sign-in details** (formerly App access): "All or some functionality is restricted" → **+ Add new instructions** → name "Any Google account", no username or password fields, and in "Any other instructions": "All features require sign-in with a Google account. Any Google account works: signing in creates a new household. The parent PIN is chosen on first run. No separate test credentials exist." Add a demo account only if review asks for one.
+- [ ] **Financial features**, **Health**, **Government apps**, **News**: answer every card the console shows with "none" or "no" (the current help page no longer lists them all).
 - [ ] Permissions declarations: none of Sprout's permissions needs a declaration form (no SMS, call log, location, accessibility, all-files, exact alarm or foreground-service-type declarations beyond WorkManager's defaults); re-check the Console's list after the first upload.
 
-Evidence to paste: "Play app created <date>; Play App Signing on; Cloud project linked; target audience 18+; content rating <rating>".
+Evidence to paste: "Play app created <date>; Play App Signing on; Cloud project linked; trader status non-trader; target audience 18+; content rating <rating>".
 
 ### 8. Play Console: data safety and the store listing
 
-- [ ] **Data safety:** enter [DATA_SAFETY.md](DATA_SAFETY.md) section by section (Section 1, every row of Section 2, Section 3). Delete account URL: `https://<host>/privacy#how-to-delete-your-account-and-data`. Before submitting, `python3 tools/privacy/inventory.py --check` passes on the commit being released.
-- [ ] **Store listing** from [`play/listing`](../play/listing/README.md): title, short and full description (`play/listing/en-GB/*.txt`), app icon (512 × 512), feature graphic (1024 × 500), phone screenshots, 7-inch and 10-inch tablet screenshots, in the upload order of `play/listing/README.md`. Category: Parenting. Contact e-mail: the privacy contact. Website: `https://<host>/privacy` or the repository.
+- [ ] **Data safety** (App content → Data safety; exempt while the app is only on the internal track, required before closed testing): enter [DATA_SAFETY.md](DATA_SAFETY.md) section by section (Section 1, every row of Section 2, Section 3). Delete account URL: `https://<host>/privacy#how-to-delete-your-account-and-data`. Before submitting, `python3 tools/privacy/inventory.py --check` passes on the commit being released.
+- [ ] **Store listing** (Grow users → Store presence → Store listings; the support e-mail is under Store settings) from [`play/listing`](../play/listing/README.md): title, short and full description (`play/listing/en-GB/*.txt`), app icon (512 × 512), feature graphic (1024 × 500), phone screenshots, 7-inch and 10-inch tablet screenshots, in the upload order of `play/listing/README.md`. Category: Parenting. Contact e-mail: the privacy contact. Website: `https://<host>/privacy` or the repository.
 - [ ] To regenerate the images after a UI change: `python3 tools/store/compose.py` (needs Pillow; see `play/listing/README.md`).
 
 Evidence to paste: "Data safety submitted <date> from DATA_SAFETY.md at <commit>; listing uploaded <date>".
@@ -225,7 +229,7 @@ Promote closed → **production** when:
 
 - [ ] The closed test ran its required time with no crash or ANR above Play's bad-behaviour thresholds (Android vitals) and no data-loss or sync report open.
 - [ ] P6 to P10 passed, or each failure has a fix released to the closed track.
-- [ ] The legal review is complete and every **Owner (legal)** note is resolved.
+- [x] The legal review is complete and every **Owner (legal)** note is resolved. (done 2026-11-11, D-REL-4)
 - [ ] RUNBOOK contacts are current; the operator script has been run once against production in dry-run mode (`npm --prefix server run operator -- prune-expired --production`).
 - [ ] Staged rollout: 10 %, then 50 %, then 100 %, watching vitals and the server error rate between steps.
 
