@@ -179,9 +179,17 @@ interface OnboardingHousehold {
 
     /**
      * Erases this phone's copy of the household (a phone that leaves onboarding after its sync pulled household data)
-     * and signs out; the app then shows the erase screen and restarts.
+     * and signs out; the app then shows the erase screen and restarts. Like any sign-out it keeps this phone's chat
+     * encryption key, which belongs to the device id ([forgetChatKey] first when it must go too).
      */
     suspend fun eraseLocalHousehold()
+
+    /**
+     * Deletes the chat encryption key a sign-out kept for this phone's device id (D-REL-7): run before this phone
+     * registers a new device id and before a device restored for another account is erased, so no other household,
+     * parent or kid inherits it. Throws when the key could not be deleted.
+     */
+    suspend fun forgetChatKey()
 }
 
 /**

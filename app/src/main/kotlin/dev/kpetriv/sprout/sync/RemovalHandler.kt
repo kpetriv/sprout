@@ -79,6 +79,10 @@ class WorkManagerBackgroundWork @Inject constructor(
  * stored unwiped, [failed] is set, and the wipe runs again at the next start ([resume]). The first reason reported
  * wins. A process that dies half-way resumes the wipe at the next start too.
  *
+ * Only [RemovalReason.SIGNED_OUT] keeps this phone's device identity: its chat encryption key stays with the device
+ * key, so the same parent signing in again restores a device whose registered key is still here (D-REL-6). A revoked
+ * device and a household that is gone erase it too.
+ *
  * The database is closed after the wipe, so the process must not go on using it: in the foreground the shell shows
  * the removed screen, whose "Continue" [acknowledge]s and restarts; in the background the process exits (the next
  * start shows the removed screen). Before that, wiped or not, the home screen widget is drawn blank at once
@@ -162,7 +166,8 @@ class RemovalHandler internal constructor(
     private suspend fun wipe(removal: Removal) {
         bestEffort { stopSync() }
         bestEffort { work.cancelAll() }
-        if (bestEffort { eraser.erase() } == true) {
+        val keepDeviceIdentity = removal.reason == RemovalReason.SIGNED_OUT
+        if (bestEffort { eraser.erase(keepDeviceIdentity) } == true) {
             bestEffort { preferences.wipe() }
             val wiped = removal.copy(wiped = true)
             bestEffort { preferences.setRemoval(wiped) }
@@ -194,7 +199,8 @@ class RemovalHandler internal constructor(
  * over rows a wipe did not remove. The previous parent's secrets go too ([ParentSecrets]: the PIN hash, its lockout
  * state and the parent signing key, audit L10), so their PIN never guards the new account. The database, photo and
  * blob cache keys stay, and so does this device's chat encryption key (like its device key, it belongs to the
- * device; a new household gets it registered again with a new binding).
+ * device id): onboarding deletes it before this phone registers as a new device (`ForgetChatKeyUseCase`, D-REL-7),
+ * so a new household, parent or kid never inherits it.
  */
 class LocalHouseholdRows @Inject constructor(
     private val database: SproutDatabase,

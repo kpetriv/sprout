@@ -1,6 +1,12 @@
 package dev.kpetriv.sprout.core.database
 
 import dev.kpetriv.sprout.core.crypto.EncryptionKeyStore
+import dev.kpetriv.sprout.core.crypto.FilesDirBlobStorage
+import dev.kpetriv.sprout.core.crypto.InMemoryKeyWrapper
+import dev.kpetriv.sprout.core.crypto.JceX25519KeyAgreement
+import dev.kpetriv.sprout.core.crypto.SecretStoreEncryptionKeyStore
+import dev.kpetriv.sprout.core.crypto.SecretUnavailableException
+import dev.kpetriv.sprout.core.crypto.WrappedSecretStore
 import dev.kpetriv.sprout.core.database.entity.AuditAction
 import dev.kpetriv.sprout.core.database.entity.MessageEntity
 import dev.kpetriv.sprout.core.database.entity.MessageSeqEntity
@@ -8,6 +14,7 @@ import dev.kpetriv.sprout.core.database.entity.MessageStatus
 import dev.kpetriv.sprout.core.database.entity.ReadMarkEntity
 import dev.kpetriv.sprout.core.database.entity.RegistrationStatus
 import dev.kpetriv.sprout.core.database.entity.ThreadKeyEntity
+import dev.kpetriv.sprout.core.database.usecase.ForgetChatKeyUseCase
 import dev.kpetriv.sprout.core.database.usecase.WipeLocalDataUseCase
 import dev.kpetriv.sprout.core.domainhousehold.Chore
 import dev.kpetriv.sprout.core.domainhousehold.ChoreReward
@@ -39,9 +46,12 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import java.io.File
+import java.security.SecureRandom
 import java.util.UUID
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
+import kotlin.test.assertNotEquals
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -181,26 +191,134 @@ class PurgeAndWipeTest {
         assertTrue(household.blobDirectory.listFiles().orEmpty().isEmpty(), "blob files are deleted")
     }
 
-    @Test
-    fun wipeDeletesTheBlobCacheAndTheChatKey() = runTest {
+    /** A file database, a blob in the blob cache and one blob per [LocalDataFiles.SECRET_NAMES]. */
+    private fun filesWithEverySecret(prefix: String): Pair<SproutDatabase, LocalDataFiles> {
         val context = RuntimeEnvironment.getApplication()
-        val name = "wipe-chat-${UUID.randomUUID()}.db"
+        val name = "$prefix-${UUID.randomUUID()}.db"
         val database = fileDatabase(name)
-        val sessions = RoomSessionStore(database, household.clock)
         val photos = File(context.noBackupFilesDir, "photos-${UUID.randomUUID()}")
         val blobs = File(context.noBackupFilesDir, "blobs-${UUID.randomUUID()}").apply { mkdirs() }
         File(blobs, "b-1.blob").writeBytes(byteArrayOf(1))
         val secrets = File(context.noBackupFilesDir, "secrets-${UUID.randomUUID()}").apply { mkdirs() }
         LocalDataFiles.SECRET_NAMES.forEach { File(secrets, "$it.bin").writeBytes(byteArrayOf(1)) }
+        return database to LocalDataFiles(context.getDatabasePath(name), photos, secrets, blobs)
+    }
+
+    private fun LocalDataFiles.chatKey() = File(secretsDirectory, "${EncryptionKeyStore.SECRET_NAME}.bin")
+
+    // A revoked device, a household that is gone, another account restored on this phone: nothing of it stays.
+    @Test
+    fun wipeDeletesTheBlobCacheAndTheChatKey() = runTest {
+        val (database, files) = filesWithEverySecret("wipe-chat")
+        val sessions = RoomSessionStore(database, household.clock)
         assertTrue(EncryptionKeyStore.SECRET_NAME in LocalDataFiles.SECRET_NAMES)
         assertTrue(BlobCache.BLOB_KEY_SECRET in LocalDataFiles.SECRET_NAMES)
-        val files = LocalDataFiles(context.getDatabasePath(name), photos, secrets, blobs)
+        assertEquals(files.secretFiles(EncryptionKeyStore.SECRET_NAME).first(), files.chatKey())
 
-        assertTrue(WipeLocalDataUseCase(database, sessions, files, Dispatchers.Unconfined)())
+        assertTrue(WipeLocalDataUseCase(database, sessions, files, Dispatchers.Unconfined)(keepDeviceIdentity = false))
 
-        assertFalse(blobs.exists())
-        assertFalse(File(secrets, "${EncryptionKeyStore.SECRET_NAME}.bin").exists())
-        assertTrue(secrets.listFiles().orEmpty().isEmpty())
+        assertFalse(files.blobDirectory.exists())
+        assertFalse(files.chatKey().exists())
+        assertTrue(files.secretsDirectory.listFiles().orEmpty().isEmpty())
+    }
+
+    // A sign-out keeps the device id, so the household's registry still lists this key for it (D-REL-6).
+    @Test
+    fun aSignOutWipeKeepsTheChatKeyAndNothingElse() = runTest {
+        val (database, files) = filesWithEverySecret("wipe-signout")
+        val sessions = RoomSessionStore(database, household.clock)
+        File(files.secretsDirectory, "${EncryptionKeyStore.SECRET_NAME}.bin.new").writeBytes(byteArrayOf(2))
+        assertEquals(listOf(EncryptionKeyStore.SECRET_NAME), LocalDataFiles.DEVICE_IDENTITY_SECRETS)
+
+        assertTrue(
+            WipeLocalDataUseCase(database, sessions, files, Dispatchers.Unconfined)(keepDeviceIdentity = true),
+            "complete: only the kept key is left",
+        )
+
+        assertTrue(files.databaseFiles.none { it.exists() })
+        assertFalse(files.blobDirectory.exists())
+        assertEquals(
+            setOf("${EncryptionKeyStore.SECRET_NAME}.bin", "${EncryptionKeyStore.SECRET_NAME}.bin.new"),
+            files.secretsDirectory.listFiles().orEmpty().map { it.name }.toSet(),
+        )
+    }
+
+    // A new device id (a new household, a second parent phone, a kid link) never inherits the kept key (D-REL-7).
+    @Test
+    fun forgettingTheChatKeyBeforeANewDeviceRegistersDeletesTheKeptKey() = runTest {
+        val (database, files) = filesWithEverySecret("wipe-forget")
+        val sessions = RoomSessionStore(database, household.clock)
+        assertTrue(WipeLocalDataUseCase(database, sessions, files, Dispatchers.Unconfined)(keepDeviceIdentity = true))
+        assertTrue(files.chatKey().exists())
+
+        ForgetChatKeyUseCase(files, Dispatchers.Unconfined)()
+
+        assertFalse(files.chatKey().exists())
+        assertTrue(files.secretsDirectory.listFiles().orEmpty().isEmpty())
+        ForgetChatKeyUseCase(files, Dispatchers.Unconfined)() // Nothing left to forget is not a failure.
+    }
+
+    // Through the real file storage: the key the registry lists is the one read back after the sign-out wipe.
+    @Test
+    fun theChatKeyPairSurvivesASignOutWipeUntilANewDeviceRegisters() = runTest {
+        val context = RuntimeEnvironment.getApplication()
+        val secrets = File(context.noBackupFilesDir, LocalDataFiles.SECRETS_DIRECTORY_NAME)
+        secrets.deleteRecursively()
+        val wrapper = InMemoryKeyWrapper() // The Keystore wrapping key survives every wipe.
+        fun keys() = SecretStoreEncryptionKeyStore(
+            WrappedSecretStore(
+                wrapper,
+                FilesDirBlobStorage(context, Dispatchers.Unconfined),
+                SecureRandom(),
+                Dispatchers.Unconfined,
+            ),
+            JceX25519KeyAgreement(SecureRandom()),
+        )
+        val name = "wipe-real-${UUID.randomUUID()}.db"
+        val files =
+            LocalDataFiles(
+                context.getDatabasePath(name),
+                File(context.noBackupFilesDir, "p-${UUID.randomUUID()}"),
+                secrets,
+            )
+        try {
+            val registered = keys().publicKey()
+            File(secrets, "${DatabaseFactory.PASSPHRASE_SECRET}.bin").writeBytes(byteArrayOf(1))
+            val database = fileDatabase(name)
+
+            assertTrue(
+                WipeLocalDataUseCase(
+                    database,
+                    RoomSessionStore(database, household.clock),
+                    files,
+                    Dispatchers.Unconfined,
+                )(keepDeviceIdentity = true),
+            )
+
+            assertEquals(registered, keys().keyPair(createIfMissing = false).use { it.publicKey })
+            assertFalse(File(secrets, "${DatabaseFactory.PASSPHRASE_SECRET}.bin").exists())
+
+            ForgetChatKeyUseCase(files, Dispatchers.Unconfined)()
+
+            assertFailsWith<SecretUnavailableException> { keys().keyPair(createIfMissing = false) }
+            assertNotEquals(registered, keys().publicKey(), "a new device id gets a fresh key")
+        } finally {
+            secrets.deleteRecursively()
+            context.deleteDatabase(name)
+        }
+    }
+
+    @Test
+    fun forgettingTheChatKeyLeavesTheOtherSecretsAlone() = runTest {
+        val (database, files) = filesWithEverySecret("forget-only")
+        database.close()
+
+        ForgetChatKeyUseCase(files, Dispatchers.Unconfined)()
+
+        assertEquals(
+            (LocalDataFiles.SECRET_NAMES - EncryptionKeyStore.SECRET_NAME).map { "$it.bin" }.toSet(),
+            files.secretsDirectory.listFiles().orEmpty().map { it.name }.toSet(),
+        )
     }
 
     @Test

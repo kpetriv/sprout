@@ -178,7 +178,7 @@ We will disclose data only if the law requires it, and then only what is require
 | Account recovery records | 12 months, also after the household is deleted | Written only when we restore a parent's access to a household whose parent phones were all lost: a one-way hash of the household id, the phone ids involved, the time and our ticket reference. Removed by our operator's monthly clean-up |
 | Our server's logs | Up to 30 days, unless Vercel's retention is longer | Vercel's log retention |
 | Sign-in accounts | Until the household is deleted (kid phone accounts are disabled when the phone is removed) | Deleted with the household |
-| Data on a phone | Until the app is uninstalled, the parent signs out, or the phone is removed from the household | Erased by the app; uninstalling removes it too |
+| Data on a phone | Until the app is uninstalled, the parent signs out, or the phone is removed from the household. The phone's own chat key stays after a sign-out on that phone, so its parent can read and send chat again after signing back in; it opens nothing without the household's data | Erased by the app; the chat key when the phone is removed from the household, when the household is deleted, or when another account or a kid's device is set up on the phone; uninstalling removes it all |
 | Export files | As long as you keep them | Saved where you choose; we never receive them |
 
 Sprout keeps no backups of its own. Google's own retention of deleted data follows its data processing terms.

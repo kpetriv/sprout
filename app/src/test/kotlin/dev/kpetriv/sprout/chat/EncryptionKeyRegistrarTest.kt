@@ -72,6 +72,20 @@ class EncryptionKeyRegistrarTest {
     }
 
     @Test
+    fun `a phone restored after a sign-out finds its kept key in the mirror, not a conflict (D-REL-6)`() = runTest {
+        // Before the sign-out: registered and mirrored.
+        assertEquals(KeyRegistration.SENT, registrar.ensureRegistered())
+        mirrored = localKey.bytes
+        // The sign-out wipe kept the key and the device id; the restore's first pull mirrors the same row again.
+        session = null
+        assertEquals(KeyRegistration.NOT_NEEDED, registrar.ensureRegistered())
+        session = parentSession()
+
+        assertEquals(KeyRegistration.REGISTERED, registrar.ensureRegistered())
+        assertEquals(1, sent.size, "nothing is registered again")
+    }
+
+    @Test
     fun `the server refusing another key is a conflict, any other failure is retried later`() = runTest {
         answer = Result.failure(FunctionsException(FunctionsError.Unavailable))
         assertEquals(KeyRegistration.FAILED, registrar.ensureRegistered())

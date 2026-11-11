@@ -47,6 +47,11 @@ import javax.inject.Inject
  * answer, so a registration the server did accept is found again on the next attempt (audit M1). A status that cannot
  * be read stops the flow with a network failure rather than registering over it.
  *
+ * A sign-out keeps this phone's chat encryption key with its device key (D-REL-6), so a restored device finds the key
+ * its registry entry lists. Every new registration (a household, a second parent phone, a kid link) is a new device
+ * id: the kept key is deleted before its fresh registration key is made ([OnboardingHousehold.forgetChatKey], D-REL-7),
+ * and so is the key of a device restored for another account before that device is erased.
+ *
  * When the pre-linking trial household has data, the parent or kid confirms first that it will be deleted
  * ([OnboardingStep.ConfirmPurge]); that screen comes before anything is created on the server, so "Cancel" leaves
  * everything as it was. The purge itself runs once the server side succeeded and before the new session is saved,
@@ -290,6 +295,9 @@ class OnboardingViewModel @Inject constructor(
      */
     private suspend fun confirmRestored(uid: UserId, householdId: HouseholdId) {
         if (attemptOrNull { household.syncNow() } == true && household.activeDeviceOf(uid, householdId) == null) {
+            // This device belongs to someone else: its chat key goes too. Best effort: the erase must run regardless,
+            // and a key left behind is deleted anyway before this phone registers as a new device.
+            attemptOrNull { household.forgetChatKey() }
             household.eraseLocalHousehold()
             throw OnboardingException(OnboardingFailure.NOT_ALLOWED)
         }
@@ -476,8 +484,12 @@ class OnboardingViewModel @Inject constructor(
         }
     }
 
-    /** A fresh pending registration key bound to a new server challenge. */
+    /**
+     * A fresh pending registration key bound to a new server challenge: a new device id. The chat key a sign-out kept
+     * for the previous device id is deleted first (D-REL-7); if it cannot be, nothing is registered.
+     */
     private suspend fun pendingKey(): DeviceRegistrationMaterial {
+        household.forgetChatKey()
         val challenge = backend.beginDeviceRegistration().orFail()
         return keys.regenerateForRegistration(challenge)
     }

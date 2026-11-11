@@ -116,6 +116,12 @@ class ChatScreenshotTest : ScreenshotTest(checkAccessibility = true) {
         ChatScreen(state = ChatPreviewData.parentLocked(), onEvent = {})
     }
 
+    @Test
+    fun `parent thread, this phone's chat key no longer matches`() =
+        screenshot.captureLightDark("chat_parent_key_conflict") {
+            ChatScreen(state = ChatPreviewData.parentKeyConflict(), onEvent = {})
+        }
+
     // One dark golden per kid screen family (docs/SCREENSHOT_TESTS.md).
     @Test
     fun `kid, messages, dark theme, every tier`() =

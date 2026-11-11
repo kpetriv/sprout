@@ -17,6 +17,7 @@ import dev.kpetriv.sprout.core.database.SessionStore
 import dev.kpetriv.sprout.core.database.SproutDatabase
 import dev.kpetriv.sprout.core.database.deviceId
 import dev.kpetriv.sprout.core.database.entity.RegistrationStatus
+import dev.kpetriv.sprout.core.database.usecase.ForgetChatKeyUseCase
 import dev.kpetriv.sprout.core.database.usecase.PurgeLocalHouseholdUseCase
 import dev.kpetriv.sprout.core.domainledger.Currency
 import dev.kpetriv.sprout.core.domainledger.toHex
@@ -179,7 +180,8 @@ class FunctionsRegistrationBackend @Inject constructor(
 /**
  * Onboarding's view of the local household: the trial household (its session or any of its kids), the purge, the
  * household policy, sync through [SyncController], this device's registry entry, the session (guarded by the account
- * the local rows belong to, [ShellPreferences.linkedAccount]), the parent setup marker and the erase.
+ * the local rows belong to, [ShellPreferences.linkedAccount]), the parent setup marker, the erase and the chat key a
+ * sign-out kept ([ForgetChatKeyUseCase]).
  */
 @Suppress("LongParameterList", "TooManyFunctions") // One collaborator per question onboarding asks.
 class RoomOnboardingHousehold @Inject constructor(
@@ -194,6 +196,7 @@ class RoomOnboardingHousehold @Inject constructor(
     private val parentSetup: ParentSetupTracker,
     private val removals: HouseholdRemovals,
     private val localRows: LocalHouseholdRows,
+    private val chatKey: ForgetChatKeyUseCase,
 ) : OnboardingHousehold {
     override fun defaultCurrency(): Currency.Fiat = currencies.fiatCurrency()
 
@@ -246,6 +249,8 @@ class RoomOnboardingHousehold @Inject constructor(
         database.outboxDao().count() > 0
 
     override suspend fun eraseLocalHousehold() = removals.remove(RemovalReason.SIGNED_OUT)
+
+    override suspend fun forgetChatKey() = chatKey()
 }
 
 /** Onboarding's signing step over `feature/lock`'s status check and PIN-gated enrolment. */

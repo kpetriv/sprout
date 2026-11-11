@@ -29,14 +29,16 @@ class RemovalHandlerTest {
     private val steps = mutableListOf<String>()
     private var foreground = true
     private var erased = true
+    private val keptIdentity = mutableListOf<Boolean>()
 
     private fun TestScope.handler() = RemovalHandler(
         scope = CoroutineScope(backgroundScope.coroutineContext + UnconfinedTestDispatcher(testScheduler)),
         preferences = preferences,
         stopSync = { steps += "stop sync" },
         work = { steps += "cancel work" },
-        eraser = {
+        eraser = { keepDeviceIdentity ->
             steps += "erase"
+            keptIdentity += keepDeviceIdentity
             erased
         },
         inForeground = { foreground },
@@ -134,6 +136,23 @@ class RemovalHandlerTest {
 
         assertEquals(listOf("exit"), steps)
         assertEquals(true, preferences.storedRemoval?.wiped)
+    }
+
+    @Test
+    fun `only a sign-out keeps this phone's chat key with its device identity (D-REL-6)`() = runTest {
+        for (reason in RemovalReason.entries) {
+            preferences.storedRemoval = null
+            keptIdentity.clear()
+            handler().remove(reason)
+            assertEquals(listOf(reason == RemovalReason.SIGNED_OUT), keptIdentity, reason.name)
+        }
+    }
+
+    @Test
+    fun `a resumed sign-out wipe still keeps the chat key`() = runTest {
+        preferences.storedRemoval = Removal(RemovalReason.SIGNED_OUT)
+        assertTrue(handler().resume())
+        assertEquals(listOf(true), keptIdentity)
     }
 
     @Test

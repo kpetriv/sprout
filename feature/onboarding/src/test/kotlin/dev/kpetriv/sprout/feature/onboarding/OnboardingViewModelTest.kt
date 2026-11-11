@@ -15,6 +15,7 @@ import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.Rule
 import org.junit.Test
+import java.io.IOException
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNotEquals
@@ -138,6 +139,11 @@ class OnboardingViewModelTest {
             log.calls,
         )
         assertEquals(1, keys.registrations, "every registration uses a fresh key")
+        assertEquals(
+            listOf("signInWithEmail", "refreshClaims", "refreshClaims"),
+            household.chatKeyForgotten.single(),
+            "a new household is a new device id: a chat key a sign-out kept is deleted first (D-REL-7)",
+        )
         val registered = backend.registeredKeys.single().publicKey
         assertEquals(registered, keys.publicKey(), "the accepted key is this device's signing key now")
         assertNotEquals(provisional, currentDevice())
@@ -306,6 +312,11 @@ class OnboardingViewModelTest {
             log.calls.drop(2).take(5),
         )
         assertEquals(
+            listOf("signInWithEmail", "refreshClaims", "status:PENDING", "status:CURRENT"),
+            household.chatKeyForgotten.single(),
+            "a new device id: the kept chat key goes before the registration key is made (D-REL-7)",
+        )
+        assertEquals(
             OnboardingStep.WaitingForApproval(displayFingerprint(currentDevice())),
             viewModel.state.value.step,
             "computed from the key, not the server's answer",
@@ -414,6 +425,8 @@ class OnboardingViewModelTest {
 
         assertEquals(0, keys.registrations)
         assertFalse("begin" in log.calls)
+        assertTrue(household.chatKeyForgotten.isEmpty(), "the same device id keeps the chat key its registry lists")
+        assertFalse("erase" in log.calls)
         assertEquals(device, sessions.session.value?.deviceId)
         assertEquals(RegistrationStatus.ACTIVE, sessions.session.value?.deviceStatus)
         assertEquals(OnboardingStep.ParentLock, viewModel.state.value.step)
@@ -426,7 +439,32 @@ class OnboardingViewModelTest {
         val viewModel = viewModel()
         viewModel.signIn()
         assertTrue("erase" in log.calls)
+        assertFalse("erase" in household.chatKeyForgotten.single(), "the chat key goes too, before the erase")
         assertEquals(OnboardingFailure.NOT_ALLOWED, viewModel.state.value.failure)
+        assertNull(sessions.session.value)
+    }
+
+    @Test
+    fun `a restored key of another account is erased even when its chat key cannot be deleted`() {
+        auth.claims[0] = parentClaims()
+        backend.statuses[RegistrationKey.CURRENT] = RegistryStatus.ACTIVE
+        household.forgetFailure = IOException("stuck")
+        val viewModel = viewModel()
+        viewModel.signIn()
+        assertTrue("erase" in log.calls)
+        assertEquals(OnboardingFailure.NOT_ALLOWED, viewModel.state.value.failure)
+    }
+
+    @Test
+    fun `a chat key that cannot be deleted stops a new registration before anything is sent`() {
+        auth.claims[0] = parentClaims()
+        household.forgetFailure = IOException("stuck")
+        val viewModel = viewModel()
+        viewModel.signIn()
+        assertFalse("begin" in log.calls)
+        assertFalse("registerParentDevice" in log.calls)
+        assertEquals(0, keys.registrations)
+        assertEquals(OnboardingFailure.UNKNOWN, viewModel.state.value.failure)
         assertNull(sessions.session.value)
     }
 
@@ -504,6 +542,11 @@ class OnboardingViewModelTest {
             sessions.session.value,
         )
         assertEquals(backend.registeredKeys.single().publicKey, keys.publicKey())
+        assertEquals(
+            listOf("signInAnonymously", "refreshClaims"),
+            household.chatKeyForgotten.single(),
+            "a kid linked on this phone never inherits a parent's kept chat key (D-REL-7)",
+        )
         assertTrue(viewModel.state.value.finished)
     }
 

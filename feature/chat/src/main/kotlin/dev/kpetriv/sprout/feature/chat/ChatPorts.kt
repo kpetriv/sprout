@@ -186,7 +186,8 @@ enum class ThreadKeyState {
 
     /**
      * The registry lists another chat key for this phone than the one it holds (D-M4-14, audit I2): no thread key will
-     * come, so the screen says to remove and re-link the phone, and does not send.
+     * come, so the screen says the phone must be set up again (a kid: ask a parent; a parent: the steps), and does not
+     * send.
      */
     KEY_CONFLICT,
 }

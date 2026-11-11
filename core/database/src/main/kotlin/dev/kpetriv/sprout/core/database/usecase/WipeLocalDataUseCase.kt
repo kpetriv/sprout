@@ -23,13 +23,19 @@ import javax.inject.Inject
  * recordings and captures; nothing there is needed again). The Keystore keys stay: the device signing key keeps this
  * device's identity, and the wrapping key is useless without the blobs.
  *
+ * With `keepDeviceIdentity` (a sign-out on this phone, D-REL-6) the chat X25519 private key stays as well
+ * ([LocalDataFiles.DEVICE_IDENTITY_SECRETS]): the device id survives the wipe, the household's registry still lists
+ * that key for it, and a parent who signs in again on the same phone restores the same device, whose chat then opens
+ * its thread keys again. Every other removal (revoked, household gone, another account) erases it too, and onboarding
+ * deletes a kept key before this phone registers as a new device ([ForgetChatKeyUseCase]).
+ *
  * The database instance is closed afterwards, so the caller must restart the process (which lands on onboarding,
  * since there is no session). Deleting is best effort per file: a file that cannot be deleted does not stop the
  * others, and a database that cannot be cleared or closed does not stop the files. The result says whether the wipe
- * is complete: true only when no database file, no photo or blob directory and no `SecretStore` blob is left, so the
- * caller can keep the removal and try again (audit L4). `cacheDir` is cleared best effort and not part of that answer:
- * the platform and libraries may write to it at any time, and the voice note temp files in it are also swept at every
- * start.
+ * is complete: true only when no database file, no photo or blob directory and no `SecretStore` blob is left (other
+ * than the kept ones), so the caller can keep the removal and try again (audit L4). `cacheDir` is cleared best effort
+ * and not part of that answer: the platform and libraries may write to it at any time, and the voice note temp files
+ * in it are also swept at every start.
  *
  * @param cacheDirectory the app's `cacheDir`, whose contents are deleted (the directory itself stays); null in tests
  *   that do not need it.
@@ -50,26 +56,32 @@ class WipeLocalDataUseCase internal constructor(
         @ApplicationContext context: Context,
     ) : this(database, sessions, files, dispatcher, context.cacheDir)
 
-    /** Erases everything listed above; true when it is all gone. */
-    suspend operator fun invoke(): Boolean {
+    /**
+     * Erases everything listed above; true when it is all gone. [keepDeviceIdentity] keeps
+     * [LocalDataFiles.DEVICE_IDENTITY_SECRETS] (a sign-out only).
+     */
+    suspend operator fun invoke(keepDeviceIdentity: Boolean = false): Boolean {
         bestEffort {
             sessions.clear()
             database.syncCursorDao().deleteAll()
         }
         // A database that cannot be read, or is already closed, is deleted below anyway.
         bestEffort { database.close() }
+        val kept = if (keepDeviceIdentity) identityFiles() else emptyList()
         return withContext(dispatcher) {
             files.databaseFiles.forEach { it.delete() }
             files.photoDirectory.deleteRecursively()
             files.blobDirectory.deleteRecursively()
-            files.secretsDirectory.listFiles()?.forEach { it.deleteRecursively() }
+            files.secretsDirectory.listFiles()?.filterNot { it in kept }?.forEach { it.deleteRecursively() }
             cacheDirectory?.listFiles()?.forEach { it.deleteRecursively() }
             files.databaseFiles.none { it.exists() } &&
                 !files.photoDirectory.exists() &&
                 !files.blobDirectory.exists() &&
-                files.secretsDirectory.listFiles().isNullOrEmpty()
+                files.secretsDirectory.listFiles().orEmpty().all { it in kept }
         }
     }
+
+    private fun identityFiles(): List<File> = LocalDataFiles.DEVICE_IDENTITY_SECRETS.flatMap(files::secretFiles)
 
     // Dropped unlogged: a storage failure may carry personal data, and the files go whatever state the database is in.
     @Suppress("TooGenericExceptionCaught", "SwallowedException")

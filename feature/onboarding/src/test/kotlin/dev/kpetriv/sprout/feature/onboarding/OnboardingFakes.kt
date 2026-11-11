@@ -187,6 +187,17 @@ class FakeOnboardingHousehold(
         log += "erase"
         sessions.session.value = null
     }
+
+    /** What [forgetChatKey] throws, if anything. */
+    var forgetFailure: Throwable? = null
+
+    /** The calls logged before each [forgetChatKey] (kept out of the log, whose exact order other tests check). */
+    val chatKeyForgotten = mutableListOf<List<String>>()
+
+    override suspend fun forgetChatKey() {
+        forgetFailure?.let { throw it }
+        chatKeyForgotten += log.calls.toList()
+    }
 }
 
 class FakeSessionStore(private val log: CallLog, initial: Session? = null) : SessionStore {
