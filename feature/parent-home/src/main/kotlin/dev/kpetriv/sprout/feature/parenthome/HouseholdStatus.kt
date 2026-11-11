@@ -27,6 +27,10 @@ fun interface HouseholdStatusSource {
  * @property signingOff this parent phone has no parent signing key ("Later" on the signing step, or no strong
  *   biometric), so its parent-only events carry no fingerprint signature (D-M3-46); the card stays until signing is
  *   turned on in Settings → Security.
+ * @property policyMissing this parent phone of a real household has no household policy although a sync completed
+ *   (D-REL-14): the policy has not arrived (held, or not pushed yet), or it was never pushed at all. Parent signatures
+ *   are off meanwhile; the card opens Settings → Security, whose fingerprint signing set-up waits for the policy or
+ *   recovers it from the household's own currency.
  */
 data class HouseholdStatus(
     val trial: Boolean = false,
@@ -35,6 +39,7 @@ data class HouseholdStatus(
     val pendingDevices: List<PendingDevice> = emptyList(),
     val signingKeyNotRegistered: Boolean = false,
     val signingOff: Boolean = false,
+    val policyMissing: Boolean = false,
 )
 
 /**

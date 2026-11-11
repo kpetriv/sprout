@@ -155,6 +155,7 @@ class FakeOnboardingHousehold(
 
     override suspend fun ensureHouseholdPolicy(fiatCurrency: Currency.Fiat) {
         log += "ensurePolicy"
+        ensureFailure?.let { throw it }
         policyCurrency = fiatCurrency
     }
 
@@ -169,14 +170,30 @@ class FakeOnboardingHousehold(
 
     override suspend fun saveSession(session: Session) = sessions.save(session)
 
-    override suspend fun startParentSetup(householdId: HouseholdId) {
+    /** The currency kept with the setup marker (D-REL-14). */
+    var setupCurrency: Currency.Fiat? = null
+
+    /** When set, [ensureHouseholdPolicy] throws it (a write that fails, or the process dying there). */
+    var ensureFailure: Exception? = null
+
+    override suspend fun hasHouseholdPolicy(): Boolean = policyCurrency != null
+
+    override suspend fun startParentSetup(householdId: HouseholdId, currency: Currency.Fiat?) {
         log += "setupStarted"
+        when {
+            currency != null -> setupCurrency = currency
+            setupPending != householdId -> setupCurrency = null
+        }
         setupPending = householdId
     }
+
+    override suspend fun parentSetupCurrency(householdId: HouseholdId): Currency.Fiat? =
+        setupCurrency.takeIf { setupPending == householdId }
 
     override suspend fun finishParentSetup() {
         log += "setupFinished"
         setupPending = null
+        setupCurrency = null
     }
 
     override suspend fun parentSetupPending(householdId: HouseholdId): Boolean = setupPending == householdId

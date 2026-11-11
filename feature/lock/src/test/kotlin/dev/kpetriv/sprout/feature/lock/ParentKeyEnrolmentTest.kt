@@ -117,6 +117,41 @@ class ParentKeyEnrolmentTest {
     }
 
     @Test
+    fun `without the household policy enrolment stops before the PIN, the challenge, the key and the prompt`() = test {
+        val f = unlocked()
+        f.registry.policyReady = false
+
+        assertEquals(ParentKeyChangeResult.PolicyNotSynced, f.enrolment.enrol(PIN.toCharArray()))
+
+        // D-REL-15: no fingerprint prompt for a registration that is bound to be refused.
+        assertEquals(1, f.registry.policyChecks)
+        assertEquals(0, f.prompter.prompts)
+        assertEquals(0, f.authorizer.keysCreated)
+        assertEquals(emptyList(), f.challenges.issued)
+        assertEquals(0, f.lockoutStore.state?.consecutiveFailures ?: 0, "the PIN was not checked")
+        assertEquals(
+            ParentKeyChangeResult.PolicyNotSynced,
+            f.enrolment.enrol(WRONG_PIN.toCharArray()),
+            "not even a wrong PIN is counted",
+        )
+        assertEquals(0, f.lockoutStore.state?.consecutiveFailures ?: 0)
+        assertNull(f.registry.key)
+
+        f.registry.policyReady = true
+        assertEquals(ParentKeyChangeResult.Registered, f.enrolment.enrol(PIN.toCharArray()))
+    }
+
+    @Test
+    fun `a renewal does not ask for the household policy`() = test {
+        val f = unlocked()
+        f.enrolKeyDirectly()
+        f.registry.policyReady = false
+
+        assertEquals(ParentKeyChangeResult.Registered, f.renewal.renew(PIN.toCharArray()))
+        assertEquals(0, f.registry.policyChecks)
+    }
+
+    @Test
     fun `a locked session cannot enrol`() = test {
         val f = SessionFixture(backgroundScope, pin = PIN)
 

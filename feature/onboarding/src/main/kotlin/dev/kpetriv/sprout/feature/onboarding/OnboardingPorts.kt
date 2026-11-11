@@ -144,8 +144,14 @@ interface OnboardingHousehold {
     /** Deletes the trial household's data (`PurgeLocalHouseholdUseCase`, ADR-0004 §2). */
     suspend fun purgeTrialData()
 
-    /** Creates the household policy document with [fiatCurrency] (a new household, after its session is saved). */
+    /**
+     * Creates the household policy document with [fiatCurrency] (a new household, after its session is saved; or the
+     * creating phone's retry after a pull that brought none, D-REL-14).
+     */
     suspend fun ensureHouseholdPolicy(fiatCurrency: Currency.Fiat)
+
+    /** True when this phone has the household policy row. */
+    suspend fun hasHouseholdPolicy(): Boolean
 
     /** One sync now; false when it failed. */
     suspend fun syncNow(): Boolean
@@ -162,8 +168,15 @@ interface OnboardingHousehold {
      */
     suspend fun saveSession(session: Session)
 
-    /** The parent's PIN and signing step for [householdId] has started; it survives a process death (review M4). */
-    suspend fun startParentSetup(householdId: HouseholdId)
+    /**
+     * The parent's PIN and signing step for [householdId] has started; it survives a process death (review M4).
+     * [currency] is the one chosen when this phone created the household (D-REL-14), kept with the marker; null keeps
+     * one already kept for the same household.
+     */
+    suspend fun startParentSetup(householdId: HouseholdId, currency: Currency.Fiat? = null)
+
+    /** The currency this phone chose when it created [householdId], while its parent setup is pending; else null. */
+    suspend fun parentSetupCurrency(householdId: HouseholdId): Currency.Fiat?
 
     /** The parent's PIN and signing step finished. */
     suspend fun finishParentSetup()
@@ -212,5 +225,8 @@ enum class SigningSetupResult {
     WRONG_PIN,
     LOCKED_OUT,
     CANCELLED,
+
+    /** Refused before the PIN check and the prompt: the household policy has not synced to this phone (D-REL-15). */
+    POLICY_NOT_SYNCED,
     FAILED,
 }

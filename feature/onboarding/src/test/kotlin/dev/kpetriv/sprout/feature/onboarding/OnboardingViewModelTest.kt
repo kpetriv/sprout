@@ -409,6 +409,23 @@ class OnboardingViewModelTest {
     }
 
     @Test
+    fun `a phone restored from the local registry mirror pulls the household before the PIN step`() {
+        auth.claims[0] = parentClaims()
+        household.activeDevice = NEW_DEVICE
+        lateinit var viewModel: OnboardingViewModel
+        val stepsAtSync = mutableListOf<OnboardingStep>()
+        household.onSync = { stepsAtSync += viewModel.state.value.step }
+        viewModel = viewModel()
+        viewModel.signIn()
+
+        // D-REL-11: the enrolment on the PIN step must find the pulled policy, on this path too.
+        assertEquals(listOf<OnboardingStep>(OnboardingStep.FirstSync), stepsAtSync)
+        assertTrue(log.calls.indexOf("saveSession:PARENT:ACTIVE") < log.calls.indexOf("sync"))
+        assertFalse("ensurePolicy" in log.calls, "this phone did not create the household")
+        assertEquals(OnboardingStep.ParentLock, viewModel.state.value.step)
+    }
+
+    @Test
     fun `after a sign-out wipe the server registry restores the same ACTIVE key without regenerating it`() {
         auth.claims[0] = parentClaims()
         val device = currentDevice()

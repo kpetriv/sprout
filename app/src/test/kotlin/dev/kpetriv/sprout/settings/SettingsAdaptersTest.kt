@@ -7,14 +7,21 @@ import dev.kpetriv.sprout.core.crypto.ParentAuthAvailability
 import dev.kpetriv.sprout.core.crypto.PublicKeyBytes
 import dev.kpetriv.sprout.core.database.HouseholdPolicy
 import dev.kpetriv.sprout.core.database.HouseholdPolicyRepository
+import dev.kpetriv.sprout.core.database.entity.RegistrationStatus
 import dev.kpetriv.sprout.core.database.usecase.RegisterParentKeyUseCase
 import dev.kpetriv.sprout.core.domainledger.Currency
+import dev.kpetriv.sprout.core.sync.HouseholdRoot
+import dev.kpetriv.sprout.core.sync.SyncError
+import dev.kpetriv.sprout.core.sync.SyncException
+import dev.kpetriv.sprout.core.sync.SyncReport
 import dev.kpetriv.sprout.feature.lock.ChangePinResult
 import dev.kpetriv.sprout.feature.lock.ParentKeyChangeResult
 import dev.kpetriv.sprout.feature.lock.PinRuleViolation
 import dev.kpetriv.sprout.feature.settings.NewPinProblem
 import dev.kpetriv.sprout.feature.settings.PinChangeOutcome
 import dev.kpetriv.sprout.feature.settings.SigningKeyOutcome
+import dev.kpetriv.sprout.household.HouseholdPolicyRecovery
+import dev.kpetriv.sprout.household.PolicyReadiness
 import dev.kpetriv.sprout.parentSession
 import dev.kpetriv.sprout.trialSession
 import kotlinx.coroutines.flow.Flow
@@ -37,6 +44,20 @@ class SettingsAdaptersTest {
     private val published = mutableListOf<ByteArray>()
     private val chains = mutableListOf<List<ByteArray>>()
     private var backendResult: Result<Unit> = Result.success(Unit)
+
+    /** What the recovery's sync answers (null: it could not run) and what the server holds (D-REL-14). */
+    private var syncReport: SyncReport? = SyncReport()
+    private var root: Result<HouseholdRoot> = Result.success(HouseholdRoot("CHF", policyStored = false))
+    private var syncs = 0
+    private val recovery = HouseholdPolicyRecovery(
+        sessions = sessions,
+        policies = policies,
+        syncNow = {
+            syncs++
+            syncReport
+        },
+        householdRoot = { root.getOrThrow() },
+    )
     private val registry = HouseholdParentKeyRegistry(
         policies = policies,
         useCase = RegisterParentKeyUseCase(policies),
@@ -47,7 +68,79 @@ class SettingsAdaptersTest {
             chains += chain
             backendResult
         },
+        recovery = recovery,
     )
+
+    @Test
+    fun `the policy is ready at once for the trial and for a phone that has it`() = runTest {
+        assertTrue(registry.householdPolicyReady(), "the trial creates its own")
+        sessions.session.value = parentSession()
+        policies.ensure(gbp)
+        assertTrue(registry.householdPolicyReady())
+        assertEquals(0, syncs, "no sync, no server read")
+    }
+
+    @Test
+    fun `a household whose policy exists nowhere is recovered with the server's currency at registration`() = runTest {
+        sessions.session.value = parentSession()
+
+        assertTrue(registry.householdPolicyReady())
+        assertEquals(1, syncs)
+        registry.registerParentKey(authorizer.createParentKey(), emptyList())
+
+        assertEquals(Currency.Fiat("CHF"), policies.recovered, "the server's currency, never the locale's")
+        assertEquals(Currency.Fiat("CHF"), policies.policy.value?.fiatCurrency)
+    }
+
+    @Test
+    fun `nothing is recovered unless a clean pull found no policy anywhere`() = runTest {
+        sessions.session.value = parentSession()
+
+        syncReport = null
+        assertFalse(registry.householdPolicyReady(), "the sync could not run")
+        syncReport = SyncReport(error = SyncError.Transient())
+        assertFalse(registry.householdPolicyReady(), "the pull failed")
+        syncReport = SyncReport()
+
+        policies.held = true
+        assertFalse(registry.householdPolicyReady(), "a pulled policy is held for its author")
+        policies.held = false
+
+        root = Result.success(HouseholdRoot("CHF", policyStored = true))
+        assertFalse(registry.householdPolicyReady(), "the server holds a policy this phone has not applied")
+        root = Result.success(HouseholdRoot(null, policyStored = false))
+        assertFalse(registry.householdPolicyReady(), "no currency on the household")
+        root = Result.success(HouseholdRoot("XXX", policyStored = false))
+        assertFalse(registry.householdPolicyReady(), "not a currency Sprout supports")
+        root = Result.failure(SyncException(SyncError.Transient()))
+        assertFalse(registry.householdPolicyReady(), "the server could not be read")
+
+        sessions.session.value = parentSession(status = RegistrationStatus.PENDING)
+        root = Result.success(HouseholdRoot("CHF", policyStored = false))
+        assertFalse(registry.householdPolicyReady(), "only an ACTIVE parent phone")
+
+        // Registration without a recovered currency never creates a real household's policy.
+        sessions.session.value = parentSession()
+        policies.policy.value = null
+        registry.registerParentKey(authorizer.createParentKey(), emptyList())
+        assertNull(policies.recovered)
+    }
+
+    @Test
+    fun `a pull that brings the policy needs no recovery`() = runTest {
+        sessions.session.value = parentSession()
+        val pulling = HouseholdPolicyRecovery(
+            sessions = sessions,
+            policies = policies,
+            syncNow = {
+                policies.ensure(Currency.Fiat("JPY"))
+                SyncReport()
+            },
+            householdRoot = { error("not read") },
+        )
+        assertEquals(PolicyReadiness.Present, pulling.readiness())
+        assertNull(pulling.takeRecovered(parentSession().householdId))
+    }
 
     @Test
     fun `a real household's parent key is also registered with the backend, the trial's never`() = runTest {
@@ -140,6 +233,7 @@ class SettingsAdaptersTest {
         assertEquals(SigningKeyOutcome.WrongPin(wait), ParentKeyChangeResult.WrongPin(wait).toOutcome())
         assertEquals(SigningKeyOutcome.LockedOut(wait), ParentKeyChangeResult.LockedOut(wait).toOutcome())
         assertEquals(SigningKeyOutcome.Cancelled, ParentKeyChangeResult.Cancelled.toOutcome())
+        assertEquals(SigningKeyOutcome.PolicyNotSynced, ParentKeyChangeResult.PolicyNotSynced.toOutcome())
         assertEquals(SigningKeyOutcome.Failed, ParentKeyChangeResult.NotAllowed.toOutcome())
         assertEquals(SigningKeyOutcome.Failed, ParentKeyChangeResult.Failed.toOutcome())
     }
@@ -176,4 +270,22 @@ private class InMemoryPolicies(private val currency: Currency.Fiat) : HouseholdP
 
     override suspend fun registerParentKey(publicKeyDer: ByteArray): HouseholdPolicy =
         HouseholdPolicy(true, 1, publicKeyDer, currency, Instant.fromEpochMilliseconds(0)).also { policy.value = it }
+
+    /** The currency the last registration recovered a missing policy with (D-REL-14). */
+    var recovered: Currency.Fiat? = null
+
+    /** What [policyHeld] answers. */
+    var held = false
+
+    override suspend fun policyHeld(): Boolean = held
+
+    override suspend fun registerParentKey(
+        publicKeyDer: ByteArray,
+        recoveredCurrency: Currency.Fiat?,
+    ): HouseholdPolicy {
+        val existing = policy.value
+        if (existing == null && recoveredCurrency != null) recovered = recoveredCurrency
+        val fiat = existing?.fiatCurrency ?: recoveredCurrency ?: currency
+        return HouseholdPolicy(true, 1, publicKeyDer, fiat, Instant.fromEpochMilliseconds(0)).also { policy.value = it }
+    }
 }

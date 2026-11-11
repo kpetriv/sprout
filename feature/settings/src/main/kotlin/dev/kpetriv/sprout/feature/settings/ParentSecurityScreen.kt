@@ -195,6 +195,8 @@ private fun registerErrorText(error: RegisterError?): String? = when (error) {
 
     RegisterError.Cancelled -> stringResource(R.string.feature_settings_security_register_cancelled)
 
+    RegisterError.PolicyNotSynced -> stringResource(R.string.feature_settings_policy_not_synced)
+
     RegisterError.RequireBiometric -> stringResource(R.string.feature_settings_security_pin_require_biometric)
 
     is RegisterError.LockedOut -> stringResource(

@@ -23,6 +23,7 @@ import dev.kpetriv.sprout.core.domainledger.toHex
 import dev.kpetriv.sprout.core.model.DeviceId
 import dev.kpetriv.sprout.core.model.HouseholdId
 import dev.kpetriv.sprout.core.model.UserId
+import dev.kpetriv.sprout.core.sync.SyncReport
 import dev.kpetriv.sprout.core.syncfirebase.AuthError
 import dev.kpetriv.sprout.core.syncfirebase.AuthException
 import dev.kpetriv.sprout.core.syncfirebase.AuthState
@@ -209,7 +210,9 @@ class RoomOnboardingHousehold @Inject constructor(
         policies.ensure(fiatCurrency)
     }
 
-    override suspend fun syncNow(): Boolean = sync.syncNow()?.error == null
+    override suspend fun hasHouseholdPolicy(): Boolean = policies.get() != null
+
+    override suspend fun syncNow(): Boolean = sync.syncNow().completed()
 
     /** Only a mirror that belongs to [uid] in [householdId] answers (audit: the mirror has no household column). */
     override suspend fun activeDeviceOf(uid: UserId, householdId: HouseholdId): DeviceId? {
@@ -232,7 +235,11 @@ class RoomOnboardingHousehold @Inject constructor(
         }
     }
 
-    override suspend fun startParentSetup(householdId: HouseholdId) = parentSetup.start(householdId)
+    override suspend fun startParentSetup(householdId: HouseholdId, currency: Currency.Fiat?) =
+        parentSetup.start(householdId, currency)
+
+    override suspend fun parentSetupCurrency(householdId: HouseholdId): Currency.Fiat? =
+        parentSetup.currencyFor(householdId)
 
     override suspend fun finishParentSetup() = parentSetup.finish()
 
@@ -267,6 +274,8 @@ class LockParentSigningSetup @Inject constructor(
 
         ParentKeyChangeResult.Cancelled -> SigningSetupResult.CANCELLED
 
+        ParentKeyChangeResult.PolicyNotSynced -> SigningSetupResult.POLICY_NOT_SYNCED
+
         ParentKeyChangeResult.NotRegistered, ParentKeyChangeResult.NotAllowed, ParentKeyChangeResult.Failed ->
             SigningSetupResult.FAILED
     }
@@ -281,6 +290,12 @@ class FunctionsParentKeyRegistrar @Inject constructor(private val functions: Hou
     override suspend fun register(publicKey: ByteArray, attestationChain: List<ByteArray>): Result<Unit> =
         functions.registerParentKey(publicKey, attestationChain).map { }.mapFunctionsFailure()
 }
+
+/**
+ * True only for a sync that ran and completed without an error. Null (the sync could not run at all: stopped, paused,
+ * a store failure) is not a pull, so nothing that waits for one (the policy recovery, D-REL-14) may act on it.
+ */
+internal fun SyncReport?.completed(): Boolean = this != null && error == null
 
 private fun <T> Result<T>.mapAuthFailure(): Result<T> = recoverCatching { failure ->
     val error = (failure as? AuthException)?.error

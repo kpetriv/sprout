@@ -101,6 +101,14 @@ object ParentHomePreviewData {
         ),
     )
 
+    /** A synced household whose policy this parent phone does not have (D-REL-14). */
+    fun policyMissing(): ParentHomeUiState.Ready = empty().copy(
+        household = HouseholdStatus(
+            sync = SyncLine(Instant.parse("2026-11-03T09:41:00Z"), blockedCode = null, failing = false),
+            policyMissing = true,
+        ),
+    )
+
     /** Key of the skipped allowance in [needsAttention]. */
     const val SKIPPED_KEY: String = "allowance/leo-weekly/2026-W30"
 

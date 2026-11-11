@@ -141,6 +141,9 @@ sealed interface RegisterError {
     /** The fingerprint prompt was dismissed; nothing changed. */
     data object Cancelled : RegisterError
 
+    /** This phone has not synced the household policy yet (D-REL-15); no prompt was shown, nothing changed. */
+    data object PolicyNotSynced : RegisterError
+
     data object Failed : RegisterError
 }
 
@@ -447,6 +450,8 @@ internal fun SigningKeyOutcome.toRegisterError(): RegisterError? = when (this) {
     is SigningKeyOutcome.LockedOut -> decision.toRegisterError(wrongPin = false)
 
     SigningKeyOutcome.Cancelled -> RegisterError.Cancelled
+
+    SigningKeyOutcome.PolicyNotSynced -> RegisterError.PolicyNotSynced
 
     // The card's state was stale; the refresh after the call shows the right action.
     SigningKeyOutcome.AlreadyOn, SigningKeyOutcome.NotRegistered, SigningKeyOutcome.Failed -> RegisterError.Failed

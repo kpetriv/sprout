@@ -86,6 +86,14 @@ class FakeShellPreferences : dev.kpetriv.sprout.sync.ShellPreferences {
         parentSetup = digest
     }
 
+    var setupCurrency: String? = null
+
+    override fun parentSetupCurrency(): String? = setupCurrency
+
+    override fun setParentSetupCurrency(code: String?) {
+        setupCurrency = code
+    }
+
     override fun removal(): dev.kpetriv.sprout.sync.Removal? = storedRemoval
 
     override fun setRemoval(removal: dev.kpetriv.sprout.sync.Removal?) {
@@ -103,6 +111,7 @@ class FakeShellPreferences : dev.kpetriv.sprout.sync.ShellPreferences {
         wipes += 1
         linkedDigest = null
         parentSetup = null
+        setupCurrency = null
         firstPulls.clear()
         digestKey = ByteArray(dev.kpetriv.sprout.sync.ShellPreferences.DIGEST_KEY_BYTES) { (wipes + 1).toByte() }
     }

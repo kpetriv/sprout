@@ -58,6 +58,7 @@
   <string name="feature_onboarding_signing_wrong_pin">Wrong PIN</string>
   <string name="feature_onboarding_signing_locked_out">Too many wrong PINs. Try again later.</string>
   <string name="feature_onboarding_signing_cancelled">The fingerprint prompt was closed. Enter the PIN to try again.</string>
+  <string name="feature_onboarding_signing_policy_not_synced">Waiting for the household policy to sync. Try again in a moment, or choose Later.</string>
   <string name="feature_onboarding_signing_failed">Couldn’t turn on signing. Enter the PIN to try again.</string>
 
   <!-- Failures -->

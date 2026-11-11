@@ -108,6 +108,18 @@ class FakeParentKeyRegistry : ParentKeyRegistry {
         replacements++
     }
 
+    /** What [householdPolicyReady] answers (D-REL-15); asked counts the calls. */
+    @Volatile
+    var policyReady = true
+
+    var policyChecks = 0
+        private set
+
+    override suspend fun householdPolicyReady(): Boolean {
+        policyChecks++
+        return policyReady
+    }
+
     override suspend fun recordSigningUnavailable() {
         signingUnavailableRecorded = true
     }

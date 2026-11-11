@@ -89,6 +89,17 @@ class SigningSetupViewModelTest {
     }
 
     @Test
+    fun `a household policy not synced yet is said so and the step stays usable`() {
+        val signing = FakeSigning()
+        signing.results += SigningSetupResult.POLICY_NOT_SYNCED
+        val viewModel = SigningSetupViewModel(signing)
+        viewModel.type("246813")
+        assertEquals(SigningSetupResult.POLICY_NOT_SYNCED, viewModel.state.value.error)
+        assertEquals(0, viewModel.state.value.rejections, "the PIN was never checked (D-REL-15)")
+        assertFalse(viewModel.state.value.done)
+    }
+
+    @Test
     fun `an exception from enrolment reads as failed and the step stays usable`() {
         val signing = FakeSigning()
         signing.failure = IllegalStateException("keystore")

@@ -58,6 +58,15 @@ interface ShellPreferences {
 
     fun setParentSetupPending(digest: String?)
 
+    /**
+     * The ISO 4217 code the parent chose when this phone created the household whose setup is pending (D-REL-14): the
+     * creating phone recreates its policy from it if the policy was lost before it was stored or pushed. Not personal
+     * data. Null when this phone did not create the household.
+     */
+    fun parentSetupCurrency(): String?
+
+    fun setParentSetupCurrency(code: String?)
+
     /** The removal under way or finished but not yet acknowledged; null when there is none. */
     fun removal(): Removal?
 
@@ -71,7 +80,8 @@ interface ShellPreferences {
     fun digestOf(householdId: HouseholdId, uid: UserId? = null): String
 
     /**
-     * After a wipe: forgets the linked account, the first pull and the pending parent setup, and replaces the digest
+     * After a wipe: forgets the linked account, the first pull and the pending parent setup (with its currency), and
+     * replaces the digest
      * key. Keeps [wasLinked] and the [removal] (the removed screen still needs it).
      */
     fun wipe()
@@ -118,6 +128,10 @@ class SharedShellPreferences @Inject constructor(@param:ApplicationContext priva
 
     override fun setParentSetupPending(digest: String?) = commit { putString(PARENT_SETUP, digest) }
 
+    override fun parentSetupCurrency(): String? = preferences.getString(PARENT_SETUP_CURRENCY, null)
+
+    override fun setParentSetupCurrency(code: String?) = commit { putString(PARENT_SETUP_CURRENCY, code) }
+
     override fun removal(): Removal? {
         val reason = preferences.getString(REMOVAL, null)?.let { name ->
             RemovalReason.entries.firstOrNull { it.name == name }
@@ -138,6 +152,7 @@ class SharedShellPreferences @Inject constructor(@param:ApplicationContext priva
             remove(LINKED_ACCOUNT)
             remove(FIRST_PULL)
             remove(PARENT_SETUP)
+            remove(PARENT_SETUP_CURRENCY)
             putString(DIGEST_KEY, newKey())
         }
     }
@@ -174,6 +189,7 @@ class SharedShellPreferences @Inject constructor(@param:ApplicationContext priva
         const val LINKED_ACCOUNT = "linked_account"
         const val FIRST_PULL = "first_pull"
         const val PARENT_SETUP = "parent_setup_pending"
+        const val PARENT_SETUP_CURRENCY = "parent_setup_currency"
         const val REMOVAL = "removal"
         const val WIPED = "removal_wiped"
         const val DIGEST_KEY = "digest_key"

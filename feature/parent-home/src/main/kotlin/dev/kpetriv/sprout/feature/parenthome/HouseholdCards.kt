@@ -29,13 +29,16 @@ import kotlin.time.Instant
 import kotlin.time.toJavaInstant
 
 /**
- * The household cards at the top of the dashboard (M3 §6): trial banner, sync line, the unregistered signing key
- * (D-M3-39), fingerprint signing off (D-M3-46), new devices, refused events.
+ * The household cards at the top of the dashboard (M3 §6): trial banner, sync line, the household policy not synced
+ * (D-REL-14), the unregistered signing key (D-M3-39), fingerprint signing off (D-M3-46), new devices, refused events.
+ * The security cards (policy, signing key, signing off, new device) use the error container, as Settings does for the
+ * same states, so they stay noticeable (D-REL-17, audit N5); the trial banner keeps the calm tertiary container.
  */
 @Composable
 internal fun HouseholdCards(status: HouseholdStatus, links: ParentHomeLinks) {
     if (status.trial) TrialBanner(links.onSetUpSync)
     status.sync?.let { SyncStatusLine(it) }
+    if (status.policyMissing) PolicyMissingCard(links.onRegisterSigningKey)
     if (status.signingKeyNotRegistered) SigningKeyNotRegisteredCard(links.onRegisterSigningKey)
     if (status.signingOff) SigningOffCard(links.onRegisterSigningKey)
     if (status.pendingDevices.isNotEmpty()) NewDevicesCard(status.pendingDevices, links.onReviewDevice)
@@ -43,8 +46,19 @@ internal fun HouseholdCards(status: HouseholdStatus, links: ParentHomeLinks) {
 }
 
 @Composable
+private fun PolicyMissingCard(onSetUp: () -> Unit) {
+    HouseholdCard(stringResource(R.string.feature_parent_home_policy_missing_title), CardTone.WARNING) {
+        Text(
+            stringResource(R.string.feature_parent_home_policy_missing_text),
+            style = MaterialTheme.typography.bodyMedium,
+        )
+        Button(onClick = onSetUp) { Text(stringResource(R.string.feature_parent_home_policy_missing_set_up)) }
+    }
+}
+
+@Composable
 private fun SigningOffCard(onTurnOn: () -> Unit) {
-    HouseholdCard(stringResource(R.string.feature_parent_home_signing_off_title), highlighted = true) {
+    HouseholdCard(stringResource(R.string.feature_parent_home_signing_off_title), CardTone.WARNING) {
         Text(stringResource(R.string.feature_parent_home_signing_off_text), style = MaterialTheme.typography.bodyMedium)
         Button(onClick = onTurnOn) { Text(stringResource(R.string.feature_parent_home_signing_off_turn_on)) }
     }
@@ -52,7 +66,7 @@ private fun SigningOffCard(onTurnOn: () -> Unit) {
 
 @Composable
 private fun SigningKeyNotRegisteredCard(onRetry: () -> Unit) {
-    HouseholdCard(stringResource(R.string.feature_parent_home_signing_key_title), highlighted = true) {
+    HouseholdCard(stringResource(R.string.feature_parent_home_signing_key_title), CardTone.WARNING) {
         Text(stringResource(R.string.feature_parent_home_signing_key_text), style = MaterialTheme.typography.bodyMedium)
         Button(onClick = onRetry) { Text(stringResource(R.string.feature_parent_home_signing_key_retry)) }
     }
@@ -60,7 +74,7 @@ private fun SigningKeyNotRegisteredCard(onRetry: () -> Unit) {
 
 @Composable
 private fun TrialBanner(onSetUpSync: () -> Unit) {
-    HouseholdCard(stringResource(R.string.feature_parent_home_trial_title), highlighted = true) {
+    HouseholdCard(stringResource(R.string.feature_parent_home_trial_title), CardTone.CALM) {
         Text(stringResource(R.string.feature_parent_home_trial_text), style = MaterialTheme.typography.bodyMedium)
         Button(onClick = onSetUpSync) { Text(stringResource(R.string.feature_parent_home_trial_set_up)) }
     }
@@ -96,7 +110,7 @@ private fun SyncStatusLine(sync: SyncLine) {
 
 @Composable
 private fun NewDevicesCard(devices: List<PendingDevice>, onReviewDevice: (DeviceId) -> Unit) {
-    HouseholdCard(stringResource(R.string.feature_parent_home_devices_title), highlighted = true) {
+    HouseholdCard(stringResource(R.string.feature_parent_home_devices_title), CardTone.WARNING) {
         Text(stringResource(R.string.feature_parent_home_devices_text), style = MaterialTheme.typography.bodyMedium)
         devices.forEach { device ->
             Row(
@@ -144,15 +158,32 @@ private fun RejectedEventsCard(rejected: List<RejectedEvent>) {
     }
 }
 
+/** How a household card stands out. */
+private enum class CardTone {
+    /** The default card colours (refused events). */
+    PLAIN,
+
+    /** Something to do that is not about security (the trial banner): the tertiary container. */
+    CALM,
+
+    /** A security state (signing off or unregistered, a phone waiting for approval, no policy): the error container. */
+    WARNING,
+}
+
 @Composable
-private fun HouseholdCard(title: String, highlighted: Boolean = false, content: @Composable () -> Unit) {
-    val colors = if (highlighted) {
-        CardDefaults.cardColors(
+private fun HouseholdCard(title: String, tone: CardTone = CardTone.PLAIN, content: @Composable () -> Unit) {
+    val colors = when (tone) {
+        CardTone.PLAIN -> CardDefaults.cardColors()
+
+        CardTone.CALM -> CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.tertiaryContainer,
             contentColor = MaterialTheme.colorScheme.onTertiaryContainer,
         )
-    } else {
-        CardDefaults.cardColors()
+
+        CardTone.WARNING -> CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.errorContainer,
+            contentColor = MaterialTheme.colorScheme.onErrorContainer,
+        )
     }
     Card(modifier = Modifier.fillMaxWidth(), colors = colors) {
         Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {

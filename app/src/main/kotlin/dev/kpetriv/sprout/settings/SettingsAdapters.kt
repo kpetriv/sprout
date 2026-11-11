@@ -20,6 +20,8 @@ import dev.kpetriv.sprout.feature.settings.ParentKeyRegistrar
 import dev.kpetriv.sprout.feature.settings.PinChangeOutcome
 import dev.kpetriv.sprout.feature.settings.PinChanger
 import dev.kpetriv.sprout.feature.settings.SigningKeyOutcome
+import dev.kpetriv.sprout.household.HouseholdPolicyRecovery
+import dev.kpetriv.sprout.household.PolicyReadiness
 import kotlinx.coroutines.flow.StateFlow
 import javax.inject.Inject
 import dev.kpetriv.sprout.feature.onboarding.ParentKeyRegistrar as BackendParentKeyRegistrar
@@ -76,6 +78,7 @@ class LockParentKeyRegistrar @Inject constructor(
 /** Maps `feature/lock`'s key-change result onto the settings port's. */
 internal fun ParentKeyChangeResult.toOutcome(): SigningKeyOutcome = when (this) {
     ParentKeyChangeResult.Registered -> SigningKeyOutcome.Registered
+    ParentKeyChangeResult.PolicyNotSynced -> SigningKeyOutcome.PolicyNotSynced
     is ParentKeyChangeResult.Unavailable -> SigningKeyOutcome.Unavailable(availability)
     ParentKeyChangeResult.AlreadyRegistered -> SigningKeyOutcome.AlreadyOn
     ParentKeyChangeResult.NotRegistered -> SigningKeyOutcome.NotRegistered
@@ -98,18 +101,31 @@ internal fun ParentKeyChangeResult.toOutcome(): SigningKeyOutcome = when (this) 
  * dashboard and in Settings → Security with a retry that renews the key (D-M3-39); other devices learn a key only
  * from the registry.
  */
+@Suppress("LongParameterList") // The policy, its use case and recovery, the currency, the session and the backend.
 class HouseholdParentKeyRegistry @Inject constructor(
     private val policies: HouseholdPolicyRepository,
     private val useCase: RegisterParentKeyUseCase,
     private val currency: FiatCurrencyProvider,
     private val sessions: SessionStore,
     private val registrar: BackendParentKeyRegistrar,
+    private val recovery: HouseholdPolicyRecovery,
 ) : ParentKeyRegistry {
     override suspend fun registeredParentKey(): PublicKeyBytes? = policies.get()?.parentPublicKey?.let(::PublicKeyBytes)
 
+    /**
+     * Present, or recoverable after a clean pull with no policy anywhere ([HouseholdPolicyRecovery], D-REL-14 and
+     * D-REL-15); asked by the enrolment before the PIN check and the fingerprint prompt.
+     */
+    override suspend fun householdPolicyReady(): Boolean = recovery.readiness() != PolicyReadiness.NotSynced
+
+    /**
+     * Registers the key; a real household without its policy row recovers it in the same write with the currency
+     * [householdPolicyReady] just read from the server, and only then (the repository refuses otherwise).
+     */
     override suspend fun registerParentKey(publicKey: PublicKeyBytes, attestationChain: List<ByteArray>) {
         check(policies.get()?.hasParentKey != true) { "A parent key is already registered" }
-        useCase.register(publicKey.encoded)
+        val recovered = sessions.get()?.takeUnless { it.isLocalTrial }?.let { recovery.takeRecovered(it.householdId) }
+        useCase.register(publicKey.encoded, recovered)
         publish(publicKey, attestationChain)
     }
 

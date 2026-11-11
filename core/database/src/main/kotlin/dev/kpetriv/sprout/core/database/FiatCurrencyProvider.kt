@@ -46,6 +46,14 @@ class HouseholdFiatCurrencyProvider @Inject constructor(
 
     override fun observeFiatCurrency(): Flow<Currency.Fiat> = policies.observe().map(::remember).distinctUntilChanged()
 
+    /**
+     * Forgets the last value seen (D-REL-20): called when this phone's household rows are removed (a wipe, or another
+     * account's rows cleared before a sign-in), so [fiatCurrency] never answers with a previous household's currency.
+     */
+    fun forget() {
+        known = null
+    }
+
     private fun remember(policy: HouseholdPolicy?): Currency.Fiat {
         known = policy?.fiatCurrency
         return policy?.fiatCurrency ?: locale.fiatCurrency()

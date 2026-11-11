@@ -387,7 +387,21 @@ class FakeBackend(val householdId: HouseholdId, private val pageSize: Int = DEFA
         return Result.success(PruneCounts(doomed.size, chunks.size))
     }
 
+    /**
+     * The currency `createHousehold` stored on the household root document (server `households/{hid}.fiatCurrency`);
+     * null for a root without one. Read by [householdRoot] (D-REL-14).
+     */
+    @Volatile
+    var fiatCurrency: String? = null
+
     // ---- what transports call ----
+
+    /** The server's household root as [SyncTransport.householdRoot] reads it. */
+    @Synchronized
+    internal fun householdRoot(caller: Caller): HouseholdRoot {
+        checkReachable(caller.deviceId)
+        return HouseholdRoot(fiatCurrency, document(DocTypes.HOUSEHOLD_POLICY, householdId.value) != null)
+    }
 
     @Synchronized
     internal fun isAvailable(caller: DeviceId): Boolean = !gone && caller !in partitioned

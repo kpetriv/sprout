@@ -52,7 +52,7 @@ class HouseholdBootstrap @Inject constructor(
     private val targets: HouseholdSeedTargets,
     private val sessions: SessionStore,
     private val signer: DeviceSigner,
-    private val currency: FiatCurrencyProvider,
+    private val currency: LocaleFiatCurrencyProvider,
     private val clock: Clock,
     private val calendar: HouseholdCalendar,
 ) {
@@ -80,6 +80,8 @@ class HouseholdBootstrap @Inject constructor(
     private suspend fun seed(): Boolean = database.withTransaction {
         if (database.kidDao().count() > 0) return@withTransaction false
         val today = calendar.today()
+        // The trial household's currency is the locale's, read directly: the household provider would answer with a
+        // previous household's policy until it reads storage again (review Low, D-REL-20).
         val fiat = currency.fiatCurrency()
         targets.policies.ensure(fiat)
         val seeded = DEMO_KIDS.mapIndexed { index, (name, age) ->

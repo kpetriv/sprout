@@ -101,6 +101,12 @@ sealed interface SigningKeyOutcome {
     /** The fingerprint prompt was dismissed. */
     data object Cancelled : SigningKeyOutcome
 
+    /**
+     * Refused before the PIN check and the fingerprint prompt: this phone has not synced the household policy yet
+     * (D-REL-15). Nothing changed.
+     */
+    data object PolicyNotSynced : SigningKeyOutcome
+
     /** The parent session is not unlocked, or storage, Keystore or the prompt failed. Nothing changed. */
     data object Failed : SigningKeyOutcome
 }

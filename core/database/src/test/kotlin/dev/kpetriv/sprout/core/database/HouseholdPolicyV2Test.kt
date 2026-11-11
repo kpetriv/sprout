@@ -1,6 +1,7 @@
 package dev.kpetriv.sprout.core.database
 
 import dev.kpetriv.sprout.core.database.entity.AuditAction
+import dev.kpetriv.sprout.core.database.entity.DocumentInboxEntity
 import dev.kpetriv.sprout.core.domainledger.Currency
 import dev.kpetriv.sprout.core.domainledger.GameCreditResult
 import dev.kpetriv.sprout.core.domainledger.LedgerAnomaly
@@ -79,6 +80,52 @@ class HouseholdPolicyV2Test {
         } finally {
             fresh.close()
         }
+    }
+
+    @Test
+    fun aHouseholdWhosePolicyWasNeverPushedIsRecoveredWithTheServersCurrencyAndSignaturesOn() = runTest {
+        // D-REL-14: the creating phone died before its outbox pushed the policy; the caller read the server's currency.
+        val fresh = parentDevice()
+        try {
+            val chf = Currency.Fiat("CHF")
+            val key = fresh.parentAuthorizer.createParentKey().encoded
+            val policy = fresh.registerKey.register(key, recoveredCurrency = chf)
+
+            assertEquals(chf, policy.fiatCurrency)
+            assertTrue(policy.requireParentSignature)
+            assertEquals(chf, fresh.policies.get()?.fiatCurrency)
+            val published = policyDocument(fresh)
+            assertEquals("CHF", published.payload["fiatCurrency"]?.jsonPrimitive?.content)
+            assertEquals(true, published.payload["requireParentSignature"]?.jsonPrimitive?.content?.toBoolean())
+        } finally {
+            fresh.close()
+        }
+    }
+
+    @Test
+    fun aHeldPolicyIsNeverRecoveredOver() = runTest {
+        val fresh = parentDevice()
+        try {
+            fresh.database.documentInboxDao().upsert(
+                DocumentInboxEntity(DocTypes.HOUSEHOLD_POLICY, HOME.value, "{}", "UNKNOWN_DEVICE", 0L),
+            )
+            assertTrue(fresh.policies.policyHeld())
+            val key = fresh.parentAuthorizer.createParentKey().encoded
+            assertFailsWith<NoHouseholdPolicyYetException> {
+                fresh.registerKey.register(key, recoveredCurrency = Currency.Fiat("CHF"))
+            }
+            assertNull(fresh.policies.get())
+            assertEquals(0, fresh.database.outboxDao().count(), "nothing queued")
+        } finally {
+            fresh.close()
+        }
+    }
+
+    @Test
+    fun aRecoveredCurrencyNeverReplacesAnExistingPolicy() = runTest {
+        val key = parent.parentAuthorizer.createParentKey().encoded
+        val policy = parent.registerKey.register(key, recoveredCurrency = Currency.Fiat("CHF"))
+        assertEquals(parent.gbp, policy.fiatCurrency)
     }
 
     private suspend fun policyDocument(on: TestHousehold) =

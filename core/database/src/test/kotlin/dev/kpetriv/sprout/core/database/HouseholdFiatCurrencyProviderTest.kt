@@ -34,4 +34,15 @@ class HouseholdFiatCurrencyProviderTest {
         assertEquals(phone.gbp, provider.currentFiatCurrency())
         assertEquals(phone.gbp, provider.fiatCurrency(), "the non-blocking read answers with the last value seen")
     }
+
+    @Test
+    fun aRemovedHouseholdsCurrencyIsForgotten() = runTest {
+        phone.policies.ensure(phone.gbp)
+        assertEquals(phone.gbp, provider.currentFiatCurrency())
+
+        // The household's rows are removed (a wipe, a sign-in of another account): D-REL-20.
+        provider.forget()
+
+        assertEquals(eur, provider.fiatCurrency(), "never the previous household's currency")
+    }
 }

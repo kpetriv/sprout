@@ -185,7 +185,10 @@ class ChoreEditorViewModel @Inject constructor(
     val state: StateFlow<ChoreEditorUiState> = mutableState.asStateFlow()
 
     init {
-        viewModelScope.launch { load() }
+        viewModelScope.launch {
+            load()
+            followCurrency()
+        }
     }
 
     fun onEvent(event: ChoreEditorEvent) {
@@ -272,6 +275,33 @@ class ChoreEditorViewModel @Inject constructor(
                 }
             }
         }
+    }
+
+    /**
+     * The form follows the household's currency after loading (D-REL-19): a pull that brings the policy while the
+     * editor is open switches it, so amounts are never parsed with another currency's decimals (a 100× reward). An
+     * existing chore's amount shown untouched is rewritten in the new decimals; text the parent typed is kept, and
+     * read in the new currency's units.
+     */
+    private suspend fun followCurrency() {
+        attempt { fiat.observeFiatCurrency().collect { currency -> switchCurrency(currency) } }
+    }
+
+    private fun switchCurrency(currency: Currency.Fiat) = edit { current ->
+        if (current.currency == currency) return@edit current
+        val money = existing?.reward?.money
+        val untouched = money != null && current.moneyText == amountText(money, current.currency.fractionDigits)
+        current.copy(
+            currency = currency,
+            moneyText = if (untouched) {
+                amountText(
+                    requireNotNull(money),
+                    currency.fractionDigits,
+                )
+            } else {
+                current.moneyText
+            },
+        )
     }
 
     private fun suggest() {

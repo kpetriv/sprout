@@ -61,7 +61,7 @@ class KidAndAccountRepositoryTest {
         targets,
         sessions,
         signer,
-        { gbp },
+        LocaleFiatCurrencyProvider { Locale.UK },
         clock,
         HouseholdCalendar(clock) { ZoneOffset.UTC },
     )

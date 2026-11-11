@@ -53,6 +53,13 @@ sealed interface ParentKeyChangeResult {
     /** The parent session is not unlocked. */
     data object NotAllowed : ParentKeyChangeResult
 
+    /**
+     * Enrolment refused before the PIN check and the proof prompt: this phone has not synced the household policy the
+     * key is registered in, and it cannot be recovered yet ([ParentKeyRegistry.householdPolicyReady], D-REL-15). The
+     * screens say they are waiting for the household policy to sync. Nothing was created or registered.
+     */
+    data object PolicyNotSynced : ParentKeyChangeResult
+
     /** The parent dismissed the proof prompt. No key was kept. */
     data object Cancelled : ParentKeyChangeResult
 
@@ -181,7 +188,10 @@ internal class ParentKeyProvisioner @Inject constructor(
     private suspend fun provisionLocked(pin: CharArray, renew: Boolean): ParentKeyChangeResult =
         refusal(pin, renew) ?: createProveAndRegister(renew)
 
-    /** Why the key must not change now, or null once the PIN is verified. Caller holds [mutex]. */
+    /**
+     * Why the key must not change now, or null once the PIN is verified. The checks that need no PIN come first:
+     * availability, the registered key and the household policy. Caller holds [mutex].
+     */
     private suspend fun refusal(pin: CharArray, renew: Boolean): ParentKeyChangeResult? {
         val availability = authorizer.availability()
         val available = availability == ParentAuthAvailability.STRONG_BIOMETRIC_AVAILABLE
@@ -196,15 +206,23 @@ internal class ParentKeyProvisioner @Inject constructor(
 
             renew && registered == null -> ParentKeyChangeResult.NotRegistered
 
-            else -> when (val check = session.verifyPinForKeyChange(pin)) {
-                KeyChangePinCheck.Verified -> null
-                is KeyChangePinCheck.Wrong -> ParentKeyChangeResult.WrongPin(check.next)
-                is KeyChangePinCheck.LockedOut -> ParentKeyChangeResult.LockedOut(check.decision)
-                KeyChangePinCheck.NotAllowed -> ParentKeyChangeResult.NotAllowed
-                KeyChangePinCheck.Unavailable -> ParentKeyChangeResult.Failed
-            }
+            // Before the PIN check, the challenge, the key and the prompt: a registration bound to be refused never
+            // asks for a fingerprint (D-REL-15). A renewal replaces a registered key, so its policy is there.
+            !renew && !registry.householdPolicyReady() -> ParentKeyChangeResult.PolicyNotSynced
+
+            else -> pinRefusal(pin)
         }
     }
+
+    /** Null once [pin] is verified for a key change; otherwise why not. */
+    private suspend fun pinRefusal(pin: CharArray): ParentKeyChangeResult? =
+        when (val check = session.verifyPinForKeyChange(pin)) {
+            KeyChangePinCheck.Verified -> null
+            is KeyChangePinCheck.Wrong -> ParentKeyChangeResult.WrongPin(check.next)
+            is KeyChangePinCheck.LockedOut -> ParentKeyChangeResult.LockedOut(check.decision)
+            KeyChangePinCheck.NotAllowed -> ParentKeyChangeResult.NotAllowed
+            KeyChangePinCheck.Unavailable -> ParentKeyChangeResult.Failed
+        }
 
     /** After a verified PIN. Caller holds [mutex]. */
     private suspend fun createProveAndRegister(renew: Boolean): ParentKeyChangeResult {

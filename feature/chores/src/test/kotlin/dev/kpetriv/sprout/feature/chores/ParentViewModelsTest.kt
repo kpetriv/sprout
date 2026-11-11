@@ -145,6 +145,51 @@ class ChoreEditorViewModelTest {
     }
 
     @Test
+    fun `an open editor switches to the household's currency when the policy is pulled`() = runTest {
+        // A German phone (EUR) restored into a yen household, editing before its first pull (D-REL-19).
+        val policies = FakeHouseholdPolicies()
+        chores.chores.value = listOf(TestData.chore("c1", "kid-leo", "Wash car", money = 150))
+        val viewModel = ChoreEditorViewModel(
+            savedStateHandle = SavedStateHandle(mapOf(ChoreEditorViewModel.CHORE_ID_KEY to "c1")),
+            chores = chores,
+            kids = kids,
+            fiat = householdCurrency(policies),
+            clock = TestData.clock(),
+            calendar = TestData.calendar(),
+            suggestions = suggestions,
+        )
+        assertEquals(Currency.Fiat("EUR"), viewModel.state.value.currency)
+        assertEquals("1.50", viewModel.state.value.moneyText)
+
+        policies.pulled(Currency.Fiat("JPY"))
+
+        assertEquals(Currency.Fiat("JPY"), viewModel.state.value.currency)
+        assertEquals("150", viewModel.state.value.moneyText, "the stored amount, in the new decimals")
+        viewModel.onEvent(ChoreEditorEvent.Save)
+        assertEquals(Money(150), chores.chores.value.single { it.id == ChoreId("c1") }.reward.money, "never 100x")
+    }
+
+    @Test
+    fun `typed text is kept and read in the currency that arrived`() = runTest {
+        val policies = FakeHouseholdPolicies()
+        val viewModel = ChoreEditorViewModel(
+            savedStateHandle = SavedStateHandle(mapOf(ChoreEditorViewModel.KID_ID_KEY to "kid-leo")),
+            chores = chores,
+            kids = kids,
+            fiat = householdCurrency(policies),
+            clock = TestData.clock(),
+            calendar = TestData.calendar(),
+            suggestions = suggestions,
+        )
+        viewModel.onEvent(ChoreEditorEvent.MoneyChanged("3"))
+
+        policies.pulled(Currency.Fiat("JPY"))
+
+        assertEquals("3", viewModel.state.value.moneyText)
+        assertEquals(Currency.Fiat("JPY"), viewModel.state.value.currency)
+    }
+
+    @Test
     fun `kid options carry this month's age band`() = runTest {
         kids.kids.value = listOf(
             TestData.kid("kid-leo", "Leo"),

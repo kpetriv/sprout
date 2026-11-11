@@ -36,6 +36,8 @@ class ColorSchemeContrastTest {
         "primaryContainer" to (scheme.onPrimaryContainer to scheme.primaryContainer),
         "secondaryContainer" to (scheme.onSecondaryContainer to scheme.secondaryContainer),
         "tertiaryContainer" to (scheme.onTertiaryContainer to scheme.tertiaryContainer),
+        // The dashboard's security cards and Settings' security states (D-REL-17).
+        "errorContainer" to (scheme.onErrorContainer to scheme.errorContainer),
         "surface" to (scheme.onSurface to scheme.surface),
     )
 
