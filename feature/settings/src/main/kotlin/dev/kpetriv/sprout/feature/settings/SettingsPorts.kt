@@ -59,6 +59,37 @@ enum class NewPinProblem {
 }
 
 /**
+ * "Restore household settings" (D-REL-22, audit M1): a real household whose policy exists nowhere (its creating phone
+ * was lost before the policy was pushed) gets it back from a parent phone without a strong biometric, which cannot
+ * recover it through fingerprint signing. The app adapts `HouseholdPolicyRecovery`: [check] runs the same checks as the
+ * recovery at key registration (one clean pull, nothing held, no policy document on the server, the household's own
+ * currency), [restore] writes the policy with that currency and parent signatures off. Settings asks the parent to
+ * confirm ([ParentConfirmation], the PIN on such a phone) between the two, as for the other policy writes (D-M7-17).
+ */
+interface HouseholdSettingsRestorer {
+    /** True while this phone is an ACTIVE parent phone of a real household without its household policy row. */
+    fun observeNeeded(): Flow<Boolean>
+
+    /** Whether the policy can be restored now. May sync and read the server (bounded, about 20 s). */
+    suspend fun check(): RestoreCheck
+
+    /** Writes the policy [check] found restorable; true when this phone has the policy afterwards. */
+    suspend fun restore(): Boolean
+}
+
+/** What [HouseholdSettingsRestorer.check] found. */
+enum class RestoreCheck {
+    /** The household has no policy anywhere and its currency is known: restore after the parent confirms. */
+    READY,
+
+    /** This phone has the policy (it arrived meanwhile): nothing to restore. */
+    PRESENT,
+
+    /** The policy may exist somewhere this phone has not applied yet, or the check could not complete: wait. */
+    NOT_SYNCED,
+}
+
+/**
  * Fingerprint signing for this device (audit H1, H2, M1). The app adapts `feature/lock`'s PIN-gated
  * `ParentKeyEnrolment` and `ParentKeyRenewal`: each call needs the parent PIN, verified under the PIN lockout, then
  * creates the parent key, proves it with one fingerprint prompt, and registers it with the household policy (which
@@ -216,6 +247,9 @@ enum class ConfirmationPurpose {
 
     /** Changing the daily game limit, which re-decides what games earned (D-M7-11). */
     CHANGE_GAME_CAP,
+
+    /** Restoring a household policy that exists nowhere, with parent signatures off (D-REL-22). */
+    RESTORE_HOUSEHOLD_SETTINGS,
 }
 
 enum class ConfirmationOutcome {

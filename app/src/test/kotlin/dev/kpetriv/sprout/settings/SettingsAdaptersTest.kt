@@ -19,13 +19,16 @@ import dev.kpetriv.sprout.feature.lock.ParentKeyChangeResult
 import dev.kpetriv.sprout.feature.lock.PinRuleViolation
 import dev.kpetriv.sprout.feature.settings.NewPinProblem
 import dev.kpetriv.sprout.feature.settings.PinChangeOutcome
+import dev.kpetriv.sprout.feature.settings.RestoreCheck
 import dev.kpetriv.sprout.feature.settings.SigningKeyOutcome
 import dev.kpetriv.sprout.household.HouseholdPolicyRecovery
 import dev.kpetriv.sprout.household.PolicyReadiness
+import dev.kpetriv.sprout.kidSession
 import dev.kpetriv.sprout.parentSession
 import dev.kpetriv.sprout.trialSession
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.runTest
 import org.junit.Test
 import kotlin.test.assertEquals
@@ -125,6 +128,37 @@ class SettingsAdaptersTest {
         registry.registerParentKey(authorizer.createParentKey(), emptyList())
         assertNull(policies.recovered)
     }
+
+    @Test
+    fun `settings offers the restore only to an active parent phone of a real household without the policy`() =
+        runTest {
+            val restorer = RecoveryHouseholdSettingsRestorer(sessions, policies, recovery)
+            assertFalse(restorer.observeNeeded().first(), "the trial creates its own policy")
+            sessions.session.value = kidSession()
+            assertFalse(restorer.observeNeeded().first())
+            sessions.session.value = parentSession(status = RegistrationStatus.PENDING)
+            assertFalse(restorer.observeNeeded().first())
+
+            sessions.session.value = parentSession()
+            assertTrue(restorer.observeNeeded().first())
+
+            root = Result.success(HouseholdRoot("CHF", policyStored = true))
+            assertEquals(
+                RestoreCheck.NOT_SYNCED,
+                restorer.check(),
+                "the server holds a policy this phone has not applied",
+            )
+            assertFalse(restorer.restore(), "nothing found restorable")
+            assertNull(policies.policy.value)
+
+            root = Result.success(HouseholdRoot("CHF", policyStored = false))
+            assertEquals(RestoreCheck.READY, restorer.check())
+            assertTrue(restorer.restore())
+            assertEquals(Currency.Fiat("CHF"), policies.policy.value?.fiatCurrency)
+            assertFalse(policies.policy.value!!.requireParentSignature, "signatures off: no key on this phone")
+            assertFalse(restorer.observeNeeded().first())
+            assertEquals(RestoreCheck.PRESENT, restorer.check())
+        }
 
     @Test
     fun `a pull that brings the policy needs no recovery`() = runTest {
@@ -256,15 +290,19 @@ class SettingsAdaptersTest {
 }
 
 /** The household policy in memory; no policy until [ensure] or [registerParentKey]. */
-private class InMemoryPolicies(private val currency: Currency.Fiat) : HouseholdPolicyRepository {
+internal class InMemoryPolicies(private val currency: Currency.Fiat) : HouseholdPolicyRepository {
     val policy = MutableStateFlow<HouseholdPolicy?>(null)
 
     override fun observe(): Flow<HouseholdPolicy?> = policy
 
     override suspend fun get(): HouseholdPolicy? = policy.value
 
+    /** How many policies [ensure] created. */
+    var ensured = 0
+
     override suspend fun ensure(fiatCurrency: Currency.Fiat): HouseholdPolicy =
         policy.value ?: HouseholdPolicy(false, null, null, fiatCurrency, Instant.fromEpochMilliseconds(0)).also {
+            ensured += 1
             policy.value = it
         }
 

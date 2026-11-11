@@ -108,6 +108,7 @@ internal fun ConfirmationPurpose.reason(): Int = when (this) {
     ConfirmationPurpose.DELETE_CHAT_HISTORY -> R.string.confirm_reason_delete_chat
     ConfirmationPurpose.CHANGE_CHAT_RETENTION -> R.string.confirm_reason_retention
     ConfirmationPurpose.CHANGE_GAME_CAP -> R.string.confirm_reason_game_cap
+    ConfirmationPurpose.RESTORE_HOUSEHOLD_SETTINGS -> R.string.confirm_reason_restore_settings
 }
 
 /**

@@ -56,6 +56,8 @@ import dev.kpetriv.sprout.feature.onboarding.RegistrationKey
 import dev.kpetriv.sprout.feature.onboarding.RegistryStatus
 import dev.kpetriv.sprout.feature.onboarding.SigningSetupResult
 import dev.kpetriv.sprout.household.HouseholdAdminFunctions
+import dev.kpetriv.sprout.household.HouseholdPolicyRecovery
+import dev.kpetriv.sprout.household.PolicyReadiness
 import dev.kpetriv.sprout.sync.HouseholdRemovals
 import dev.kpetriv.sprout.sync.LocalHouseholdRows
 import dev.kpetriv.sprout.sync.ParentSetupTracker
@@ -195,6 +197,7 @@ class RoomOnboardingHousehold @Inject constructor(
     private val parentSetup: ParentSetupTracker,
     private val removals: HouseholdRemovals,
     private val localRows: LocalHouseholdRows,
+    private val recovery: HouseholdPolicyRecovery,
 ) : OnboardingHousehold {
     /** A new household's suggested currency: the locale's (the parent picks it; it is then the policy's). */
     override fun defaultCurrency(): Currency.Fiat = currencies.fiatCurrency()
@@ -210,7 +213,9 @@ class RoomOnboardingHousehold @Inject constructor(
         policies.ensure(fiatCurrency)
     }
 
-    override suspend fun hasHouseholdPolicy(): Boolean = policies.get() != null
+    /** [HouseholdPolicyRecovery]: Recoverable, then the policy with the server's currency, signatures off. */
+    override suspend fun recoverHouseholdPolicy(): Boolean =
+        recovery.readiness() is PolicyReadiness.Recoverable && recovery.restoreWithoutKey()
 
     override suspend fun syncNow(): Boolean = sync.syncNow().completed()
 
@@ -235,11 +240,7 @@ class RoomOnboardingHousehold @Inject constructor(
         }
     }
 
-    override suspend fun startParentSetup(householdId: HouseholdId, currency: Currency.Fiat?) =
-        parentSetup.start(householdId, currency)
-
-    override suspend fun parentSetupCurrency(householdId: HouseholdId): Currency.Fiat? =
-        parentSetup.currencyFor(householdId)
+    override suspend fun startParentSetup(householdId: HouseholdId) = parentSetup.start(householdId)
 
     override suspend fun finishParentSetup() = parentSetup.finish()
 

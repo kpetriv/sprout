@@ -144,14 +144,17 @@ interface OnboardingHousehold {
     /** Deletes the trial household's data (`PurgeLocalHouseholdUseCase`, ADR-0004 §2). */
     suspend fun purgeTrialData()
 
-    /**
-     * Creates the household policy document with [fiatCurrency] (a new household, after its session is saved; or the
-     * creating phone's retry after a pull that brought none, D-REL-14).
-     */
+    /** Creates the household policy document with [fiatCurrency] (a new household, after its session is saved). */
     suspend fun ensureHouseholdPolicy(fiatCurrency: Currency.Fiat)
 
-    /** True when this phone has the household policy row. */
-    suspend fun hasHouseholdPolicy(): Boolean
+    /**
+     * Writes the household policy if it exists nowhere (D-REL-14, audit L1): only when this phone has no policy row,
+     * after one more pull that completed without an error, with no pulled policy held for its author and no policy
+     * document on the server, and then with the currency `createHousehold` stored on the household (never a currency
+     * kept on this phone); parent signatures off, as a new household's. The app routes it through the same recovery
+     * as Settings and the key registration. True when it wrote the policy.
+     */
+    suspend fun recoverHouseholdPolicy(): Boolean
 
     /** One sync now; false when it failed. */
     suspend fun syncNow(): Boolean
@@ -168,15 +171,8 @@ interface OnboardingHousehold {
      */
     suspend fun saveSession(session: Session)
 
-    /**
-     * The parent's PIN and signing step for [householdId] has started; it survives a process death (review M4).
-     * [currency] is the one chosen when this phone created the household (D-REL-14), kept with the marker; null keeps
-     * one already kept for the same household.
-     */
-    suspend fun startParentSetup(householdId: HouseholdId, currency: Currency.Fiat? = null)
-
-    /** The currency this phone chose when it created [householdId], while its parent setup is pending; else null. */
-    suspend fun parentSetupCurrency(householdId: HouseholdId): Currency.Fiat?
+    /** The parent's PIN and signing step for [householdId] has started; it survives a process death (review M4). */
+    suspend fun startParentSetup(householdId: HouseholdId)
 
     /** The parent's PIN and signing step finished. */
     suspend fun finishParentSetup()

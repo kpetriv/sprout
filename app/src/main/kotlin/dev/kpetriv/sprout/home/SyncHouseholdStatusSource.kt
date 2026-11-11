@@ -1,5 +1,7 @@
 package dev.kpetriv.sprout.home
 
+import dev.kpetriv.sprout.core.crypto.ParentAuthAvailability
+import dev.kpetriv.sprout.core.crypto.ParentAuthorizer
 import dev.kpetriv.sprout.core.database.HouseholdPolicy
 import dev.kpetriv.sprout.core.database.HouseholdPolicyRepository
 import dev.kpetriv.sprout.core.database.KidRepository
@@ -41,7 +43,9 @@ import javax.inject.Inject
  * through "no key" and "key not registered yet" on the way; only an enrolment that ended leaves a state worth a card.
  * The end of a key change is held back by [KEY_CHANGE_SETTLE_MS] so Room's re-query of its last write lands first
  * (D-REL-16). "Household settings have not synced yet" shows for a parent phone of a real household that has no policy
- * row although a sync completed (D-REL-14).
+ * row although a sync completed (D-REL-14); on a phone without a strong biometric ([ParentAuthorizer.availability],
+ * read with every update) its action is "Restore household settings" with the PIN (D-REL-22). "Fingerprint signing is
+ * off" also shows when the policy does not require parent signatures in a real household (D-REL-26).
  */
 @Suppress("LongParameterList") // One source per card.
 class SyncHouseholdStatusSource @Inject constructor(
@@ -53,6 +57,7 @@ class SyncHouseholdStatusSource @Inject constructor(
     private val kids: KidRepository,
     private val policies: HouseholdPolicyRepository,
     private val keyChanges: ParentKeyChangeProgress,
+    private val authorizer: ParentAuthorizer,
 ) : HouseholdStatusSource {
     override fun observe(): Flow<HouseholdStatus> = combine(
         combine(sessions.observe(), sync.status, outbox.observeBlocked(), ::Triple),
@@ -113,12 +118,18 @@ class SyncHouseholdStatusSource @Inject constructor(
         synced: Boolean,
     ) = copy(
         signingKeyNotRegistered = keyPending && parent,
-        // A real household's parent phone whose policy exists without its parent key (D-M3-46).
-        signingOff = realParent && policy != null && !policy.hasParentKey,
+        // A real household's parent phone whose policy exists without its parent key (D-M3-46), or whose policy does
+        // not require parent signatures (D-REL-26: written before they became one-way, D-REL-23).
+        signingOff = realParent && policy != null && (!policy.hasParentKey || !policy.requireParentSignature),
         // A real household's parent phone with no policy row after a sync that completed (D-REL-14): signatures are
-        // off (the ledger default) and enrolment waits for the policy or recovers it.
+        // off (the ledger default) and enrolment waits for the policy or recovers it; without a strong biometric the
+        // PIN restores it (D-REL-22).
         policyMissing = realParent && policy == null && synced,
+        policyRestoreWithPin = realParent && policy == null && synced && !strongBiometric(),
     )
+
+    private fun strongBiometric(): Boolean =
+        authorizer.availability() == ParentAuthAvailability.STRONG_BIOMETRIC_AVAILABLE
 
     private companion object {
         const val FINGERPRINT_CHARS = 16

@@ -190,7 +190,7 @@ internal class ParentKeyProvisioner @Inject constructor(
 
     /**
      * Why the key must not change now, or null once the PIN is verified. The checks that need no PIN come first:
-     * availability, the registered key and the household policy. Caller holds [mutex].
+     * availability, the registered key, an unlocked session and the household policy. Caller holds [mutex].
      */
     private suspend fun refusal(pin: CharArray, renew: Boolean): ParentKeyChangeResult? {
         val availability = authorizer.availability()
@@ -206,8 +206,12 @@ internal class ParentKeyProvisioner @Inject constructor(
 
             renew && registered == null -> ParentKeyChangeResult.NotRegistered
 
+            // A locked session is refused before any network work, without checking (or counting) a PIN (audit L3).
+            !session.isUnlocked() -> ParentKeyChangeResult.NotAllowed
+
             // Before the PIN check, the challenge, the key and the prompt: a registration bound to be refused never
-            // asks for a fingerprint (D-REL-15). A renewal replaces a registered key, so its policy is there.
+            // asks for a fingerprint (D-REL-15). A renewal replaces a registered key, so its policy is there. The
+            // check is bounded (HouseholdPolicyRecovery answers "not synced" after its timeout).
             !renew && !registry.householdPolicyReady() -> ParentKeyChangeResult.PolicyNotSynced
 
             else -> pinRefusal(pin)

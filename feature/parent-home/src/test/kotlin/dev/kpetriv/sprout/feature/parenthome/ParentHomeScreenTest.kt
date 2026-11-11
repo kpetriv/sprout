@@ -151,6 +151,17 @@ class ParentHomeScreenTest {
     }
 
     @Test
+    fun `without a strong biometric the missing policy card offers the restore with the PIN`() {
+        show(ParentHomePreviewData.policyMissing(restoreWithPin = true))
+
+        compose.onNodeWithText("Household settings have not synced yet").assertIsDisplayed()
+        compose.onNodeWithText("Set up fingerprint signing").assertDoesNotExist()
+        compose.onNodeWithText("Restore household settings").performClick()
+
+        assertEquals(listOf("security"), opened)
+    }
+
+    @Test
     fun `a blocked sync names a human reason, never the server's code`() {
         show(ParentHomePreviewData.syncBlocked())
 

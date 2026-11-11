@@ -103,6 +103,67 @@ class HouseholdPolicyV2Test {
     }
 
     @Test
+    fun aRecoveryQueuesExactlyOnePolicyDocument() = runTest {
+        // D-REL-14: the policy is created and the key registered over it in one transaction, published once.
+        val fresh = parentDevice()
+        try {
+            val key = fresh.parentAuthorizer.createParentKey().encoded
+            fresh.registerKey.register(key, recoveredCurrency = Currency.Fiat("CHF"))
+
+            val policies = fresh.queuedDocuments().filter { it.docType == DocTypes.HOUSEHOLD_POLICY }
+            assertEquals(1, policies.size, "one envelope, with signatures on")
+            assertEquals(true, policies.single().payload["requireParentSignature"]?.jsonPrimitive?.content?.toBoolean())
+        } finally {
+            fresh.close()
+        }
+    }
+
+    @Test
+    fun aKidSessionNeverRecoversThePolicy() = runTest {
+        // The repository's own role check, whatever the caller vouches for (D-REL-14).
+        val fresh = kidDevice()
+        try {
+            val key = fresh.parentAuthorizer.createParentKey().encoded
+            assertFailsWith<NoHouseholdPolicyYetException> {
+                fresh.registerKey.register(key, recoveredCurrency = Currency.Fiat("CHF"))
+            }
+            assertNull(fresh.policies.get())
+            assertEquals(0, fresh.database.outboxDao().count(), "nothing queued")
+        } finally {
+            fresh.close()
+        }
+    }
+
+    @Test
+    fun aRestoreWithoutAKeyWritesThePolicyWithSignaturesOffAndQueuesOneDocument() = runTest {
+        // D-REL-22: "Restore household settings" on a phone without a strong biometric ensures the policy with the
+        // server's currency, exactly as a creating phone without a biometric does.
+        val fresh = parentDevice()
+        try {
+            val chf = Currency.Fiat("CHF")
+            val policy = fresh.policies.ensure(chf)
+
+            assertEquals(chf, policy.fiatCurrency)
+            assertEquals(false, policy.requireParentSignature)
+            assertEquals(false, policy.hasParentKey)
+            val policies = fresh.queuedDocuments().filter { it.docType == DocTypes.HOUSEHOLD_POLICY }
+            assertEquals(1, policies.size)
+            assertEquals("CHF", policies.single().payload["fiatCurrency"]?.jsonPrimitive?.content)
+            assertEquals(
+                false,
+                policies.single().payload["requireParentSignature"]?.jsonPrimitive?.content?.toBoolean(),
+            )
+
+            // A second restore (a retry) finds the row and writes nothing more.
+            fresh.policies.ensure(Currency.Fiat("JPY"))
+            assertEquals(1, fresh.queuedDocuments().count { it.docType == DocTypes.HOUSEHOLD_POLICY })
+            assertEquals(chf, fresh.policies.get()?.fiatCurrency)
+        } finally {
+            fresh.close()
+        }
+    }
+
+    @Test
     fun aHeldPolicyIsNeverRecoveredOver() = runTest {
         val fresh = parentDevice()
         try {

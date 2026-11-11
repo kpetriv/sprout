@@ -15,8 +15,10 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /**
- * The creating phone's household policy (D-REL-14, audit M1): `createHousehold` stores none on the server, so a policy
- * lost on this phone before it was stored is written again from the currency kept with the setup marker, after a pull.
+ * A household policy that exists nowhere (D-REL-14, audit M1 and L1): `createHousehold` stores none on the server, so
+ * a policy lost on the creating phone before it was stored or pushed is recovered after a pull, through the app's
+ * recovery checks (nothing held, no policy document on the server) and with the currency the server stored at
+ * creation, never one kept on this phone.
  */
 class OnboardingCreatedPolicyTest {
     @get:Rule
@@ -47,55 +49,65 @@ class OnboardingCreatedPolicyTest {
     }
 
     @Test
-    fun `the creating phone keeps the chosen currency with the setup marker`() {
+    fun `the creating phone keeps no currency of its own beside the setup marker`() {
         claimsSequence(parentClaims(householdId = null), parentClaims(householdId = null), parentClaims())
         val viewModel = viewModel()
         viewModel.signIn()
         viewModel.onEvent(OnboardingEvent.CurrencyChosen(Currency.Fiat("GBP")))
         viewModel.onEvent(OnboardingEvent.CreateHousehold)
 
-        assertEquals(Currency.Fiat("GBP"), household.setupCurrency, "kept before the session is saved (D-REL-14)")
-        viewModel.onEvent(OnboardingEvent.ParentLockDone)
-        assertNull(household.setupCurrency, "dropped with the marker")
-    }
-
-    @Test
-    fun `a process death between the session and the policy writes the policy after the resumed pull`() {
-        // The creating phone died after saving its session: the policy exists nowhere (D-REL-14, audit M1).
-        sessions.session.value =
-            Session(PARENT_UID, HOUSEHOLD, Role.PARENT, null, NEW_DEVICE, RegistrationStatus.ACTIVE, clock.now())
-        household.setupPending = HOUSEHOLD
-        household.setupCurrency = Currency.Fiat("GBP")
-
-        val viewModel = viewModel()
-
-        assertEquals(listOf("refreshClaims", "sync", "ensurePolicy"), log.calls)
-        assertEquals(Currency.Fiat("GBP"), household.policyCurrency, "the chosen currency, never the locale's")
+        assertEquals(Currency.Fiat("GBP"), household.policyCurrency, "written right after the session")
+        assertEquals(0, household.recoveryChecks, "a fresh create needs no recovery")
         assertEquals(OnboardingStep.ParentLock, viewModel.state.value.step)
     }
 
     @Test
-    fun `a resumed creating phone writes no policy when its pull failed or brought one`() {
+    fun `a process death between the session and the policy recovers the policy after the resumed pull`() {
+        // The creating phone died after saving its session: the policy exists nowhere (D-REL-14, audit M1).
         sessions.session.value =
             Session(PARENT_UID, HOUSEHOLD, Role.PARENT, null, NEW_DEVICE, RegistrationStatus.ACTIVE, clock.now())
         household.setupPending = HOUSEHOLD
-        household.setupCurrency = Currency.Fiat("GBP")
-        household.syncSucceeds = false
+        household.serverCurrency = Currency.Fiat("GBP")
 
+        val viewModel = viewModel()
+
+        assertEquals(listOf("refreshClaims", "sync", "recoverPolicy"), log.calls)
+        assertEquals(Currency.Fiat("GBP"), household.policyCurrency, "the server's currency, never the locale's")
+        assertEquals(OnboardingStep.ParentLock, viewModel.state.value.step)
+    }
+
+    @Test
+    fun `a resumed phone recovers nothing when its pull failed, a policy is held or stored, or the pull brought one`() {
+        sessions.session.value =
+            Session(PARENT_UID, HOUSEHOLD, Role.PARENT, null, NEW_DEVICE, RegistrationStatus.ACTIVE, clock.now())
+        household.setupPending = HOUSEHOLD
+        household.serverCurrency = Currency.Fiat("GBP")
+
+        household.syncSucceeds = false
         viewModel()
-        assertFalse("ensurePolicy" in log.calls, "offline: whether the household has a policy is unknown")
+        assertEquals(0, household.recoveryChecks, "offline: whether the household has a policy is unknown")
 
         household.syncSucceeds = true
-        household.onSync = { household.policyCurrency = Currency.Fiat("CHF") }
-        log.calls.clear()
+        household.policyHeld = true
         viewModel()
-        assertFalse("ensurePolicy" in log.calls, "the pull brought the policy (pushed before the process died)")
+        assertFalse("recoverPolicy" in log.calls, "a pulled policy waits for its author (audit L1)")
+        household.policyHeld = false
+
+        household.serverPolicyStored = true
+        viewModel()
+        assertFalse("recoverPolicy" in log.calls, "the server holds a policy this phone has not applied (audit L1)")
+        household.serverPolicyStored = false
+
+        household.onSync = { household.policyCurrency = Currency.Fiat("CHF") }
+        viewModel()
+        assertFalse("recoverPolicy" in log.calls, "the pull brought the policy (pushed before the process died)")
         assertEquals(Currency.Fiat("CHF"), household.policyCurrency)
     }
 
     @Test
-    fun `a policy write that failed on create is written by the retried Create after its pull`() {
+    fun `a policy write that failed on create is recovered by the retried Create after its pull`() {
         claimsSequence(parentClaims(householdId = null), parentClaims(householdId = null), parentClaims())
+        household.serverCurrency = Currency.Fiat("GBP")
         household.ensureFailure = IllegalStateException("storage")
         val viewModel = viewModel()
         viewModel.signIn()
@@ -113,8 +125,8 @@ class OnboardingCreatedPolicyTest {
         viewModel.onEvent(OnboardingEvent.CreateHousehold)
 
         assertEquals(1, keys.registrations, "no second household, no second key")
-        assertTrue(log.calls.indexOf("sync") < log.calls.indexOf("ensurePolicy"))
-        assertEquals(Currency.Fiat("GBP"), household.policyCurrency)
+        assertTrue(log.calls.indexOf("sync") < log.calls.indexOf("recoverPolicy"))
+        assertEquals(Currency.Fiat("GBP"), household.policyCurrency, "the server's currency")
         assertEquals(OnboardingStep.ParentLock, viewModel.state.value.step)
     }
 }

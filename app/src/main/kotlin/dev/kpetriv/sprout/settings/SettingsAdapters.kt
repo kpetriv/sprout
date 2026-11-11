@@ -4,7 +4,9 @@ import dev.kpetriv.sprout.core.crypto.PublicKeyBytes
 import dev.kpetriv.sprout.core.database.FiatCurrencyProvider
 import dev.kpetriv.sprout.core.database.HouseholdPolicyRepository
 import dev.kpetriv.sprout.core.database.SessionStore
+import dev.kpetriv.sprout.core.database.entity.RegistrationStatus
 import dev.kpetriv.sprout.core.database.usecase.RegisterParentKeyUseCase
+import dev.kpetriv.sprout.core.model.Role
 import dev.kpetriv.sprout.feature.lock.ChangePinResult
 import dev.kpetriv.sprout.feature.lock.LockSettings
 import dev.kpetriv.sprout.feature.lock.ParentKeyChangeResult
@@ -14,15 +16,20 @@ import dev.kpetriv.sprout.feature.lock.ParentKeyRenewal
 import dev.kpetriv.sprout.feature.lock.ParentKeyStatus
 import dev.kpetriv.sprout.feature.lock.ParentSession
 import dev.kpetriv.sprout.feature.lock.PinRuleViolation
+import dev.kpetriv.sprout.feature.settings.HouseholdSettingsRestorer
 import dev.kpetriv.sprout.feature.settings.LockPreferences
 import dev.kpetriv.sprout.feature.settings.NewPinProblem
 import dev.kpetriv.sprout.feature.settings.ParentKeyRegistrar
 import dev.kpetriv.sprout.feature.settings.PinChangeOutcome
 import dev.kpetriv.sprout.feature.settings.PinChanger
+import dev.kpetriv.sprout.feature.settings.RestoreCheck
 import dev.kpetriv.sprout.feature.settings.SigningKeyOutcome
 import dev.kpetriv.sprout.household.HouseholdPolicyRecovery
 import dev.kpetriv.sprout.household.PolicyReadiness
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
 import javax.inject.Inject
 import dev.kpetriv.sprout.feature.onboarding.ParentKeyRegistrar as BackendParentKeyRegistrar
 
@@ -86,6 +93,30 @@ internal fun ParentKeyChangeResult.toOutcome(): SigningKeyOutcome = when (this) 
     is ParentKeyChangeResult.LockedOut -> SigningKeyOutcome.LockedOut(decision)
     ParentKeyChangeResult.Cancelled -> SigningKeyOutcome.Cancelled
     ParentKeyChangeResult.NotAllowed, ParentKeyChangeResult.Failed -> SigningKeyOutcome.Failed
+}
+
+/**
+ * Settings' [HouseholdSettingsRestorer] over [HouseholdPolicyRecovery] (D-REL-22, audit M1): the same checks as the
+ * recovery at key registration, then the policy with the server's currency and signatures off. Offered on an ACTIVE
+ * parent phone of a real household without its policy row; the screen asks for the PIN between [check] and [restore].
+ */
+class RecoveryHouseholdSettingsRestorer @Inject constructor(
+    private val sessions: SessionStore,
+    private val policies: HouseholdPolicyRepository,
+    private val recovery: HouseholdPolicyRecovery,
+) : HouseholdSettingsRestorer {
+    override fun observeNeeded(): Flow<Boolean> = combine(sessions.observe(), policies.observe()) { session, policy ->
+        session != null && !session.isLocalTrial && session.role == Role.PARENT &&
+            session.deviceStatus == RegistrationStatus.ACTIVE && policy == null
+    }.distinctUntilChanged()
+
+    override suspend fun check(): RestoreCheck = when (recovery.readiness()) {
+        PolicyReadiness.Present -> RestoreCheck.PRESENT
+        is PolicyReadiness.Recoverable -> RestoreCheck.READY
+        PolicyReadiness.NotSynced -> RestoreCheck.NOT_SYNCED
+    }
+
+    override suspend fun restore(): Boolean = recovery.restoreWithoutKey()
 }
 
 /**

@@ -14,7 +14,6 @@ import dev.kpetriv.sprout.core.crypto.ParentAuthorizer
 import dev.kpetriv.sprout.core.database.HouseholdFiatCurrencyProvider
 import dev.kpetriv.sprout.core.database.LocalDataFiles
 import dev.kpetriv.sprout.core.database.SproutDatabase
-import dev.kpetriv.sprout.core.domainledger.Currency
 import dev.kpetriv.sprout.core.model.HouseholdId
 import dev.kpetriv.sprout.di.ApplicationScope
 import dev.kpetriv.sprout.feature.lock.EncryptedParentPinStore
@@ -273,33 +272,12 @@ class ParentSetupTracker @Inject constructor(private val preferences: ShellPrefe
     /** The digest of the household whose setup is pending ([ShellPreferences.digestOf]), or null. */
     val pending: StateFlow<String?> = mutablePending.asStateFlow()
 
-    /**
-     * The setup of [householdId] has started. [currency] is the one the parent chose when this phone created it
-     * (D-REL-14); null keeps a currency already stored for the same household (a create retried through the restore
-     * path) and drops one stored for another.
-     */
-    fun start(householdId: HouseholdId, currency: Currency.Fiat? = null) {
-        val digest = preferences.digestOf(householdId)
-        when {
-            currency != null -> preferences.setParentSetupCurrency(currency.isoCode)
-            mutablePending.value != digest -> preferences.setParentSetupCurrency(null)
-        }
-        set(digest)
-    }
+    /** The setup of [householdId] has started. */
+    fun start(householdId: HouseholdId) = set(preferences.digestOf(householdId))
 
-    fun finish() {
-        set(null)
-        preferences.setParentSetupCurrency(null)
-    }
+    fun finish() = set(null)
 
     fun isPending(householdId: HouseholdId): Boolean = mutablePending.value == preferences.digestOf(householdId)
-
-    /** The currency this phone chose when it created [householdId], while that household's setup is pending. */
-    fun currencyFor(householdId: HouseholdId): Currency.Fiat? = if (isPending(householdId)) {
-        preferences.parentSetupCurrency()?.let { code -> runCatching { Currency.Fiat(code) }.getOrNull() }
-    } else {
-        null
-    }
 
     /** The digest [pending] holds for [householdId]. */
     fun digestOf(householdId: HouseholdId): String = preferences.digestOf(householdId)

@@ -170,30 +170,44 @@ class FakeOnboardingHousehold(
 
     override suspend fun saveSession(session: Session) = sessions.save(session)
 
-    /** The currency kept with the setup marker (D-REL-14). */
-    var setupCurrency: Currency.Fiat? = null
+    /**
+     * The currency `createHousehold` stored on the server's household root, and whether the server holds a policy
+     * document: what the app's recovery reads (D-REL-14). Null: the household has no readable root.
+     */
+    var serverCurrency: Currency.Fiat? = null
+    var serverPolicyStored = false
+
+    /** True while a pulled policy is held for its author on this phone. */
+    var policyHeld = false
+
+    /** How many times [recoverHouseholdPolicy] was asked (the app's recovery syncs again, then reads the server). */
+    var recoveryChecks = 0
 
     /** When set, [ensureHouseholdPolicy] throws it (a write that fails, or the process dying there). */
     var ensureFailure: Exception? = null
 
-    override suspend fun hasHouseholdPolicy(): Boolean = policyCurrency != null
-
-    override suspend fun startParentSetup(householdId: HouseholdId, currency: Currency.Fiat?) {
-        log += "setupStarted"
-        when {
-            currency != null -> setupCurrency = currency
-            setupPending != householdId -> setupCurrency = null
-        }
-        setupPending = householdId
+    /**
+     * The app's recovery: no row, nothing held, nothing on the server and a currency there; then the policy with the
+     * server's currency. Logged as "recoverPolicy" only when it writes.
+     */
+    override suspend fun recoverHouseholdPolicy(): Boolean {
+        recoveryChecks += 1
+        val currency = serverCurrency?.takeUnless { serverPolicyStored || policyHeld || policyCurrency != null }
+            ?: return false
+        log += "recoverPolicy"
+        ensureFailure?.let { throw it }
+        policyCurrency = currency
+        return true
     }
 
-    override suspend fun parentSetupCurrency(householdId: HouseholdId): Currency.Fiat? =
-        setupCurrency.takeIf { setupPending == householdId }
+    override suspend fun startParentSetup(householdId: HouseholdId) {
+        log += "setupStarted"
+        setupPending = householdId
+    }
 
     override suspend fun finishParentSetup() {
         log += "setupFinished"
         setupPending = null
-        setupCurrency = null
     }
 
     override suspend fun parentSetupPending(householdId: HouseholdId): Boolean = setupPending == householdId

@@ -35,14 +35,15 @@ import javax.inject.Inject
  *   → a fresh attested **pending** device key ([DeviceKeyStore.regenerateForRegistration]) → `createHousehold` → the
  *   returned device id must be this key's fingerprint → promote the key → save the ACTIVE PARENT session at once →
  *   create the household policy → claims refresh (a failure is retried without a new key) → the app's PIN and signing
- *   step (the chosen currency is kept with the setup marker, so a creating phone whose policy was lost writes it
- *   after its first pull, D-REL-14). With a household: a phone the registry already knows is restored, never
+ *   step (a policy lost before it was stored or pushed is recovered after the first pull, with the currency the server
+ *   stored at creation, D-REL-14). With a household: a phone the registry already knows is restored, never
  *   re-registered (the local mirror, else the token-less `deviceStatus` for the pending and then the current key:
  *   ACTIVE restores the session, PENDING goes back to waiting); otherwise this device registers PENDING with a
  *   pending key, saves a PENDING session and waits (one sync every [POLL_INTERVAL_MS]; the sync mirrors the registry
  *   into the session) until a parent approves.
  *   Every way into the PIN and signing step from an existing household (restored, approved, resumed) first pulls the
- *   household ([OnboardingStep.FirstSync]), so enrolment finds the household's policy (D-REL-11).
+ *   household ([OnboardingStep.FirstSync]), so enrolment finds the household's policy (D-REL-11), and recovers a
+ *   policy that exists nowhere through the same checks as Settings (D-REL-24).
  * - **Kid device**: the 8-character code → anonymous sign-in → (an anonymous user already linked whose key the
  *   registry has ACTIVE is restored) → pending key → `redeemLinkCode` → fingerprint check → promote → save the KID
  *   session → claims refresh (best effort) → first sync → kid mode.
@@ -151,7 +152,7 @@ class OnboardingViewModel @Inject constructor(
                 if (pending) {
                     // The ID token may predate the household's claims (the process died before the refresh).
                     attemptOrNull { auth.refreshClaims() }
-                    parentLockAfterPull(session.householdId)
+                    parentLockAfterPull()
                 }
             }
 
@@ -222,9 +223,9 @@ class OnboardingViewModel @Inject constructor(
         val created = backend.createHousehold(currency, key).orFail()
         val deviceId = promote(created.deviceId, key)
         purgeTrialDataIfAny()
-        // The chosen currency is kept with the setup marker: if the policy below is never written (a process death,
-        // a failure), a resume or a retried "Create" on this phone writes it after its first pull (D-REL-14).
-        household.startParentSetup(created.householdId, currency)
+        // If the policy below is never written (a process death, a failure), a resume or a retried "Create" on this
+        // phone recovers it after its first pull, with the currency the server stored at creation (D-REL-14).
+        household.startParentSetup(created.householdId)
         // The session first: the policy is signed and published as this session's device, and saving a session of
         // another account clears the local rows (D-M3-47), so the policy cannot come before it.
         household.saveSession(
@@ -260,7 +261,7 @@ class OnboardingViewModel @Inject constructor(
         household.activeDeviceOf(uid, householdId)?.let { active ->
             purgeTrialDataIfAny()
             saveActiveParent(uid, householdId, active)
-            parentLockAfterPull(householdId)
+            parentLockAfterPull()
             return true
         }
         for (key in listOf(RegistrationKey.PENDING, RegistrationKey.CURRENT)) {
@@ -276,7 +277,7 @@ class OnboardingViewModel @Inject constructor(
                 // The first pull runs before the PIN and signing step (D-REL-11): see parentLockAfterPull.
                 show(OnboardingStep.FirstSync)
                 val pulled = confirmRestored(uid, householdId)
-                ensureCreatedPolicy(householdId, pulled)
+                recoverPolicy(pulled)
                 show(OnboardingStep.ParentLock)
             } else {
                 household.saveSession(
@@ -304,26 +305,23 @@ class OnboardingViewModel @Inject constructor(
      * then stays off ("Fingerprint signing is off" on the dashboard once the policy arrives) until the parent turns it
      * on in Settings.
      */
-    private suspend fun parentLockAfterPull(householdId: HouseholdId) {
+    private suspend fun parentLockAfterPull() {
         show(OnboardingStep.FirstSync)
         val pulled = attemptOrNull { household.syncNow() } == true
-        ensureCreatedPolicy(householdId, pulled)
+        recoverPolicy(pulled)
         show(OnboardingStep.ParentLock)
     }
 
     /**
-     * The phone that created [householdId] writes its policy if it never did (D-REL-14): `createHousehold` stores no
-     * policy on the server, so one lost before this phone stored it (a process death between the session and the
-     * policy, a write that failed) would be lost for good. Only after a pull that [pulled] the household without an
-     * error and brought no policy row, and only with the currency this phone chose and kept with the setup marker
-     * ([OnboardingHousehold.startParentSetup]); best effort: the recovery at enrolment (D-REL-15) covers the rest.
+     * A household policy that exists nowhere is written again (D-REL-14, audit L1): `createHousehold` stores no policy
+     * on the server, so one lost before the creating phone stored or pushed it (a process death between the session
+     * and the policy, a write that failed) would be lost for good. Only after a pull that [pulled] the household
+     * without an error, and then only through the same checks as every other recovery
+     * ([OnboardingHousehold.recoverHouseholdPolicy]: nothing held, nothing on the server, the server's currency).
+     * Best effort: the dashboard's "Restore household settings" and the recovery at enrolment cover the rest.
      */
-    private suspend fun ensureCreatedPolicy(householdId: HouseholdId, pulled: Boolean) {
-        if (!pulled) return
-        val chosen = attemptOrNull { household.parentSetupCurrency(householdId) } ?: return
-        if (attemptOrNull { household.hasHouseholdPolicy() } == false) {
-            attemptOrNull { household.ensureHouseholdPolicy(chosen) }
-        }
+    private suspend fun recoverPolicy(pulled: Boolean) {
+        if (pulled) attemptOrNull { household.recoverHouseholdPolicy() }
     }
 
     /**
@@ -369,7 +367,7 @@ class OnboardingViewModel @Inject constructor(
             if (status == RegistrationStatus.ACTIVE) {
                 attemptOrNull { household.startParentSetup(householdId) }
                 // A PENDING phone cannot read the household's documents: pull them now that it is ACTIVE.
-                parentLockAfterPull(householdId)
+                parentLockAfterPull()
             } else {
                 // Revoked while waiting (or the session went): whatever the sync pulled is erased, not kept.
                 leavePending(householdId)

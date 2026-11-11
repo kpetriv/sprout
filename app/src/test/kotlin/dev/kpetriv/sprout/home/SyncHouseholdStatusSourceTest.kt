@@ -2,9 +2,10 @@ package dev.kpetriv.sprout.home
 
 import android.app.Application
 import dev.kpetriv.sprout.FakeShellPreferences
+import dev.kpetriv.sprout.core.crypto.FakeParentAuthorizer
+import dev.kpetriv.sprout.core.crypto.ParentAuthAvailability
+import dev.kpetriv.sprout.core.database.HouseholdPolicyRepository
 import dev.kpetriv.sprout.core.database.TestHousehold
-import dev.kpetriv.sprout.core.domainledger.JvmSha256Hasher
-import dev.kpetriv.sprout.core.domainledger.toHex
 import dev.kpetriv.sprout.core.model.HouseholdId
 import dev.kpetriv.sprout.core.sync.SyncError
 import dev.kpetriv.sprout.core.sync.SyncReport
@@ -20,14 +21,19 @@ import dev.kpetriv.sprout.sync.SyncScheduler
 import dev.kpetriv.sprout.testPause
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.test.UnconfinedTestDispatcher
+import kotlinx.coroutines.test.advanceTimeBy
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
@@ -46,6 +52,7 @@ import kotlin.time.Instant
  * The dashboard's signing cards over a real Room household (D-M3-39, D-M3-46): hidden while a parent key change runs,
  * so the enrolment right after the PIN setup never flashes "signing is off" or "key not registered" (D-REL-12).
  */
+@OptIn(ExperimentalCoroutinesApi::class)
 @RunWith(RobolectricTestRunner::class)
 @Config(application = Application::class) // Not the Hilt app: its startup opens the encrypted database.
 class SyncHouseholdStatusSourceTest {
@@ -54,6 +61,18 @@ class SyncHouseholdStatusSourceTest {
         sessionFor = TestHousehold.parentSession(HouseholdId("home-1"), "parent-uid"),
     )
     private val enrolling = MutableStateFlow(false)
+    private val authorizer = FakeParentAuthorizer()
+
+    /**
+     * The server registration's pending flag as the test drives it (null: Room's own flow). Lets a test order the
+     * progress drop and Room's late re-query of the audit row deterministically (D-REL-16).
+     */
+    private val pending = MutableStateFlow<Boolean?>(null)
+    private val policies = object : HouseholdPolicyRepository by household.policies {
+        override fun observeServerRegistrationPending(): Flow<Boolean> = pending.flatMapLatest { driven ->
+            driven?.let(::flowOf) ?: household.policies.observeServerRegistrationPending()
+        }
+    }
     private val processor = SyncReportProcessor(
         auditor = { },
         sessions = household.sessions,
@@ -74,8 +93,9 @@ class SyncHouseholdStatusSourceTest {
         outbox = household.outbox,
         database = household.database,
         kids = household.kids,
-        policies = household.policies,
+        policies = policies,
         keyChanges = ParentKeyChangeProgress { enrolling },
+        authorizer = authorizer,
     )
 
     @After
@@ -126,29 +146,78 @@ class SyncHouseholdStatusSourceTest {
     }
 
     @Test
+    fun `without a strong biometric the missing policy card restores with the PIN`() = runTest {
+        processor.handle(SyncReport())
+        assertTrue(status().policyMissing)
+        assertFalse(status().policyRestoreWithPin, "a strong biometric recovers it with fingerprint signing")
+
+        authorizer.availability = ParentAuthAvailability.NOT_ENROLLED
+        assertTrue(status().policyMissing)
+        assertTrue(status().policyRestoreWithPin, "D-REL-22: Restore household settings")
+
+        household.policies.ensure(household.gbp)
+        assertFalse(status().policyMissing)
+        assertFalse(status().policyRestoreWithPin)
+    }
+
+    @Test
+    fun `signing off also shows when the policy does not require parent signatures`() = runTest {
+        // D-REL-26: a key on this phone, but a policy written without signatures (before they became one-way).
+        household.policies.ensure(household.gbp)
+        household.registerParentKey()
+        assertFalse(status().signingOff)
+
+        val dao = household.database.householdPolicyDao()
+        dao.upsert(checkNotNull(dao.get()).copy(requireParentSignature = false))
+
+        assertTrue(status().signingOff)
+    }
+
+    @Test
     fun `the end of an enrolment never flashes the key-not-registered card`() = runTest {
-        // Room-backed and on real time (D-REL-16): the progress drops the moment the last write commits, while Room
-        // re-runs the audit query on its own thread afterwards. Every emission is recorded, not a snapshot.
-        val policy = household.registerParentKey() // locally; the server call is running
-        val fingerprint = JvmSha256Hasher.sha256(checkNotNull(policy.parentPublicKey)).toHex()
+        // D-REL-16 on virtual time, in the order that flashed: the progress drops first, Room's re-query of the audit
+        // row lands 100 ms later. Without the hold the drop alone shows the card; every emission is recorded.
+        household.registerParentKey() // locally; the server call is running
+        pending.value = true
         enrolling.value = true
         val seen = CopyOnWriteArrayList<HouseholdStatus>()
-        val collector = launch(Dispatchers.Default) { source.observe().collect { seen += it } }
+        backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { source.observe().collect { seen += it } }
+        // Room's first values arrive on its own threads.
         realTime { withTimeout(5_000) { while (seen.isEmpty()) delay(10) } }
+        runCurrent()
         assertFalse(seen.last().signingKeyNotRegistered, "hidden while the enrolment runs")
         val before = seen.size
 
-        // The registration answered: recordServerRegisteredKey's audit row is the last write, then the progress
-        // counter drops at once.
-        assertTrue(household.policies.recordServerRegisteredKey(fingerprint, validFromLamport = 1))
         enrolling.value = false
-        realTime { delay(1_500) }
-        collector.cancelAndJoin()
+        runCurrent()
+        advanceTimeBy(100)
+        pending.value = false
+        advanceTimeBy(1_000)
+        runCurrent()
 
         val after = seen.drop(before)
         assertTrue(after.none { it.signingKeyNotRegistered }, "no frame shows the card: $after")
         assertTrue(after.none { it.signingOff })
         assertFalse(seen.last().signingKeyNotRegistered)
+    }
+
+    @Test
+    fun `a registration that really failed shows the card once the hold has passed`() = runTest {
+        household.registerParentKey()
+        pending.value = true
+        enrolling.value = true
+        val seen = CopyOnWriteArrayList<HouseholdStatus>()
+        backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { source.observe().collect { seen += it } }
+        realTime { withTimeout(5_000) { while (seen.isEmpty()) delay(10) } }
+        runCurrent()
+
+        enrolling.value = false
+        advanceTimeBy(400)
+        runCurrent()
+        assertFalse(seen.last().signingKeyNotRegistered, "still within the hold")
+        advanceTimeBy(200)
+        runCurrent()
+        assertTrue(seen.last().signingKeyNotRegistered, "the registration failed: the card shows")
     }
 
     /** Runs [block] off the test scheduler, so its delays are real ones. */

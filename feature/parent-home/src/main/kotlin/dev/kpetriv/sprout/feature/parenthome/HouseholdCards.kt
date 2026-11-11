@@ -38,21 +38,42 @@ import kotlin.time.toJavaInstant
 internal fun HouseholdCards(status: HouseholdStatus, links: ParentHomeLinks) {
     if (status.trial) TrialBanner(links.onSetUpSync)
     status.sync?.let { SyncStatusLine(it) }
-    if (status.policyMissing) PolicyMissingCard(links.onRegisterSigningKey)
+    if (status.policyMissing) PolicyMissingCard(status.policyRestoreWithPin, links.onRegisterSigningKey)
     if (status.signingKeyNotRegistered) SigningKeyNotRegisteredCard(links.onRegisterSigningKey)
     if (status.signingOff) SigningOffCard(links.onRegisterSigningKey)
     if (status.pendingDevices.isNotEmpty()) NewDevicesCard(status.pendingDevices, links.onReviewDevice)
     if (status.rejected.isNotEmpty()) RejectedEventsCard(status.rejected)
 }
 
+/**
+ * D-REL-14: both actions open Settings → Security. With a strong biometric, fingerprint signing set-up recovers the
+ * policy with the key; without one ([restoreWithPin]), "Restore household settings" recovers it with the PIN
+ * (D-REL-22).
+ */
 @Composable
-private fun PolicyMissingCard(onSetUp: () -> Unit) {
+private fun PolicyMissingCard(restoreWithPin: Boolean, onOpenSecurity: () -> Unit) {
     HouseholdCard(stringResource(R.string.feature_parent_home_policy_missing_title), CardTone.WARNING) {
         Text(
-            stringResource(R.string.feature_parent_home_policy_missing_text),
+            stringResource(
+                if (restoreWithPin) {
+                    R.string.feature_parent_home_policy_missing_restore_text
+                } else {
+                    R.string.feature_parent_home_policy_missing_text
+                },
+            ),
             style = MaterialTheme.typography.bodyMedium,
         )
-        Button(onClick = onSetUp) { Text(stringResource(R.string.feature_parent_home_policy_missing_set_up)) }
+        Button(onClick = onOpenSecurity) {
+            Text(
+                stringResource(
+                    if (restoreWithPin) {
+                        R.string.feature_parent_home_policy_missing_restore
+                    } else {
+                        R.string.feature_parent_home_policy_missing_set_up
+                    },
+                ),
+            )
+        }
     }
 }
 

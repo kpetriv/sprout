@@ -90,7 +90,8 @@ fun ParentSecurityScreen(
 @Composable
 private fun SigningCard(state: ParentSecurityUiState, onEvent: (ParentSecurityEvent) -> Unit) {
     val warning = state.signing == SigningStatus.UNAVAILABLE || state.signing == SigningStatus.KEY_INVALIDATED ||
-        state.signing == SigningStatus.NOT_REGISTERED_WITH_HOUSEHOLD
+        state.signing == SigningStatus.NOT_REGISTERED_WITH_HOUSEHOLD ||
+        state.signing == SigningStatus.SIGNATURES_NOT_REQUIRED
     val colors = if (warning) {
         CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.errorContainer,
@@ -110,6 +111,9 @@ private fun SigningCard(state: ParentSecurityUiState, onEvent: (ParentSecurityEv
 
                         SigningStatus.NOT_REGISTERED_WITH_HOUSEHOLD ->
                             R.string.feature_settings_security_signing_not_shared_title
+
+                        SigningStatus.SIGNATURES_NOT_REQUIRED ->
+                            R.string.feature_settings_security_signing_not_required_title
 
                         SigningStatus.ON, SigningStatus.NOT_SET_UP -> R.string.feature_settings_security_signing_title
                     },
@@ -137,7 +141,25 @@ private fun SigningCard(state: ParentSecurityUiState, onEvent: (ParentSecurityEv
             } else {
                 SigningAction(state, onEvent)
             }
+            if (state.offerRestore) RestoreSettings(isRestoring = state.isRestoring, onEvent = onEvent)
         }
+    }
+}
+
+/**
+ * "Restore household settings" (D-REL-22): a phone without a strong biometric whose household policy exists nowhere
+ * restores it with the PIN, signatures off.
+ */
+@Composable
+private fun RestoreSettings(isRestoring: Boolean, onEvent: (ParentSecurityEvent) -> Unit) {
+    Text(stringResource(R.string.feature_settings_security_restore_text), style = MaterialTheme.typography.bodyMedium)
+    Button(onClick = { onEvent(ParentSecurityEvent.RestoreHouseholdSettings) }, enabled = !isRestoring) {
+        val label = if (isRestoring) {
+            R.string.feature_settings_security_restoring
+        } else {
+            R.string.feature_settings_security_restore
+        }
+        Text(stringResource(label))
     }
 }
 
@@ -147,6 +169,7 @@ private fun SigningAction(state: ParentSecurityUiState, onEvent: (ParentSecurity
         SigningStatus.NOT_SET_UP -> R.string.feature_settings_security_signing_register
         SigningStatus.KEY_INVALIDATED -> R.string.feature_settings_security_signing_renew
         SigningStatus.NOT_REGISTERED_WITH_HOUSEHOLD -> R.string.feature_settings_security_signing_retry
+        SigningStatus.SIGNATURES_NOT_REQUIRED -> R.string.feature_settings_security_signing_renew
         SigningStatus.ON, SigningStatus.UNAVAILABLE -> return
     }
     Button(onClick = { onEvent(ParentSecurityEvent.StartSigningKeyChange) }, enabled = !state.isRegistering) {
@@ -217,6 +240,8 @@ private fun ParentSecurityUiState.signingDetailRes(): Int = when (signing) {
     SigningStatus.KEY_INVALIDATED -> R.string.feature_settings_security_signing_invalidated
 
     SigningStatus.NOT_REGISTERED_WITH_HOUSEHOLD -> R.string.feature_settings_security_signing_not_shared
+
+    SigningStatus.SIGNATURES_NOT_REQUIRED -> R.string.feature_settings_security_signing_not_required
 
     SigningStatus.UNAVAILABLE -> when (availability) {
         ParentAuthAvailability.NOT_ENROLLED -> R.string.feature_settings_security_signing_not_enrolled

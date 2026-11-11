@@ -117,6 +117,19 @@ class ParentKeyEnrolmentTest {
     }
 
     @Test
+    fun `a locked session is refused before the household policy check and no PIN attempt is counted`() = test {
+        // Audit L3: the policy check may sync and read the server; a locked session never starts it.
+        val f = SessionFixture(backgroundScope, pin = PIN)
+
+        assertEquals(ParentKeyChangeResult.NotAllowed, f.enrolment.enrol(WRONG_PIN.toCharArray()))
+
+        assertEquals(0, f.registry.policyChecks, "no sync, no server read")
+        assertEquals(0, f.lockoutStore.state?.consecutiveFailures ?: 0, "the PIN was not checked")
+        assertEquals(0, f.prompter.prompts)
+        assertEquals(emptyList(), f.challenges.issued)
+    }
+
+    @Test
     fun `without the household policy enrolment stops before the PIN, the challenge, the key and the prompt`() = test {
         val f = unlocked()
         f.registry.policyReady = false
