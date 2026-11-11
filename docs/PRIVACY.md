@@ -3,16 +3,16 @@
 <!-- repo-only -->
 > **Source of the published page.** This file is rendered to `server/public/privacy/index.html` by `tools/privacy/render.py`, which fills the `{{...}}` placeholders from `docs/privacy.properties` (gitignored; the committed page is rendered from `docs/privacy.properties.example`, so it shows `example.invalid` addresses) and leaves out every block marked `repo-only`, like this note. CI fails when the committed page no longer matches this file (`python3 tools/privacy/check.py`). The Play data-safety answers are derived from this file and a build inventory: [DATA_SAFETY.md](DATA_SAFETY.md).
 >
-> **Not legal advice, and the legal review has not happened.** The structure and the facts are final for v1 and match the code as of M8; the paragraphs marked **Owner (legal)** in repo-only notes need a decision by the owner and a lawyer before the page is published ([release checklist](RELEASE_CHECKLIST.md) item 4). Related: [threat model](THREAT_MODEL.md), [controls matrix](CONTROLS.md), [security review](SECURITY_REVIEW.md), [ADR-0003](adr/0003-security-model.md), [ADR-0007](adr/0007-identity-linking-and-device-registry.md), [ADR-0010](adr/0010-on-device-ai.md).
+> **Not legal advice.** The structure and the facts are final for v1 and match the code as of M8. The owner resolved every legal note on 2026-11-11 without a lawyer (repo-only "Legal review" notes below, D-REL-4; [release checklist](RELEASE_CHECKLIST.md) item 4); a lawyer's read before a wide rollout is still recommended. Related: [threat model](THREAT_MODEL.md), [controls matrix](CONTROLS.md), [security review](SECURITY_REVIEW.md), [ADR-0003](adr/0003-security-model.md), [ADR-0007](adr/0007-identity-linking-and-device-registry.md), [ADR-0010](adr/0010-on-device-ai.md).
 <!-- /repo-only -->
 
 - **Effective date:** {{EFFECTIVE_DATE}}
 - **Applies to:** the Sprout Android app (`dev.kpetriv.sprout`) and the Sprout server it talks to
-- **Who we are:** {{DEVELOPER_NAME}}, {{POSTAL_ADDRESS}}, the developer of Sprout ("we", "us")
+- **Who we are:** {{DEVELOPER_NAME}}, {{POSTAL_ADDRESS}}, the developer of Sprout ("we", "us") and the data controller for the data Sprout's server processes
 - **Contact:** [{{CONTACT_EMAIL}}](mailto:{{CONTACT_EMAIL}})
 
 <!-- repo-only -->
-> **Owner (legal):** the controller identity, the lawful basis for each purpose (contract for running the household; legitimate interests for security and abuse prevention are the likely candidates), and how parental consent fits the parent-as-controller-of-their-household model. Recorded consent at household creation is not built (CONTROLS DP-13, D-M8-33); this page therefore does not claim it.
+> **Legal review (owner, 2026-11-11, D-REL-4):** the controller is the developer as an individual (named above); the lawful bases are stated in "Children's data and your rights"; parental consent is neither claimed nor recorded (CONTROLS DP-13, D-M8-33 stands). Reviewed by the owner, not by a lawyer.
 <!-- /repo-only -->
 
 ## The short version
@@ -154,14 +154,14 @@ For young children Sprout can read chat messages aloud. The message text is hand
 | Parents in the household | Everything in the household, including the full ledger and audit log |
 | A child, in kid mode | Their own chores, balance, ledger entries, shop, and chat with the parent; never parent settings or other children's data |
 | Our server and its operator | Household data and the ledger, in order to sync it and to export or delete it. **Not** the content of chat messages, voice notes or photos. Allowance and interest are calculated on the parent's phone, not on the server. |
-| Google, as our cloud provider | Stores and processes the data on our behalf under its data processing terms, and runs the Google services listed above under its own terms |
-| Vercel, as host of our server | Processes requests to the server on our behalf; sees the request contents in transit and keeps request logs |
+| Google, as our cloud provider (processor) | Stores and processes the data on our behalf under the [Firebase Data Processing and Security Terms](https://firebase.google.com/terms/data-processing-terms), and runs the Google services listed above under its own terms |
+| Vercel, as host of our server (processor) | Processes requests to the server on our behalf under [Vercel's data processing agreement](https://vercel.com/legal/dpa); sees the request contents in transit and keeps request logs |
 | Anyone else | Nobody. We do not sell or share data, and there are no advertising or analytics partners. |
 
 We will disclose data only if the law requires it, and then only what is required.
 
 <!-- repo-only -->
-> **Owner (legal):** the legal-disclosure sentence above, and whether Google and Vercel are named as processors with links to their data processing terms (CONTROLS SC-6, vendor review).
+> **Legal review (owner, 2026-11-11, D-REL-4):** the legal-disclosure sentence stays; Google and Vercel are named as processors with links to their data processing terms (CONTROLS SC-6; accepting those terms in the consoles is release checklist item 6).
 <!-- /repo-only -->
 
 ## How long we keep it
@@ -184,7 +184,7 @@ We will disclose data only if the law requires it, and then only what is require
 Sprout keeps no backups of its own. Google's own retention of deleted data follows its data processing terms.
 
 <!-- repo-only -->
-> **Enforced vs. proposed (owner).** Enforced in code today: codes, challenges and rate-limit records are refused after expiry (CONTROLS DP-7, `linking.test.ts`, `registration.ts`, `rateLimit.ts`); household deletion (DP-4); chat retention and purge (M7). **Proposed until the console and operator steps are done:** removing expired rate-limit rows, codes and challenges needs the Firestore TTL policies (FIREBASE.md production checklist; RELEASE_CHECKLIST item 6); `deletionRecords` and `recoveries` have no TTL field, so their 12 months depend on the owner's monthly `prune-expired` run (`server/scripts/operator.ts`, RELEASE_CHECKLIST item 6, D-M8-51). Vercel's log retention depends on the Vercel plan; confirm it on the project and keep "up to 30 days unless Vercel's retention is longer". **Owner (legal):** confirm the processor retention figures.
+> **Enforced vs. proposed (owner).** Enforced in code today: codes, challenges and rate-limit records are refused after expiry (CONTROLS DP-7, `linking.test.ts`, `registration.ts`, `rateLimit.ts`); household deletion (DP-4); chat retention and purge (M7). **Proposed until the console and operator steps are done:** removing expired rate-limit rows, codes and challenges needs the Firestore TTL policies (FIREBASE.md production checklist; RELEASE_CHECKLIST item 6); `deletionRecords` and `recoveries` have no TTL field, so their 12 months depend on the owner's monthly `prune-expired` run (`server/scripts/operator.ts`, RELEASE_CHECKLIST item 6, D-M8-51). Vercel's log retention depends on the Vercel plan; confirm it on the project and keep "up to 30 days unless Vercel's retention is longer". **Legal review (owner, 2026-11-11, D-REL-4):** the processor retention figures stay as written.
 <!-- /repo-only -->
 
 ## Your data, your copy
@@ -208,14 +208,16 @@ The readable chat is decrypted on the parent's phone from its own copy (voice no
 **By e-mail.** If you can no longer use the app (for example, every parent phone is lost), e-mail [{{CONTACT_EMAIL}}](mailto:{{CONTACT_EMAIL}}) from the Google account that created the household, with the household id if you have it. We confirm the request and delete the household with the same steps as the app, usually within 30 days, and tell you when it is done.
 
 <!-- repo-only -->
-> **Owner (legal):** the 30-day figure and how the requester is verified (RUNBOOK §4; slice A's `operator.ts delete-household`). This section is the Play Console "delete account" web link: `{{PRIVACY_URL}}#how-to-delete-your-account-and-data`.
+> **Legal review (owner, 2026-11-11, D-REL-4):** the 30-day figure (RUNBOOK §4 answers within one month) and the verification (an e-mail from the Google account that created the household, with the household id) stay as written; `operator.ts delete-household` is the path. This section is the Play Console "delete account" web link: `{{PRIVACY_URL}}#how-to-delete-your-account-and-data`.
 <!-- /repo-only -->
 
 **Uninstalling** the app removes all local data from that phone. Cloud data remains until the household is deleted.
 
 ## Children's data and your rights
 
-The parent decides what Sprout holds about their child and can view, correct, export or delete it at any time from the app.
+Sprout is for adults. You, the parent, decide what goes into Sprout about your child and are responsible for that choice; we process it on your instruction. Sprout never collects data from a child directly beyond what the child enters in kid mode, and a child never has a sign-in of their own: a kid phone is linked by a parent and gets an anonymous account that belongs to the household. The parent can view, correct, export or delete the child's data at any time from the app.
+
+**Why we may process your data.** Running your household (sync, the ledger, delivering chat, export and deletion) is necessary to provide the service you asked for (performance of a contract with you). Security and abuse prevention (phone attestation, rate limits, server logs) is our legitimate interest in keeping the service safe for every household. We disclose data to authorities only where the law obliges us to.
 
 Depending on where you live (for example under the GDPR or UK GDPR), you have the right to access, correct, export and erase your data, to object to or restrict processing, and to complain to your data protection authority. Most of these you can do yourself in the app; for anything else, contact us at [{{CONTACT_EMAIL}}](mailto:{{CONTACT_EMAIL}}).
 
@@ -225,13 +227,13 @@ Depending on where you live (for example under the GDPR or UK GDPR), you have th
 - The parent area is behind a PIN or biometric; money entries are signed by the parent's biometric-bound key.
 - Every ledger entry is signed and chained, so tampering is detectable.
 - Chat, voice notes and photos are end-to-end encrypted.
-- All network traffic uses TLS; modified apps are rejected by Firebase App Check on our server and on the database.
+- All network traffic uses TLS; modified apps are rejected by Firebase App Check on our server.
 - New phones join only with a code or an approval from an existing parent phone, and a lost phone can be removed from another parent phone.
 
 To report a vulnerability, see our [security and disclosure policy](SECURITY.md) and [`security.txt`]({{SECURITY_TXT_URL}}).
 
 <!-- repo-only -->
-> App Check enforcement on Firestore is a console step (CONTROLS IA-16, release checklist item 6); until it is switched on, "and on the database" above is not true. The page must not be published before that step.
+> App Check enforcement on Firestore is a console step (CONTROLS IA-16, release checklist item 6). The page went live on 2026-11-10 before that step, so the bullet above names the server only (D-REL-5); add "and on the database" once enforcement is on, then re-render and redeploy.
 <!-- /repo-only -->
 
 ## Changes to this policy

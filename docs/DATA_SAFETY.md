@@ -1,6 +1,6 @@
 # Play data-safety form: answers and inventory
 
-- **Status:** M8, prepared from the code and [PRIVACY.md](PRIVACY.md) on 2026-11-04. Not yet entered in the Play Console (owner step: [release checklist](RELEASE_CHECKLIST.md) item 8). Not legal advice; the questions marked **Owner (legal)** need a decision.
+- **Status:** M8, prepared from the code and [PRIVACY.md](PRIVACY.md) on 2026-11-04. Not yet entered in the Play Console (owner step: [release checklist](RELEASE_CHECKLIST.md) item 8). Not legal advice. The D-M6-51 question was decided on 2026-11-11: list the event as recommended (D-REL-4).
 - **Rule:** every answer points at the PRIVACY.md section that says the same to users and at the code that makes it true. When the code changes, the policy and this file change in the same pull request.
 - **Guard:** `python3 tools/privacy/inventory.py --check` (CI build job, step "Data-safety inventory") compares the [inventory](#inventory) below with the release build's merged manifest and runtime classpath, and fails when a permission or SDK appears without an entry here, or an entry is no longer in the build (D-M8-2).
 - **Related:** [security review](SECURITY_REVIEW.md), [controls matrix](CONTROLS.md) (DP-1 to DP-16), D-M6-33 and D-M6-51 in [pending decisions](DECISIONS-PENDING.md).
@@ -59,6 +59,8 @@ For every type: **collected / shared**, **processed ephemerally**, **required or
 > **Must Google Play services' per-scan usage event be listed?** Receipt text recognition (`play-services-mlkit-text-recognition`) runs as a Google Play services module and records one event per scan (event id, error code, start and end times; never the picture or the text), which Sprout cannot switch off; scanning runs only while the On-device AI switch is on.
 >
 > **Recommended answer:** list it. **App info and performance → Diagnostics: collected, not shared (it goes only to Google), not processed ephemerally, optional (the parent can switch scanning off), purpose Analytics** (Google's measurement of its service). Over-declaring a small, content-free event costs nothing; under-declaring an SDK's collection is a policy violation. If the legal review decides Play services' own telemetry is Google's collection, not the app's, remove the row and keep the PRIVACY.md sentence.
+>
+> **Decided (owner, 2026-11-11, D-REL-4):** list it, as recommended. The Firebase installation id stays disclosed in the "Device or other IDs" row (D-M8-32).
 >
 > **Verify first:** the network capture in [SECURITY_REVIEW.md](SECURITY_REVIEW.md#p1-network-capture-including-a-receipt-scan) confirms what a scan sends.
 

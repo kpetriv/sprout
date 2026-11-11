@@ -40,7 +40,7 @@ footer ul{list-style:none;padding:0;margin:0;display:flex;flex-wrap:wrap;gap:.5r
 <ul>
 <li><strong>Effective date:</strong> 2026-11-04</li>
 <li><strong>Applies to:</strong> the Sprout Android app (<code>dev.kpetriv.sprout</code>) and the Sprout server it talks to</li>
-<li><strong>Who we are:</strong> Developer name (to be filled), Postal address (to be filled), the developer of Sprout (&quot;we&quot;, &quot;us&quot;)</li>
+<li><strong>Who we are:</strong> Developer name (to be filled), Postal address (to be filled), the developer of Sprout (&quot;we&quot;, &quot;us&quot;) and the data controller for the data Sprout's server processes</li>
 <li><strong>Contact:</strong> <a href="mailto:privacy@example.invalid">privacy@example.invalid</a></li>
 </ul>
 <h2 id="the-short-version">The short version</h2>
@@ -185,8 +185,8 @@ footer ul{list-style:none;padding:0;margin:0;display:flex;flex-wrap:wrap;gap:.5r
 <tr><td>Parents in the household</td><td>Everything in the household, including the full ledger and audit log</td></tr>
 <tr><td>A child, in kid mode</td><td>Their own chores, balance, ledger entries, shop, and chat with the parent; never parent settings or other children's data</td></tr>
 <tr><td>Our server and its operator</td><td>Household data and the ledger, in order to sync it and to export or delete it. <strong>Not</strong> the content of chat messages, voice notes or photos. Allowance and interest are calculated on the parent's phone, not on the server.</td></tr>
-<tr><td>Google, as our cloud provider</td><td>Stores and processes the data on our behalf under its data processing terms, and runs the Google services listed above under its own terms</td></tr>
-<tr><td>Vercel, as host of our server</td><td>Processes requests to the server on our behalf; sees the request contents in transit and keeps request logs</td></tr>
+<tr><td>Google, as our cloud provider (processor)</td><td>Stores and processes the data on our behalf under the <a href="https://firebase.google.com/terms/data-processing-terms">Firebase Data Processing and Security Terms</a>, and runs the Google services listed above under its own terms</td></tr>
+<tr><td>Vercel, as host of our server (processor)</td><td>Processes requests to the server on our behalf under <a href="https://vercel.com/legal/dpa">Vercel's data processing agreement</a>; sees the request contents in transit and keeps request logs</td></tr>
 <tr><td>Anyone else</td><td>Nobody. We do not sell or share data, and there are no advertising or analytics partners.</td></tr>
 </tbody></table></div>
 <p>We will disclose data only if the law requires it, and then only what is required.</p>
@@ -226,7 +226,8 @@ footer ul{list-style:none;padding:0;margin:0;display:flex;flex-wrap:wrap;gap:.5r
 <p><strong>By e-mail.</strong> If you can no longer use the app (for example, every parent phone is lost), e-mail <a href="mailto:privacy@example.invalid">privacy@example.invalid</a> from the Google account that created the household, with the household id if you have it. We confirm the request and delete the household with the same steps as the app, usually within 30 days, and tell you when it is done.</p>
 <p><strong>Uninstalling</strong> the app removes all local data from that phone. Cloud data remains until the household is deleted.</p>
 <h2 id="childrens-data-and-your-rights">Children's data and your rights</h2>
-<p>The parent decides what Sprout holds about their child and can view, correct, export or delete it at any time from the app.</p>
+<p>Sprout is for adults. You, the parent, decide what goes into Sprout about your child and are responsible for that choice; we process it on your instruction. Sprout never collects data from a child directly beyond what the child enters in kid mode, and a child never has a sign-in of their own: a kid phone is linked by a parent and gets an anonymous account that belongs to the household. The parent can view, correct, export or delete the child's data at any time from the app.</p>
+<p><strong>Why we may process your data.</strong> Running your household (sync, the ledger, delivering chat, export and deletion) is necessary to provide the service you asked for (performance of a contract with you). Security and abuse prevention (phone attestation, rate limits, server logs) is our legitimate interest in keeping the service safe for every household. We disclose data to authorities only where the law obliges us to.</p>
 <p>Depending on where you live (for example under the GDPR or UK GDPR), you have the right to access, correct, export and erase your data, to object to or restrict processing, and to complain to your data protection authority. Most of these you can do yourself in the app; for anything else, contact us at <a href="mailto:privacy@example.invalid">privacy@example.invalid</a>.</p>
 <h2 id="security">Security</h2>
 <ul>
@@ -234,7 +235,7 @@ footer ul{list-style:none;padding:0;margin:0;display:flex;flex-wrap:wrap;gap:.5r
 <li>The parent area is behind a PIN or biometric; money entries are signed by the parent's biometric-bound key.</li>
 <li>Every ledger entry is signed and chained, so tampering is detectable.</li>
 <li>Chat, voice notes and photos are end-to-end encrypted.</li>
-<li>All network traffic uses TLS; modified apps are rejected by Firebase App Check on our server and on the database.</li>
+<li>All network traffic uses TLS; modified apps are rejected by Firebase App Check on our server.</li>
 <li>New phones join only with a code or an approval from an existing parent phone, and a lost phone can be removed from another parent phone.</li>
 </ul>
 <p>To report a vulnerability, see our <a href="https://sprout.example.invalid/security">security and disclosure policy</a> and <a href="https://sprout.example.invalid/.well-known/security.txt"><code>security.txt</code></a>.</p>

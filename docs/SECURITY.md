@@ -1,7 +1,7 @@
 # Sprout security and disclosure policy
 
 <!-- repo-only -->
-> **Source of the published page.** Rendered with the privacy policy by `tools/privacy/render.py` to `server/public/security/index.html`, and summarised in `server/public/.well-known/security.txt` and `server/public/security.txt` (RFC 9116, written by `npm --prefix server run build:static`). Placeholders come from `docs/privacy.properties`. GitHub also shows this file as the repository's security policy. The safe-harbour paragraph is marked for legal review (**Owner (legal)**).
+> **Source of the published page.** Rendered with the privacy policy by `tools/privacy/render.py` to `server/public/security/index.html`, and summarised in `server/public/.well-known/security.txt` and `server/public/security.txt` (RFC 9116, written by `npm --prefix server run build:static`). Placeholders come from `docs/privacy.properties`. GitHub also shows this file as the repository's security policy. The safe-harbour paragraph was accepted at the owner's legal review on 2026-11-11 (D-REL-4).
 <!-- /repo-only -->
 
 - **Effective date:** {{EFFECTIVE_DATE}}
@@ -49,7 +49,7 @@ Please use only test households you created yourself. Do not access, change or d
 ## Safe harbour
 
 <!-- repo-only -->
-> **Owner (legal):** the paragraph below is draft wording for legal review before publication.
+> **Legal review (owner, 2026-11-11, D-REL-4):** the paragraph below is published as written.
 <!-- /repo-only -->
 
 If you make a good-faith effort to follow this policy, we will not pursue or support legal action against you for your research, and we will consider it authorised. Good faith means: testing only against accounts and households you own, not degrading the service for others, not accessing or keeping other people's data beyond what is needed to show the problem, and giving us reasonable time to fix it before disclosure. If in doubt, ask us first at [{{SECURITY_CONTACT}}]({{SECURITY_CONTACT_URI}}).
