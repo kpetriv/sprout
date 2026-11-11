@@ -1,0 +1,115 @@
+{
+  "projectId": "10251972321848422943",
+  "title": "Sprout",
+  "url": "https://stitch.withgoogle.com/projects/10251972321848422943",
+  "designSystems": {
+    "base": "assets/8309cb6591d44dfa8de0887e2159a353",
+    "garden-journal-auto": "assets/5b6b3e8aa97d48c28f65f5b11d828d7a",
+    "auto-2": "assets/873a6d4173364d4f8a496c5956e05062",
+    "auto-3": "assets/e8583b2b0db041f7a653e57a7199f947"
+  },
+  "screens": {
+    "A-dashboard": {
+      "id": "db29321319fa47928f596ea0f815c6d1",
+      "direction": "A Garden journal",
+      "device": "MOBILE",
+      "file": "designs/A-dashboard.png"
+    },
+    "A-wallet-sprout": {
+      "id": "bf01640147b743adb159ed33161c09ff",
+      "direction": "A Garden journal",
+      "device": "DESKTOP-canvas",
+      "file": "designs/A-wallet-sprout.png"
+    },
+    "B-dashboard": {
+      "id": "c4ec2958df684f0db97e7f6a67076de0",
+      "direction": "B Sunny garden",
+      "device": "MOBILE",
+      "file": "designs/B-dashboard.png"
+    },
+    "B-wallet-sprout": {
+      "id": "e8b519e1ca614b1da526c0e2a2b0ed53",
+      "direction": "B Sunny garden",
+      "device": "MOBILE",
+      "file": "designs/B-wallet-sprout.png"
+    },
+    "C-dashboard": {
+      "id": "fd0186d0f5e64afcbc018cf961453613",
+      "direction": "C Quiet ledger",
+      "device": "MOBILE",
+      "file": "designs/C-dashboard.png"
+    },
+    "C-wallet-sprout": {
+      "id": "18771fa387c044cea0e84cd9011525db",
+      "direction": "C Quiet ledger",
+      "device": "MOBILE",
+      "file": "designs/C-wallet-sprout.png"
+    },
+    "B1-wallet-variant1-botanical-meadow": {
+      "id": "83e7621f1db34762ad8c35f68af7d8ae",
+      "direction": "B refined (variant)",
+      "file": "designs/B1-wallet-variant1-botanical-meadow.png"
+    },
+    "B1-wallet-variant2-herb-marigold": {
+      "id": "69b7cdd009844065b3910e7d35d9d9bb",
+      "direction": "B refined (variant)",
+      "file": "designs/B1-wallet-variant2-herb-marigold.png"
+    },
+    "B1-wallet-variant3-nordic-sprout": {
+      "id": "3d9afe8c221245d7b40d8caa6e004cd6",
+      "direction": "B refined (variant)",
+      "file": "designs/B1-wallet-variant3-nordic-sprout.png"
+    },
+    "B1-dashboard-variant1-meadow-ochre": {
+      "id": "0d1b591d14b84d46919f35a9b4e402bd",
+      "direction": "B refined (variant)",
+      "file": "designs/B1-dashboard-variant1-meadow-ochre.png"
+    },
+    "B1-dashboard-variant2-sage-amber": {
+      "id": "d482e4a062064fbb8a1511ba176c47a3",
+      "direction": "B refined (variant)",
+      "file": "designs/B1-dashboard-variant2-sage-amber.png"
+    },
+    "B1-dashboard-variant3-botanical-linen": {
+      "id": "703ed83c7d854ce8bc89640ae680ac50",
+      "direction": "B refined (variant)",
+      "file": "designs/B1-dashboard-variant3-botanical-linen.png",
+      "chosen": true
+    },
+    "B1-wallet-take1": {
+      "id": "aed773b193174eb5b8783a856a7079ba",
+      "direction": "B refined (take 1 morning garden)",
+      "file": "designs/B1-wallet-take1.png",
+      "chosen": true
+    },
+    "B1-wallet-take2": {
+      "id": "3cc255b94cec44d2b42872b3af5f6aad",
+      "direction": "B refined (take 2 orchard)",
+      "file": "designs/B1-wallet-take2.png"
+    },
+    "B1-wallet-take3": {
+      "id": "1723ff4215214d0da313ba4828ee2c65",
+      "direction": "B refined (take 3 bold hero)",
+      "file": "designs/B1-wallet-take3.png"
+    },
+    "B1-wallet-edit-refined-garden": {
+      "id": "d98a2444ee9f4c7a9da3ec1335d6a20f",
+      "direction": "B refined (edit)",
+      "file": "designs/B1-wallet-edit-refined-garden.png",
+      "chosen": true
+    }
+  },
+  "duplicates": [
+    "ffcc7d6163cc434c957ac8c515436184",
+    "ec37f9fc7fdf4dab99288db56ac264e2",
+    "62328e57b268454ab97c7b9fd2c64814",
+    "3eb145ae18574e0c89b911487f6cd87f",
+    "190a9e677d784a13b85ae33e498ecc2b",
+    "5808a017d95748b6bf94a74c6b8c017a"
+  ],
+  "designMdUploads": {
+    "DESIGN.md": "8037668245393955006",
+    "DESIGN-morning-garden.md": "11330999580498960196"
+  },
+  "chosen": "Morning garden: wallet take 1 + Refined garden edit + dashboard Botanical Linen (Kiril, 2026-11-11); tokens in DESIGN-morning-garden.md"
+}
