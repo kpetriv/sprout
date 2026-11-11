@@ -6,7 +6,8 @@
     "base": "assets/8309cb6591d44dfa8de0887e2159a353",
     "garden-journal-auto": "assets/5b6b3e8aa97d48c28f65f5b11d828d7a",
     "auto-2": "assets/873a6d4173364d4f8a496c5956e05062",
-    "auto-3": "assets/e8583b2b0db041f7a653e57a7199f947"
+    "auto-3": "assets/e8583b2b0db041f7a653e57a7199f947",
+    "morning-garden": "assets/87c1dbeea6a3488c891bc866774156aa"
   },
   "screens": {
     "A-dashboard": {
@@ -97,6 +98,72 @@
       "direction": "B refined (edit)",
       "file": "designs/B1-wallet-edit-refined-garden.png",
       "chosen": true
+    },
+    "MG-01-dashboard": {
+      "id": "08bbc595a0484438bb5c457040c3f3ad",
+      "direction": "Morning garden (design system)",
+      "file": "designs/MG-01-dashboard.png",
+      "screen": "parent dashboard, final"
+    },
+    "MG-02-wallet-seedling": {
+      "id": "edf31da023244a2c939930f1ef0e2298",
+      "direction": "Morning garden (design system)",
+      "file": "designs/MG-02-wallet-seedling.png",
+      "screen": "wallet Seedling (Mia)"
+    },
+    "MG-02-wallet-sapling": {
+      "id": "1ca9494691b548bbaed69cba6231dc0f",
+      "direction": "Morning garden (design system)",
+      "file": "designs/MG-02-wallet-sapling.png",
+      "screen": "wallet Sapling (Ava)"
+    },
+    "MG-03-chores-seedling": {
+      "id": "aae19216cb3040dba0d0303ff98dce20",
+      "direction": "Morning garden (design system)",
+      "file": "designs/MG-03-chores-seedling.png",
+      "screen": "chores Seedling"
+    },
+    "MG-03-chores-sprout": {
+      "id": "f4964521e6ec4b7086034591c1100976",
+      "direction": "Morning garden (design system)",
+      "file": "designs/MG-03-chores-sprout.png",
+      "screen": "chores Sprout"
+    },
+    "MG-03-chores-sapling": {
+      "id": "f36c5f06afd14fb781d912806aa1d2f1",
+      "direction": "Morning garden (design system)",
+      "file": "designs/MG-03-chores-sapling.png",
+      "screen": "chores Sapling"
+    },
+    "MG-04-shop-seedling": {
+      "id": "f4fabb13fcfb47aeabc1bb3759266d17",
+      "direction": "Morning garden (design system)",
+      "file": "designs/MG-04-shop-seedling.png",
+      "screen": "shop Seedling"
+    },
+    "MG-05-chat-parent": {
+      "id": "2ec62204bb5a4067bdc9606fd61e6b82",
+      "direction": "Morning garden (design system)",
+      "file": "designs/MG-05-chat-parent.png",
+      "screen": "chat parent thread"
+    },
+    "MG-06-games-hub-sprout": {
+      "id": "5f64ccc6b79e4fddaf785c5dadc1820d",
+      "direction": "Morning garden (design system)",
+      "file": "designs/MG-06-games-hub-sprout.png",
+      "screen": "games hub Sprout"
+    },
+    "MG-07-timebank-seedling": {
+      "id": "05d6b90bf5414fc397850387fc674748",
+      "direction": "Morning garden (design system)",
+      "file": "designs/MG-07-timebank-seedling.png",
+      "screen": "time bank Seedling running"
+    },
+    "MG-08-household-data": {
+      "id": "b4933039a6e04e4aaf687ab535e420de",
+      "direction": "Morning garden (design system)",
+      "file": "designs/MG-08-household-data.png",
+      "screen": "household data settings"
     }
   },
   "duplicates": [
