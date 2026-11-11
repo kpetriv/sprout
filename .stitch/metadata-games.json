@@ -1,0 +1,218 @@
+{
+  "projectId": "10251972321848422943",
+  "title": "Sprout",
+  "url": "https://stitch.withgoogle.com/projects/10251972321848422943",
+  "spec": "docs/milestones/M9-games.md",
+  "designSystems": {
+    "morning-garden": "assets/87c1dbeea6a3488c891bc866774156aa"
+  },
+  "characters": {
+    "A": "Morning garden: inherits the app's design system (passed as designSystem)",
+    "B": "Playground: a flat game character of its own, described in the prompt (deep forest green play field, marigold, sky, coral and lime tiles with a solid bottom edge), no design system"
+  },
+  "screens": {
+    "games-A-numbers": {
+      "id": "5dfaaad7d66a4b4b81d7489cb6be9153",
+      "character": "A",
+      "tier": "SPROUT",
+      "file": "designs/games-A-numbers.png"
+    },
+    "games-A-memory-showing": {
+      "id": "b9919531a1c54bc4b3bca0eac370eb5e",
+      "character": "A",
+      "tier": "SPROUT",
+      "file": "designs/games-A-memory-showing.png"
+    },
+    "games-A-memory-answering": {
+      "id": "70115db82eb44e37a2a53a1eabceda89",
+      "character": "A",
+      "tier": "SPROUT",
+      "file": "designs/games-A-memory-answering.png"
+    },
+    "games-A-word": {
+      "id": "bb96c51e985645b48aaacbf13e06acd8",
+      "character": "A",
+      "tier": "SPROUT",
+      "file": "designs/games-A-word.png"
+    },
+    "games-A-result": {
+      "id": "275404d68bcd43f78e4d01506169c90d",
+      "character": "A",
+      "tier": "SPROUT",
+      "file": "designs/games-A-result.png",
+      "note": "rendered on a desktop canvas, cropped to the phone"
+    },
+    "games-A-tables-setup": {
+      "id": "d4b64c3abd1a4ae893c5f9f55ec136da",
+      "character": "A",
+      "tier": "SPROUT",
+      "file": "designs/games-A-tables-setup.png"
+    },
+    "games-A-tables-play": {
+      "id": "c48c3ef57b7f4626875c81c06049fcf3",
+      "character": "A",
+      "tier": "SPROUT",
+      "file": "designs/games-A-tables-play.png"
+    },
+    "games-B-numbers": {
+      "id": "2fd491c9badb4fd4b9318b0f25ba5cc3",
+      "character": "B",
+      "tier": "SPROUT",
+      "file": "designs/games-B-numbers.png",
+      "note": "desktop canvas, cropped"
+    },
+    "games-B-memory-showing": {
+      "id": "d7d7cf5dc8ad4d649644bdf5eff71436",
+      "character": "B",
+      "tier": "SPROUT",
+      "file": "designs/games-B-memory-showing.png"
+    },
+    "games-B-memory-answering": {
+      "id": "d64cdb42ad7b45139519bfc62cbee8e7",
+      "character": "B",
+      "tier": "SPROUT",
+      "file": "designs/games-B-memory-answering.png",
+      "note": "desktop canvas, cropped"
+    },
+    "games-B-word": {
+      "id": "0ed51d9e24d84f9fa42d7e37fdcee36a",
+      "character": "B",
+      "tier": "SPROUT",
+      "file": "designs/games-B-word.png",
+      "note": "desktop canvas, cropped"
+    },
+    "games-B-result": {
+      "id": "ec7cfa73420d436fbd0c460f39fc2211",
+      "character": "B",
+      "tier": "SPROUT",
+      "file": "designs/games-B-result.png",
+      "note": "desktop canvas, cropped"
+    },
+    "games-B1-numbers": {
+      "id": "1489d6d6f61946aebc01e457623cea5d",
+      "character": "B",
+      "tier": "SPROUT",
+      "file": "designs/games-B1-numbers.png",
+      "note": "clean-up edit of games-B-numbers; chosen"
+    },
+    "games-B1-memory-showing": {
+      "id": "8dc9e42b2e3c41ec8571fc50d67b42b9",
+      "character": "B",
+      "tier": "SPROUT",
+      "file": "designs/games-B1-memory-showing.png",
+      "note": "clean-up edit; chosen"
+    },
+    "games-B1-memory-answering": {
+      "id": "12b68c39506f45408ea666ccd514300f",
+      "character": "B",
+      "tier": "SPROUT",
+      "file": "designs/games-B1-memory-answering.png",
+      "note": "clean-up edit; chosen"
+    },
+    "games-B1-word": {
+      "id": "45740e013dbb43adb129550efd5b0faf",
+      "character": "B",
+      "tier": "SPROUT",
+      "file": "designs/games-B1-word.png",
+      "note": "clean-up edit; chosen"
+    },
+    "games-B1-result": {
+      "id": "18f35350ab8f43c5bfb5c14887971b7f",
+      "character": "B",
+      "tier": "SPROUT",
+      "file": "designs/games-B1-result.png",
+      "note": "clean-up edit; chosen"
+    },
+    "games-B-tables-setup": {
+      "id": "62140d5fe08543d080b1eb91c5ca55fc",
+      "character": "B",
+      "tier": "SPROUT",
+      "file": "designs/games-B-tables-setup.png",
+      "note": "desktop canvas, cropped; chosen"
+    },
+    "games-B-tables-play": {
+      "id": "c3eefdb75a1c476cbd6f5ce1ce4d8bbc",
+      "character": "B",
+      "tier": "SPROUT",
+      "file": "designs/games-B-tables-play.png",
+      "note": "desktop canvas, cropped; chosen"
+    },
+    "games-B-seedling-numbers": {
+      "id": "744a2e04222d46a0aa59828db1271c91",
+      "character": "B",
+      "tier": "SEEDLING",
+      "file": "designs/games-B-seedling-numbers.png",
+      "note": "desktop canvas, cropped"
+    },
+    "games-B-seedling-memory-answering": {
+      "id": "042730d8a54841eeb15fb09c607a7127",
+      "character": "B",
+      "tier": "SEEDLING",
+      "file": "designs/games-B-seedling-memory-answering.png",
+      "note": "desktop canvas, cropped"
+    },
+    "games-B-seedling-result": {
+      "id": "e574521be18344f486f6961f988f77f7",
+      "character": "B",
+      "tier": "SEEDLING",
+      "file": "designs/games-B-seedling-result.png",
+      "note": "desktop canvas, cropped"
+    },
+    "games-B-sapling-start-timed": {
+      "id": "e2363262b0154f2fa2325fe63b9db7a8",
+      "character": "B",
+      "tier": "SAPLING",
+      "file": "designs/games-B-sapling-start-timed.png",
+      "note": "desktop canvas, cropped"
+    },
+    "games-B-sapling-numbers-timed": {
+      "id": "64686840544743b5a7ee4fcf9d87beb1",
+      "character": "B",
+      "tier": "SAPLING",
+      "file": "designs/games-B-sapling-numbers-timed.png",
+      "note": "desktop canvas, cropped; the icon font failed to load in this render"
+    },
+    "games-B-sapling-memory-answering": {
+      "id": "9c40ac32d99646729ed043056adde917",
+      "character": "B",
+      "tier": "SAPLING",
+      "file": "designs/games-B-sapling-memory-answering.png",
+      "note": "desktop canvas, cropped"
+    },
+    "games-B-sapling-word": {
+      "id": "1fa5a59bbb6548118083bc33ecff5824",
+      "character": "B",
+      "tier": "SAPLING",
+      "file": "designs/games-B-sapling-word.png",
+      "note": "desktop canvas, cropped"
+    },
+    "games-B-sapling-tables-play": {
+      "id": "c721dab768f7418788093ea24fa20575",
+      "character": "B",
+      "tier": "SAPLING",
+      "file": "designs/games-B-sapling-tables-play.png"
+    },
+    "games-B-tablet-numbers-landscape": {
+      "id": null,
+      "character": "B",
+      "tier": "SPROUT",
+      "file": "designs/games-B-tablet-numbers-landscape.png",
+      "note": "TABLET device; generation accepted 2026-11-11 ~20:08 UTC, not landed when the spec was committed"
+    },
+    "games-B-tablet-tables-portrait": {
+      "id": null,
+      "character": "B",
+      "tier": "SPROUT",
+      "file": "designs/games-B-tablet-tables-portrait.png",
+      "note": "TABLET device; generation accepted 2026-11-11 ~20:08 UTC, not landed when the spec was committed"
+    }
+  },
+  "sheets": {
+    "games-sheet-AB": "designs/games-sheet-AB.png",
+    "games-sheet-B-tiers": "designs/games-sheet-B-tiers.png"
+  },
+  "chosen": "B Playground (Kiril, 2026-11-11): Seedling and Sprout full Playground, Sapling quiet Playground; the clean-up edits (games-B1-*) are the Sprout references",
+  "designMd": {
+    "playground": ".stitch/DESIGN-playground.md (tokens read from the B renders' HTML; no Stitch design system created for it yet)"
+  }
+}
