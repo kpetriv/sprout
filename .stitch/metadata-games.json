@@ -193,18 +193,20 @@
       "file": "designs/games-B-sapling-tables-play.png"
     },
     "games-B-tablet-numbers-landscape": {
-      "id": null,
+      "id": "8294857cf2eb4c3a879b2bdd0b578e76",
       "character": "B",
       "tier": "SPROUT",
+      "window": "tablet landscape 1280x800",
       "file": "designs/games-B-tablet-numbers-landscape.png",
-      "note": "TABLET device; generation accepted 2026-11-11 ~20:08 UTC, not landed when the spec was committed"
+      "note": "DESKTOP device, cropped; the TABLET-device twins c4d08f3e3727413b95a3624656e64785 and f94f10fac9f04fce8f109dd9d92c1602 landed later and are not kept locally"
     },
     "games-B-tablet-tables-portrait": {
-      "id": null,
+      "id": "8bab141b97fc4fbda11610936b9fd930",
       "character": "B",
       "tier": "SPROUT",
+      "window": "tablet portrait 800x1280",
       "file": "designs/games-B-tablet-tables-portrait.png",
-      "note": "TABLET device; generation accepted 2026-11-11 ~20:08 UTC, not landed when the spec was committed"
+      "note": "TABLET device, cropped; twins 1d598e9b0ab348218766f8665d471693 (TABLET) and c2b0916cb74741c0953acd484537d74c (AGNOSTIC) not kept locally"
     }
   },
   "sheets": {

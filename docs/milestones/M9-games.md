@@ -63,8 +63,8 @@ Stitch screen ids are in project `10251972321848422943`; local renders in `.stit
 | Memory, answering, distractors | Sapling | `9c40ac32d99646729ed043056adde917` | `games-B-sapling-memory-answering.png` | Five slots, seven outline shape tiles (two distractors unmarked), "Timed · bonus if every round beats the clock" caption. |
 | Word scramble, typed | Sapling | `1fa5a59bbb6548118083bc33ecff5824` | `games-B-sapling-word.png` | No hint, seven slots and tiles, "Type the word" field, outline "Clear"; the Marigold "Submit word" tile is dropped (a round ends when the word is complete, as today). |
 | Times tables play | Sapling | `c721dab768f7418788093ea24fa20575` | `games-B-sapling-tables-play.png` | Rock star level: 20 thin segments, 4 s ring, Field-outline pad, "Right 10 · Streak 6". |
-| Numbers, tablet landscape | Sprout | pending | `games-B-tablet-numbers-landscape.png` | Two columns: prompt left, 2 by 2 tiles right (see §5). |
-| Times tables play, tablet portrait | Sprout | pending | `games-B-tablet-tables-portrait.png` | One 640 dp column on the full-bleed field (see §5). |
+| Numbers, tablet landscape | Sprout | `8294857cf2eb4c3a879b2bdd0b578e76` | `games-B-tablet-numbers-landscape.png` | Two columns: prompt left, 2 by 2 tiles right (see §5). |
+| Times tables play, tablet portrait | Sprout | `8bab141b97fc4fbda11610936b9fd930` | `games-B-tablet-tables-portrait.png` | One 640 dp column on the full-bleed field (see §5). |
 
 ### 3.2 The other renders (kept for the record)
 
