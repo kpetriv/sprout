@@ -87,7 +87,7 @@ class WorkManagerBackgroundWork @Inject constructor(
  * its chat encryption key stays with the device key, so the same parent signing in again restores a device whose
  * registered key is still here (D-REL-6). A kid session, the gate's erase while the registry was unreachable
  * ([RemovalReason.ERASED_UNVERIFIED]), another account found by onboarding, a revoked device and a household that is
- * gone erase it too (D-REL-23). The answer is taken once, from the session, before the wipe's first step, and stored
+ * gone erase it too (D-REL-28). The answer is taken once, from the session, before the wipe's first step, and stored
  * with the removal ([Removal.keepDeviceIdentity]); a resumed wipe uses the stored answer, and one whose answer could
  * not be stored keeps nothing.
  *
@@ -216,7 +216,7 @@ class RemovalHandler internal constructor(
     }
 }
 
-/** A sign-out keeps the chat key only for a real PARENT session that is ACTIVE or PENDING (D-REL-23). */
+/** A sign-out keeps the chat key only for a real PARENT session that is ACTIVE or PENDING (D-REL-28). */
 internal fun keepsDeviceIdentity(session: Session?): Boolean = session != null && !session.isLocalTrial &&
     session.role == Role.PARENT &&
     (session.deviceStatus == RegistrationStatus.ACTIVE || session.deviceStatus == RegistrationStatus.PENDING)
@@ -228,7 +228,7 @@ internal fun keepsDeviceIdentity(session: Session?): Boolean = session != null &
  * state and the parent signing key, audit L10), so their PIN never guards the new account. The database, photo and
  * blob cache keys stay, and so does this device's chat encryption key (like its device key, it belongs to the
  * device id): onboarding moves it to a stash before this phone registers as a new device (`ForgetChatKeyUseCase`,
- * D-REL-7, D-REL-24) and restores a device only for the account its registry row names (D-REL-22), so a new
+ * D-REL-7, D-REL-29) and restores a device only for the account its registry row names (D-REL-27), so a new
  * household, parent or kid never inherits it.
  */
 class LocalHouseholdRows @Inject constructor(

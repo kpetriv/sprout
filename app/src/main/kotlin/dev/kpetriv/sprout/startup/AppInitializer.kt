@@ -46,9 +46,9 @@ import javax.inject.Singleton
  *    sync retries later;
  * 2. restore the session and reconcile it with Firebase Auth ([SessionReconciler]): another account or household
  *    wipes, an account that is gone wipes, lost credentials raise the "Sign in again" gate; with no session, a chat key
- *    a sign-out kept is checked with the token-less `deviceStatus` in the background ([KeptChatKeyCheck], D-REL-28);
+ *    a sign-out kept is checked with the token-less `deviceStatus` in the background ([KeptChatKeyCheck], D-REL-33);
  *    with a real session, a sign-out's record of its own device that a process death left behind seeds the chat
- *    counters again and is deleted ([ChatIdentityKeeper.resumeSeed], best effort, D-REL-25, D-REL-33);
+ *    counters again and is deleted ([ChatIdentityKeeper.resumeSeed], best effort, D-REL-30, D-REL-38);
  * 3. debug builds only, and only on a device that has no session and never belonged to a real household: seed the
  *    demo trial household ([HouseholdBootstrap]; release builds never create demo kids);
  * 4. ledger maintenance: quarantine stored events whose hash or signature no longer verifies
@@ -285,7 +285,7 @@ class AppInitializer internal constructor(
         }
     }
 
-    /** The kept chat key check (D-REL-28) never fails or delays startup; the next start without a session repeats. */
+    /** The kept chat key check (D-REL-33) never fails or delays startup; the next start without a session repeats. */
     @Suppress("TooGenericExceptionCaught", "SwallowedException")
     private suspend fun checkKeptChatKeyBestEffort() {
         try {

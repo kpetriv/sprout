@@ -93,7 +93,7 @@ class FakeBackendRulesTest {
     private val deferred = listOf(SyncError.Transient().code)
 
     @Test
-    fun `one registry row reads for a member and is refused to anyone else, as the rules do (D-REL-22)`() = runTest {
+    fun `one registry row reads for a member and is refused to anyone else, as the rules do (D-REL-27)`() = runTest {
         assertEquals(kid.uid, transport.registeredDevice(HOUSEHOLD, kid.deviceId)?.uid)
         assertEquals(parent.uid, kidTransport.registeredDevice(HOUSEHOLD, parent.deviceId)?.uid)
         assertNull(transport.registeredDevice(HOUSEHOLD, DeviceId("unknown-device")), "no such row")

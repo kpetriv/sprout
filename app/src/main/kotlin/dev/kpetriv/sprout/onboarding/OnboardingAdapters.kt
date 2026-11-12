@@ -186,8 +186,8 @@ class FunctionsRegistrationBackend @Inject constructor(
  * household policy, sync through [SyncController], this device's registry entry, the session (guarded by the account
  * the local rows belong to, [ShellPreferences.linkedAccount], and the chat counters a sign-out kept for a restored
  * device, [ChatIdentityKeeper.seed]), the parent setup marker, the erase, one registry row read from the server
- * ([SyncTransport.registeredDevice], D-REL-22) and the chat key a sign-out kept ([ForgetChatKeyUseCase], stashed and
- * put back, D-REL-24).
+ * ([SyncTransport.registeredDevice], D-REL-27) and the chat key a sign-out kept ([ForgetChatKeyUseCase], stashed and
+ * put back, D-REL-29).
  */
 @Suppress("LongParameterList", "TooManyFunctions") // One collaborator per question onboarding asks.
 class RoomOnboardingHousehold @Inject constructor(
@@ -235,9 +235,9 @@ class RoomOnboardingHousehold @Inject constructor(
             val linked = preferences.linkedAccount()
             // Rows of another account or household must never mix with this one's (D-M3-47).
             if (linked != null && linked != digest) localRows.clear()
-            // A restored device goes on from its own chat counters, not from what the pull rebuilds (D-REL-25). Seeded
+            // A restored device goes on from its own chat counters, not from what the pull rebuilds (D-REL-30). Seeded
             // before the session is saved, so no session ever runs without them; the record goes only once the session
-            // is saved, and a start that finds both seeds again (D-REL-33).
+            // is saved, and a start that finds both seeds again (D-REL-38).
             chatIdentity.seed(session)
             sessions.save(session)
             preferences.setLinkedAccount(digest)

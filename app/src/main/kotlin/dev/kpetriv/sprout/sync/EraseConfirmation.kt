@@ -31,7 +31,7 @@ interface EraseConfirmation {
 
     /**
      * True when an erase after the registry answered keeps this phone's chat key: the session is a parent's (ACTIVE or
-     * PENDING), the same test the removal makes ([keepsDeviceIdentity], D-REL-23).
+     * PENDING), the same test the removal makes ([keepsDeviceIdentity], D-REL-28).
      */
     suspend fun keepsChatKey(): Boolean
 }

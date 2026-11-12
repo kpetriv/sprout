@@ -164,7 +164,7 @@ class RemovalHandlerTest {
     }
 
     @Test
-    fun `only the sign-out of a parent session, ACTIVE or PENDING, keeps this phone's chat key (D-REL-23)`() = runTest {
+    fun `only the sign-out of a parent session, ACTIVE or PENDING, keeps this phone's chat key (D-REL-28)`() = runTest {
         val sessions = listOf(
             parentSession() to true,
             parentSession(RegistrationStatus.PENDING) to true,

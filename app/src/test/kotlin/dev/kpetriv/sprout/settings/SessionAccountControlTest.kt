@@ -91,7 +91,7 @@ class SessionAccountControlTest {
         val order = mutableListOf<String>()
         val removal = HouseholdRemovals { order += "remove:$it" }
         flushing(parentSession(), removal) { order += "flush" }.signOut()
-        assertEquals(listOf("flush", "remove:SIGNED_OUT"), order, "the outbox goes out before the erase (D-REL-35)")
+        assertEquals(listOf("flush", "remove:SIGNED_OUT"), order, "the outbox goes out before the erase (D-REL-40)")
 
         order.clear()
         flushing(parentSession(), removal) { error("offline") }.signOut()

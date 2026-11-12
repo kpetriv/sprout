@@ -343,7 +343,7 @@ class FirebaseSyncTransportPullTest {
     }
 
     @Test
-    fun `one registry row is read by path for any household, before a session exists (D-REL-22)`() = runTest {
+    fun `one registry row is read by path for any household, before a session exists (D-REL-27)`() = runTest {
         hid = null
         val parent = TestData.DEVICE
         firestore.seed("households/h2/devices/$parent", device("p-uid", "PARENT", "ACTIVE"))

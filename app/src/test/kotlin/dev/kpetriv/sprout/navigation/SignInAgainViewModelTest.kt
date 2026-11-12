@@ -163,7 +163,7 @@ class SignInAgainViewModelTest {
         confirmation.keeps = true
         val answered = SignInAgainViewModel(gated(), confirmation)
         answered.onEvent(SignInAgainEvent.EraseInstead)
-        assertEquals(true, answered.state.value.erase?.keepsChatKey, "a sign-out: the key stays (D-REL-23)")
+        assertEquals(true, answered.state.value.erase?.keepsChatKey, "a sign-out: the key stays (D-REL-28)")
 
         status = CompletableDeferred(Result.failure(IllegalStateException("offline")))
         val gate = gated()

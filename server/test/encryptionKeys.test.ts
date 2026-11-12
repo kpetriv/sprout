@@ -301,7 +301,7 @@ describe('registration callables with an encryption key', () => {
   });
 });
 
-describe('one encryption key per device row in a household (D-REL-27)', () => {
+describe('one encryption key per device row in a household (D-REL-32)', () => {
   it('registerEncryptionKey refuses a key another device row holds, and its own row may repeat it', async () => {
     const h = await newHousehold();
     const second = newDevice();

@@ -17,17 +17,17 @@ import kotlinx.coroutines.withTimeoutOrNull
 import javax.inject.Inject
 
 /**
- * Keeps the privacy promise of a sign-out (D-REL-28, PRIVACY "Data on a phone"): a signed-out phone keeps its chat key
+ * Keeps the privacy promise of a sign-out (D-REL-33, PRIVACY "Data on a phone"): a signed-out phone keeps its chat key
  * only until Sprout is set up again on it, it is removed from the household, or it is uninstalled. At a start with no
  * session, a kept key (its record names the household and the device, [ChatIdentityKeeper]) is checked with the
  * token-less, device-signed `deviceStatus`: REVOKED, UNKNOWN (the proof fails or there is no such device) or a
  * household that is gone deletes it, and a stash of the same device with it, so none of the four names is left. A
  * record of another device than this phone's current one can never be restored and goes at once. A stash is checked
  * the same way; one whose tag names no household (a key no sign-out kept: a registration that did not finish) or that
- * has no readable tag can never be checked or restored, and goes too (D-REL-32).
+ * has no readable tag can never be checked or restored, and goes too (D-REL-37).
  *
  * The answers are bounded ([TIMEOUT_MS]) and best effort: no answer (offline, server trouble) keeps the key, and the
- * next start asks again. Onboarding may stash, restore or replace the key while the check waits (D-REL-30): every
+ * next start asks again. Onboarding may stash, restore or replace the key while the check waits (D-REL-35): every
  * deletion goes through [ChatIdentityKeeper.forgetIf] or [ChatIdentityKeeper.dropStashIf], which delete only while the
  * record or the stash is still the one that was checked, under the keeper's lock. Nothing is logged.
  */

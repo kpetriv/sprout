@@ -42,7 +42,7 @@ export async function beginDeviceRegistration(request: CallableRequest): Promise
  * device approves it (T8). Registering the same key again while it is pending is idempotent. The optional encryption
  * key (M4 §1.1) must be bound by the submitted device key to the caller's household and this device id
  * (`permission-denied` otherwise) and must not be held by another device row of the household (`failed-precondition`,
- * D-REL-27); a pending retry adds it when the row has none yet.
+ * D-REL-32); a pending retry adds it when the row has none yet.
  */
 export async function registerParentDevice(
   request: CallableRequest,

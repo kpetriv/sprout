@@ -291,7 +291,7 @@ class PurgeAndWipeTest {
     )
 
     // The sign-out of a parent keeps the device id, so the registry still lists this key for it (D-REL-6), and the
-    // record of its own chat counters goes with it (D-REL-25).
+    // record of its own chat counters goes with it (D-REL-30).
     @Test
     fun aParentSignOutWipeKeepsTheChatKeyAndItsRecordAndNothingElse() = runTest {
         RealSecrets("wipe-signout").use { real ->
@@ -338,7 +338,7 @@ class PurgeAndWipeTest {
         }
     }
 
-    // A kid's phone never keeps its key (D-REL-23): the wipe erases it although the caller asked to keep it.
+    // A kid's phone never keeps its key (D-REL-28): the wipe erases it although the caller asked to keep it.
     @Test
     fun aSignOutWipeWithoutAParentRecordErasesTheChatKey() = runTest {
         RealSecrets("wipe-kid").use { real ->
@@ -364,7 +364,7 @@ class PurgeAndWipeTest {
     }
 
     // A resumed wipe whose first attempt wrote the record and cleared the session keeps it; a record found while a
-    // session is still here predates that session (a restore that had not deleted it yet) and keeps nothing (D-REL-33).
+    // session is still here predates that session (a restore that had not deleted it yet) and keeps nothing (D-REL-38).
     @Test
     fun aRecordAloneKeepsTheKeyOnlyWhenNoSessionIsLeft() = runTest {
         RealSecrets("wipe-resumed").use { real ->
@@ -403,7 +403,7 @@ class PurgeAndWipeTest {
     }
 
     // A new device id (a new household, a second parent phone, a kid link) never inherits the kept key, and a failed
-    // registration does not destroy it either (D-REL-7, D-REL-24).
+    // registration does not destroy it either (D-REL-7, D-REL-29).
     @Test
     fun aStashedKeyDoesNotOpenUntilItsOwnDeviceIsRestored() = runTest {
         RealSecrets("wipe-stash").use { real ->

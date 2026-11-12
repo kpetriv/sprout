@@ -15,7 +15,7 @@ import java.io.File
  *   X25519 private key with its record and stash, the PIN lockout state). Keystore keys (the device signing key and
  *   the key that wraps these blobs) are not files and are never touched. The chat X25519 private key and its record
  *   belong to the device identity ([DEVICE_IDENTITY_SECRETS]): the sign-out of a parent session keeps them, every
- *   other removal deletes them (D-REL-6, D-REL-23).
+ *   other removal deletes them (D-REL-6, D-REL-28).
  * @property blobDirectory the encrypted chat and chore photo blob cache (`noBackupFilesDir/blobs`, M4 §2).
  */
 class LocalDataFiles(
@@ -61,10 +61,10 @@ class LocalDataFiles(
         /**
          * The secrets that belong to this device's identity rather than to its copy of the household: the chat X25519
          * private key, registered with the household against this device id (M4 §1.1), and its record (household,
-         * device id and this device's own chat counters, [ChatIdentityKeeper], D-REL-25). Like the Keystore device
+         * device id and this device's own chat counters, [ChatIdentityKeeper], D-REL-30). Like the Keystore device
          * signing key, they survive the sign-out wipe of a parent session on this phone, so the same device restored
          * by the same parent finds its registered key again; every other removal deletes them, and before this phone
-         * registers as a new device they are moved to a stash (`ForgetChatKeyUseCase`, D-REL-24). A stash is never
+         * registers as a new device they are moved to a stash (`ForgetChatKeyUseCase`, D-REL-29). A stash is never
          * kept by a wipe.
          */
         val DEVICE_IDENTITY_SECRETS: List<String> = listOf(EncryptionKeyStore.SECRET_NAME, ChatIdentityKeeper.RECORD)

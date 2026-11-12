@@ -102,7 +102,7 @@ class FunctionsKidLinking @Inject constructor(private val admin: HouseholdAdminF
  * stops sync, erases this phone's copy and signs out of Firebase; the shell shows the erase screen and restarts.
  * Before that, one sync is tried for at most [FLUSH_TIMEOUT_MS] (the dialog shows that it is signing out): changes
  * still in the outbox are lost by the erase, and a chat message among them would leave a gap in this device's `seq`
- * that the kept counters jump over after a restore (D-REL-25, D-REL-35). Offline, it fails fast or times out; the
+ * that the kept counters jump over after a restore (D-REL-30, D-REL-40). Offline, it fails fast or times out; the
  * sign-out goes on either way.
  */
 class SessionAccountControl internal constructor(

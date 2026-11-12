@@ -215,7 +215,7 @@ internal constructor(
     /**
      * "Erase this phone's copy" instead of signing in (once confirmed); ignored while [canEraseInstead] is false. While
      * the registry was unreachable nothing proves this device is still in the household, so the erase does not keep
-     * its chat key ([RemovalReason.ERASED_UNVERIFIED], D-REL-23); after the registry answered, it is a sign-out.
+     * its chat key ([RemovalReason.ERASED_UNVERIFIED], D-REL-28); after the registry answered, it is a sign-out.
      */
     fun eraseInstead() {
         if (!canEraseInstead()) return

@@ -56,7 +56,7 @@ export function verifiedEncryptionKey(
 
 /**
  * Inside [tx], before any write: refuses (`failed-precondition`) an encryption key (base64, as stored) that another
- * device row of household [hid] already holds (D-REL-27, defence in depth). A device's chat key is created on the phone
+ * device row of household [hid] already holds (D-REL-32, defence in depth). A device's chat key is created on the phone
  * for one device id and is never moved to another (a kept key is stashed before the phone registers again), so a key
  * bound to two rows means a key that leaked or a client bug; either way the second row must not get it, since every
  * wrap for it would also open for the first device. The device's own row ([deviceId]) may hold it (an idempotent retry).

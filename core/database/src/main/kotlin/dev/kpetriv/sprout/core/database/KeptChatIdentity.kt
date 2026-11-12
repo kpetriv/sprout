@@ -25,7 +25,7 @@ import java.io.IOException
 import javax.inject.Inject
 
 /**
- * This device's own chat counters in one thread when it signed out (D-REL-25): the `seq` its next message there takes
+ * This device's own chat counters in one thread when it signed out (D-REL-30): the `seq` its next message there takes
  * and the lamport of its last one. Receivers expect the `seq` to go on and the lamport to rise, so a restored phone
  * must never reuse values it already sent, even when the server no longer has those messages (deleted chat history,
  * a retention prune) and the pull cannot rebuild them. [lastLamport] is a floor for the device clock next to
@@ -35,7 +35,7 @@ data class OwnThreadMark(val threadId: ThreadId, val nextSeq: Long, val lastLamp
 
 /**
  * What a sign-out keeps with this phone's chat X25519 key (`chat.x25519.v1`), as one wrapped `SecretStore` record
- * ([ChatIdentityKeeper.RECORD], D-REL-25, D-REL-28): the household and the device id the key is registered for, the
+ * ([ChatIdentityKeeper.RECORD], D-REL-30, D-REL-33): the household and the device id the key is registered for, the
  * device's Lamport clock and its [OwnThreadMark]s. [householdId] is null only for a stash tag written for a key that
  * was never kept by a sign-out (a phone that registers again without signing out).
  */
@@ -115,8 +115,8 @@ data class KeptChatIdentity(
 }
 
 /**
- * The lifecycle of this phone's chat X25519 key across a sign-out (ADR-0008 §1, D-REL-6, D-REL-7, D-REL-24 to
- * D-REL-28, D-REL-30 to D-REL-33), every step through the wrapped [SecretStore]:
+ * The lifecycle of this phone's chat X25519 key across a sign-out (ADR-0008 §1, D-REL-6, D-REL-7, D-REL-29 to
+ * D-REL-33, D-REL-35 to D-REL-38), every step through the wrapped [SecretStore]:
  * - [keepForSignOut]: a sign-out wipe of a PARENT session writes [RECORD] (household, device id, Lamport clock and
  *   this device's [OwnThreadMark]s) before the database goes; the wipe then leaves the key and the record in place.
  * - [seed]: before the same parent's session for the same device id is saved, the record's counters are put into the
@@ -129,13 +129,13 @@ data class KeptChatIdentity(
  *   it.
  * - [dropStash]: a registration the server accepted (the new key was promoted) deletes the stash for good.
  * - [unstash]: restoring the stash's own device id moves the stash back over whatever key a failed registration made.
- * - [forget], [forgetIf], [dropStashIf]: a kept key or stash whose device is gone from the household (D-REL-28) is
+ * - [forget], [forgetIf], [dropStashIf]: a kept key or stash whose device is gone from the household (D-REL-33) is
  *   deleted, the `If` forms only while it is still the one that was checked.
  *
  * Every step that changes these names holds one lock for the whole process ([LOCK]; the keeper itself is not a
- * singleton), so a slow start-up check never deletes a key that onboarding moved or made meanwhile (D-REL-30).
+ * singleton), so a slow start-up check never deletes a key that onboarding moved or made meanwhile (D-REL-35).
  *
- * Crash safety (D-REL-31): the stash exists exactly when [STASH_KEY] is stored. Its tag is written first (a fresh
+ * Crash safety (D-REL-36): the stash exists exactly when [STASH_KEY] is stored. Its tag is written first (a fresh
  * record bound to [STASH_RECORD]), then the key moves, then [RECORD] goes; [unstash] writes [RECORD] from the tag
  * first, then moves the key back (the move replaces any live key), then deletes the tag. A tag without its key is
  * no stash and is deleted wherever it is found; a stashed key without a readable tag can never be identified, so it
@@ -264,7 +264,7 @@ class ChatIdentityKeeper @Inject constructor(private val database: SproutDatabas
 
     /**
      * [forget], only while [RECORD] still holds [checked]: a key stashed, restored or replaced since it was checked is
-     * left alone (D-REL-30). True when it deleted.
+     * left alone (D-REL-35). True when it deleted.
      */
     suspend fun forgetIf(checked: KeptChatIdentity): Boolean = LOCK.withLock {
         (read(RECORD) == checked).also { same -> if (same) forgetLocked() }

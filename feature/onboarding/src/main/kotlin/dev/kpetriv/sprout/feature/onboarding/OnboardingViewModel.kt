@@ -50,9 +50,9 @@ import javax.inject.Inject
  *
  * A parent's sign-out keeps this phone's chat encryption key with its device key (D-REL-6), so a restored device finds
  * the key its registry entry lists. A device is restored only for the account (and role) its registry row names, read
- * before anything is saved or synced (D-REL-22, D-REL-26). Every new registration (a household, a second parent phone,
+ * before anything is saved or synced (D-REL-27, D-REL-31). Every new registration (a household, a second parent phone,
  * a kid link) is a new device id: the kept key is moved to a stash before its fresh registration key is made
- * ([OnboardingHousehold.forgetChatKey], D-REL-7, D-REL-24), deleted once the server accepted the new key, and put back
+ * ([OnboardingHousehold.forgetChatKey], D-REL-7, D-REL-29), deleted once the server accepted the new key, and put back
  * when the stash's own device is restored instead.
  *
  * When the pre-linking trial household has data, the parent or kid confirms first that it will be deleted
@@ -256,11 +256,11 @@ class OnboardingViewModel @Inject constructor(
      * goes back to waiting. A pending key the registry does not have is dropped.
      *
      * `deviceStatus` proves the key, not the account, so before anything is saved or synced the device's registry row
-     * must name [uid] as a PARENT ([isOwner], D-REL-22): another account's device on this phone (a co-parent
+     * must name [uid] as a PARENT ([isOwner], D-REL-27): another account's device on this phone (a co-parent
      * signing in on the owner's signed-out phone) restores nothing, syncs nothing and keeps the owner's chat key. A
-     * PENDING key whose row names another account is skipped rather than refused (D-REL-34).
+     * PENDING key whose row names another account is skipped rather than refused (D-REL-39).
      * Restoring the current key puts back a chat key that a failed registration moved away from it
-     * ([OnboardingHousehold.restoreChatKey], D-REL-24).
+     * ([OnboardingHousehold.restoreChatKey], D-REL-29).
      */
     @Suppress("ReturnCount") // The local mirror, then each key: one return per way it ends.
     private suspend fun restoreParent(uid: UserId, householdId: HouseholdId): Boolean {
@@ -308,7 +308,7 @@ class OnboardingViewModel @Inject constructor(
     /**
      * [registered], when [key]'s registry row names [uid] as a PARENT ([isOwner]). Another account's unfinished
      * registration on this phone (the PENDING key) is not this account's device: it is skipped (null) and the current
-     * key decides; a new registration replaces it. Only the CURRENT key refuses ([refuseAnotherAccount], D-REL-34).
+     * key decides; a new registration replaces it. Only the CURRENT key refuses ([refuseAnotherAccount], D-REL-39).
      */
     private suspend fun ownRegistered(
         householdId: HouseholdId,
@@ -329,7 +329,7 @@ class OnboardingViewModel @Inject constructor(
 
     /**
      * Whether [deviceId]'s registry row in [householdId] belongs to [uid] with [role] (and [kidId] for a kid): read
-     * from the server before anything is saved or synced (D-REL-22, D-REL-26). A row that cannot be read stops the
+     * from the server before anything is saved or synced (D-REL-27, D-REL-31). A row that cannot be read stops the
      * flow with a network failure, never a restore.
      */
     @Suppress("LongParameterList") // The row and the account it must belong to.
@@ -346,7 +346,7 @@ class OnboardingViewModel @Inject constructor(
 
     /**
      * This phone is another account's device: nothing is saved or synced, its chat key stays for its owner, the
-     * account is signed out and onboarding starts again from Welcome with NOT_ALLOWED (D-REL-22).
+     * account is signed out and onboarding starts again from Welcome with NOT_ALLOWED (D-REL-27).
      */
     private suspend fun refuseAnotherAccount(): Nothing {
         attemptOrNull { auth.signOut() }
@@ -367,7 +367,7 @@ class OnboardingViewModel @Inject constructor(
 
     /**
      * A second line behind [isOwner]: once a sync mirrored the registry, a device that belongs to another parent
-     * account is erased again with a removal that does not keep its chat key (`ANOTHER_ACCOUNT`, D-REL-22; the
+     * account is erased again with a removal that does not keep its chat key (`ANOTHER_ACCOUNT`, D-REL-27; the
      * durable wipe owns the deletion and retries it). Offline, it is kept.
      */
     private suspend fun confirmRestored(uid: UserId, householdId: HouseholdId) {
@@ -470,7 +470,7 @@ class OnboardingViewModel @Inject constructor(
 
     /**
      * Restores a kid device an earlier attempt linked (the server answered after a process death): only when the
-     * device's registry row belongs to this anonymous account as the KID of its claims (D-REL-26), so a kid account is
+     * device's registry row belongs to this anonymous account as the KID of its claims (D-REL-31), so a kid account is
      * never restored onto another device of this phone (a parent's kept device id). Anything else is not restored.
      */
     @Suppress("ReturnCount") // No household or kid in the claims, then each key: one return per way it ends.
@@ -576,7 +576,7 @@ class OnboardingViewModel @Inject constructor(
 
     /**
      * A fresh pending registration key bound to a new server challenge: a new device id. The chat key of the current
-     * device id is moved to a stash first (D-REL-7, D-REL-24); if it cannot be, nothing is registered.
+     * device id is moved to a stash first (D-REL-7, D-REL-29); if it cannot be, nothing is registered.
      */
     private suspend fun pendingKey(): DeviceRegistrationMaterial {
         household.forgetChatKey()
@@ -602,7 +602,7 @@ class OnboardingViewModel @Inject constructor(
     /**
      * Promotes the pending key: this phone is a new device from now on, so the stashed chat key of its previous
      * device id can never be restored again and is deleted (best effort: a stash of another device is dropped anyway
-     * when found, D-REL-24).
+     * when found, D-REL-29).
      */
     private suspend fun promotePending(): DeviceId {
         val promoted = deviceIdOf(keys.promotePendingKey())

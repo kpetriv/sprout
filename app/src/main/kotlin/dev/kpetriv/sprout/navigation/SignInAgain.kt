@@ -85,8 +85,8 @@ sealed interface SignInAgainEvent {
 /**
  * The erase confirmation (audit L5): what erasing loses ([unsyncedChanges], null when it could not be counted) and,
  * when this phone has a parent PIN, the PIN ([needsPin]), checked by `feature/lock`. [keepsChatKey]: the registry
- * answered and this is a parent's phone, so the erase is a sign-out that keeps the chat key (D-REL-23); otherwise the
- * key goes too and chat is set up again on this phone (D-REL-36).
+ * answered and this is a parent's phone, so the erase is a sign-out that keeps the chat key (D-REL-28); otherwise the
+ * key goes too and chat is set up again on this phone (D-REL-41).
  */
 data class EraseConfirmState(
     val unsyncedChanges: Int?,

@@ -21,7 +21,7 @@ import { log } from '../log.js';
  *   it does not verify.
  * - Registering the key the row already has answers `created: false` and changes nothing (the stored binding is
  *   kept); a different key already on the row is `failed-precondition` (a changed key needs a new device
- *   registration, D-M4-2), and so is a key another device row of the household holds (D-REL-27). The device is read
+ *   registration, D-M4-2), and so is a key another device row of the household holds (D-REL-32). The device is read
  *   again in the write transaction: one revoked meanwhile is refused.
  */
 export async function registerEncryptionKey(

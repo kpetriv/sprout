@@ -37,7 +37,7 @@ import kotlin.test.assertTrue
 import kotlin.time.Instant
 
 /**
- * The chat key's record and stash (D-REL-25, D-REL-30, D-REL-31, D-REL-33): the counters a restore seeds, and the
+ * The chat key's record and stash (D-REL-30, D-REL-35, D-REL-36, D-REL-38): the counters a restore seeds, and the
  * stash steps, each one cut short by a process death and run again.
  */
 @RunWith(RobolectricTestRunner::class)
@@ -83,7 +83,7 @@ class ChatIdentityKeeperTest {
         return key
     }
 
-    // ---- seeding (D-REL-25) ----
+    // ---- seeding (D-REL-30) ----
 
     @Test
     fun `a restore raises the device clock to the kept one and sets the seq floors`() = runTest {
@@ -178,7 +178,7 @@ class ChatIdentityKeeperTest {
         }
     }
 
-    // ---- stash steps cut short (D-REL-31) ----
+    // ---- stash steps cut short (D-REL-36) ----
 
     @Test
     fun `a stash cut after its tag was written leaves the live key, and running it again finishes it`() = runTest {
@@ -287,7 +287,7 @@ class ChatIdentityKeeperTest {
         assertNotEquals(live, liveKey(), "the untagged one was dropped")
     }
 
-    // ---- deletions that check first (D-REL-30) ----
+    // ---- deletions that check first (D-REL-35) ----
 
     @Test
     fun `forgetIf and dropStashIf delete only what was checked`() = runTest {

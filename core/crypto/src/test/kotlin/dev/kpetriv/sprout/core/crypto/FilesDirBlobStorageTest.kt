@@ -14,7 +14,7 @@ import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
-/** [FilesDirBlobStorage]'s delete and rename cover every file `AtomicFile` may leave (review L2, D-REL-24). */
+/** [FilesDirBlobStorage]'s delete and rename cover every file `AtomicFile` may leave (review L2, D-REL-29). */
 @RunWith(RobolectricTestRunner::class)
 class FilesDirBlobStorageTest {
     private val context = RuntimeEnvironment.getApplication()

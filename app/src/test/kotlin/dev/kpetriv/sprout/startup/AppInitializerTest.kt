@@ -103,7 +103,7 @@ class AppInitializerTest {
                 start()
                 advanceUntilIdle()
             }
-            assertEquals(0, keptKeyChecks, "a session owns the key: nothing to check (D-REL-28)")
+            assertEquals(0, keptKeyChecks, "a session owns the key: nothing to check (D-REL-33)")
         }
 
     @Test
@@ -118,7 +118,7 @@ class AppInitializerTest {
             advanceUntilIdle()
             assertEquals(StartupState.Ready, state.value)
         }
-        assertEquals(listOf(parentSession()), seeded, "D-REL-33: a record a process death left is used")
+        assertEquals(listOf(parentSession()), seeded, "D-REL-38: a record a process death left is used")
         assertTrue(steps.indexOf("chat seed") in 0 until steps.indexOf("sync"))
 
         seeded.clear()

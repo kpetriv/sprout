@@ -41,7 +41,7 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlin.time.Instant
 
-/** The start-up check of a chat key a sign-out kept (D-REL-28). */
+/** The start-up check of a chat key a sign-out kept (D-REL-33). */
 @RunWith(RobolectricTestRunner::class)
 @Config(application = Application::class) // Not the Hilt app: its startup opens the encrypted database.
 class KeptChatKeyCheckTest {

@@ -38,7 +38,7 @@ import kotlin.time.Instant
  * Chat between two (then three) real Room devices over one [FakeBackend] (M4 §7): parent and kid exchange messages
  * and a photo; the backend only ever holds ciphertext; revoking the kid device rotates the thread key so the revoked
  * device cannot read the next epoch; a parent device added later reads the current epoch only (D-M4-10); a parent
- * phone signed out and restored reads what the server kept and goes on above what the kid has seen (D-REL-25).
+ * phone signed out and restored reads what the server kept and goes on above what the kid has seen (D-REL-30).
  */
 @RunWith(RobolectricTestRunner::class)
 class ChatConvergenceTest {
@@ -263,7 +263,7 @@ class ChatConvergenceTest {
             secretStore = parent.secretStore,
         )
         assertEquals(parent.deviceId, restored.deviceId)
-        // What saving the restored session does: seed, save, then delete the record (D-REL-33).
+        // What saving the restored session does: seed, save, then delete the record (D-REL-38).
         assertTrue(restored.chatIdentity.seed(restored.session))
         restored.chatIdentity.discardRecord()
         assertNull(restored.chatIdentity.kept(), "the record is used once")
@@ -279,7 +279,7 @@ class ChatConvergenceTest {
     /**
      * The parent signs out (Settings → Sign out: a wipe that keeps the device identity, D-REL-6) after the server lost
      * its own messages (here "Delete chat history now"; a retention prune does the same), and signs in again on the
-     * same phone: a fresh database for the same device id and the same secret store (D-REL-25, review H2, M1).
+     * same phone: a fresh database for the same device id and the same secret store (D-REL-30, review H2, M1).
      */
     @Test
     fun aParentRestoredAfterASignOutReadsTheHistoryLeftAndSendsAboveWhatTheKidHasSeen() = runTest {

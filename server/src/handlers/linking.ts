@@ -116,7 +116,7 @@ export async function redeemLinkCode(
     if (!householdSnap.exists) throw new HttpsError('not-found', INVALID_CODE);
     if (userSnap.exists) throw new HttpsError('failed-precondition', 'This device is already linked');
     if (deviceSnap.exists) throw new HttpsError('already-exists', 'Device already registered');
-    // A kid device never takes a key another device of the household holds (D-REL-27).
+    // A kid device never takes a key another device of the household holds (D-REL-32).
     if (encryptionKey !== undefined) {
       await requireKeyNotBoundElsewhere(tx, hid, key.deviceId, encryptionKey.encryptionKey);
     }

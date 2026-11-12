@@ -175,7 +175,7 @@ class CredentialGateTest {
         assertEquals(GateState.Unreachable, gate.state.value)
         assertTrue(gate.canEraseInstead())
         gate.eraseInstead()
-        assertEquals(listOf(RemovalReason.ERASED_UNVERIFIED), removals, "unverified: the chat key goes too (D-REL-23)")
+        assertEquals(listOf(RemovalReason.ERASED_UNVERIFIED), removals, "unverified: the chat key goes too (D-REL-28)")
     }
 
     @Test

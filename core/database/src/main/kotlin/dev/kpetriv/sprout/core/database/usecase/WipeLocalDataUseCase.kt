@@ -24,13 +24,13 @@ import javax.inject.Inject
  * recordings and captures; nothing there is needed again). The Keystore keys stay: the device signing key keeps this
  * device's identity, and the wrapping key is useless without the blobs.
  *
- * With `keepDeviceIdentity` (the sign-out of a PARENT session on this phone, D-REL-6, D-REL-23) the chat X25519
+ * With `keepDeviceIdentity` (the sign-out of a PARENT session on this phone, D-REL-6, D-REL-28) the chat X25519
  * private key stays as well, with its record ([LocalDataFiles.DEVICE_IDENTITY_SECRETS], [ChatIdentityKeeper]): the
  * device id survives the wipe, the household's registry still lists that key for it, and the parent who signs in
  * again on the same phone restores the same device, whose chat then opens its thread keys again and goes on with its
- * own `seq` and lamport (D-REL-25). Every other removal (revoked, household gone, a kid session, an erase while the
+ * own `seq` and lamport (D-REL-30). Every other removal (revoked, household gone, a kid session, an erase while the
  * registry was unreachable, another account restored on this phone) erases it too, and onboarding moves a kept key
- * to a stash before this phone registers as a new device ([ForgetChatKeyUseCase], D-REL-24).
+ * to a stash before this phone registers as a new device ([ForgetChatKeyUseCase], D-REL-29).
  *
  * The database instance is closed afterwards, so the caller must restart the process (which lands on onboarding,
  * since there is no session). Deleting is best effort per file: a file that cannot be deleted does not stop the
@@ -65,11 +65,11 @@ class WipeLocalDataUseCase internal constructor(
 
     /**
      * Erases everything listed above; true when it is all gone. [keepDeviceIdentity] (the sign-out of a parent
-     * session, decided by the caller, D-REL-23) keeps [LocalDataFiles.DEVICE_IDENTITY_SECRETS], but only once their
+     * session, decided by the caller, D-REL-28) keeps [LocalDataFiles.DEVICE_IDENTITY_SECRETS], but only once their
      * record is written ([ChatIdentityKeeper.keepForSignOut], before anything is erased) or was written by an earlier
      * attempt of the same wipe, which is known by the session being gone already: a key without its record (household,
      * device id, counters) is erased like any other, and so is one whose only record predates a session that is still
-     * here (a restore whose record was not deleted yet, D-REL-33: its counters are stale).
+     * here (a restore whose record was not deleted yet, D-REL-38: its counters are stale).
      */
     suspend operator fun invoke(keepDeviceIdentity: Boolean = false): Boolean {
         val keep = keepDeviceIdentity && (

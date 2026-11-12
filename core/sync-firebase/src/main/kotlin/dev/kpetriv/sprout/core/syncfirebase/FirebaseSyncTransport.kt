@@ -92,7 +92,7 @@ import javax.inject.Singleton
  * the rules refuse. Blob chunks are never pulled:
  * [fetchBlob] reads one blob's chunks by id.
  *
- * **One registry row** ([registeredDevice], D-REL-22) is read by path for onboarding, before a session exists: the
+ * **One registry row** ([registeredDevice], D-REL-27) is read by path for onboarding, before a session exists: the
  * household and device are the caller's, never the session's.
  *
  * **Changes** come from snapshot listeners (messages included, scoped like the pull), open only while [foreground]
@@ -546,7 +546,7 @@ internal constructor(
     }
 
     // SyncException carries the code only, never the SDK failure (codes only, no free text). A row that is there but
-    // does not parse (or is not this device's) is a failure too, never "no row" (D-REL-22).
+    // does not parse (or is not this device's) is a failure too, never "no row" (D-REL-27).
     @Suppress("SwallowedException")
     override suspend fun registeredDevice(householdId: HouseholdId, deviceId: DeviceId): RegisteredDevice? {
         val document = try {

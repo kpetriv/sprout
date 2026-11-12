@@ -21,18 +21,18 @@ enum class RemovalReason {
 
     /**
      * This phone signed out, or another account signed in (D-M3-47): its copy of the household is erased. The only
-     * reason that may keep this phone's chat key: for a PARENT session, ACTIVE or PENDING (D-REL-6, D-REL-23).
+     * reason that may keep this phone's chat key: for a PARENT session, ACTIVE or PENDING (D-REL-6, D-REL-28).
      */
     SIGNED_OUT,
 
     /**
      * "Erase this phone's copy instead" on the "Sign in again" gate while the registry could not be read: shown as a
-     * sign-out, but nothing proves the device is still in the household, so its chat key goes too (D-REL-23).
+     * sign-out, but nothing proves the device is still in the household, so its chat key goes too (D-REL-28).
      */
     ERASED_UNVERIFIED,
 
     /**
-     * Onboarding restored a device that its synced registry mirror says belongs to another account (D-REL-22): shown as
+     * Onboarding restored a device that its synced registry mirror says belongs to another account (D-REL-27): shown as
      * a sign-out; the chat key goes with the rest, through the durable wipe.
      */
     ANOTHER_ACCOUNT,
@@ -41,14 +41,14 @@ enum class RemovalReason {
     /** Whether the removed screen words it as a sign-out (the phone's own choice) rather than a removal. */
     val isSignOut: Boolean get() = this == SIGNED_OUT || this == ERASED_UNVERIFIED || this == ANOTHER_ACCOUNT
 
-    /** Whether this reason may keep the chat key at all (the session decides the rest, D-REL-23). */
+    /** Whether this reason may keep the chat key at all (the session decides the rest, D-REL-28). */
     val mayKeepDeviceIdentity: Boolean get() = this == SIGNED_OUT
 }
 
 /**
  * A removal as stored: why, whether the wipe has finished, and whether it keeps this phone's chat key
  * ([keepDeviceIdentity]: decided once from the session before anything is erased and stored with the removal, so a
- * resumed wipe uses the same answer; null until decided, D-REL-23).
+ * resumed wipe uses the same answer; null until decided, D-REL-28).
  */
 data class Removal(val reason: RemovalReason, val wiped: Boolean = false, val keepDeviceIdentity: Boolean? = null)
 

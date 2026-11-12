@@ -39,7 +39,7 @@ class OnboardingViewModelTest {
     private val keys = InMemoryDeviceKeyStore(clock)
 
     init {
-        // Every registry row belongs to the signed-in account unless a test says otherwise (D-REL-22).
+        // Every registry row belongs to the signed-in account unless a test says otherwise (D-REL-27).
         household.ownerOf = { auth.lastClaims?.let { RegisteredOwner(it.uid, it.role ?: Role.PARENT, it.kidId) } }
     }
 
@@ -450,8 +450,8 @@ class OnboardingViewModelTest {
 
         val (read, before) = household.ownerReads.single()
         assertEquals(device, read)
-        assertFalse(before.any { it.startsWith("saveSession") || it == "sync" }, "checked first (D-REL-22)")
-        assertEquals(listOf(device), household.chatKeysRestored, "a stash of this device id comes back (D-REL-24)")
+        assertFalse(before.any { it.startsWith("saveSession") || it == "sync" }, "checked first (D-REL-27)")
+        assertEquals(listOf(device), household.chatKeysRestored, "a stash of this device id comes back (D-REL-29)")
     }
 
     @Test
@@ -474,7 +474,7 @@ class OnboardingViewModelTest {
     }
 
     @Test
-    fun `another account's pending key on this phone is skipped and the current key is restored (D-REL-34)`() {
+    fun `another account's pending key on this phone is skipped and the current key is restored (D-REL-39)`() {
         auth.claims[0] = parentClaims()
         val current = currentDevice()
         // An unfinished registration of a co-parent's account left its pending key on this phone.
@@ -636,7 +636,7 @@ class OnboardingViewModelTest {
             household.chatKeyForgotten.single(),
             "a kid linked on this phone never inherits a parent's kept chat key (D-REL-7)",
         )
-        assertEquals(1, household.stashesDropped, "accepted: the stash of the old device id goes (D-REL-24)")
+        assertEquals(1, household.stashesDropped, "accepted: the stash of the old device id goes (D-REL-29)")
         assertTrue(viewModel.state.value.finished)
     }
 
@@ -665,7 +665,7 @@ class OnboardingViewModelTest {
     }
 
     @Test
-    fun `a kid account is never restored onto a device id whose row names another account or role (D-REL-26)`() {
+    fun `a kid account is never restored onto a device id whose row names another account or role (D-REL-31)`() {
         // This phone's current key is a parent's device (kept by a sign-out); the anonymous user already has claims.
         claimsSequence(AccountClaims(KID_UID, HOUSEHOLD, Role.KID, LEO), NEW_KID_CLAIMS)
         backend.statuses[RegistrationKey.CURRENT] = RegistryStatus.ACTIVE
