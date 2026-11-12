@@ -129,8 +129,9 @@ data class KeptChatIdentity(
  *   it.
  * - [dropStash]: a registration the server accepted (the new key was promoted) deletes the stash for good.
  * - [unstash]: restoring the stash's own device id moves the stash back over whatever key a failed registration made.
- * - [forget], [forgetIf], [dropStashIf]: a kept key or stash whose device is gone from the household (D-REL-33) is
- *   deleted, the `If` forms only while it is still the one that was checked.
+ * - [forgetIf], [dropStashIf]: a kept key or stash whose device is gone from the household (D-REL-33) is deleted,
+ *   only while it is still the one that was checked. The unconditional [forget] is internal (tests only), so every
+ *   deletion the start-up check makes stays conditional.
  *
  * Every step that changes these names holds one lock for the whole process ([LOCK]; the keeper itself is not a
  * singleton), so a slow start-up check never deletes a key that onboarding moved or made meanwhile (D-REL-35).
@@ -257,8 +258,8 @@ class ChatIdentityKeeper @Inject constructor(private val database: SproutDatabas
         LOCK.withLock { dropStashLocked() }
     }
 
-    /** Deletes the live key and its record. */
-    suspend fun forget() {
+    /** Deletes the live key and its record, unconditionally: tests only (production deletes through [forgetIf]). */
+    internal suspend fun forget() {
         LOCK.withLock { forgetLocked() }
     }
 

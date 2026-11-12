@@ -267,7 +267,8 @@ class OnboardingViewModel @Inject constructor(
      * `deviceStatus` proves the key, not the account, so before anything is saved or synced the device's registry row
      * must name [uid] as a PARENT ([isOwner], D-REL-27): another account's device on this phone (a co-parent
      * signing in on the owner's signed-out phone) restores nothing, syncs nothing and keeps the owner's chat key. A
-     * PENDING key whose row names another account is skipped rather than refused (D-REL-39).
+     * PENDING key whose row names another account is skipped rather than refused, and discarded once the current key's
+     * restore saved this account's session, so it never stays next to the owner's live key (D-REL-39).
      * Restoring the current key puts back a chat key that a failed registration moved away from it
      * ([OnboardingHousehold.restoreChatKey], D-REL-29).
      */
@@ -279,8 +280,15 @@ class OnboardingViewModel @Inject constructor(
             parentLockAfterPull()
             return true
         }
+        var skippedPending = false
         for (key in listOf(RegistrationKey.PENDING, RegistrationKey.CURRENT)) {
-            val (status, candidate) = ownRegistered(householdId, key, uid) ?: continue
+            val registered = ownRegistered(householdId, key, uid)
+            if (registered == null) {
+                // Still here after [registered] dropped an unknown one: another account's pending key (D-REL-39).
+                if (key == RegistrationKey.PENDING) skippedPending = pendingDevice() != null
+                continue
+            }
+            val (status, candidate) = registered
             val deviceId = if (key == RegistrationKey.PENDING) {
                 promotePending()
             } else {
@@ -290,6 +298,7 @@ class OnboardingViewModel @Inject constructor(
             purgeTrialDataIfAny()
             if (status == RegistryStatus.ACTIVE) {
                 saveActiveParent(uid, householdId, deviceId)
+                if (skippedPending) keys.discardPendingKey()
                 // The first pull runs before the PIN and signing step (D-REL-11): see parentLockAfterPull.
                 show(OnboardingStep.FirstSync)
                 val pulled = confirmRestored(uid, householdId)
@@ -299,6 +308,7 @@ class OnboardingViewModel @Inject constructor(
                 household.saveSession(
                     Session(uid, householdId, Role.PARENT, null, deviceId, RegistrationStatus.PENDING, now()),
                 )
+                if (skippedPending) keys.discardPendingKey()
                 waitForApproval(householdId, displayFingerprint(deviceId))
             }
             return true
@@ -518,18 +528,25 @@ class OnboardingViewModel @Inject constructor(
      * Restores a kid device an earlier attempt linked (the server answered after a process death): only when the
      * device's registry row belongs to this anonymous account as the KID of its claims (D-REL-31), so a kid account is
      * never restored onto another device of this phone (a parent's kept device id). Anything else is not restored.
+     * A pending key skipped on the way is discarded once the current key's restore saved the session (D-REL-39).
      */
     @Suppress("ReturnCount") // No household or kid in the claims, then each key: one return per way it ends.
     private suspend fun restoreKid(account: AccountClaims): Boolean {
         val householdId = account.householdId ?: return false
         val kidId = account.kidId ?: return false
+        var skippedPending = false
         for (key in listOf(RegistrationKey.PENDING, RegistrationKey.CURRENT)) {
-            val candidate = restorableKidDevice(householdId, key, account.uid, kidId) ?: continue
+            val candidate = restorableKidDevice(householdId, key, account.uid, kidId)
+            if (candidate == null) {
+                if (key == RegistrationKey.PENDING) skippedPending = pendingDevice() != null
+                continue
+            }
             val deviceId = if (key == RegistrationKey.PENDING) promotePending() else candidate
             purgeTrialDataIfAny()
             household.saveSession(
                 Session(account.uid, householdId, Role.KID, kidId, deviceId, RegistrationStatus.ACTIVE, now()),
             )
+            if (skippedPending) keys.discardPendingKey()
             firstSync()
             return true
         }

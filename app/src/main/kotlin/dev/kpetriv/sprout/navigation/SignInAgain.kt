@@ -85,8 +85,8 @@ sealed interface SignInAgainEvent {
 /**
  * The erase confirmation (audit L5): what erasing loses ([unsyncedChanges], null when it could not be counted) and,
  * when this phone has a parent PIN, the PIN ([needsPin]), checked by `feature/lock`. [keepsChatKey]: the registry
- * answered and this is a parent's phone, so the erase is a sign-out that keeps the chat key (D-REL-28); otherwise the
- * key goes too and chat is set up again on this phone (D-REL-41).
+ * answered, this is a parent's phone and it has a chat key, so the erase is a sign-out that keeps that key
+ * (D-REL-28); otherwise there is no key to keep, or it goes too and chat is set up again on this phone (D-REL-41).
  */
 data class EraseConfirmState(
     val unsyncedChanges: Int?,
@@ -129,9 +129,11 @@ class SignInAgainViewModel @Inject constructor(
         viewModelScope.launch {
             val unsynced = attempt { confirmation.unsyncedChanges() }
             val needsPin = attempt { confirmation.hasParentPin() } ?: true
-            // The same test as the erase itself: unverified (Unreachable) never keeps the key, a kid's phone neither.
+            // The same test as the erase itself: unverified (Unreachable) never keeps the key, a kid's phone neither,
+            // and a phone without a chat key has none to keep.
             val keepsChatKey = gate.state.value is GateState.SignInRequired &&
-                attempt { confirmation.keepsChatKey() } == true
+                attempt { confirmation.keepsChatKey() } == true &&
+                attempt { confirmation.hasChatKey() } == true
             if (gate.canEraseInstead()) {
                 mutableState.update {
                     it.copy(erase = it.erase ?: EraseConfirmState(unsynced, needsPin, keepsChatKey = keepsChatKey))

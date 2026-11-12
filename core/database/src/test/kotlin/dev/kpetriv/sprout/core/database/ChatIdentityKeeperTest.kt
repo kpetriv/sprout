@@ -1,5 +1,6 @@
 package dev.kpetriv.sprout.core.database
 
+import dev.kpetriv.sprout.core.crypto.BlobStorage
 import dev.kpetriv.sprout.core.crypto.InMemoryBlobStorage
 import dev.kpetriv.sprout.core.crypto.InMemoryKeyWrapper
 import dev.kpetriv.sprout.core.crypto.JceX25519KeyAgreement
@@ -22,7 +23,11 @@ import dev.kpetriv.sprout.core.model.ThreadId
 import dev.kpetriv.sprout.core.model.UserId
 import dev.kpetriv.sprout.core.sync.SyncCursor
 import dev.kpetriv.sprout.core.time.FakeClock
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.After
 import org.junit.Test
@@ -40,10 +45,11 @@ import kotlin.time.Instant
  * The chat key's record and stash (D-REL-30, D-REL-35, D-REL-36, D-REL-38): the counters a restore seeds, and the
  * stash steps, each one cut short by a process death and run again.
  */
+@OptIn(ExperimentalCoroutinesApi::class)
 @RunWith(RobolectricTestRunner::class)
 class ChatIdentityKeeperTest {
-    private val store =
-        WrappedSecretStore(InMemoryKeyWrapper(), InMemoryBlobStorage(), SecureRandom(), Dispatchers.Unconfined)
+    private val blobs = InMemoryBlobStorage()
+    private val store = WrappedSecretStore(InMemoryKeyWrapper(), blobs, SecureRandom(), Dispatchers.Unconfined)
     private val keys = SecretStoreEncryptionKeyStore(store, JceX25519KeyAgreement(SecureRandom()))
     private val databases = mutableListOf<SproutDatabase>()
     private val device = DeviceId("d".repeat(64))
@@ -287,7 +293,124 @@ class ChatIdentityKeeperTest {
         assertNotEquals(live, liveKey(), "the untagged one was dropped")
     }
 
+    /** The first half of a `BlobStorage.rename`: [from]'s blob copied to [to], [from] not deleted yet. */
+    private suspend fun copiedNotDeleted(from: String, to: String) {
+        blobs.write(to, requireNotNull(blobs.read(from)))
+    }
+
+    @Test
+    fun `a stash cut after the key was copied but before the original went converges either way`() = runTest {
+        val key = signedOut()
+        val keeper = phone().second
+        val record = requireNotNull(keeper.kept())
+        // {K, SK, ST, R}: the tag is written and the key copied to the stash, the live key not deleted yet.
+        store.writeRecord(STASH_RECORD, record.encode())
+        copiedNotDeleted(KEY, STASH_KEY)
+
+        // The next registration attempt finishes the stash: complete, with the same key.
+        keeper.stash(device)
+        assertEquals(record, keeper.stashed())
+        assertFalse(keeper.hasKey())
+        assertNull(keeper.kept())
+        assertTrue(keeper.unstash(device))
+        assertEquals(key, liveKey(), "the stash was the live key itself")
+
+        // The same split undone instead: the parent goes back to the same account.
+        store.writeRecord(STASH_RECORD, record.encode())
+        copiedNotDeleted(KEY, STASH_KEY)
+        assertTrue(keeper.unstash(device))
+        assertEquals(key, liveKey(), "the live key is the registered one, never deleted")
+        assertEquals(record, keeper.kept())
+        assertFalse(keeper.hasStash())
+        assertFalse(store.contains(STASH_RECORD))
+    }
+
+    @Test
+    fun `an unstash cut after the record and the key copy were written converges either way`() = runTest {
+        val key = signedOut()
+        val keeper = phone().second
+        keeper.stash(device)
+        val tag = requireNotNull(keeper.stashed())
+        // {K', SK, ST, R-from-tag}: the record written from the tag and the stash copied back, the stash not deleted.
+        store.writeRecord(RECORD, tag.encode())
+        copiedNotDeleted(STASH_KEY, KEY)
+        assertEquals(key, liveKey(), "the copy already opens under the live name")
+
+        // Running the unstash again finishes it.
+        assertTrue(keeper.unstash(device))
+        assertEquals(key, liveKey())
+        assertEquals(tag, keeper.kept())
+        assertFalse(keeper.hasStash())
+        assertFalse(store.contains(STASH_RECORD))
+
+        // The same split followed by another registration attempt: a complete stash, the key never lost.
+        keeper.stash(device)
+        store.writeRecord(RECORD, tag.encode())
+        copiedNotDeleted(STASH_KEY, KEY)
+        keeper.stash(device)
+        assertEquals(tag, keeper.stashed())
+        assertFalse(keeper.hasKey())
+        assertNull(keeper.kept())
+        assertTrue(keeper.unstash(device))
+        assertEquals(key, liveKey())
+    }
+
     // ---- deletions that check first (D-REL-35) ----
+
+    /** [BlobStorage] whose first delete of [KEY] waits for [gate] ([entered] completes when it is reached). */
+    private class GatedDeletes(private val inner: BlobStorage) : BlobStorage by inner {
+        val entered = CompletableDeferred<Unit>()
+        val gate = CompletableDeferred<Unit>()
+        val calls = mutableListOf<String>()
+
+        override suspend fun read(name: String): ByteArray? = inner.read(name).also { calls += "read:$name" }
+
+        override suspend fun write(name: String, blob: ByteArray) {
+            calls += "write:$name"
+            inner.write(name, blob)
+        }
+
+        override suspend fun delete(name: String) {
+            calls += "delete:$name"
+            if (name == KEY && !entered.isCompleted) {
+                entered.complete(Unit)
+                gate.await()
+            }
+            inner.delete(name)
+        }
+    }
+
+    @Test
+    fun `a stash started while forgetIf is deleting waits for the lock`() = runTest {
+        val storage = GatedDeletes(InMemoryBlobStorage())
+        val wrapper = InMemoryKeyWrapper()
+        // Two stores over the same files: each store's own mutex covers one call only, so nothing but the keeper's
+        // lock keeps the stash out of the check-then-delete.
+        val checking = WrappedSecretStore(wrapper, storage, SecureRandom(), Dispatchers.Unconfined)
+        val registering = WrappedSecretStore(wrapper, storage, SecureRandom(), Dispatchers.Unconfined)
+        SecretStoreEncryptionKeyStore(checking, JceX25519KeyAgreement(SecureRandom())).publicKey()
+        val checked = KeptChatIdentity(home, device)
+        checking.writeRecord(RECORD, checked.encode())
+        val database = inMemoryDatabase().also { databases += it }
+
+        val forgetting = launch { assertTrue(ChatIdentityKeeper(database, checking).forgetIf(checked)) }
+        runCurrent()
+        assertTrue(storage.entered.isCompleted, "forgetIf is inside its delete of the live key")
+        val before = storage.calls.size
+        val stashing = launch { ChatIdentityKeeper(database, registering).stash(device) }
+        runCurrent()
+
+        assertTrue(stashing.isActive, "the stash waits for the lock")
+        assertEquals(before, storage.calls.size, "and touches nothing meanwhile")
+
+        storage.gate.complete(Unit)
+        forgetting.join()
+        stashing.join()
+        assertFalse(checking.contains(KEY))
+        assertFalse(checking.contains(RECORD))
+        assertFalse(checking.contains(STASH_KEY), "nothing was left to stash")
+        assertFalse(checking.contains(STASH_RECORD))
+    }
 
     @Test
     fun `forgetIf and dropStashIf delete only what was checked`() = runTest {

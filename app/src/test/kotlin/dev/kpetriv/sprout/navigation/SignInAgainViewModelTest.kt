@@ -41,6 +41,7 @@ class SignInAgainViewModelTest {
         var hasPin = true
         var check = ErasePinCheck.CONFIRMED
         var keeps = false
+        var hasKey = true
         val checkedPins = mutableListOf<String>()
         var lastPin: CharArray? = null
 
@@ -49,6 +50,8 @@ class SignInAgainViewModelTest {
         override suspend fun hasParentPin(): Boolean = hasPin
 
         override suspend fun keepsChatKey(): Boolean = keeps
+
+        override suspend fun hasChatKey(): Boolean = hasKey
 
         override suspend fun checkPin(pin: CharArray): ErasePinCheck {
             checkedPins += String(pin)
@@ -177,6 +180,15 @@ class SignInAgainViewModelTest {
         val kid = SignInAgainViewModel(gated(), confirmation)
         kid.onEvent(SignInAgainEvent.EraseInstead)
         assertEquals(false, kid.state.value.erase?.keepsChatKey, "a phone whose erase keeps nothing")
+    }
+
+    @Test
+    fun `a parent's phone without a chat key is not told the erase keeps one`() = runTest {
+        confirmation.keeps = true
+        confirmation.hasKey = false
+        val viewModel = SignInAgainViewModel(gated(), confirmation)
+        viewModel.onEvent(SignInAgainEvent.EraseInstead)
+        assertEquals(false, viewModel.state.value.erase?.keepsChatKey, "no key to keep: the text must not promise one")
     }
 
     @Test

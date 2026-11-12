@@ -1,5 +1,6 @@
 package dev.kpetriv.sprout.sync
 
+import dev.kpetriv.sprout.core.database.ChatIdentityKeeper
 import dev.kpetriv.sprout.core.database.SessionStore
 import dev.kpetriv.sprout.core.database.SproutDatabase
 import dev.kpetriv.sprout.feature.lock.ParentPinStore
@@ -34,6 +35,12 @@ interface EraseConfirmation {
      * PENDING), the same test the removal makes ([keepsDeviceIdentity], D-REL-28).
      */
     suspend fun keepsChatKey(): Boolean
+
+    /**
+     * True when a chat key is stored on this phone ([ChatIdentityKeeper.hasKey]): an erase that keeps the key keeps
+     * nothing without one, so the confirmation promises it only when both hold.
+     */
+    suspend fun hasChatKey(): Boolean
 }
 
 /**
@@ -46,10 +53,13 @@ class LocalEraseConfirmation @Inject constructor(
     private val pins: ParentPinStore,
     private val parentSession: ParentSession,
     private val sessions: SessionStore,
+    private val chatIdentity: ChatIdentityKeeper,
 ) : EraseConfirmation {
     override suspend fun unsyncedChanges(): Int = database.outboxDao().count()
 
     override suspend fun keepsChatKey(): Boolean = keepsDeviceIdentity(sessions.get())
+
+    override suspend fun hasChatKey(): Boolean = chatIdentity.hasKey()
 
     @Suppress("SwallowedException") // Unreadable storage reads as "a PIN exists"; nothing to log.
     override suspend fun hasParentPin(): Boolean = try {
