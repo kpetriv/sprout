@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Material Symbols Outlined "home", weight 500, filled (fill 1), 24 px. Apache 2.0, Google. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+  android:width="24dp"
+  android:height="24dp"
+  android:viewportWidth="960"
+  android:viewportHeight="960">
+  <group android:translateY="960">
+    <path
+      android:fillColor="@android:color/black"
+      android:pathData="M151.87-111.87v-492.2L480-850.28l328.13 246.13v492.28H561.91v-290.04H398.09v290.04H151.87Z" />
+  </group>
+</vector>

@@ -7,6 +7,7 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.ReadOnlyComposable
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Modifier
@@ -16,6 +17,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.semantics.hideFromAccessibility
 import androidx.compose.ui.semantics.semantics
+import dev.kpetriv.sprout.core.designsystem.theme.LocalReducedMotion
 
 private const val PIECES = 36
 private const val DURATION_MILLIS = 1_600
@@ -24,24 +26,33 @@ private const val SEED = 0x5EED
 /** One confetti piece: start position (fractions of the width), fall speed, sway and spin, all fixed. */
 private class Piece(val x: Float, val delay: Float, val speed: Float, val sway: Float, val spin: Float, val color: Int)
 
+/** Defaults for [Confetti]. */
+object ConfettiDefaults {
+    /** The Morning garden three (M9 §2.5): Botanical, Honey and Sky. */
+    @Composable
+    @ReadOnlyComposable
+    fun colors(): List<Color> = MaterialTheme.colorScheme.let { listOf(it.primary, it.secondary, it.tertiary) }
+}
+
 /**
- * A short confetti burst over the content, then [onFinished]. Finite and deterministic (pieces come from a fixed
- * seed), so it never runs forever and never makes a screenshot flaky. Decorative: hidden from accessibility. Used for
- * finished chores and brain-game results (D-M5-8).
+ * A short confetti burst over the content in [colors], then [onFinished]. Finite and deterministic (pieces come from
+ * a fixed seed), so it never runs forever and never makes a screenshot flaky. Decorative: hidden from accessibility.
+ * Under reduced motion ([LocalReducedMotion]) nothing falls and [onFinished] runs straight away. Used for finished
+ * chores and brain-game results (D-M5-8).
  */
 @Suppress("MagicNumber") // Piece size and colour are proportions of the canvas, tuned by eye.
 @Composable
-fun Confetti(onFinished: () -> Unit, modifier: Modifier = Modifier) {
+fun Confetti(onFinished: () -> Unit, modifier: Modifier = Modifier, colors: List<Color> = ConfettiDefaults.colors()) {
+    require(colors.isNotEmpty()) { "Confetti needs at least one colour" }
     val finished = rememberUpdatedState(onFinished)
     val progress = remember { Animatable(0f) }
-    val colors = MaterialTheme.colorScheme.let {
-        listOf(it.primary, it.secondary, it.tertiary, it.error, Color(0xFFF2A900))
-    }
+    val reducedMotion = LocalReducedMotion.current
     val pieces = remember { pieces() }
     LaunchedEffect(Unit) {
-        progress.animateTo(1f, animationSpec = tween(DURATION_MILLIS, easing = LinearEasing))
+        if (!reducedMotion) progress.animateTo(1f, animationSpec = tween(DURATION_MILLIS, easing = LinearEasing))
         finished.value()
     }
+    if (reducedMotion) return
     Canvas(modifier = modifier.semantics { hideFromAccessibility() }) {
         val t = progress.value
         val pieceSize = Size(size.minDimension / 40f, size.minDimension / 24f)

@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Material Symbols Outlined "send", weight 500, outlined, 24 px. Apache 2.0, Google. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+  android:width="24dp"
+  android:height="24dp"
+  android:viewportWidth="960"
+  android:viewportHeight="960"
+  android:autoMirrored="true">
+  <group android:translateY="960">
+    <path
+      android:fillColor="@android:color/black"
+      android:pathData="M112.59-152.35v-655.3L889.57-480 112.59-152.35ZM200-283.59 665.15-480 200-676.41v132.82L443.59-480 200-416.41v132.82Zm0 0v-392.82 392.82Z" />
+  </group>
+</vector>

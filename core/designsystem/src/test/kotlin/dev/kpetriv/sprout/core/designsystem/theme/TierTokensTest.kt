@@ -21,7 +21,28 @@ class TierTokensTest {
             assertTrue(younger.typeScale > older.typeScale)
             assertTrue(younger.minTouchTarget > older.minTouchTarget)
             assertTrue(younger.cornerRadius > older.cornerRadius)
+            assertTrue(younger.buttonHeight > older.buttonHeight)
+            // ColourLevel is declared from most to least colour: younger tiers never get less.
+            assertTrue(younger.colourLevel < older.colourLevel)
         }
+    }
+
+    @Test
+    fun cornerRadiiAreTheMorningGardenCardRadii() {
+        assertEquals(listOf(28.dp, 24.dp, 18.dp), KidUiTier.entries.map { TierTokens.forTier(it).cornerRadius })
+    }
+
+    @Test
+    fun colourDialMatchesTheSpec() {
+        assertEquals(ColourLevel.FULL, TierTokens.Seedling.colourLevel)
+        assertEquals(ColourLevel.ACCENTED, TierTokens.Sprout.colourLevel)
+        assertEquals(ColourLevel.RESTRAINED, TierTokens.Sapling.colourLevel)
+    }
+
+    @Test
+    fun parentScreensMatchSaplingExceptForMaterialSizedButtons() {
+        assertEquals(TierTokens.Sapling.copy(buttonHeight = 48.dp), TierTokens.Parent)
+        assertEquals(ColourLevel.RESTRAINED, TierTokens.Parent.colourLevel)
     }
 
     @Test

@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Material Symbols Outlined "account_balance_wallet", weight 500, filled (fill 1), 24 px. Apache 2.0, Google. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+  android:width="24dp"
+  android:height="24dp"
+  android:viewportWidth="960"
+  android:viewportHeight="960">
+  <group android:translateY="960">
+    <path
+      android:fillColor="@android:color/black"
+      android:pathData="M202.87-111.87q-37.78 0-64.39-26.61t-26.61-64.39v-554.26q0-37.78 26.61-64.39t64.39-26.61h554.26q37.78 0 64.39 26.61t26.61 64.39H520.48q-69.57 0-113.59 44.02-44.02 44.02-44.02 113.59V-360q0 69.57 44.02 113.35t113.59 43.78h327.65q0 37.78-26.61 64.39t-64.39 26.61H202.87ZM520.48-280q-32.76 0-56.62-23.62T440-360v-239.52q0-32.76 23.86-56.62T520.48-680h287.17q32.76 0 56.62 23.86t23.86 56.62V-360q0 32.76-23.86 56.38Q840.41-280 807.65-280H520.48ZM683-437q17-17 17-43t-17-43q-17-17-43-17t-43 17q-17 17-17 43t17 43q17 17 43 17t43-17Z" />
+  </group>
+</vector>

@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Material Symbols Outlined "star", weight 500, outlined, 24 px. Apache 2.0, Google. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+  android:width="24dp"
+  android:height="24dp"
+  android:viewportWidth="960"
+  android:viewportHeight="960">
+  <group android:translateY="960">
+    <path
+      android:fillColor="@android:color/black"
+      android:pathData="M358.54-293.46 480-366.59l121.46 74.13-32.05-138.5 107.18-92.65-140.74-12.52L480-667.11l-55.85 130.22-140.74 12.28 107.18 93.41-32.05 137.74ZM221.04-103.5l68.35-294.63L60.63-596.46l301.87-25.95L480-900.33l117.5 277.92 301.87 25.95-228.76 198.33 68.35 294.63L480-259.91 221.04-103.5ZM480-469.28Z" />
+  </group>
+</vector>

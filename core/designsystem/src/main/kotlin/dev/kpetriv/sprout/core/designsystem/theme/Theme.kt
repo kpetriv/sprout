@@ -7,7 +7,6 @@ import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.LocalMinimumInteractiveComponentSize
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Shapes
-import androidx.compose.material3.Typography
 import androidx.compose.material3.dynamicDarkColorScheme
 import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.runtime.Composable
@@ -29,15 +28,17 @@ private const val LARGE_SHAPE_FACTOR = 1.5f
 private const val EXTRA_LARGE_SHAPE_FACTOR = 2f
 
 /**
- * Sprout's Material 3 theme with standard (parent) sizing: [TierTokens.Sapling], no kid tier.
+ * Sprout's Material 3 theme ("Morning garden", M9) with standard (parent) sizing: [TierTokens.Parent], no kid tier.
  * Kid-mode UI additionally wraps itself in [ProvideKidTier].
  *
  * @param dynamicColor use the wallpaper palette on Android 12+. Off by default so the brand colours stay.
+ * @param reducedMotion provided as [LocalReducedMotion]; the system's "Remove animations" setting by default.
  */
 @Composable
 fun SproutTheme(
     darkTheme: Boolean = isSystemInDarkTheme(),
     dynamicColor: Boolean = false,
+    reducedMotion: Boolean = rememberSystemReducedMotion(),
     content: @Composable () -> Unit,
 ) {
     val colorScheme = when {
@@ -50,12 +51,18 @@ fun SproutTheme(
 
         else -> SproutLightColors
     }
-    TierScaledMaterialTheme(colorScheme = colorScheme, tokens = TierTokens.Sapling, content = content)
+    CompositionLocalProvider(
+        LocalSproutColors provides if (darkTheme) SproutColors.Dark else SproutColors.Light,
+        LocalReducedMotion provides reducedMotion,
+    ) {
+        TierScaledMaterialTheme(colorScheme = colorScheme, tokens = TierTokens.Parent, content = content)
+    }
 }
 
 /**
  * Enters kid mode for [content]: provides [LocalKidTier] and rescales type, shapes and minimum touch
- * targets to the tier's [TierTokens]. Use inside [SproutTheme]; colours are inherited from it.
+ * targets to the tier's [TierTokens] (including its [ColourLevel]). Use inside [SproutTheme]; colours are inherited
+ * from it.
  */
 @Composable
 fun ProvideKidTier(tier: KidUiTier, content: @Composable () -> Unit) {
@@ -70,7 +77,7 @@ fun ProvideKidTier(tier: KidUiTier, content: @Composable () -> Unit) {
 
 @Composable
 private fun TierScaledMaterialTheme(colorScheme: ColorScheme, tokens: TierTokens, content: @Composable () -> Unit) {
-    val typography = remember(tokens) { Typography().scaledBy(tokens.typeScale) }
+    val typography = remember(tokens) { SproutTypography.scaledBy(tokens.typeScale) }
     val shapes = remember(tokens) { tokens.toShapes() }
 
     val viewConfiguration = LocalViewConfiguration.current
@@ -122,8 +129,21 @@ object SproutTheme {
         @ReadOnlyComposable
         get() = LocalKidTier.current
 
+    /** Size and colour-level tokens: the kid's tier under [ProvideKidTier], [TierTokens.Parent] otherwise. */
     val tierTokens: TierTokens
         @Composable
         @ReadOnlyComposable
         get() = LocalTierTokens.current
+
+    /** The named Morning garden colours that are not Material roles. */
+    val colors: SproutColors
+        @Composable
+        @ReadOnlyComposable
+        get() = LocalSproutColors.current
+
+    /** Whether decorative motion is off ([LocalReducedMotion]). */
+    val reducedMotion: Boolean
+        @Composable
+        @ReadOnlyComposable
+        get() = LocalReducedMotion.current
 }
