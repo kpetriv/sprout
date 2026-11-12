@@ -22,6 +22,7 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import javax.inject.Inject
@@ -199,8 +200,15 @@ class ModeViewModel @Inject constructor(
         }
     }
 
-    /** The kid's UI tier, or null when the kid does not exist. */
-    suspend fun tierOf(kidId: KidId): KidUiTier? = kids.getKid(kidId)?.uiTier
+    /**
+     * The kid's UI tier as it changes (a parent can change it from another phone, and a kid's own phone keeps running
+     * for days); null while the kid is not on this phone (a freshly linked phone before its first sync, a removed
+     * kid) or when the kids cannot be read.
+     */
+    fun observeTier(kidId: KidId): Flow<KidUiTier?> = kids.observeKids()
+        .map { all -> all.firstOrNull { it.id == kidId }?.uiTier }
+        .catch { emit(null) }
+        .distinctUntilChanged()
 
     // A database closed by a wipe ends the stream instead of crashing; the app restarts right after a wipe.
     private fun sessionViews(sessions: SessionStore): Flow<SessionView> =

@@ -23,15 +23,16 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import dev.kpetriv.sprout.R
+import dev.kpetriv.sprout.core.model.KidUiTier
 import dev.kpetriv.sprout.core.ui.contentWidth
 
 /** One button of a [WithShortcuts] bar. */
 internal data class Shortcut(val label: Int, val onClick: () -> Unit)
 
 /**
- * [content] (a feature's home screen) with a bar of [shortcuts] under it (M4: Chat and Screen time on the kid's home,
- * Chat on the parent dashboard; M5: Games on the kid's home). The bar takes the navigation bar inset, so the screen
- * above does not pad for it again. Without shortcuts the content is shown as is.
+ * [content] (the kid's wallet) with a bar of [shortcuts] under it (M4: Chat and Screen time; M5: Games; M9: see
+ * [kidShortcuts]). The bar takes the navigation bar inset, so the screen above does not pad for it again (inside the
+ * shell the bottom bar has taken it already). Without shortcuts the content is shown as is.
  */
 @Composable
 internal fun WithShortcuts(shortcuts: List<Shortcut>, modifier: Modifier = Modifier, content: @Composable () -> Unit) {
@@ -76,18 +77,24 @@ private fun ShortcutBar(shortcuts: List<Shortcut>) {
     }
 }
 
-/** The kid's home shortcuts: Chat (real households only), Screen time and Games (M5). */
+/**
+ * The kid's home shortcuts under the wallet. Seedling keeps its three giant buttons, Chat (real households only),
+ * Screen time and Games (M9 §5.1: its bar has only Wallet, Chores and Shop). Sprout and Sapling have Chat and Games in
+ * the bar, so only Screen time is left here.
+ */
 internal fun kidShortcuts(
+    tier: KidUiTier,
     chat: Boolean,
     onChat: () -> Unit,
     onScreenTime: () -> Unit,
     onGames: () -> Unit,
-): List<Shortcut> = buildList {
-    if (chat) add(Shortcut(R.string.home_chat, onChat))
-    add(Shortcut(R.string.home_screen_time, onScreenTime))
-    add(Shortcut(R.string.home_games, onGames))
+): List<Shortcut> = if (tier == KidUiTier.SEEDLING) {
+    buildList {
+        if (chat) add(Shortcut(R.string.home_chat, onChat))
+        add(Shortcut(R.string.home_screen_time, onScreenTime))
+        add(Shortcut(R.string.home_games, onGames))
+    }
+} else {
+    // Interim until M9 slice B: the wallet's screen-time badge opens the time bank and this bar goes.
+    listOf(Shortcut(R.string.home_screen_time, onScreenTime))
 }
-
-/** The parent dashboard's shortcut: Chat (real households only). */
-internal fun parentShortcuts(chat: Boolean, onChat: () -> Unit): List<Shortcut> =
-    if (chat) listOf(Shortcut(R.string.home_chat, onChat)) else emptyList()

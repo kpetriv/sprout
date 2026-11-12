@@ -96,8 +96,9 @@ The single source for what is covered. Rule: **parent screens light and dark; ki
 | app | Removed | wiping | L/D |
 | app | Removed | wiped, failed | light |
 | app | Startup error | database | L/D |
-| app | Kid shortcut bar | Chat, Screen time, Games | phone and tablet per tier |
-| app | Parent shortcut bar | Chat | L/D |
+| app | Kid shortcut bar | Seedling: Chat, Screen time, Games; Sprout and Sapling: Screen time | phone and tablet per tier |
+| app | Shell, parent (M9 §5) | Home, Chores, Chat, Settings tabs with the real screens | L/D; Home on a tablet (rail) |
+| app | Shell, kid (M9 §5) | wallet tab (Seedling: three items and the giant buttons) | tiers; tablet per tier (rail) |
 | widget | Home screen widget | kid 2×2, kid 4×2, "Open Sprout" (Glance `RemoteViews` in a Compose host) | light |
 
 ## Commands

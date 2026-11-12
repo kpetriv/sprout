@@ -48,6 +48,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.kpetriv.sprout.core.designsystem.theme.ProvideKidTier
 import dev.kpetriv.sprout.core.model.KidId
 import dev.kpetriv.sprout.core.model.KidUiTier
+import dev.kpetriv.sprout.core.ui.HideNavigationWhile
 
 /**
  * Navigation entry for [kidId]'s time bank, rendered for [tier]. On Android 13+ the first Start on this screen asks
@@ -101,6 +102,8 @@ fun TimeBankScreen(
     onBack: () -> Unit = {},
 ) {
     val snackbar = remember { SnackbarHostState() }
+    // No tabbing away from a running timer (M9 §5.2, D-M9-10): the shell hides its bar until the kid stops it.
+    HideNavigationWhile((state as? TimeBankUiState.Ready)?.running == true)
     Scaffold(
         modifier = modifier,
         topBar = {

@@ -119,10 +119,29 @@ class ModeViewModelTest {
         }
 
     @Test
-    fun `the tier comes from the kid repository`() = runTest {
-        val viewModel = viewModel()
-        assertEquals(KidUiTier.SPROUT, viewModel.tierOf(leo.id))
-        assertNull(viewModel.tierOf(KidId("nobody")))
+    fun `the tier comes from the kid repository and follows a change`() = runTest {
+        val repository = FakeKidRepository(listOf(leo))
+        val viewModel = ModeViewModel(SavedStateHandle(), repository, {}, sessions, signals, startup)
+        viewModel.observeTier(leo.id).test {
+            assertEquals(KidUiTier.SPROUT, awaitItem())
+            repository.upsert(leo.copy(uiTier = KidUiTier.SAPLING))
+            assertEquals(KidUiTier.SAPLING, awaitItem())
+            repository.upsert(leo.copy(firstName = "Leon", uiTier = KidUiTier.SAPLING))
+            expectNoEvents()
+        }
+        viewModel.observeTier(KidId("nobody")).test {
+            assertNull(awaitItem())
+        }
+    }
+
+    @Test
+    fun `a kid that cannot be read has no tier`() = runTest {
+        val repository = FakeKidRepository(listOf(leo), failReads = true)
+        val viewModel = ModeViewModel(SavedStateHandle(), repository, {}, sessions, signals, startup)
+        viewModel.observeTier(leo.id).test {
+            assertNull(awaitItem())
+            awaitComplete()
+        }
     }
 
     @Test

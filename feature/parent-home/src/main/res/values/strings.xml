@@ -110,10 +110,7 @@
 
   <!-- Quick links -->
   <string name="feature_parent_home_links_title">Go to</string>
-  <string name="feature_parent_home_link_chores">Chores</string>
-  <string name="feature_parent_home_link_approvals">Approvals</string>
   <string name="feature_parent_home_link_shop">Shop (parent view)</string>
-  <string name="feature_parent_home_link_settings">Settings</string>
   <string name="feature_parent_home_link_kid_mode">Switch to kid mode</string>
 
   <!-- Household and sync (M3) -->

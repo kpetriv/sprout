@@ -17,7 +17,7 @@ import java.util.Locale
 import kotlin.time.Instant
 
 /** Realistic fake wallet states for previews and UI tests. */
-internal object WalletPreviewData {
+object WalletPreviewData {
     private val gbp = Currency.Fiat("GBP")
     private val formatter = MoneyFormatter(Locale.UK)
     private const val DAY_MILLIS = 86_400_000L

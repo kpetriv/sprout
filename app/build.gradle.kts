@@ -412,6 +412,8 @@ dependencies {
     implementation(libs.androidx.navigation3.ui)
     // ListDetailSceneStrategy: chat and chores list-detail on an Expanded window (M7 §5, D-M7-2).
     implementation(libs.androidx.compose.material3.adaptive.navigation3)
+    // NavigationSuiteScaffoldLayout: the shell's bottom bar on phones, rail on Expanded windows (M9 §5, D-M9-12).
+    implementation(libs.androidx.compose.material3.adaptive.navigation.suite)
     implementation(libs.androidx.profileinstaller)
     // Room's invalidation tracker on the outbox table is the sync trigger (OutboxSyncTrigger).
     implementation(libs.androidx.room.runtime)

@@ -7,10 +7,12 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBarDefaults
 import androidx.compose.material3.NavigationBarItem
@@ -26,6 +28,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.ReadOnlyComposable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.isTraversalGroup
@@ -43,10 +46,16 @@ import dev.kpetriv.sprout.core.model.KidUiTier
  * One destination of [SproutNavigationBar] or [SproutNavigationRail]: plain data, no navigation dependency (the app
  * shell maps items to its keys). [icon] is the outlined symbol, [selectedIcon] the filled one shown while selected.
  * [label] is always visible and is what TalkBack reads (with the tab role and selected state), so the icons carry no
- * description of their own.
+ * description of their own. [tinted] false draws the icons in their own colours (a [Pictogram]'s, on Seedling's bar,
+ * M9 §5.1) instead of the item's content colour; icons are drawn 24 dp either way.
  */
 @Immutable
-data class SproutNavItem(val label: String, val icon: ImageVector, val selectedIcon: ImageVector)
+data class SproutNavItem(
+    val label: String,
+    val icon: ImageVector,
+    val selectedIcon: ImageVector,
+    val tinted: Boolean = true,
+)
 
 /** Defaults for [SproutNavigationBar] and [SproutNavigationRail]. */
 object SproutNavigationDefaults {
@@ -183,7 +192,12 @@ fun SproutNavigationRail(
 
 @Composable
 private fun NavIcon(item: SproutNavItem, selected: Boolean) {
-    Icon(imageVector = if (selected) item.selectedIcon else item.icon, contentDescription = null)
+    Icon(
+        imageVector = if (selected) item.selectedIcon else item.icon,
+        contentDescription = null,
+        modifier = Modifier.size(NavIconSize),
+        tint = if (item.tinted) LocalContentColor.current else Color.Unspecified,
+    )
 }
 
 @Composable
@@ -241,6 +255,8 @@ internal fun SproutNavigationRailSample(tier: KidUiTier?) {
 }
 
 private val RailSampleHeight = 400.dp
+
+private val NavIconSize = 24.dp
 
 @Preview(name = "Seedling", showBackground = true)
 @Composable

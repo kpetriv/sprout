@@ -68,10 +68,8 @@ import java.time.format.FormatStyle
 @Composable
 fun ParentHomeRoute(
     requester: ParentAuthorizationRequester,
-    onOpenChores: () -> Unit,
     onOpenApprovals: () -> Unit,
     onOpenShop: () -> Unit,
-    onOpenSettings: () -> Unit,
     onSwitchToKidMode: () -> Unit,
     onOpenKid: (KidId) -> Unit,
     modifier: Modifier = Modifier,
@@ -81,10 +79,8 @@ fun ParentHomeRoute(
     onOpenAiSettings: () -> Unit = {},
 ) {
     val links = ParentHomeLinks(
-        onOpenChores,
         onOpenApprovals,
         onOpenShop,
-        onOpenSettings,
         onSwitchToKidMode,
         onOpenKid,
         onSetUpSync,
@@ -492,10 +488,8 @@ private fun QuickLinks(links: ParentHomeLinks) {
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         SectionTitle(stringResource(R.string.feature_parent_home_links_title))
         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            LinkButton(R.string.feature_parent_home_link_chores, links.onOpenChores)
-            LinkButton(R.string.feature_parent_home_link_approvals, links.onOpenApprovals)
+            // Chores and Settings are in the bottom bar and Approvals is on the attention card (M9 §5.2).
             LinkButton(R.string.feature_parent_home_link_shop, links.onOpenShop)
-            LinkButton(R.string.feature_parent_home_link_settings, links.onOpenSettings)
             LinkButton(R.string.feature_parent_home_link_kid_mode, links.onSwitchToKidMode)
         }
     }

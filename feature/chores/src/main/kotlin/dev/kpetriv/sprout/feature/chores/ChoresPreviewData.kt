@@ -15,7 +15,7 @@ import kotlin.time.Instant
 
 /** Fixed chore states for previews, screenshot goldens and UI tests: fixed ids, dates and amounts. */
 @Suppress("MagicNumber") // Fixed preview amounts and dates.
-internal object ChoresPreviewData {
+object ChoresPreviewData {
     val gbp = Currency.Fiat("GBP")
     val today = CalendarDate(2026, 11, 4)
     private val now = Instant.fromEpochMilliseconds(1_793_800_000_000L)
