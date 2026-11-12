@@ -29,7 +29,10 @@ internal object GamesPreviewData {
     fun hubCapReached(tier: KidUiTier): GamesHubUiState.Ready = hub(tier, Money(0))
 
     fun session(tier: KidUiTier, kind: GameKind, seed: Long = SEED): GameSession =
-        GameSession.create(GameId(kind, Difficulty.forTier(tier)), seed)
+        // Interim until M9-games slice G-C: Times tables take the default setup.
+        GameId(kind, Difficulty.forTier(tier)).let {
+            GameSession.create(it, seed, setup = GameViewModel.interimTablesSetup(it))
+        }
 
     /** A sum with, at Sapling, an answer being typed; Seedling shows a counting round with dots. */
     fun arithmetic(tier: KidUiTier): GamePlayUiState.Playing {

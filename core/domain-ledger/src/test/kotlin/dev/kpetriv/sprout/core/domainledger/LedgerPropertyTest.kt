@@ -387,19 +387,22 @@ internal object ReferenceLedger {
 
     /**
      * The most a play may credit, written out independently of `GameCredit`: rounds per difficulty (Seedling 5,
-     * Sprout 8, Sapling 10), 1 per correct round, +3 for all correct, +2 more at Sapling (timed), at most 15. Null for
-     * an id that is not playable or a score outside `0..rounds`.
+     * Sprout 8, Sapling 10; Times tables 20 at Sprout and Sapling), 1 per correct round, +3 for all correct, +2 more
+     * where a play may be timed (Sapling, and Times tables), at most 15. Null for an id that is not playable or a
+     * score outside `0..rounds`.
      */
     fun maxGameCredit(gameId: String, score: Long): Long? {
         val rounds = when (gameId) {
             "arithmetic.seedling", "memory.seedling" -> 5L
             "arithmetic.sprout", "memory.sprout", "words.sprout" -> 8L
             "arithmetic.sapling", "memory.sapling", "words.sapling" -> 10L
+            "tables.sprout", "tables.sapling" -> 20L
             else -> null
         }
         if (rounds == null || score !in 0L..rounds) return null
         val perfect = score == rounds
-        val bonus = (if (perfect) 3L else 0L) + (if (perfect && rounds == 10L) 2L else 0L)
+        val timedPossible = rounds == 10L || gameId.startsWith("tables.")
+        val bonus = (if (perfect) 3L else 0L) + (if (perfect && timedPossible) 2L else 0L)
         return minOf(score + bonus, 15L)
     }
 
@@ -497,6 +500,7 @@ internal class StreamGenerator(seed: Int, parentKey: ParentAuthorization? = null
     private val gameIds = listOf(
         "arithmetic.seedling", "memory.seedling", "arithmetic.sprout", "memory.sprout", "words.sprout",
         "arithmetic.sapling", "memory.sapling", "words.sapling", "words.seedling", "chess.sprout", "memory",
+        "tables.sprout", "tables.sapling", "tables.seedling",
     )
 
     fun generate(count: Int): GeneratedHistory {
@@ -591,7 +595,8 @@ internal class StreamGenerator(seed: Int, parentKey: ParentAuthorization? = null
      */
     private fun game(device: DeviceWriter, account: Account) {
         val gameId = gameIds.random(random)
-        val score = random.nextLong(-1, 12)
+        // Up to one past the rounds: 10 at most for the first three games, 20 for Times tables.
+        val score = if (gameId.startsWith("tables.")) random.nextLong(-1, 22) else random.nextLong(-1, 12)
         val max = ReferenceLedger.maxGameCredit(gameId, score)
         val amount = when {
             max == null || max == 0L -> amount(16)

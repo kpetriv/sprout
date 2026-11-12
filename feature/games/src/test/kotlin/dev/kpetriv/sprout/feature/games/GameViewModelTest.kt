@@ -179,6 +179,24 @@ class GameViewModelTest {
     }
 
     @Test
+    fun `times tables play twenty typed questions with the default setup`() = runTest {
+        // Interim until M9-games slice G-C: no setup screen yet, the difficulty's default setup and no Timed switch.
+        for (tier in listOf(KidUiTier.SPROUT, KidUiTier.SAPLING)) {
+            val vm = viewModel(tier, GameKind.TABLES)
+            val start = assertIs<GamePlayUiState.Start>(vm.state.value)
+            assertEquals(20, start.rounds)
+            assertEquals(false, start.timedAvailable)
+            vm.onEvent(GamePlayEvent.Start)
+            assertEquals(false, vm.playing().timed)
+
+            repeat(20) { vm.answer(correct = true) }
+
+            val score = assertIs<GamePlayUiState.Result>(vm.state.value).score
+            assertEquals(Score(correct = 20, total = 20, perfect = true, timedBonus = false), score, "$tier")
+        }
+    }
+
+    @Test
     fun `a perfect timed play within every limit earns the timed bonus`() = runTest {
         val vm = viewModel(KidUiTier.SAPLING)
         vm.onEvent(GamePlayEvent.TimedChanged(true))

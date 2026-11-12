@@ -112,6 +112,7 @@ internal fun gameName(kind: GameKind): String = stringResource(
         GameKind.ARITHMETIC -> R.string.feature_games_kind_arithmetic
         GameKind.MEMORY -> R.string.feature_games_kind_memory
         GameKind.WORDS -> R.string.feature_games_kind_words
+        GameKind.TABLES -> R.string.feature_games_kind_tables
     },
 )
 
@@ -133,14 +134,22 @@ internal fun gameDescription(kind: GameKind, tier: KidUiTier): String {
             }
 
             GameKind.WORDS -> R.string.feature_games_kind_words_description
+
+            // Interim until M9-games slice G-C.
+            GameKind.TABLES -> R.string.feature_games_kind_tables_description
         },
     )
 }
 
 internal fun gameGlyph(kind: GameKind): String = when (kind) {
     GameKind.ARITHMETIC -> "🔢"
+
     GameKind.MEMORY -> "🧠"
+
     GameKind.WORDS -> "🔤"
+
+    // Interim until M9-games slice G-C.
+    GameKind.TABLES -> "✖️"
 }
 
 /**

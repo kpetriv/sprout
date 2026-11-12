@@ -19,6 +19,8 @@ import dev.kpetriv.sprout.core.games.MemoryRound
 import dev.kpetriv.sprout.core.games.RoundOutcome
 import dev.kpetriv.sprout.core.games.Score
 import dev.kpetriv.sprout.core.games.Symbol
+import dev.kpetriv.sprout.core.games.TablesRound
+import dev.kpetriv.sprout.core.games.TablesSetup
 import dev.kpetriv.sprout.core.games.WordRound
 import dev.kpetriv.sprout.core.model.KidId
 import dev.kpetriv.sprout.core.model.KidUiTier
@@ -65,7 +67,9 @@ class GameViewModel @Inject constructor(
     private val difficulty = Difficulty.forTier(tier)
     private val gameId: GameId? =
         if (kind in GameCatalogue.forDifficulty(difficulty)) GameId(kind, difficulty) else null
-    private val timedAvailable = GameCatalogue.supportsTimed(difficulty)
+
+    // Times tables are timed by their level, not the switch (interim until M9-games slice G-C).
+    private val timedAvailable = GameCatalogue.supportsTimed(difficulty) && kind != GameKind.TABLES
 
     private val mutableState = MutableStateFlow<GamePlayUiState>(GamePlayUiState.Unavailable(tier, kind))
     val state: StateFlow<GamePlayUiState> = mutableState.asStateFlow()
@@ -102,7 +106,7 @@ class GameViewModel @Inject constructor(
         val id = gameId ?: return
         val seed = handle.get<Long>(SEED_KEY) ?: seeds.next().also { handle[SEED_KEY] = it }
         val timed = timedAvailable && handle.get<Boolean>(TIMED_KEY) == true
-        val created = GameSession.create(id, seed, timed)
+        val created = GameSession.create(id, seed, timed, interimTablesSetup(id))
         session = created
         if (handle.get<Boolean>(STARTED_KEY) != true) {
             showStart(timed)
@@ -134,7 +138,7 @@ class GameViewModel @Inject constructor(
         val id = gameId ?: return
         val start = mutableState.value as? GamePlayUiState.Start ?: return
         val seed = checkNotNull(handle.get<Long>(SEED_KEY))
-        val created = GameSession.create(id, seed, start.timed)
+        val created = GameSession.create(id, seed, start.timed, interimTablesSetup(id))
         session = created
         saveOutcomes(emptyList())
         handle[STARTED_KEY] = true
@@ -147,8 +151,21 @@ class GameViewModel @Inject constructor(
         val round = session.rounds[index]
         val ui = when (round) {
             is ArithmeticRound -> RoundUi.Arithmetic(round)
+
             is MemoryRound -> RoundUi.Memory(round, showing = true, shownCount = 0)
+
             is WordRound -> RoundUi.Word(round)
+
+            // Interim until M9-games slice G-C: the Sapling typed-answer path (choices = null), compared as integers.
+            is TablesRound -> RoundUi.Arithmetic(
+                ArithmeticRound(
+                    prompt = round.prompt,
+                    spokenPrompt = round.spokenPrompt,
+                    operands = listOf(round.a, round.b),
+                    answer = round.answer,
+                    choices = null,
+                ),
+            )
         }
         mutableState.value = GamePlayUiState.Playing(
             tier = tier,
@@ -461,6 +478,13 @@ class GameViewModel @Inject constructor(
         }
 
         internal fun toggleMinus(text: String): String = if (text.startsWith(MINUS)) text.drop(1) else "$MINUS$text"
+
+        /**
+         * The setup a session of [id] needs: the difficulty's default for Times tables, null for every other game.
+         * Interim until M9-games slice G-C, which adds the setup screen and the per-kid setup store.
+         */
+        internal fun interimTablesSetup(id: GameId): TablesSetup? =
+            if (id.kind == GameKind.TABLES) TablesSetup.defaultFor(id.difficulty) else null
 
         /** The scrambled tiles [answer] uses, matched left to right to the first unused tile with that letter. */
         internal fun tilesFor(answer: String, scrambled: String): List<Int> {

@@ -17,6 +17,9 @@
   <string name="feature_games_kind_memory_seedling_description">Remember the pictures</string>
   <string name="feature_games_kind_memory_description">Remember the order</string>
   <string name="feature_games_kind_words_description">Put the letters back in order</string>
+  <!-- Interim until M9-games slice G-C. -->
+  <string name="feature_games_kind_tables">Times tables</string>
+  <string name="feature_games_kind_tables_description">20 typed questions from the tables you choose</string>
   <!-- %1$s is a game name. -->
   <string name="feature_games_play_game">Play %1$s</string>
 

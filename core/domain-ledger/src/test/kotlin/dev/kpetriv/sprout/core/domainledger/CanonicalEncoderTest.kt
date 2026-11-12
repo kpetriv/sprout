@@ -333,6 +333,9 @@ class CanonicalEncoderTest {
                 chore,
                 parent.allowance(500),
                 kid.game(6, gameId = "arithmetic.sprout", score = 6),
+                // Times tables (M9-games §6.2): 20 rounds, the same GamePlayed shape.
+                kid.game(15, gameId = "tables.sapling", score = 20),
+                kid.game(14, gameId = "tables.sprout", score = 14),
                 kid.purchase(50),
                 screenTime,
                 kid.timeCredit(20, grantedBy = screenTime),

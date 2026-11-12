@@ -203,6 +203,8 @@ class HashChainTest {
         val kid = DeviceWriter(Fixtures.kidTablet)
         kid.game(10, score = 9)
         kid.game()
+        kid.game(15, gameId = "tables.sprout", score = 20)
+        kid.game(12, gameId = "tables.sapling", score = 12)
         val events = kid.written.toList()
         assertIs<ChainVerification.Valid>(chain.verifyChain(events))
         for (index in events.indices) {
@@ -238,12 +240,17 @@ class HashChainTest {
         )
 
         is GamePlayed -> listOf(
-            event.copy(gameId = "memory.sapling"),
+            // Another playable id; for a Times tables play, the same game at the other difficulty.
+            event.copy(gameId = TABLES_SWAP[event.gameId] ?: "memory.sapling"),
             event.copy(score = event.score - 1),
             event.copy(amount = event.amount - Money(1)),
             event.copy(playedOn = event.playedOn.plusDays(-1)),
         )
 
         else -> emptyList()
+    }
+
+    private companion object {
+        val TABLES_SWAP = mapOf("tables.sprout" to "tables.sapling", "tables.sapling" to "tables.sprout")
     }
 }

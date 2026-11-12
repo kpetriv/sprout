@@ -54,4 +54,16 @@ class GameScorerTest {
         assertFailsWith<IllegalArgumentException> { GameScorer.score(session, outcomes(9)) }
         assertFailsWith<IllegalArgumentException> { RoundOutcome(true, -1) }
     }
+
+    @Test
+    fun rockStarTimesTablesGetTheBonusWithinFiveSecondsAndTheOtherLevelsNever() {
+        val tables = GameId(GameKind.TABLES, Difficulty.SPROUT)
+        val rockStar = GameSession.create(tables, 1, setup = TablesSetup(setOf(6, 7), TablesLevel.ROCK_STAR))
+        val perfect = Score(20, 20, true, timedBonus = true)
+        assertEquals(perfect, GameScorer.score(rockStar, outcomes(20, elapsedMs = 5_000)))
+        assertEquals(false, GameScorer.score(rockStar, outcomes(20, elapsedMs = 5_001)).timedBonus)
+        assertEquals(Score(17, 20, false, timedBonus = false), GameScorer.score(rockStar, outcomes(20, 17)))
+        val gentle = GameSession.create(tables, 1, setup = TablesSetup(setOf(6, 7), TablesLevel.GENTLE))
+        assertEquals(Score(20, 20, true, timedBonus = false), GameScorer.score(gentle, outcomes(20, elapsedMs = 1)))
+    }
 }

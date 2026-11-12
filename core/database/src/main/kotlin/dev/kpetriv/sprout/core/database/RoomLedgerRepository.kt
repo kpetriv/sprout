@@ -314,24 +314,64 @@ class RoomLedgerRepository internal constructor(
      */
     internal suspend fun remainingGameCap(kidId: KidId, date: CalendarDate, currency: Currency): Money =
         database.withTransaction {
-            val active = policies.load()
-            val ids = events.verifiedOfType(kidId, GAME_PLAYED_TYPE)
-                .filter { row -> (LedgerEventMapper.toDomain(row) as? GamePlayed)?.playedOn == date }
-                .map { it.eventId }
-            val rows = ids.distinct().chunked(MAX_QUERY_IDS).flatMap { events.verifiedCopiesOf(it) }
-            val received = HashMap<String, Instant>()
-            val folded = rows.mapNotNull { row ->
-                LedgerEventMapper.toDomain(row)?.also { event ->
-                    row.serverReceivedAtEpochMs?.let { ms ->
-                        received[event.envelope.hash] = Instant.fromEpochMilliseconds(ms)
-                    }
-                }
-            }
-            val projection = project(folded, active, received)
+            val (projection, _) = gameProjection(kidId) { it.playedOn == date }
             val cap = projection.policy.dailyGameCapFor(currency)
             // The projection never credits past the cap; both are bounded, so this cannot overflow.
             maxOf(cap - projection.dailyGameCredits(kidId, date, currency), Money.ZERO)
         }
+
+    /**
+     * Every [GamePlayed] of [kidId] the household projection credits, in no particular order (M9-games §6.2, the
+     * games' "Your last plays" and "Best this week"), projected like [remainingGameCap]: the kid's stored games and
+     * every other copy of their ids, with their server stamps and the current policy. A play the projection excludes
+     * (a broken rule, over the day's cap, outside its played-on window) is left out, and of conflicting copies of one
+     * id only the applied one is kept. Rows are hash-checked but their signatures are not re-verified here.
+     */
+    internal suspend fun creditedGamePlays(kidId: KidId): List<GamePlayed> = database.withTransaction {
+        val (projection, folded) = gameProjection(kidId) { true }
+        val excluded = HashSet<EventId>()
+        val applied = HashMap<EventId, String?>()
+        projection.anomalies.forEach { anomaly ->
+            when (anomaly) {
+                is LedgerAnomaly.InvalidEvent -> excluded += anomaly.eventId
+                is LedgerAnomaly.DailyCapExceeded -> excluded += anomaly.eventId
+                is LedgerAnomaly.PlayedOnOutOfRange -> excluded += anomaly.eventId
+                is LedgerAnomaly.ConflictingDuplicate -> applied[anomaly.eventId] = anomaly.applied?.hash
+                else -> Unit
+            }
+        }
+        folded.asSequence()
+            .filterIsInstance<GamePlayed>()
+            .filter { it.envelope.kidId == kidId && it.eventId !in excluded }
+            .filter { game -> applied[game.eventId].let { it == null || it == game.envelope.hash } }
+            .distinctBy { it.eventId }
+            .toList()
+    }
+
+    /**
+     * The projection of [kidId]'s stored [GamePlayed] rows that [keep] selects and every other copy of their ids
+     * (a conflicting copy decides which one applies), with their server stamps and the current policy, and the
+     * events folded into it. Must run inside a Room transaction.
+     */
+    private suspend fun gameProjection(
+        kidId: KidId,
+        keep: (GamePlayed) -> Boolean,
+    ): Pair<Projection, List<LedgerEvent>> {
+        val active = policies.load()
+        val ids = events.verifiedOfType(kidId, GAME_PLAYED_TYPE)
+            .filter { row -> (LedgerEventMapper.toDomain(row) as? GamePlayed)?.let(keep) == true }
+            .map { it.eventId }
+        val rows = ids.distinct().chunked(MAX_QUERY_IDS).flatMap { events.verifiedCopiesOf(it) }
+        val received = HashMap<String, Instant>()
+        val folded = rows.mapNotNull { row ->
+            LedgerEventMapper.toDomain(row)?.also { event ->
+                row.serverReceivedAtEpochMs?.let { ms ->
+                    received[event.envelope.hash] = Instant.fromEpochMilliseconds(ms)
+                }
+            }
+        }
+        return project(folded, active, received) to folded
+    }
 
     /** Serialises game plays on this device's database ([dev.kpetriv.sprout.core.database.usecase.PlayGameUseCase]). */
     internal val gamePlays: Mutex get() = GamePlayLocks.of(database)

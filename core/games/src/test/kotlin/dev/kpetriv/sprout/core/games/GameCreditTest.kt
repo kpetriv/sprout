@@ -43,7 +43,7 @@ class GameCreditTest {
             }
         }
         assertEquals(
-            listOf(8L, 8L, 11L, 11L, 11L, 15L, 15L, 15L),
+            listOf(8L, 8L, 11L, 11L, 11L, 15L, 15L, 15L, 15L, 15L),
             GameCatalogue.all.map { GameCredit.earned(it.wire, GameCatalogue.rounds(it)) },
         )
     }
@@ -80,7 +80,26 @@ class GameCreditTest {
         assertNull(GameCredit.earned("arithmetic.seedling", 6))
         assertNull(GameCredit.earned("memory.sprout", 9))
         assertNull(GameCredit.earned("words.sapling", 11))
+        assertNull(GameCredit.earned("tables.sprout", 21))
+        assertNull(GameCredit.earned("tables.sapling", -1))
+        assertNull(GameCredit.earned("tables.seedling", 5))
         assertNull(GameCredit.earned(id("words.sapling"), Score(11, 11, perfect = true, timedBonus = true)))
         assertNull(GameCredit.earned(id("words.sapling"), Score(-1, 10, perfect = false, timedBonus = false)))
+    }
+
+    @Test
+    fun timesTablesPayTheSameCappedRuleOverTwentyRounds() {
+        // One per correct up to the cap: 14 right is 14, 15 or more is 15, perfect (20 + 3, + 2 timed) is still 15.
+        val table = listOf(0 to 0L, 1 to 1L, 14 to 14L, 15 to 15L, 19 to 15L, 20 to 15L)
+        for (wire in listOf("tables.sprout", "tables.sapling")) {
+            for ((correct, credit) in table) assertEquals(credit, GameCredit.earned(wire, correct), "$wire $correct")
+        }
+        val sprout = id("tables.sprout")
+        val sapling = id("tables.sapling")
+        assertEquals(15L, GameCredit.earned(sprout, Score(20, 20, perfect = true, timedBonus = false)))
+        assertEquals(15L, GameCredit.earned(sprout, Score(20, 20, perfect = true, timedBonus = true)))
+        assertEquals(15L, GameCredit.earned(sapling, Score(20, 20, perfect = true, timedBonus = true)))
+        assertEquals(12L, GameCredit.earned(sapling, Score(12, 20, perfect = false, timedBonus = false)))
+        assertNull(GameCredit.earned(sapling, Score(21, 20, perfect = true, timedBonus = true)))
     }
 }
