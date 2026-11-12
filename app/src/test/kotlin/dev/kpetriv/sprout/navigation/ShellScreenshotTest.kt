@@ -40,7 +40,7 @@ class ShellScreenshotTest : ScreenshotTest(checkAccessibility = true) {
     @Test
     fun `parent shell, chat`() = screenshot.captureLightDark("app_shell_parent_chat") {
         ParentShell(selected = 2) {
-            ChatThreadListScreen(ChatPreviewData.threads(), onEvent = {}, onOpenThread = {}, onBack = {})
+            ChatThreadListScreen(ChatPreviewData.threads(), onEvent = {}, onOpenThread = {})
         }
     }
 

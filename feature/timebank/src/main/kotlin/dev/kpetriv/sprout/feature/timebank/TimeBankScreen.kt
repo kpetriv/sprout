@@ -11,17 +11,12 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
-import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
-import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -33,19 +28,19 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import dev.kpetriv.sprout.core.designsystem.components.SproutButton
+import dev.kpetriv.sprout.core.designsystem.components.SproutTopBar
 import dev.kpetriv.sprout.core.designsystem.theme.ProvideKidTier
+import dev.kpetriv.sprout.core.designsystem.theme.SproutSpacing
 import dev.kpetriv.sprout.core.model.KidId
 import dev.kpetriv.sprout.core.model.KidUiTier
 import dev.kpetriv.sprout.core.ui.HideNavigationWhile
@@ -93,7 +88,6 @@ fun TimeBankRoute(kidId: KidId, tier: KidUiTier, onBack: () -> Unit, modifier: M
  * [SeedlingTimeBankContent] (a big Start/Stop sun with a draining ring and whole minutes), [SproutTimeBankContent]
  * (timer, minutes left, today's sessions) or [SaplingTimeBankContent] (timer, history and the rule text).
  */
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun TimeBankScreen(
     state: TimeBankUiState,
@@ -106,24 +100,8 @@ fun TimeBankScreen(
     HideNavigationWhile((state as? TimeBankUiState.Ready)?.running == true)
     Scaffold(
         modifier = modifier,
-        topBar = {
-            TopAppBar(
-                title = {
-                    Text(
-                        text = stringResource(R.string.feature_timebank_title),
-                        modifier = Modifier.semantics { heading() },
-                    )
-                },
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(
-                            painter = painterResource(R.drawable.feature_timebank_ic_arrow_back),
-                            contentDescription = stringResource(R.string.feature_timebank_back),
-                        )
-                    }
-                },
-            )
-        },
+        // Pushed on every tier (from the wallet's screen-time badge or Seedling's button), so the arrow stays.
+        topBar = { SproutTopBar(title = stringResource(R.string.feature_timebank_title), onBack = onBack) },
         snackbarHost = { SnackbarHost(snackbar) },
     ) { padding ->
         Box(modifier = Modifier.padding(padding).fillMaxSize()) {
@@ -184,8 +162,8 @@ private fun Loading() {
 @Composable
 private fun ErrorContent(onRetry: () -> Unit) {
     Column(
-        modifier = Modifier.fillMaxSize().padding(24.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp, Alignment.CenterVertically),
+        modifier = Modifier.fillMaxSize().padding(SproutSpacing.lg),
+        verticalArrangement = Arrangement.spacedBy(SproutSpacing.md, Alignment.CenterVertically),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         Text(
@@ -194,6 +172,6 @@ private fun ErrorContent(onRetry: () -> Unit) {
             textAlign = TextAlign.Center,
             modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
         )
-        Button(onClick = onRetry) { Text(stringResource(R.string.feature_timebank_retry)) }
+        SproutButton(text = stringResource(R.string.feature_timebank_retry), onClick = onRetry)
     }
 }

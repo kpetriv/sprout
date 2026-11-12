@@ -8,17 +8,19 @@ import dev.kpetriv.sprout.core.model.KidUiTier
 @Preview(name = "Parent inbox", showBackground = true)
 @Composable
 private fun ThreadsPreview() = SproutTheme {
-    ChatThreadListScreen(ChatPreviewData.threads(), onEvent = {}, onOpenThread = {}, onBack = {})
+    ChatThreadListScreen(ChatPreviewData.threads(), onEvent = {}, onOpenThread = {})
 }
 
 @Preview(name = "Parent thread", showBackground = true, heightDp = 900)
 @Composable
-private fun ParentThreadPreview() = SproutTheme { ChatScreen(state = ChatPreviewData.parentThread(), onEvent = {}) }
+private fun ParentThreadPreview() = SproutTheme {
+    ChatScreen(state = ChatPreviewData.parentThread(), onEvent = {}, onBack = {})
+}
 
 @Preview(name = "Seedling", showBackground = true, heightDp = 900)
 @Composable
 private fun SeedlingPreview() = SproutTheme {
-    ChatScreen(state = ChatPreviewData.kidMessages(KidUiTier.SEEDLING), onEvent = {})
+    ChatScreen(state = ChatPreviewData.kidMessages(KidUiTier.SEEDLING), onEvent = {}, onBack = {})
 }
 
 @Preview(name = "Sprout nudge", showBackground = true, heightDp = 900)
@@ -30,5 +32,5 @@ private fun SproutNudgePreview() = SproutTheme {
 @Preview(name = "Parent, chat key conflict", showBackground = true, heightDp = 900)
 @Composable
 private fun ParentKeyConflictPreview() = SproutTheme {
-    ChatScreen(state = ChatPreviewData.parentKeyConflict(), onEvent = {})
+    ChatScreen(state = ChatPreviewData.parentKeyConflict(), onEvent = {}, onBack = {})
 }

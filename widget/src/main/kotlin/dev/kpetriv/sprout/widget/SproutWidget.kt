@@ -86,7 +86,7 @@ fun SproutWidgetContent(state: WidgetState, open: Action?) {
         var modifier = GlanceModifier
             .fillMaxSize()
             .appWidgetBackground()
-            .background(GlanceTheme.colors.widgetBackground)
+            .background(SproutWidgetCard)
             .cornerRadius(CORNER_RADIUS.dp)
         if (open != null) modifier = modifier.clickable(open)
         when (state) {

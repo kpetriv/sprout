@@ -7,14 +7,13 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.unit.dp
+import dev.kpetriv.sprout.core.designsystem.components.SproutCard
+import dev.kpetriv.sprout.core.designsystem.theme.SproutSpacing
 import dev.kpetriv.sprout.core.ui.contentWidth
 import dev.kpetriv.sprout.core.ui.rememberMoneyFormatter
 
@@ -27,8 +26,10 @@ internal fun SproutTimeBankContent(
 ) {
     val formatter = rememberMoneyFormatter()
     Column(
-        modifier = modifier.fillMaxSize().verticalScroll(rememberScrollState()).contentWidth().padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp),
+        modifier = modifier.fillMaxSize().verticalScroll(
+            rememberScrollState(),
+        ).contentWidth().padding(SproutSpacing.gutter),
+        verticalArrangement = Arrangement.spacedBy(SproutSpacing.md),
     ) {
         TimerCard(state, onEvent)
         SectionTitle(stringResource(R.string.feature_timebank_today))
@@ -39,9 +40,7 @@ internal fun SproutTimeBankContent(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         } else {
-            Column {
-                state.today.forEach { SessionRow(it, withDate = false) }
-            }
+            SessionList(state.today, withDate = false)
             val total = formatter.formatMinutes(state.todayMinutes)
             Text(
                 text = stringResource(R.string.feature_timebank_today_total, total),
@@ -60,24 +59,23 @@ internal fun SaplingTimeBankContent(
 ) {
     val formatter = rememberMoneyFormatter()
     Column(
-        modifier = modifier.fillMaxSize().verticalScroll(rememberScrollState()).contentWidth().padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp),
+        modifier = modifier.fillMaxSize().verticalScroll(
+            rememberScrollState(),
+        ).contentWidth().padding(SproutSpacing.gutter),
+        verticalArrangement = Arrangement.spacedBy(SproutSpacing.md),
     ) {
         TimerCard(state, onEvent)
         Text(
             text = stringResource(R.string.feature_timebank_balance, formatter.formatMinutes(state.balanceMinutes)),
             style = MaterialTheme.typography.titleMedium,
         )
-        Card(
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer),
-            modifier = Modifier.fillMaxWidth(),
-        ) {
-            Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        SproutCard(modifier = Modifier.fillMaxWidth()) {
+            Column(verticalArrangement = Arrangement.spacedBy(SproutSpacing.sm)) {
                 SectionTitle(stringResource(R.string.feature_timebank_rules_title))
                 Text(
                     text = stringResource(R.string.feature_timebank_rules),
                     style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSecondaryContainer,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
         }
@@ -89,9 +87,7 @@ internal fun SaplingTimeBankContent(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         } else {
-            Column {
-                state.history.forEach { SessionRow(it, withDate = true) }
-            }
+            SessionList(state.history, withDate = true)
         }
     }
 }

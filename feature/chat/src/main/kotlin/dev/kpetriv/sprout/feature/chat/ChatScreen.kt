@@ -21,12 +21,12 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.kpetriv.sprout.core.designsystem.theme.ProvideKidTier
+import dev.kpetriv.sprout.core.designsystem.theme.SproutSpacing
 import dev.kpetriv.sprout.core.model.KidId
 import dev.kpetriv.sprout.core.model.KidUiTier
 import dev.kpetriv.sprout.core.ui.ContentWidth
@@ -63,13 +63,15 @@ fun ParentChatRoute(threadId: KidId, onBack: () -> Unit, modifier: Modifier = Mo
  * Navigation entry for [kidId]'s own thread in kid mode, rendered for [tier]. The app wraps it in `SecureWindow`
  * ([ChatUiState.secure]). Seedling's microphone asks for `RECORD_AUDIO` on the first press; a refusal shows a notice.
  *
+ * @param onBack null where the thread is a tab root (Sprout and Sapling: no back arrow, M9 §5.2); Seedling's thread is
+ *   pushed from the wallet and keeps the arrow.
  * @param readAloud speaks Seedling bubbles and tiles; with [ReadAloud.None] nothing is spoken.
  */
 @Composable
 fun KidChatRoute(
     kidId: KidId,
     tier: KidUiTier,
-    onBack: () -> Unit,
+    onBack: (() -> Unit)?,
     modifier: Modifier = Modifier,
     readAloud: ReadAloud = ReadAloud.None,
 ) {
@@ -106,6 +108,7 @@ fun KidChatRoute(
  * a kid's thread renders inside [ProvideKidTier] and switches to [SeedlingChatContent] (presets, emoji, voice notes),
  * Sprout (free text with the kindness hook plus preset chips) or Sapling (free text with the kindness hook).
  *
+ * @param onBack draws the back arrow; null on a tab root (M9 §5.2).
  * @param onAttachPhoto parent only: opens the photo picker.
  */
 @Composable
@@ -113,7 +116,7 @@ fun ChatScreen(
     state: ChatUiState,
     onEvent: (ChatEvent) -> Unit,
     modifier: Modifier = Modifier,
-    onBack: () -> Unit = {},
+    onBack: (() -> Unit)? = null,
     onAttachPhoto: () -> Unit = {},
     readAloud: ReadAloud = ReadAloud.None,
 ) {
@@ -181,7 +184,7 @@ private fun ReadyContent(
 
 /**
  * The parent, Sprout and Sapling thread: messages, then (Sprout) preset chips, the nudge, and the composer. The
- * message list fills the width with [gutters] as content padding; the rest sits inside the gutters.
+ * message list and the composer's white bar fill the width with [gutters] inside; the rest sits inside the gutters.
  */
 @Composable
 private fun TextThread(
@@ -194,8 +197,10 @@ private fun TextThread(
     Column(modifier = Modifier.fillMaxSize()) {
         if (!state.canSend) WaitingBanner(state.mode, state.keyState, modifier = Modifier.padding(gutters))
         MessageList(state = state, onEvent = onEvent, modifier = Modifier.weight(1f), gutters = gutters)
-        state.nudge?.let { NudgeCard(it, onEvent, modifier = Modifier.padding(gutters).padding(bottom = 8.dp)) }
+        state.nudge?.let {
+            NudgeCard(it, onEvent, modifier = Modifier.padding(gutters).padding(bottom = SproutSpacing.sm))
+        }
         if (presets) PresetChips(state, onEvent, modifier = Modifier.padding(gutters))
-        TextComposer(state, onEvent, modifier = Modifier.padding(gutters), onAttachPhoto = onAttachPhoto)
+        TextComposer(state, onEvent, gutters = gutters, onAttachPhoto = onAttachPhoto)
     }
 }

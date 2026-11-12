@@ -21,24 +21,35 @@ import java.io.ByteArrayOutputStream
 /**
  * Golden screenshots of the chat screens, in src/test/screenshots. The kid thread covers every tier in every state
  * (empty, messages, locked, recording, failed); Sprout and Sapling have no microphone, so their "recording" golden is
- * the thread unchanged. Parent screens are captured light and dark. Re-record with
- * `./gradlew :feature:chat:recordRoborazziDebug`.
+ * the thread unchanged. Parent screens are captured light and dark. The back arrow is drawn where the app draws it:
+ * on a parent's thread and Seedling's (pushed), not on the inbox or the Sprout and Sapling thread (tab roots).
+ * Re-record with `./gradlew :feature:chat:recordRoborazziDebug`.
  */
 class ChatScreenshotTest : ScreenshotTest(checkAccessibility = true) {
     @Test
     fun `kid, empty, every tier`() = screenshot.captureTiers("chat_kid_empty") { tier ->
-        ChatScreen(state = ChatPreviewData.kidEmpty(tier), onEvent = {}, readAloud = speech)
+        ChatScreen(state = ChatPreviewData.kidEmpty(tier), onEvent = {}, onBack = backFor(tier), readAloud = speech)
     }
 
     @Test
     fun `kid, messages, every tier`() = screenshot.captureTiers("chat_kid_messages") { tier ->
-        ChatScreen(state = ChatPreviewData.kidMessages(tier, PhotoUi.Loaded(photo)), onEvent = {}, readAloud = speech)
+        ChatScreen(
+            state = ChatPreviewData.kidMessages(tier, PhotoUi.Loaded(photo)),
+            onEvent = {},
+            onBack = backFor(tier),
+            readAloud = speech,
+        )
     }
 
     @Test
     fun `kid, locked and waiting for a parent device, every tier`() =
         screenshot.captureTiers("chat_kid_locked") { tier ->
-            ChatScreen(state = ChatPreviewData.kidLocked(tier), onEvent = {}, readAloud = speech)
+            ChatScreen(
+                state = ChatPreviewData.kidLocked(tier),
+                onEvent = {},
+                onBack = backFor(tier),
+                readAloud = speech,
+            )
         }
 
     @Test
@@ -46,17 +57,17 @@ class ChatScreenshotTest : ScreenshotTest(checkAccessibility = true) {
         "chat_kid_key_conflict",
         tiers = listOf(KidUiTier.SPROUT),
     ) { tier ->
-        ChatScreen(state = ChatPreviewData.kidKeyConflict(tier), onEvent = {})
+        ChatScreen(state = ChatPreviewData.kidKeyConflict(tier), onEvent = {}, onBack = backFor(tier))
     }
 
     @Test
     fun `kid, recording, every tier`() = screenshot.captureTiers("chat_kid_recording") { tier ->
-        ChatScreen(state = ChatPreviewData.kidRecording(tier), onEvent = {}, readAloud = speech)
+        ChatScreen(state = ChatPreviewData.kidRecording(tier), onEvent = {}, onBack = backFor(tier), readAloud = speech)
     }
 
     @Test
     fun `kid, sending failed, every tier`() = screenshot.captureTiers("chat_kid_failed") { tier ->
-        ChatScreen(state = ChatPreviewData.kidFailed(tier), onEvent = {}, readAloud = speech)
+        ChatScreen(state = ChatPreviewData.kidFailed(tier), onEvent = {}, onBack = backFor(tier), readAloud = speech)
     }
 
     @Test
@@ -64,12 +75,17 @@ class ChatScreenshotTest : ScreenshotTest(checkAccessibility = true) {
         "chat_kid_nudge",
         tiers = listOf(KidUiTier.SPROUT, KidUiTier.SAPLING),
     ) { tier ->
-        ChatScreen(state = ChatPreviewData.kidNudge(tier), onEvent = {})
+        ChatScreen(state = ChatPreviewData.kidNudge(tier), onEvent = {}, onBack = backFor(tier))
     }
 
     @Test
     fun `kid, voice note playing, every tier`() = screenshot.captureTiers("chat_kid_voice_playing") { tier ->
-        ChatScreen(state = ChatPreviewData.kidVoicePlaying(tier), onEvent = {}, readAloud = speech)
+        ChatScreen(
+            state = ChatPreviewData.kidVoicePlaying(tier),
+            onEvent = {},
+            onBack = backFor(tier),
+            readAloud = speech,
+        )
     }
 
     @Test
@@ -77,61 +93,66 @@ class ChatScreenshotTest : ScreenshotTest(checkAccessibility = true) {
         "chat_kid_checking",
         tiers = listOf(KidUiTier.SPROUT, KidUiTier.SAPLING),
     ) { tier ->
-        ChatScreen(state = ChatPreviewData.kidChecking(tier), onEvent = {})
+        ChatScreen(state = ChatPreviewData.kidChecking(tier), onEvent = {}, onBack = backFor(tier))
     }
 
     @Test
     fun `parent thread, sending, failed, blocked and arrived late`() =
         screenshot.captureLightDark("chat_parent_send_states") {
-            ChatScreen(state = ChatPreviewData.parentSendStates(), onEvent = {})
+            ChatScreen(state = ChatPreviewData.parentSendStates(), onEvent = {}, onBack = {})
         }
 
     @Test
     fun `parent thread, photo loading and unavailable`() = screenshot.captureLightDark("chat_parent_photos") {
-        ChatScreen(state = ChatPreviewData.parentPhotos(), onEvent = {})
+        ChatScreen(state = ChatPreviewData.parentPhotos(), onEvent = {}, onBack = {})
     }
 
     @Test
     fun `parent inbox`() = screenshot.captureLightDark("chat_threads") {
-        ChatThreadListScreen(ChatPreviewData.threads(), onEvent = {}, onOpenThread = {}, onBack = {})
+        ChatThreadListScreen(ChatPreviewData.threads(), onEvent = {}, onOpenThread = {})
     }
 
     @Test
     fun `parent inbox, empty`() = screenshot.captureLightDark("chat_threads_empty") {
-        ChatThreadListScreen(ChatThreadListUiState.Ready(emptyList()), onEvent = {}, onOpenThread = {}, onBack = {})
+        ChatThreadListScreen(ChatThreadListUiState.Ready(emptyList()), onEvent = {}, onOpenThread = {})
     }
 
     @Test
     fun `parent thread`() = screenshot.captureLightDark("chat_parent_thread") {
-        ChatScreen(state = ChatPreviewData.parentThread(PhotoUi.Loaded(photo)), onEvent = {})
+        ChatScreen(state = ChatPreviewData.parentThread(PhotoUi.Loaded(photo)), onEvent = {}, onBack = {})
     }
 
     @Test
     fun `parent thread, empty`() = screenshot.captureLightDark("chat_parent_empty") {
-        ChatScreen(state = ChatPreviewData.parentEmpty(), onEvent = {})
+        ChatScreen(state = ChatPreviewData.parentEmpty(), onEvent = {}, onBack = {})
     }
 
     @Test
     fun `parent thread, locked and waiting for the key`() = screenshot.captureLightDark("chat_parent_locked") {
-        ChatScreen(state = ChatPreviewData.parentLocked(), onEvent = {})
+        ChatScreen(state = ChatPreviewData.parentLocked(), onEvent = {}, onBack = {})
     }
 
     @Test
     fun `parent thread, this phone's chat key no longer matches`() =
         screenshot.captureLightDark("chat_parent_key_conflict") {
-            ChatScreen(state = ChatPreviewData.parentKeyConflict(), onEvent = {})
+            ChatScreen(state = ChatPreviewData.parentKeyConflict(), onEvent = {}, onBack = {})
         }
 
     // One dark golden per kid screen family (docs/SCREENSHOT_TESTS.md).
     @Test
     fun `kid, messages, dark theme, every tier`() =
         screenshot.captureTiers("chat_kid_messages_dark", darkTheme = true) { tier ->
-            ChatScreen(state = ChatPreviewData.kidMessages(tier), onEvent = {}, readAloud = speech)
+            ChatScreen(
+                state = ChatPreviewData.kidMessages(tier),
+                onEvent = {},
+                onBack = backFor(tier),
+                readAloud = speech,
+            )
         }
 
     @Test
     fun `parent thread at font scale 2`() = screenshot.captureFontScale("chat_parent_thread") {
-        ChatScreen(state = ChatPreviewData.parentThread(PhotoUi.Loaded(photo)), onEvent = {})
+        ChatScreen(state = ChatPreviewData.parentThread(PhotoUi.Loaded(photo)), onEvent = {}, onBack = {})
     }
 
     // The inbox and thread panes as the app's list-detail scene lays them out on a tablet (M7 §5): a 360 dp list pane
@@ -147,7 +168,6 @@ class ChatScreenshotTest : ScreenshotTest(checkAccessibility = true) {
                     state = ChatPreviewData.threads(),
                     onEvent = {},
                     onOpenThread = {},
-                    onBack = {},
                     modifier = Modifier.width(LIST_PANE_WIDTH),
                     selectedThreadId = KidId("kid-leo"),
                 )
@@ -156,6 +176,7 @@ class ChatScreenshotTest : ScreenshotTest(checkAccessibility = true) {
             ChatScreen(
                 state = ChatPreviewData.parentThread(PhotoUi.Loaded(photo)),
                 onEvent = {},
+                onBack = {},
                 modifier = Modifier.weight(1f),
             )
         }
@@ -172,7 +193,6 @@ class ChatScreenshotTest : ScreenshotTest(checkAccessibility = true) {
                     state = ChatPreviewData.threads(),
                     onEvent = {},
                     onOpenThread = {},
-                    onBack = {},
                     modifier = Modifier.width(LIST_PANE_WIDTH),
                 )
             }
@@ -182,6 +202,9 @@ class ChatScreenshotTest : ScreenshotTest(checkAccessibility = true) {
     }
 
     private companion object {
+        /** Seedling's thread is pushed from the wallet (back arrow); Sprout's and Sapling's are tab roots (none). */
+        fun backFor(tier: KidUiTier): (() -> Unit)? = if (tier == KidUiTier.SEEDLING) ({}) else null
+
         /** Material's default list pane width in a list-detail scene. */
         val LIST_PANE_WIDTH = 360.dp
 

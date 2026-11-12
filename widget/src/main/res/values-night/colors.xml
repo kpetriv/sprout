@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- The widget picker preview's colours, as WidgetColors.kt in dark. -->
 <resources>
-  <color name="widget_preview_card">#FF1E331F</color>
-  <color name="widget_preview_primary">#FF8BD88F</color>
-  <color name="widget_preview_text">#FFE2E3DD</color>
-  <color name="widget_preview_text_secondary">#FFC2C9BB</color>
+  <color name="widget_preview_card">#FF1F4A30</color>
+  <color name="widget_preview_primary">#FF8FD3A3</color>
+  <color name="widget_preview_text">#FFE4E7E0</color>
+  <color name="widget_preview_text_secondary">#FFAEB7B0</color>
 </resources>

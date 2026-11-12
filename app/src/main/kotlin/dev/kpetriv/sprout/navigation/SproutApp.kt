@@ -432,7 +432,7 @@ private fun EntryProviderScope<NavKey>.listDetailEntries(navigation: TopLevelBac
         ListPane {
             ChatThreadListRoute(
                 onOpenThread = { kidId -> navigation.openDetail(ChatThreadKey(kidId)) },
-                onBack = back,
+                onBack = null,
                 selectedThreadId = navigation.tabs
                     .takeIf { ChatThreadsKey in it }
                     ?.let { (navigation.stackOf(ChatThreadsKey).lastOrNull() as? ChatThreadKey)?.kidId },
@@ -611,7 +611,13 @@ private val KidRouteEntries = KidEntries { navigation, tier, chatAvailable, back
         entry<ShopKey> { key -> ShopRoute(kidId = key.kidId, mode = key.mode, onBack = back) }
         entry<KidChoresKey> { key -> KidTodayRoute(kidId = key.kidId, tier = key.tier) }
         entry<ChatThreadKey> { key ->
-            KidChatRoute(kidId = key.kidId, tier = tier, onBack = back, readAloud = rememberReadAloud())
+            // A tab root on Sprout and Sapling (no back arrow); pushed from the wallet on Seedling (M9 §5.2).
+            KidChatRoute(
+                kidId = key.kidId,
+                tier = tier,
+                onBack = back.takeIf { tier == KidUiTier.SEEDLING },
+                readAloud = rememberReadAloud(),
+            )
         }
         entry<TimeBankKey> { key -> TimeBankRoute(kidId = key.kidId, tier = tier, onBack = back) }
         entry<KidGamesKey> { key ->
