@@ -75,6 +75,8 @@ data class SubmissionUi(
     val photo: PhotoUi?,
     /** Some rewards are already paid (an approval stopped halfway): the approve button reads "Finish approval". */
     val partlyPaid: Boolean = false,
+    /** The kid's avatar tint: their place in the household's kids (as on the dashboard). */
+    val tintIndex: Int = 0,
 )
 
 data class ProposalUi(
@@ -84,6 +86,8 @@ data class ProposalUi(
     val description: String?,
     val reward: RewardUi,
     val schedule: ChoreSchedule,
+    /** The kid's avatar tint: their place in the household's kids (as on the dashboard). */
+    val tintIndex: Int = 0,
 )
 
 /** The reject sheet for [submissionId], with the reason typed so far (at most [MAX_NOTE_LENGTH] characters). */
@@ -279,6 +283,7 @@ class ApprovalsViewModel @Inject internal constructor(
                 note = submission.note?.takeIf { it.isNotBlank() },
                 reward = RewardUi.of(chore.reward, currency),
                 photo = PhotoKey.of(submission)?.let { photoMap[it] ?: PhotoUi.Loading },
+                tintIndex = data.tintIndex(submission.kidId),
             )
         }
         val proposals = data.chores.values.filter { it.state == ChoreState.PROPOSED }
@@ -291,6 +296,7 @@ class ApprovalsViewModel @Inject internal constructor(
                     description = chore.description,
                     reward = RewardUi.of(chore.reward, currency),
                     schedule = chore.schedule,
+                    tintIndex = data.tintIndex(chore.kidId),
                 )
             }
         return ApprovalsUiState.Ready(
@@ -509,6 +515,9 @@ class ApprovalsViewModel @Inject internal constructor(
         val currency: Currency.Fiat,
     ) {
         fun kidName(kid: Kid?): String = kid?.firstName ?: UNKNOWN_KID
+
+        /** The kid's place in the household's kids ([kids] keeps the repository's order); 0 for a kid not there. */
+        fun tintIndex(kidId: KidId): Int = kids.keys.indexOf(kidId).coerceAtLeast(0)
 
         companion object {
             val EMPTY = Snapshot(emptyList(), emptyMap(), emptyMap(), LocaleFiatCurrencyProvider.FALLBACK)

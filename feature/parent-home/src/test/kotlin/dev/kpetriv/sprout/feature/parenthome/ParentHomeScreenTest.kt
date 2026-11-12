@@ -13,6 +13,7 @@ import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import dev.kpetriv.sprout.core.designsystem.theme.SproutTheme
@@ -67,6 +68,8 @@ class ParentHomeScreenTest {
         compose.onNodeWithText("Sapling").assertIsDisplayed()
         compose.onAllNodes(hasText("Next allowance:", substring = true)).assertCountEquals(2)
         compose.onNodeWithText("Weekly summary").assertIsDisplayed()
+        compose.onNodeWithText("Needs you").assertIsDisplayed()
+        compose.onNodeWithText("Mia, 6").assertIsDisplayed()
     }
 
     @Test
@@ -181,7 +184,7 @@ class ParentHomeScreenTest {
         compose.onNodeWithText("Sign now").performClick()
         compose.onNodeWithText("Shop (parent view)").performClick()
         compose.onNodeWithText("Switch to kid mode").performClick()
-        compose.onNodeWithText("Leo").performClick()
+        compose.onNodeWithText("Leo, 9").performClick()
 
         assertEquals(1, signNow)
         assertEquals(listOf("shop", "kid mode", "kid kid-leo"), opened)
@@ -226,7 +229,7 @@ class ParentHomeScreenTest {
     fun `the anomalies card opens the first kid with anomalies`() {
         show(ParentHomePreviewData.busy())
 
-        // The approvals card's button comes first, then the anomalies card's.
+        // The approvals row's button comes first, then the ledger check's.
         val reviews = compose.onAllNodes(hasText("Review") and hasClickAction())
         reviews[0].performClick()
         reviews[1].performClick()
@@ -243,7 +246,9 @@ class ParentHomeScreenTest {
         compose.onNodeWithText("Couldn't be paid: it breaks a ledger rule").assertIsDisplayed()
         compose.onNodeWithText("Leo: £3.00 allowance for 2026-W30").assertIsDisplayed()
         compose.onNodeWithText("Skipped: too far in the past to catch up").assertIsDisplayed()
-        compose.onAllNodes(hasText("Dismiss") and hasClickAction())[1].performClick()
+        // Each Dismiss is read with its payment, the visible text stays "Dismiss".
+        compose.onAllNodes(hasText("Dismiss") and hasClickAction()).assertCountEquals(2)
+        compose.onNodeWithContentDescription("Dismiss Leo’s allowance for 2026-W30").performClick()
 
         assertEquals(
             listOf<ParentHomeEvent>(ParentHomeEvent.Dismiss(ParentHomePreviewData.SKIPPED_KEY)),

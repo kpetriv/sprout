@@ -3,28 +3,20 @@ package dev.kpetriv.sprout.feature.parenthome
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.Button
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
-import androidx.compose.material3.SuggestionChip
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -33,14 +25,26 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.isTraversalGroup
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import dev.kpetriv.sprout.core.designsystem.components.InitialAvatar
+import dev.kpetriv.sprout.core.designsystem.components.SproutButton
+import dev.kpetriv.sprout.core.designsystem.components.SproutButtonStyle
+import dev.kpetriv.sprout.core.designsystem.components.SproutCard
+import dev.kpetriv.sprout.core.designsystem.components.SproutTopBar
+import dev.kpetriv.sprout.core.designsystem.components.StatTile
+import dev.kpetriv.sprout.core.designsystem.icon.SproutIcons
+import dev.kpetriv.sprout.core.designsystem.theme.STACK_FONT_SCALE
+import dev.kpetriv.sprout.core.designsystem.theme.SproutSpacing
 import dev.kpetriv.sprout.core.domainledger.Currency
 import dev.kpetriv.sprout.core.domainledger.ParentAuthorizationRequester
 import dev.kpetriv.sprout.core.model.CalendarDate
@@ -48,6 +52,7 @@ import dev.kpetriv.sprout.core.model.DeviceId
 import dev.kpetriv.sprout.core.model.KidId
 import dev.kpetriv.sprout.core.model.KidUiTier
 import dev.kpetriv.sprout.core.ui.ContentWidthDefaults
+import dev.kpetriv.sprout.core.ui.MoneyFormatter
 import dev.kpetriv.sprout.core.ui.contentWidth
 import dev.kpetriv.sprout.core.ui.rememberMoneyFormatter
 import dev.kpetriv.sprout.core.ui.rememberWindowWidthClass
@@ -100,8 +105,10 @@ fun ParentHomeRoute(
     )
 }
 
-/** The dashboard for any [ParentHomeUiState]. [onSignNow] starts signing the queued payments. */
-@OptIn(ExperimentalMaterial3Api::class)
+/**
+ * The dashboard for any [ParentHomeUiState], the parent shell's Home tab (no back arrow: Chores, Chat and Settings are
+ * in the bar, M9 §5.2). [onSignNow] starts signing the queued payments.
+ */
 @Composable
 fun ParentHomeScreen(
     state: ParentHomeUiState,
@@ -113,16 +120,7 @@ fun ParentHomeScreen(
     val snackbar = remember { SnackbarHostState() }
     Scaffold(
         modifier = modifier,
-        topBar = {
-            TopAppBar(
-                title = {
-                    Text(
-                        stringResource(R.string.feature_parent_home_title),
-                        modifier = Modifier.semantics { heading() },
-                    )
-                },
-            )
-        },
+        topBar = { SproutTopBar(title = stringResource(R.string.feature_parent_home_title), onBack = null) },
         snackbarHost = { SnackbarHost(snackbar) },
     ) { padding ->
         Box(modifier = Modifier.padding(padding).fillMaxSize()) {
@@ -149,8 +147,9 @@ fun ParentHomeScreen(
 }
 
 /**
- * The dashboard's cards. Compact: one column in the order below. Medium and wider (D-M7-2): two columns, household
- * status and payments on the left, the kids, the weekly summary and the links on the right, together capped at
+ * The dashboard of the "Botanical Linen" render. Compact: one column, the sync line, "Needs you" (one white card of
+ * attention rows), the kids, the weekly summary and the Shop and kid-mode pills. Medium and wider (D-M7-2): two
+ * columns, the sync line and "Needs you" on the left, the rest on the right, together capped at
  * [TWO_COLUMN_MAX_WIDTH] and centred.
  */
 @Composable
@@ -161,179 +160,228 @@ private fun Dashboard(
     links: ParentHomeLinks,
 ) {
     val twoColumns = rememberWindowWidthClass().isAtLeastMedium
-    val spacing = Arrangement.spacedBy(12.dp)
+    val spacing = Arrangement.spacedBy(SproutSpacing.md)
     Column(
         modifier = Modifier
             .fillMaxSize()
             .verticalScroll(rememberScrollState())
             .contentWidth(if (twoColumns) TWO_COLUMN_MAX_WIDTH else ContentWidthDefaults.Max)
-            .padding(16.dp),
+            .padding(horizontal = SproutSpacing.gutter, vertical = SproutSpacing.md),
         verticalArrangement = spacing,
     ) {
         if (twoColumns) {
-            Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+            Row(horizontalArrangement = Arrangement.spacedBy(SproutSpacing.lg)) {
                 Column(modifier = Modifier.weight(1f), verticalArrangement = spacing) {
-                    StatusCards(state, onSignNow, onEvent, links)
+                    NeedsYou(state, onSignNow, onEvent, links)
                 }
                 Column(modifier = Modifier.weight(1f), verticalArrangement = spacing) {
                     KidsAndSummary(state, onEvent, links)
                 }
             }
         } else {
-            StatusCards(state, onSignNow, onEvent, links)
-            KidsAndSummary(state, onEvent, links)
+            NeedsYou(state, onSignNow, onEvent, links)
+            KidsAndSummary(state, onEvent, links, modifier = Modifier.padding(top = SproutSpacing.sm))
         }
     }
 }
 
+/**
+ * The sync line, then "Needs you": the household's rows ([householdRows]), chores to approve, payments to sign,
+ * payments that need attention and the ledger check, in one card.
+ */
 @Composable
-private fun StatusCards(
+private fun NeedsYou(
     state: ParentHomeUiState.Ready,
     onSignNow: () -> Unit,
     onEvent: (ParentHomeEvent) -> Unit,
     links: ParentHomeLinks,
 ) {
-    HouseholdCards(state.household, links)
-    ApprovalsCard(state.pendingApprovals, links.onOpenApprovals)
-    PendingActionsCard(state.pendingActions, state.signing, onSignNow)
-    if (state.attention.isNotEmpty()) AttentionCard(state.attention) { onEvent(ParentHomeEvent.Dismiss(it)) }
-    AnomaliesCard(state, links.onOpenKid)
+    state.household.sync?.let { SyncStatusLine(it) }
+    SectionTitle(stringResource(R.string.feature_parent_home_needs_you))
+    val rows = householdRows(state.household, links) + buildList<@Composable () -> Unit> {
+        add { ApprovalsRow(state.pendingApprovals, links.onOpenApprovals) }
+        add { PendingActionsRow(state.pendingActions, state.signing, onSignNow) }
+        if (state.attention.isNotEmpty()) {
+            add { PaymentsAttentionRow(state.attention) { onEvent(ParentHomeEvent.Dismiss(it)) } }
+        }
+        add { AnomaliesRow(state, links.onOpenKid) }
+    }
+    AttentionCard(rows)
 }
 
 @Composable
-private fun KidsAndSummary(state: ParentHomeUiState.Ready, onEvent: (ParentHomeEvent) -> Unit, links: ParentHomeLinks) {
-    SectionTitle(stringResource(R.string.feature_parent_home_kids_title))
+private fun KidsAndSummary(
+    state: ParentHomeUiState.Ready,
+    onEvent: (ParentHomeEvent) -> Unit,
+    links: ParentHomeLinks,
+    modifier: Modifier = Modifier,
+) {
+    SectionTitle(stringResource(R.string.feature_parent_home_kids_title), modifier)
     if (state.kids.isEmpty()) {
-        Text(stringResource(R.string.feature_parent_home_kids_none), style = MaterialTheme.typography.bodyMedium)
+        Text(
+            stringResource(R.string.feature_parent_home_kids_none),
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
     }
-    state.kids.forEach { KidCard(it, onOpen = { links.onOpenKid(it.kid.id) }) }
+    state.kids.forEachIndexed { index, kid ->
+        KidCard(kid, tintIndex = index, onOpen = { links.onOpenKid(kid.kid.id) })
+    }
     WeeklySummaryCard(
         summary = state.summary,
         week = state.summaryWeek,
         onWeekChange = { onEvent(ParentHomeEvent.SummaryWeekChanged(it)) },
         onDownloadModel = links.onOpenAiSettings,
+        modifier = Modifier.padding(top = SproutSpacing.sm),
     )
-    QuickLinks(links)
+    ModeButtons(links)
 }
 
 /** Two dashboard columns of at most about [ContentWidthDefaults.Max] each. */
 private val TWO_COLUMN_MAX_WIDTH = 1_200.dp
 
 @Composable
-private fun DashboardCard(
-    title: String,
-    modifier: Modifier = Modifier,
-    highlighted: Boolean = false,
-    content: @Composable () -> Unit,
-) {
-    val colors = if (highlighted) {
-        CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.secondaryContainer,
-            contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
-        )
-    } else {
-        CardDefaults.cardColors()
-    }
-    Card(modifier = modifier.fillMaxWidth(), colors = colors) {
-        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            SectionTitle(title)
-            content()
-        }
-    }
+private fun SectionTitle(text: String, modifier: Modifier = Modifier) {
+    Text(
+        text,
+        style = MaterialTheme.typography.titleLarge,
+        modifier = modifier.padding(top = SproutSpacing.sm).semantics { heading() },
+    )
+}
+
+/** "Review" on a Linen pill, read as [description] so the rows' two Reviews can be told apart. */
+@Composable
+private fun ReviewButton(text: String, description: String, onClick: () -> Unit, modifier: Modifier) {
+    SproutButton(
+        text = text,
+        onClick = onClick,
+        style = SproutButtonStyle.Tertiary,
+        modifier = modifier.semantics { contentDescription = description },
+    )
 }
 
 @Composable
-private fun SectionTitle(text: String) {
-    Text(text, style = MaterialTheme.typography.titleMedium, modifier = Modifier.semantics { heading() })
-}
-
-@Composable
-private fun ApprovalsCard(count: Int, onReview: () -> Unit) {
-    DashboardCard(stringResource(R.string.feature_parent_home_approvals_title), highlighted = count > 0) {
-        Text(
-            if (count == 0) {
-                stringResource(R.string.feature_parent_home_approvals_none)
-            } else {
-                pluralStringResource(R.plurals.feature_parent_home_approvals_count, count, count)
-            },
-            style = MaterialTheme.typography.bodyLarge,
-        )
-        if (count > 0) {
-            Button(onClick = onReview) { Text(stringResource(R.string.feature_parent_home_approvals_review)) }
-        }
-    }
-}
-
-@Composable
-private fun PendingActionsCard(pending: PendingActionsUi, signing: SigningProgress?, onSignNow: () -> Unit) {
-    DashboardCard(stringResource(R.string.feature_parent_home_signing_title), highlighted = pending.total > 0) {
-        Text(pendingText(pending), style = MaterialTheme.typography.bodyLarge)
-        if (signing != null) {
-            LinearProgressIndicator(
-                progress = { if (signing.total == 0) 0f else signing.signed.toFloat() / signing.total },
-                modifier = Modifier.fillMaxWidth(),
-            )
-            Text(
-                pluralStringResource(
-                    R.plurals.feature_parent_home_signing_progress,
-                    signing.total,
-                    signing.signed,
-                    signing.total,
-                ),
-                style = MaterialTheme.typography.bodyMedium,
-            )
-        }
-        if (pending.total > 0) {
-            Button(onClick = onSignNow, enabled = signing == null) {
-                Text(stringResource(R.string.feature_parent_home_sign_now))
+private fun ApprovalsRow(count: Int, onReview: () -> Unit) {
+    AttentionRow(
+        lead = AttentionLead.Count(count),
+        title = stringResource(R.string.feature_parent_home_approvals_title),
+        detail = if (count == 0) {
+            stringResource(R.string.feature_parent_home_approvals_none)
+        } else {
+            pluralStringResource(R.plurals.feature_parent_home_approvals_count, count, count)
+        },
+        action = if (count > 0) {
+            { modifier ->
+                ReviewButton(
+                    text = stringResource(R.string.feature_parent_home_approvals_review),
+                    description = stringResource(R.string.feature_parent_home_approvals_review_described),
+                    onClick = onReview,
+                    modifier = modifier,
+                )
             }
-        }
-    }
+        } else {
+            null
+        },
+    )
 }
 
 @Composable
-private fun AttentionCard(items: List<AttentionItemUi>, onDismiss: (String) -> Unit) {
-    DashboardCard(stringResource(R.string.feature_parent_home_attention_title), highlighted = true) {
-        Text(
-            stringResource(R.string.feature_parent_home_attention_explainer),
-            style = MaterialTheme.typography.bodyMedium,
-        )
-        val formatter = rememberMoneyFormatter()
-        items.forEach { item ->
-            // One traversal group per payment, so each "Dismiss" is read right after the payment it dismisses.
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier.semantics { isTraversalGroup = true },
-            ) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        stringResource(
-                            when (item.kind) {
-                                PaymentKind.ALLOWANCE -> R.string.feature_parent_home_attention_allowance
-                                PaymentKind.INTEREST -> R.string.feature_parent_home_attention_interest
-                            },
-                            item.kidName,
-                            formatter.format(item.amount.amount, item.amount.currency),
-                            item.period,
-                        ),
-                        style = MaterialTheme.typography.bodyLarge,
+private fun PendingActionsRow(pending: PendingActionsUi, signing: SigningProgress?, onSignNow: () -> Unit) {
+    AttentionRow(
+        lead = AttentionLead.Count(pending.total),
+        title = stringResource(R.string.feature_parent_home_signing_title),
+        detail = pendingText(pending),
+        action = if (pending.total > 0) {
+            { modifier ->
+                SproutButton(
+                    text = stringResource(R.string.feature_parent_home_sign_now),
+                    onClick = onSignNow,
+                    enabled = signing == null,
+                    modifier = modifier,
+                )
+            }
+        } else {
+            null
+        },
+        extra = signing?.let { progress ->
+            {
+                LinearProgressIndicator(
+                    progress = { if (progress.total == 0) 0f else progress.signed.toFloat() / progress.total },
+                    modifier = Modifier.fillMaxWidth().padding(top = SproutSpacing.xs),
+                    trackColor = MaterialTheme.colorScheme.surfaceContainer,
+                )
+                Text(
+                    pluralStringResource(
+                        R.plurals.feature_parent_home_signing_progress,
+                        progress.total,
+                        progress.signed,
+                        progress.total,
+                    ),
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+            }
+        },
+    )
+}
+
+/** Payments that won't be paid automatically, each with its own "Dismiss". */
+@Composable
+private fun PaymentsAttentionRow(items: List<AttentionItemUi>, onDismiss: (String) -> Unit) {
+    val formatter = rememberMoneyFormatter()
+    AttentionRow(
+        lead = AttentionLead.Count(items.size),
+        title = stringResource(R.string.feature_parent_home_attention_title),
+        detail = stringResource(R.string.feature_parent_home_attention_explainer),
+        extra = {
+            items.forEach { item ->
+                // One traversal group per payment, so each "Dismiss" is read right after the payment it dismisses.
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(SproutSpacing.sm),
+                    modifier = Modifier.padding(top = SproutSpacing.sm).semantics { isTraversalGroup = true },
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            stringResource(
+                                when (item.kind) {
+                                    PaymentKind.ALLOWANCE -> R.string.feature_parent_home_attention_allowance
+                                    PaymentKind.INTEREST -> R.string.feature_parent_home_attention_interest
+                                },
+                                item.kidName,
+                                formatter.format(item.amount.amount, item.amount.currency),
+                                item.period,
+                            ),
+                            style = MaterialTheme.typography.bodyLarge,
+                        )
+                        Text(
+                            stringResource(
+                                when (item.reason) {
+                                    AttentionReason.FAILED -> R.string.feature_parent_home_attention_failed
+                                    AttentionReason.SKIPPED -> R.string.feature_parent_home_attention_skipped
+                                },
+                            ),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    val dismissDescription = stringResource(
+                        when (item.kind) {
+                            PaymentKind.ALLOWANCE -> R.string.feature_parent_home_attention_dismiss_allowance
+                            PaymentKind.INTEREST -> R.string.feature_parent_home_attention_dismiss_interest
+                        },
+                        item.kidName,
+                        item.period,
                     )
-                    Text(
-                        stringResource(
-                            when (item.reason) {
-                                AttentionReason.FAILED -> R.string.feature_parent_home_attention_failed
-                                AttentionReason.SKIPPED -> R.string.feature_parent_home_attention_skipped
-                            },
-                        ),
-                        style = MaterialTheme.typography.bodyMedium,
+                    SproutButton(
+                        text = stringResource(R.string.feature_parent_home_attention_dismiss),
+                        onClick = { onDismiss(item.key) },
+                        style = SproutButtonStyle.Tertiary,
+                        modifier = Modifier.semantics { contentDescription = dismissDescription },
                     )
                 }
-                TextButton(onClick = { onDismiss(item.key) }) {
-                    Text(stringResource(R.string.feature_parent_home_attention_dismiss))
-                }
             }
-        }
-    }
+        },
+    )
 }
 
 @Composable
@@ -408,96 +456,148 @@ private fun signResultText(result: SignResult): String = when (result) {
 }
 
 @Composable
-private fun AnomaliesCard(state: ParentHomeUiState.Ready, onOpenKid: (KidId) -> Unit) {
+private fun AnomaliesRow(state: ParentHomeUiState.Ready, onOpenKid: (KidId) -> Unit) {
     val total = state.anomaliesTotal
-    DashboardCard(stringResource(R.string.feature_parent_home_anomalies_title)) {
-        Text(
-            if (total == 0) {
-                stringResource(R.string.feature_parent_home_anomalies_none)
-            } else {
-                pluralStringResource(R.plurals.feature_parent_home_anomalies_count, total, total)
-            },
-            style = MaterialTheme.typography.bodyLarge,
-        )
-        state.firstKidWithAnomalies?.let { kid ->
-            OutlinedButton(onClick = { onOpenKid(kid.id) }) {
-                Text(stringResource(R.string.feature_parent_home_anomalies_review))
+    val kid = state.firstKidWithAnomalies
+    AttentionRow(
+        lead = AttentionLead.Count(total, alert = true),
+        title = stringResource(R.string.feature_parent_home_anomalies_title),
+        detail = if (total == 0) {
+            stringResource(R.string.feature_parent_home_anomalies_none)
+        } else {
+            pluralStringResource(R.plurals.feature_parent_home_anomalies_count, total, total)
+        },
+        action = kid?.let {
+            { modifier ->
+                ReviewButton(
+                    text = stringResource(R.string.feature_parent_home_anomalies_review),
+                    description = stringResource(R.string.feature_parent_home_anomalies_review_described),
+                    onClick = { onOpenKid(it.id) },
+                    modifier = modifier,
+                )
             }
-        }
-    }
+        },
+    )
 }
 
+/**
+ * A kid as one white card (one button to their wallet): the avatar ([tintIndex] by their place in the household),
+ * "Leo, 9" over their tier, the money and screen-time tiles, the next allowance and any issues to review.
+ */
 @Composable
-private fun KidCard(summary: KidSummaryUi, onOpen: () -> Unit) {
+private fun KidCard(summary: KidSummaryUi, tintIndex: Int, onOpen: () -> Unit) {
     val formatter = rememberMoneyFormatter()
-    Card(onClick = onOpen, modifier = Modifier.fillMaxWidth()) {
-        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    summary.kid.firstName,
-                    style = MaterialTheme.typography.titleLarge,
-                    modifier = Modifier.weight(1f),
+    val kid = summary.kid
+    SproutCard(onClick = onOpen, modifier = Modifier.fillMaxWidth()) {
+        Column(verticalArrangement = Arrangement.spacedBy(SproutSpacing.md)) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(SproutSpacing.md),
+            ) {
+                InitialAvatar(
+                    initial = kid.firstName.take(1).uppercase(),
+                    tintIndex = tintIndex,
+                    modifier = Modifier.clearAndSetSemantics {},
                 )
-                SuggestionChip(onClick = onOpen, label = { Text(tierName(summary.kid.uiTier)) })
-            }
-            Row(horizontalArrangement = Arrangement.spacedBy(24.dp)) {
-                summary.money?.let {
-                    Balance(
-                        stringResource(R.string.feature_parent_home_kid_money),
-                        formatter.format(it.amount, it.currency),
+                Column(modifier = Modifier.weight(1f)) {
+                    val age = summary.age
+                    Text(
+                        if (age != null) {
+                            stringResource(R.string.feature_parent_home_kid_name_age, kid.firstName, age)
+                        } else {
+                            kid.firstName
+                        },
+                        style = MaterialTheme.typography.titleLarge,
+                    )
+                    Text(
+                        tierName(kid.uiTier),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
-                summary.minutes?.let {
-                    Balance(
-                        stringResource(R.string.feature_parent_home_kid_minutes),
-                        formatter.format(it, Currency.Minutes),
-                    )
-                }
+                Icon(
+                    SproutIcons.ChevronRight,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
-            Text(
-                summary.nextAllowance?.let {
-                    stringResource(R.string.feature_parent_home_kid_next_allowance, formatDate(it))
-                } ?: stringResource(R.string.feature_parent_home_kid_no_allowance),
-                style = MaterialTheme.typography.bodyMedium,
-            )
-            if (summary.anomalies > 0) {
+            BalanceTiles(summary, formatter)
+            Column(verticalArrangement = Arrangement.spacedBy(SproutSpacing.xs)) {
                 Text(
-                    pluralStringResource(
-                        R.plurals.feature_parent_home_kid_anomalies,
-                        summary.anomalies,
-                        summary.anomalies,
-                    ),
+                    summary.nextAllowance?.let {
+                        stringResource(R.string.feature_parent_home_kid_next_allowance, formatDate(it))
+                    } ?: stringResource(R.string.feature_parent_home_kid_no_allowance),
                     style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.error,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+                if (summary.anomalies > 0) {
+                    Text(
+                        pluralStringResource(
+                            R.plurals.feature_parent_home_kid_anomalies,
+                            summary.anomalies,
+                            summary.anomalies,
+                        ),
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
             }
         }
     }
 }
 
+/** The money and screen-time [StatTile]s side by side (stacked at large font sizes). */
 @Composable
-private fun Balance(label: String, value: String) {
-    Column {
-        Text(label, style = MaterialTheme.typography.labelMedium)
-        Text(value, style = MaterialTheme.typography.titleMedium)
-    }
-}
-
-@Composable
-private fun QuickLinks(links: ParentHomeLinks) {
-    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        SectionTitle(stringResource(R.string.feature_parent_home_links_title))
-        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            // Chores and Settings are in the bottom bar and Approvals is on the attention card (M9 §5.2).
-            LinkButton(R.string.feature_parent_home_link_shop, links.onOpenShop)
-            LinkButton(R.string.feature_parent_home_link_kid_mode, links.onSwitchToKidMode)
+private fun BalanceTiles(summary: KidSummaryUi, formatter: MoneyFormatter) {
+    val tiles = listOfNotNull(
+        summary.money?.let {
+            Triple(
+                stringResource(R.string.feature_parent_home_kid_money),
+                formatter.format(it.amount, it.currency),
+                SproutIcons.Payments,
+            )
+        },
+        summary.minutes?.let {
+            Triple(
+                stringResource(R.string.feature_parent_home_kid_minutes),
+                formatter.format(it, Currency.Minutes),
+                SproutIcons.Schedule,
+            )
+        },
+    )
+    if (tiles.isEmpty()) return
+    if (LocalDensity.current.fontScale >= STACK_FONT_SCALE) {
+        Column(verticalArrangement = Arrangement.spacedBy(SproutSpacing.sm)) {
+            tiles.forEach { (label, value, icon) ->
+                StatTile(label = label, value = value, icon = icon, modifier = Modifier.fillMaxWidth())
+            }
+        }
+    } else {
+        Row(horizontalArrangement = Arrangement.spacedBy(SproutSpacing.sm)) {
+            tiles.forEach { (label, value, icon) ->
+                StatTile(label = label, value = value, icon = icon, modifier = Modifier.weight(1f))
+            }
         }
     }
 }
 
+/** "Shop (parent view)" and "Switch to kid mode" as two Linen pills in one row (stacked at large font sizes). */
 @Composable
-private fun LinkButton(labelRes: Int, onClick: () -> Unit) {
-    TextButton(onClick = onClick) { Text(stringResource(labelRes)) }
+private fun ModeButtons(links: ParentHomeLinks) {
+    val shop = stringResource(R.string.feature_parent_home_link_shop)
+    val kidMode = stringResource(R.string.feature_parent_home_link_kid_mode)
+    val style = SproutButtonStyle.Tertiary
+    if (LocalDensity.current.fontScale >= STACK_FONT_SCALE) {
+        Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(SproutSpacing.sm)) {
+            SproutButton(shop, links.onOpenShop, Modifier.fillMaxWidth(), style = style)
+            SproutButton(kidMode, links.onSwitchToKidMode, Modifier.fillMaxWidth(), style = style)
+        }
+    } else {
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(SproutSpacing.sm)) {
+            SproutButton(shop, links.onOpenShop, Modifier.weight(1f), style = style)
+            SproutButton(kidMode, links.onSwitchToKidMode, Modifier.weight(1f), style = style)
+        }
+    }
 }
 
 @Composable

@@ -6,16 +6,11 @@ import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.material3.DatePicker
 import androidx.compose.material3.DatePickerDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilledTonalButton
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.SegmentedButton
-import androidx.compose.material3.SegmentedButtonDefaults
-import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberDatePickerState
@@ -28,28 +23,33 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.unit.dp
+import dev.kpetriv.sprout.core.designsystem.components.SproutButton
+import dev.kpetriv.sprout.core.designsystem.components.SproutButtonStyle
+import dev.kpetriv.sprout.core.designsystem.components.SproutChip
+import dev.kpetriv.sprout.core.designsystem.icon.SproutIcons
+import dev.kpetriv.sprout.core.designsystem.theme.SproutSpacing
 import dev.kpetriv.sprout.core.model.CalendarDate
 import dev.kpetriv.sprout.core.model.DayOfWeek
 import dev.kpetriv.sprout.core.model.MAX_SCHEDULE_DAY_OF_MONTH
 
 private const val MILLIS_PER_DAY = 86_400_000L
 
-/** Who a new chore is for. Fixed once the chore exists (its history belongs to that kid). */
-@OptIn(ExperimentalLayoutApi::class)
+/** Who a new chore is for, as one-choice chips. Fixed once the chore exists (its history belongs to that kid). */
 @Composable
 internal fun KidPicker(state: ChoreEditorUiState, onEvent: (ChoreEditorEvent) -> Unit) {
-    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    Column(verticalArrangement = Arrangement.spacedBy(SproutSpacing.sm)) {
         SectionHeading(stringResource(R.string.feature_chores_field_kid))
-        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        ChipRow {
             state.kids.forEach { kid ->
-                FilterChip(
+                SproutChip(
                     selected = kid.id == state.kidId,
+                    label = kid.name,
                     onClick = { onEvent(ChoreEditorEvent.KidChanged(kid.id)) },
                     enabled = state.isNew || kid.id == state.kidId,
-                    label = { Text(kid.name) },
+                    role = Role.RadioButton,
                 )
             }
         }
@@ -62,27 +62,26 @@ internal fun KidPicker(state: ChoreEditorUiState, onEvent: (ChoreEditorEvent) ->
 @Composable
 internal fun ScheduleEditor(state: ChoreEditorUiState, onEvent: (ChoreEditorEvent) -> Unit) {
     val form = state.schedule
-    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    Column(verticalArrangement = Arrangement.spacedBy(SproutSpacing.sm)) {
         SectionHeading(stringResource(R.string.feature_chores_field_schedule))
-        val kinds = ScheduleKind.entries
-        SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
-            kinds.forEachIndexed { index, kind ->
-                SegmentedButton(
+        ChipRow {
+            ScheduleKind.entries.forEach { kind ->
+                SproutChip(
                     selected = form.kind == kind,
+                    label = kindLabel(kind),
                     onClick = { onEvent(ChoreEditorEvent.ScheduleKindChanged(kind)) },
-                    shape = SegmentedButtonDefaults.itemShape(index, kinds.size),
-                    label = { Text(kindLabel(kind)) },
+                    role = Role.RadioButton,
                 )
             }
         }
         when (form.kind) {
             ScheduleKind.ONCE -> OnceEditor(form.onceDate, state.today, onEvent)
 
-            ScheduleKind.DAILY -> DayChips(selected = form.dailyDays) {
+            ScheduleKind.DAILY -> DayChips(selected = form.dailyDays, role = Role.Checkbox) {
                 onEvent(ChoreEditorEvent.DailyDayToggled(it))
             }
 
-            ScheduleKind.WEEKLY -> DayChips(selected = setOf(form.weeklyDay)) {
+            ScheduleKind.WEEKLY -> DayChips(selected = setOf(form.weeklyDay), role = Role.RadioButton) {
                 onEvent(ChoreEditorEvent.WeeklyDayChanged(it))
             }
 
@@ -102,21 +101,39 @@ private fun kindLabel(kind: ScheduleKind): String = stringResource(
     },
 )
 
-@OptIn(ExperimentalLayoutApi::class)
+/**
+ * One chip per weekday ("Mon", read as "Monday"): [Role.Checkbox] for the days of a daily chore, [Role.RadioButton]
+ * for the one day of a weekly chore.
+ */
 @Composable
-private fun DayChips(selected: Set<DayOfWeek>, onToggle: (DayOfWeek) -> Unit) {
+private fun DayChips(selected: Set<DayOfWeek>, role: Role, onToggle: (DayOfWeek) -> Unit) {
     val locale = LocalConfiguration.current.locales[0]
-    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+    ChipRow {
         DayOfWeek.entries.forEach { day ->
             val full = day.displayName(locale)
-            FilterChip(
+            SproutChip(
                 selected = day in selected,
+                label = day.displayName(locale, short = true),
                 onClick = { onToggle(day) },
-                label = { Text(day.displayName(locale, short = true)) },
+                role = role,
                 modifier = Modifier.semantics { contentDescription = full },
             )
         }
     }
+}
+
+/**
+ * Chips or pills that wrap onto more lines; with [selectable] (the default, for radio and checkbox chip sets) they
+ * form one selectable group.
+ */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun ChipRow(selectable: Boolean = true, content: @Composable () -> Unit) {
+    FlowRow(
+        modifier = Modifier.fillMaxWidth().then(if (selectable) Modifier.selectableGroup() else Modifier),
+        horizontalArrangement = Arrangement.spacedBy(SproutSpacing.sm),
+        verticalArrangement = Arrangement.spacedBy(SproutSpacing.sm),
+    ) { content() }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -128,12 +145,21 @@ private fun OnceEditor(date: CalendarDate?, today: CalendarDate, onEvent: (Chore
             ?: stringResource(R.string.feature_chores_once_any_time),
         style = MaterialTheme.typography.bodyLarge,
     )
-    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        FilledTonalButton(onClick = { picking = true }) { Text(stringResource(R.string.feature_chores_pick_date)) }
+    // Plain buttons, not a choice: no selectable group.
+    ChipRow(selectable = false) {
+        SproutButton(
+            text = stringResource(R.string.feature_chores_pick_date),
+            onClick = { picking = true },
+            style = SproutButtonStyle.Tertiary,
+            icon = SproutIcons.Schedule,
+        )
         if (date != null) {
-            OutlinedButton(onClick = { onEvent(ChoreEditorEvent.OnceDateChanged(null)) }) {
-                Text(stringResource(R.string.feature_chores_clear_date))
-            }
+            SproutButton(
+                text = stringResource(R.string.feature_chores_clear_date),
+                onClick = { onEvent(ChoreEditorEvent.OnceDateChanged(null)) },
+                style = SproutButtonStyle.Tertiary,
+                icon = SproutIcons.Close,
+            )
         }
     }
     if (picking) {
@@ -164,20 +190,27 @@ private fun OnceEditor(date: CalendarDate?, today: CalendarDate, onEvent: (Chore
 private fun MonthlyEditor(day: Int, onEvent: (ChoreEditorEvent) -> Unit) {
     val earlier = stringResource(R.string.feature_chores_monthly_earlier)
     val later = stringResource(R.string.feature_chores_monthly_later)
-    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-        OutlinedButton(
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(SproutSpacing.sm + SproutSpacing.xs),
+    ) {
+        SproutButton(
+            text = "−",
             onClick = { onEvent(ChoreEditorEvent.MonthlyDayChanged(day - 1)) },
             enabled = day > 1,
+            style = SproutButtonStyle.Tertiary,
             modifier = Modifier.semantics { contentDescription = earlier },
-        ) { Text("−") }
+        )
         Text(
             text = stringResource(R.string.feature_chores_monthly_day, day),
             style = MaterialTheme.typography.bodyLarge,
         )
-        OutlinedButton(
+        SproutButton(
+            text = "+",
             onClick = { onEvent(ChoreEditorEvent.MonthlyDayChanged(day + 1)) },
             enabled = day < MAX_SCHEDULE_DAY_OF_MONTH,
+            style = SproutButtonStyle.Tertiary,
             modifier = Modifier.semantics { contentDescription = later },
-        ) { Text("+") }
+        )
     }
 }

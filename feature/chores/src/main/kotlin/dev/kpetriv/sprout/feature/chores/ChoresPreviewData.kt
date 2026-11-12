@@ -1,5 +1,6 @@
 package dev.kpetriv.sprout.feature.chores
 
+import dev.kpetriv.sprout.core.designsystem.components.Pictogram
 import dev.kpetriv.sprout.core.domainledger.Currency
 import dev.kpetriv.sprout.core.domainledger.Money
 import dev.kpetriv.sprout.core.model.AgeBand
@@ -29,7 +30,7 @@ object ChoresPreviewData {
         choreId = ChoreId(id),
         title = title,
         description = null,
-        emoji = ChoreEmoji.forTitle(title),
+        pictogram = ChorePictogram.forTitle(title),
         dueOn = today,
         reward = reward,
         status = status,
@@ -60,15 +61,27 @@ object ChoresPreviewData {
             emptyList()
         } else {
             listOf(
-                UpcomingChoreUi(ChoreId("bed"), "Make your bed", "🛏️", today.plusDays(1), reward(moneyMinor = 50)),
+                UpcomingChoreUi(
+                    ChoreId("bed"),
+                    "Make your bed",
+                    Pictogram.BED,
+                    today.plusDays(1),
+                    reward(moneyMinor = 50),
+                ),
                 UpcomingChoreUi(
                     ChoreId("bins"),
                     "Take the bins out",
-                    "🗑️",
+                    Pictogram.BIN,
                     today.plusDays(2),
                     reward(moneyMinor = 200),
                 ),
-                UpcomingChoreUi(ChoreId("car"), "Wash the car", "🚗", today.plusDays(4), reward(moneyMinor = 500)),
+                UpcomingChoreUi(
+                    ChoreId("car"),
+                    "Wash the car",
+                    Pictogram.CAR,
+                    today.plusDays(4),
+                    reward(moneyMinor = 500),
+                ),
             )
         },
         proposals = if (tier == KidUiTier.SAPLING) {
@@ -112,6 +125,7 @@ object ChoresPreviewData {
         errors = setOf(EditorError.MINUTES_INVALID),
     )
 
+    /** Two submissions and a proposal; avatar tints follow the household order of [choreList] (Leo, Ava, Mia). */
     fun approvals(): ApprovalsUiState.Ready = ApprovalsUiState.Ready(
         submissions = listOf(
             SubmissionUi(
@@ -123,6 +137,7 @@ object ChoresPreviewData {
                 note = "Did it before school!",
                 reward = reward(moneyMinor = 250, minutes = 15),
                 photo = null,
+                tintIndex = 0,
             ),
             SubmissionUi(
                 id = SubmissionId("sub-2"),
@@ -133,6 +148,7 @@ object ChoresPreviewData {
                 note = null,
                 reward = reward(moneyMinor = 100),
                 photo = PhotoUi.Unavailable,
+                tintIndex = 2,
             ),
         ),
         proposals = listOf(
@@ -143,6 +159,7 @@ object ChoresPreviewData {
                 description = null,
                 reward = reward(moneyMinor = 300),
                 schedule = ChoreSchedule.Once(null),
+                tintIndex = 1,
             ),
         ),
     )
@@ -207,6 +224,7 @@ object ChoresPreviewData {
         ),
     )
 
+    /** The chore list in the household's order (Leo, Ava, Mia), which is also each kid's avatar tint. */
     fun choreList() = ChoreListUiState.Ready(
         groups = listOf(
             KidChoresUi(
@@ -228,6 +246,7 @@ object ChoresPreviewData {
                         ChoreState.ACTIVE,
                     ),
                 ),
+                tintIndex = 0,
             ),
             KidChoresUi(
                 KidId("kid-ava"),
@@ -241,8 +260,9 @@ object ChoresPreviewData {
                         ChoreState.PROPOSED,
                     ),
                 ),
+                tintIndex = 1,
             ),
-            KidChoresUi(KidId("kid-mia"), "Mia", emptyList()),
+            KidChoresUi(KidId("kid-mia"), "Mia", emptyList(), tintIndex = 2),
         ),
         pendingApprovals = 2,
     )

@@ -421,7 +421,6 @@ private fun EntryProviderScope<NavKey>.listDetailEntries(navigation: TopLevelBac
                 onCreateChore = { navigation.openDetail(ChoreEditorKey()) },
                 onEditChore = { choreId -> navigation.openDetail(ChoreEditorKey(choreId)) },
                 onOpenApprovals = { navigation.push(ApprovalsKey) },
-                onBack = back,
                 selectedChoreId = (navigation.stackOf(ChoresKey).lastOrNull() as? ChoreEditorKey)?.choreId,
             )
         }
@@ -610,7 +609,7 @@ private val KidRouteEntries = KidEntries { navigation, tier, chatAvailable, back
             }
         }
         entry<ShopKey> { key -> ShopRoute(kidId = key.kidId, mode = key.mode, onBack = back) }
-        entry<KidChoresKey> { key -> KidTodayRoute(kidId = key.kidId, tier = key.tier, onBack = back) }
+        entry<KidChoresKey> { key -> KidTodayRoute(kidId = key.kidId, tier = key.tier) }
         entry<ChatThreadKey> { key ->
             KidChatRoute(kidId = key.kidId, tier = tier, onBack = back, readAloud = rememberReadAloud())
         }

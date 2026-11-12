@@ -3,19 +3,17 @@ package dev.kpetriv.sprout.feature.chores
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
-import androidx.compose.material3.OutlinedCard
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -27,6 +25,11 @@ import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
+import dev.kpetriv.sprout.core.designsystem.components.Pictogram
+import dev.kpetriv.sprout.core.designsystem.components.SproutButton
+import dev.kpetriv.sprout.core.designsystem.components.SproutButtonStyle
+import dev.kpetriv.sprout.core.designsystem.components.SproutCard
+import dev.kpetriv.sprout.core.designsystem.theme.SproutSpacing
 import dev.kpetriv.sprout.core.domainledger.Currency
 import dev.kpetriv.sprout.core.domainledger.Money
 import dev.kpetriv.sprout.core.ui.rememberMoneyFormatter
@@ -41,13 +44,21 @@ internal fun ChoreSuggestionsSheet(
     onEvent: (ChoreEditorEvent) -> Unit,
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
-    ModalBottomSheet(onDismissRequest = { onEvent(ChoreEditorEvent.SuggestDismissed) }, sheetState = sheetState) {
+    ModalBottomSheet(
+        onDismissRequest = { onEvent(ChoreEditorEvent.SuggestDismissed) },
+        sheetState = sheetState,
+        containerColor = MaterialTheme.colorScheme.surfaceContainerLowest,
+    ) {
         ChoreSuggestionsContent(
             sheet = sheet,
             kidName = kidName,
             currency = currency,
             onEvent = onEvent,
-            modifier = Modifier.padding(start = 24.dp, end = 24.dp, bottom = 24.dp),
+            modifier = Modifier.padding(
+                start = SproutSpacing.lg,
+                end = SproutSpacing.lg,
+                bottom = SproutSpacing.lg,
+            ),
         )
     }
 }
@@ -63,7 +74,7 @@ internal fun ChoreSuggestionsContent(
 ) {
     Column(
         modifier = modifier.fillMaxWidth().verticalScroll(rememberScrollState()),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
+        verticalArrangement = Arrangement.spacedBy(SproutSpacing.sm + SproutSpacing.xs),
     ) {
         Text(
             text = if (kidName != null) {
@@ -90,15 +101,18 @@ internal fun ChoreSuggestionsContent(
 
             SuggestionsUi.Failed -> {
                 SheetMessage(stringResource(R.string.feature_chores_suggest_failed))
-                Button(onClick = { onEvent(ChoreEditorEvent.SuggestRetry) }) {
-                    Text(stringResource(R.string.feature_chores_retry))
-                }
+                SproutButton(
+                    text = stringResource(R.string.feature_chores_retry),
+                    onClick = { onEvent(ChoreEditorEvent.SuggestRetry) },
+                )
             }
         }
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-            TextButton(onClick = { onEvent(ChoreEditorEvent.SuggestDismissed) }) {
-                Text(stringResource(R.string.feature_chores_suggest_close))
-            }
+            SproutButton(
+                text = stringResource(R.string.feature_chores_suggest_close),
+                onClick = { onEvent(ChoreEditorEvent.SuggestDismissed) },
+                style = SproutButtonStyle.Tertiary,
+            )
         }
     }
 }
@@ -106,7 +120,10 @@ internal fun ChoreSuggestionsContent(
 @Composable
 private fun SuggestionsLoading() {
     val loading = stringResource(R.string.feature_chores_suggest_loading)
-    Box(modifier = Modifier.fillMaxWidth().padding(vertical = 24.dp), contentAlignment = Alignment.Center) {
+    Box(
+        modifier = Modifier.fillMaxWidth().padding(vertical = SproutSpacing.lg),
+        contentAlignment = Alignment.Center,
+    ) {
         CircularProgressIndicator(
             modifier = Modifier.semantics {
                 contentDescription = loading
@@ -125,22 +142,35 @@ private fun SheetMessage(text: String) {
     )
 }
 
+/** One idea as a white card (one button): its pictogram, title, description, and reward and schedule in Botanical. */
 @Composable
 private fun SuggestionCard(item: ChoreSuggestionUi, currency: Currency.Fiat, onClick: () -> Unit) {
     val formatter = rememberMoneyFormatter()
     val reward = RewardUi(item.money, item.minutes?.let(::Money), currency).format(formatter)
     val details = listOf(reward, scheduleLabel(item.schedule)).filter { it.isNotEmpty() }.joinToString(" · ")
-    OutlinedCard(onClick = onClick, modifier = Modifier.fillMaxWidth()) {
-        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            Text(item.title, style = MaterialTheme.typography.titleMedium)
-            item.description?.let {
-                Text(
-                    text = it,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+    SproutCard(
+        onClick = onClick,
+        modifier = Modifier.fillMaxWidth(),
+        contentPadding = PaddingValues(SproutSpacing.md),
+    ) {
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(SproutSpacing.md),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Pictogram(ChorePictogram.forTitle(item.title), size = IdeaPictogram)
+            Column(verticalArrangement = Arrangement.spacedBy(SproutSpacing.xs)) {
+                Text(item.title, style = MaterialTheme.typography.titleMedium)
+                item.description?.let {
+                    Text(
+                        text = it,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                Text(details, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
             }
-            Text(details, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
         }
     }
 }
+
+private val IdeaPictogram = 40.dp

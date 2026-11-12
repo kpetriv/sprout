@@ -1,9 +1,12 @@
 package dev.kpetriv.sprout.feature.chores
 
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
@@ -11,24 +14,20 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.ExtendedFloatingActionButton
-import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.isTraversalGroup
 import androidx.compose.ui.semantics.selected
@@ -36,27 +35,41 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import dev.kpetriv.sprout.core.designsystem.components.CardMeaning
+import dev.kpetriv.sprout.core.designsystem.components.InitialAvatar
+import dev.kpetriv.sprout.core.designsystem.components.Pictogram
+import dev.kpetriv.sprout.core.designsystem.components.SproutButton
+import dev.kpetriv.sprout.core.designsystem.components.SproutButtonStyle
+import dev.kpetriv.sprout.core.designsystem.components.SproutCard
+import dev.kpetriv.sprout.core.designsystem.components.SproutChip
+import dev.kpetriv.sprout.core.designsystem.components.SproutTopBar
+import dev.kpetriv.sprout.core.designsystem.icon.SproutIcons
+import dev.kpetriv.sprout.core.designsystem.theme.STACK_FONT_SCALE
+import dev.kpetriv.sprout.core.designsystem.theme.SproutSpacing
 import dev.kpetriv.sprout.core.model.ChoreId
 import dev.kpetriv.sprout.core.model.ChoreState
+import dev.kpetriv.sprout.core.model.KidUiTier
 import dev.kpetriv.sprout.core.ui.ContentWidth
 import dev.kpetriv.sprout.core.ui.rememberMoneyFormatter
 import dev.kpetriv.sprout.core.ui.withGutters
 
 /**
- * Navigation entry for the parent's chore list.
+ * Navigation entry for the parent's chore list, the root of the parent shell's Chores tab (no back arrow, M9 §5.2).
  *
  * List-detail (M7 §5, D-M7-2): on an Expanded window the app shows this route as the list pane and
  * [ChoreEditorRoute] as the detail pane (Navigation 3 `ListDetailSceneStrategy`: this entry's metadata is
  * `listPane(detailPlaceholder = { ChoreEditorPlaceholder() })`, the editor's is `detailPane()`). Pass the chore open
  * in the editor as [selectedChoreId] so its row is marked selected while both panes show.
+ *
+ * @param onBack the top bar's back arrow; null (the default) on the Chores tab root.
  */
 @Composable
 fun ChoreListRoute(
     onCreateChore: () -> Unit,
     onEditChore: (ChoreId) -> Unit,
     onOpenApprovals: () -> Unit,
-    onBack: () -> Unit,
     modifier: Modifier = Modifier,
+    onBack: (() -> Unit)? = null,
     selectedChoreId: ChoreId? = null,
 ) {
     val viewModel = choresViewModel<ChoreListViewModel>(key = "chores:list")
@@ -74,8 +87,12 @@ fun ChoreListRoute(
 }
 
 /**
- * Every kid's chores, grouped by kid, with state chips, archive / restore and a "New chore" button.
- * [selectedChoreId] marks the chore open in the editor pane (list-detail on an Expanded window).
+ * Every kid's chores, grouped by kid under their avatar, as white cards with a pictogram, the schedule, the reward in
+ * Botanical and a state pill, with archive / restore, a "Show archived" chip and a "New chore" pill. The approvals
+ * count sits in the bar. [selectedChoreId] marks the chore open in the editor pane (list-detail on an Expanded window)
+ * with a Botanical outline, announced as selected.
+ *
+ * @param onBack the top bar's back arrow; null on the Chores tab root (M9 §5.2).
  */
 @Composable
 fun ChoreListScreen(
@@ -85,7 +102,7 @@ fun ChoreListScreen(
     onCreateChore: () -> Unit = {},
     onEditChore: (ChoreId) -> Unit = {},
     onOpenApprovals: () -> Unit = {},
-    onBack: () -> Unit = {},
+    onBack: (() -> Unit)? = null,
     selectedChoreId: ChoreId? = null,
 ) {
     val snackbar = remember { SnackbarHostState() }
@@ -93,23 +110,27 @@ fun ChoreListScreen(
     Scaffold(
         modifier = modifier,
         topBar = {
-            ChoresTopBar(title = stringResource(R.string.feature_chores_title), onBack = onBack) {
-                if (ready != null) {
-                    TextButton(onClick = onOpenApprovals) {
-                        Text(stringResource(R.string.feature_chores_approvals_count, ready.pendingApprovals))
+            SproutTopBar(
+                title = stringResource(R.string.feature_chores_title),
+                onBack = onBack,
+                trailing = {
+                    if (ready != null) {
+                        SproutButton(
+                            text = stringResource(R.string.feature_chores_approvals_count, ready.pendingApprovals),
+                            onClick = onOpenApprovals,
+                            style = SproutButtonStyle.Tertiary,
+                            modifier = Modifier.padding(end = SproutSpacing.sm),
+                        )
                     }
-                }
-            }
+                },
+            )
         },
         floatingActionButton = {
             if (ready != null && ready.groups.isNotEmpty()) {
-                val newChore = stringResource(R.string.feature_chores_new_chore)
-                ExtendedFloatingActionButton(
+                SproutButton(
+                    text = stringResource(R.string.feature_chores_new_chore),
                     onClick = onCreateChore,
-                    // Material's extended FAB does not expose its text to accessibility services (M7 §8).
-                    modifier = Modifier.semantics { contentDescription = newChore },
-                    icon = { Icon(painterResource(R.drawable.feature_chores_ic_add), contentDescription = null) },
-                    text = { Text(newChore) },
+                    icon = SproutIcons.Add,
                 )
             }
         },
@@ -150,30 +171,30 @@ private fun ReadyList(
         Text(
             text = stringResource(R.string.feature_chores_no_kids),
             style = MaterialTheme.typography.bodyLarge,
-            modifier = Modifier.padding(24.dp),
+            modifier = Modifier.padding(SproutSpacing.lg),
         )
         return
     }
     ContentWidth(modifier = Modifier.fillMaxSize()) { gutters ->
         LazyColumn(
             modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 96.dp).withGutters(gutters),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
+            contentPadding = PaddingValues(
+                start = SproutSpacing.gutter,
+                end = SproutSpacing.gutter,
+                top = SproutSpacing.sm,
+                bottom = ListBottomPadding,
+            ).withGutters(gutters),
+            verticalArrangement = Arrangement.spacedBy(SproutSpacing.rowGap),
         ) {
             item(key = "toggle") {
-                TextButton(onClick = { onEvent(ChoreListEvent.ToggleArchived) }) {
-                    val label = if (state.showArchived) {
-                        R.string.feature_chores_hide_archived
-                    } else {
-                        R.string.feature_chores_show_archived
-                    }
-                    Text(stringResource(label))
-                }
+                SproutChip(
+                    selected = state.showArchived,
+                    label = stringResource(R.string.feature_chores_show_archived),
+                    onClick = { onEvent(ChoreListEvent.ToggleArchived) },
+                )
             }
             state.groups.forEach { group ->
-                item(key = "kid:${group.kidId.value}") {
-                    SectionHeading(text = group.kidName, modifier = Modifier.padding(top = 8.dp))
-                }
+                item(key = "kid:${group.kidId.value}") { KidHeading(group.kidName, tintIndex = group.tintIndex) }
                 if (group.chores.isEmpty()) {
                     item(key = "empty:${group.kidId.value}") {
                         Text(
@@ -197,13 +218,36 @@ private fun ReadyList(
     }
 }
 
+/** The kid's avatar (tint by their place in the household) and name, as a heading. */
+@Composable
+private fun KidHeading(name: String, tintIndex: Int) {
+    Row(
+        modifier = Modifier.padding(top = SproutSpacing.md),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(SproutSpacing.sm + SproutSpacing.xs),
+    ) {
+        InitialAvatar(
+            initial = name.take(1).uppercase(),
+            tintIndex = tintIndex,
+            size = KidAvatar,
+            modifier = Modifier.clearAndSetSemantics {},
+        )
+        SectionHeading(text = name, style = MaterialTheme.typography.titleLarge)
+    }
+}
+
 /**
  * The detail pane before a chore is picked (list-detail on an Expanded window): the app passes it as the list pane's
  * `detailPlaceholder`.
  */
 @Composable
 fun ChoreEditorPlaceholder(modifier: Modifier = Modifier) {
-    Box(modifier = modifier.fillMaxSize().padding(24.dp), contentAlignment = Alignment.Center) {
+    Column(
+        modifier = modifier.fillMaxSize().padding(SproutSpacing.lg),
+        verticalArrangement = Arrangement.spacedBy(SproutSpacing.md, Alignment.CenterVertically),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Pictogram(Pictogram.SPARKLE, size = PlaceholderPictogram)
         Text(
             text = stringResource(R.string.feature_chores_editor_placeholder),
             style = MaterialTheme.typography.bodyLarge,
@@ -213,6 +257,7 @@ fun ChoreEditorPlaceholder(modifier: Modifier = Modifier) {
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun ChoreRow(
     row: ChoreRowUi,
@@ -226,69 +271,91 @@ private fun ChoreRow(
     val schedule = scheduleLabel(row.schedule)
     val stateLabel = stateLabel(row.state)
     val description = stringResource(R.string.feature_chores_row_description, row.title, reward, schedule, stateLabel)
-    // The chore open in the editor pane beside the list is shown in the secondary container colour and announced as
-    // selected. Each card is a traversal group, so its archive button is read with its chore.
-    val colors = if (selected) {
-        CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer)
+    val shape = MaterialTheme.shapes.medium
+    // The chore open in the editor pane beside the list has a Botanical outline and is announced as selected. Each
+    // card is a traversal group, so its archive button is read with its chore.
+    val outline = if (selected) {
+        Modifier.border(SelectedOutline, MaterialTheme.colorScheme.primary, shape)
     } else {
-        CardDefaults.cardColors()
+        Modifier
     }
-    Card(modifier = Modifier.fillMaxWidth().semantics { isTraversalGroup = true }, colors = colors) {
-        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
-            Column(
-                verticalArrangement = Arrangement.spacedBy(4.dp),
-                modifier = Modifier
-                    .weight(1f)
-                    .clickable(onClick = onClick)
+    SproutCard(
+        modifier = Modifier.fillMaxWidth().then(outline).semantics { isTraversalGroup = true },
+        contentPadding = PaddingValues(0.dp),
+    ) {
+        val stacked = LocalDensity.current.fontScale >= STACK_FONT_SCALE
+        val details: @Composable (Modifier) -> Unit = { detailsModifier ->
+            Row(
+                modifier = detailsModifier
+                    .clickable(role = Role.Button, onClick = onClick)
                     .semantics(mergeDescendants = true) {
                         contentDescription = description
                         if (selected) this.selected = true
                     }
-                    .padding(16.dp),
+                    .padding(SproutSpacing.md),
+                horizontalArrangement = Arrangement.spacedBy(SproutSpacing.md),
+                verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text(text = row.title, style = MaterialTheme.typography.titleMedium)
-                Text(text = schedule, style = MaterialTheme.typography.bodyMedium)
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(text = reward, style = MaterialTheme.typography.labelLarge)
-                    StateChip(stateLabel, row.state)
+                Pictogram(ChorePictogram.forTitle(row.title), size = RowPictogram)
+                Column(verticalArrangement = Arrangement.spacedBy(SproutSpacing.xs)) {
+                    Text(text = row.title, style = MaterialTheme.typography.titleMedium)
+                    Text(
+                        text = schedule,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(SproutSpacing.sm),
+                        verticalArrangement = Arrangement.spacedBy(SproutSpacing.xs),
+                        itemVerticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        RewardText(
+                            reward = row.reward,
+                            formatter = formatter,
+                            tier = KidUiTier.SAPLING,
+                            style = MaterialTheme.typography.titleMedium,
+                        )
+                        LabelPill(stateLabel, row.state.meaning)
+                    }
                 }
             }
-            val archived = row.state == ChoreState.ARCHIVED
-            val actionDescription = stringResource(
-                if (archived) R.string.feature_chores_restore_described else R.string.feature_chores_archive_described,
-                row.title,
-            )
-            TextButton(
+        }
+        val archived = row.state == ChoreState.ARCHIVED
+        val actionDescription = stringResource(
+            if (archived) R.string.feature_chores_restore_described else R.string.feature_chores_archive_described,
+            row.title,
+        )
+        val action: @Composable (Modifier) -> Unit = { actionModifier ->
+            SproutButton(
+                text = stringResource(
+                    if (archived) R.string.feature_chores_restore else R.string.feature_chores_archive,
+                ),
                 onClick = if (archived) onRestore else onArchive,
-                modifier = Modifier
-                    .padding(end = 8.dp)
-                    .semantics { contentDescription = actionDescription },
-            ) {
-                Text(stringResource(if (archived) R.string.feature_chores_restore else R.string.feature_chores_archive))
+                style = SproutButtonStyle.Tertiary,
+                modifier = actionModifier.semantics { contentDescription = actionDescription },
+            )
+        }
+        if (stacked) {
+            Column {
+                details(Modifier.fillMaxWidth())
+                action(Modifier.padding(start = SproutSpacing.md, end = SproutSpacing.md, bottom = SproutSpacing.md))
+            }
+        } else {
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                details(Modifier.weight(1f))
+                action(Modifier.padding(end = SproutSpacing.md))
             }
         }
     }
 }
 
-@Composable
-private fun StateChip(label: String, state: ChoreState) {
-    val colors = MaterialTheme.colorScheme
-    val (container, content) = when (state) {
-        ChoreState.ACTIVE -> colors.primaryContainer to colors.onPrimaryContainer
-        ChoreState.PROPOSED -> colors.tertiaryContainer to colors.onTertiaryContainer
-        ChoreState.ARCHIVED -> colors.surfaceVariant to colors.onSurfaceVariant
+/** Active chores on Leaf tint, a kid's proposal on Honey tint (it needs a look), archived ones on Linen. */
+private val ChoreState.meaning: CardMeaning
+    get() = when (this) {
+        ChoreState.ACTIVE -> CardMeaning.Money
+        ChoreState.PROPOSED -> CardMeaning.Attention
+        ChoreState.ARCHIVED -> CardMeaning.Content
     }
-    Surface(color = container, contentColor = content, shape = MaterialTheme.shapes.small) {
-        Text(
-            text = label,
-            style = MaterialTheme.typography.labelMedium,
-            modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
-        )
-    }
-}
 
 @Composable
 private fun stateLabel(state: ChoreState): String = stringResource(
@@ -298,3 +365,10 @@ private fun stateLabel(state: ChoreState): String = stringResource(
         ChoreState.ARCHIVED -> R.string.feature_chores_state_archived
     },
 )
+
+/** Room under the last card for the floating "New chore" pill. */
+private val ListBottomPadding = 96.dp
+private val KidAvatar = 40.dp
+private val RowPictogram = 40.dp
+private val PlaceholderPictogram = 96.dp
+private val SelectedOutline = 2.dp

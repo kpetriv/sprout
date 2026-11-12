@@ -23,14 +23,16 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import dev.kpetriv.sprout.core.designsystem.components.Pictogram
+import dev.kpetriv.sprout.core.designsystem.components.SproutTopBar
+import dev.kpetriv.sprout.core.designsystem.theme.SproutSpacing
 import dev.kpetriv.sprout.core.ui.ContentWidth
 import dev.kpetriv.sprout.core.ui.withGutters
 
-/** Navigation entry for the parent's approvals inbox (submissions and chore proposals). */
+/** Navigation entry for the parent's approvals inbox (submissions and chore proposals), a pushed screen. */
 @Composable
 fun ApprovalsInboxRoute(onBack: () -> Unit, modifier: Modifier = Modifier) {
     val viewModel = choresViewModel<ApprovalsViewModel>(key = "chores:approvals")
@@ -39,8 +41,9 @@ fun ApprovalsInboxRoute(onBack: () -> Unit, modifier: Modifier = Modifier) {
 }
 
 /**
- * Pending submissions newest first (photo, note, Approve / Reject) and Sapling kids' proposals (Accept / Decline).
- * Results arrive as snackbars; Reject opens a sheet for an optional reason.
+ * Pending submissions newest first (photo, note, Approve / Reject) and Sapling kids' proposals (Accept / Decline), as
+ * white cards with the kid's avatar, on parent tokens. A pushed screen: the bar has a back arrow. Results arrive as
+ * snackbars; Reject opens a sheet for an optional reason.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -54,7 +57,7 @@ fun ApprovalsInboxScreen(
     val ready = state as? ApprovalsUiState.Ready
     Scaffold(
         modifier = modifier,
-        topBar = { ChoresTopBar(title = stringResource(R.string.feature_chores_approvals_title), onBack = onBack) },
+        topBar = { SproutTopBar(title = stringResource(R.string.feature_chores_approvals_title), onBack = onBack) },
         snackbarHost = { SnackbarHost(snackbar) },
     ) { padding ->
         Box(modifier = Modifier.padding(padding).fillMaxSize()) {
@@ -76,14 +79,21 @@ fun ApprovalsInboxScreen(
         }
         val rejecting = ready.rejecting
         if (rejecting != null) {
-            ModalBottomSheet(onDismissRequest = { onEvent(ApprovalsEvent.DismissReject) }) {
+            ModalBottomSheet(
+                onDismissRequest = { onEvent(ApprovalsEvent.DismissReject) },
+                containerColor = MaterialTheme.colorScheme.surfaceContainerLowest,
+            ) {
                 RejectForm(
                     reject = rejecting,
                     busy = ready.busy != null,
                     onReasonChange = { onEvent(ApprovalsEvent.RejectReasonChanged(it)) },
                     onConfirm = { onEvent(ApprovalsEvent.ConfirmReject) },
                     onCancel = { onEvent(ApprovalsEvent.DismissReject) },
-                    modifier = Modifier.padding(start = 24.dp, end = 24.dp, bottom = 24.dp),
+                    modifier = Modifier.padding(
+                        start = SproutSpacing.lg,
+                        end = SproutSpacing.lg,
+                        bottom = SproutSpacing.lg,
+                    ),
                 )
             }
         }
@@ -93,11 +103,11 @@ fun ApprovalsInboxScreen(
 @Composable
 private fun EmptyInbox() {
     Column(
-        modifier = Modifier.fillMaxSize().padding(24.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp, Alignment.CenterVertically),
+        modifier = Modifier.fillMaxSize().padding(SproutSpacing.lg),
+        verticalArrangement = Arrangement.spacedBy(SproutSpacing.md, Alignment.CenterVertically),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        Text(text = "🎉", style = MaterialTheme.typography.displayMedium, modifier = Modifier.clearAndSetSemantics { })
+        Pictogram(Pictogram.PARTY, size = EmptyPictogram)
         Text(
             text = stringResource(R.string.feature_chores_approvals_empty),
             style = MaterialTheme.typography.titleMedium,
@@ -110,17 +120,22 @@ private fun EmptyInbox() {
 private fun Inbox(state: ApprovalsUiState.Ready, onEvent: (ApprovalsEvent) -> Unit) {
     ContentWidth(modifier = Modifier.fillMaxSize()) { gutters ->
         LazyColumn(
-            contentPadding = PaddingValues(16.dp).withGutters(gutters),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
+            contentPadding = PaddingValues(horizontal = SproutSpacing.gutter, vertical = SproutSpacing.md)
+                .withGutters(gutters),
+            verticalArrangement = Arrangement.spacedBy(SproutSpacing.md),
             modifier = Modifier.fillMaxSize(),
         ) {
             if (state.submissions.isNotEmpty()) {
                 item(key = "submissions") {
-                    SectionHeading(stringResource(R.string.feature_chores_approvals_submissions))
+                    SectionHeading(
+                        text = stringResource(R.string.feature_chores_approvals_submissions),
+                        style = MaterialTheme.typography.titleLarge,
+                    )
                 }
                 items(state.submissions, key = { it.id.value }) { submission ->
                     SubmissionCard(
                         submission = submission,
+                        tintIndex = submission.tintIndex,
                         busy = state.busy == submission.id.value,
                         enabled = state.busy == null,
                         onApprove = { onEvent(ApprovalsEvent.Approve(submission.id)) },
@@ -132,12 +147,14 @@ private fun Inbox(state: ApprovalsUiState.Ready, onEvent: (ApprovalsEvent) -> Un
                 item(key = "proposals") {
                     SectionHeading(
                         text = stringResource(R.string.feature_chores_approvals_proposals),
-                        modifier = Modifier.padding(top = 8.dp),
+                        style = MaterialTheme.typography.titleLarge,
+                        modifier = Modifier.padding(top = SproutSpacing.sm),
                     )
                 }
                 items(state.proposals, key = { it.choreId.value }) { proposal ->
                     ProposalCard(
                         proposal = proposal,
+                        tintIndex = proposal.tintIndex,
                         enabled = state.busy == null,
                         onAccept = { onEvent(ApprovalsEvent.AcceptProposal(proposal.choreId)) },
                         onDecline = { onEvent(ApprovalsEvent.DeclineProposal(proposal.choreId)) },
@@ -215,3 +232,5 @@ private fun approvedText(message: ApprovalsMessage.Approved): String = when {
         message.alreadyPaid,
     )
 }
+
+private val EmptyPictogram = 96.dp

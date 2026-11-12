@@ -9,6 +9,7 @@ import dev.kpetriv.sprout.core.database.FiatCurrencyProvider
 import dev.kpetriv.sprout.core.database.KidRepository
 import dev.kpetriv.sprout.core.database.PhotoStore
 import dev.kpetriv.sprout.core.database.SubmissionFilter
+import dev.kpetriv.sprout.core.designsystem.components.Pictogram
 import dev.kpetriv.sprout.core.domainhousehold.Chore
 import dev.kpetriv.sprout.core.domainhousehold.ChoreProposalRules
 import dev.kpetriv.sprout.core.domainhousehold.ChoreReward
@@ -65,7 +66,7 @@ data class TodayChoreUi(
     val choreId: ChoreId,
     val title: String,
     val description: String?,
-    val emoji: String,
+    val pictogram: Pictogram,
     val dueOn: CalendarDate,
     val reward: RewardUi,
     val status: OccurrenceStatus,
@@ -75,7 +76,7 @@ data class TodayChoreUi(
 data class UpcomingChoreUi(
     val choreId: ChoreId,
     val title: String,
-    val emoji: String,
+    val pictogram: Pictogram,
     val dueOn: CalendarDate,
     val reward: RewardUi,
 )
@@ -310,8 +311,8 @@ class KidTodayViewModel @Inject constructor(
             active.flatMap { chore ->
                 ChoreScheduler.occurrences(chore, data.today.plusDays(1), data.today.plusDays(UPCOMING_DAYS))
                     .map { occurrence ->
-                        val emoji = ChoreEmoji.forTitle(chore.title)
-                        UpcomingChoreUi(chore.id, chore.title, emoji, occurrence.dueOn, reward(chore, currency))
+                        val pictogram = ChorePictogram.forTitle(chore.title)
+                        UpcomingChoreUi(chore.id, chore.title, pictogram, occurrence.dueOn, reward(chore, currency))
                     }
             }.sortedWith(compareBy<UpcomingChoreUi> { it.dueOn }.thenBy { it.title.lowercase() })
         }
@@ -351,7 +352,7 @@ class KidTodayViewModel @Inject constructor(
             choreId = chore.id,
             title = chore.title,
             description = chore.description,
-            emoji = ChoreEmoji.forTitle(chore.title),
+            pictogram = ChorePictogram.forTitle(chore.title),
             dueOn = occurrence.dueOn,
             reward = reward(chore, currency),
             status = occurrence.status.toUi(),
