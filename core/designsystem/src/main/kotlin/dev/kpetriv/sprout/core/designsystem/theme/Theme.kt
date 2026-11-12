@@ -60,6 +60,12 @@ fun SproutTheme(
 }
 
 /**
+ * The app's dark Morning garden colour scheme, for themes that start from it: the games' Playground theme sets its
+ * field and accents on top of it (M9-games §2.2).
+ */
+fun sproutDarkColorScheme(): ColorScheme = SproutDarkColors
+
+/**
  * Enters kid mode for [content]: provides [LocalKidTier] and rescales type, shapes and minimum touch
  * targets to the tier's [TierTokens] (including its [ColourLevel]). Use inside [SproutTheme]; colours are inherited
  * from it.

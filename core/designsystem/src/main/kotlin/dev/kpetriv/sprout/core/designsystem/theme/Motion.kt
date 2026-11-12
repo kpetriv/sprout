@@ -1,12 +1,13 @@
 package dev.kpetriv.sprout.core.designsystem.theme
 
 import android.provider.Settings
-import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animate
 import androidx.compose.animation.core.spring
 import androidx.compose.foundation.interaction.InteractionSource
 import androidx.compose.foundation.interaction.PressInteraction
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Modifier
@@ -17,6 +18,7 @@ import androidx.compose.ui.node.CompositionLocalConsumerModifierNode
 import androidx.compose.ui.node.LayoutModifierNode
 import androidx.compose.ui.node.ModifierNodeElement
 import androidx.compose.ui.node.currentValueOf
+import androidx.compose.ui.node.invalidatePlacement
 import androidx.compose.ui.platform.InspectorInfo
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.Constraints
@@ -68,26 +70,37 @@ private class PressScaleNode(private var interactionSource: InteractionSource) :
     Modifier.Node(),
     LayoutModifierNode,
     CompositionLocalConsumerModifierNode {
-    private var scale = Animatable(1f)
+    // Snapshot-backed, read inside the layer block: any write (an animation frame or a reset) redraws the layer.
+    private val scale = mutableFloatStateOf(1f)
     private var collecting: Job? = null
+    private var animation: Job? = null
 
-    override fun onAttach() = collect()
+    override fun onAttach() {
+        // A node recycled (lazy lists) or detached mid-press must never come back shrunk: start from 1f and
+        // re-place, so the layer block runs again even if nothing else invalidates it.
+        scale.floatValue = 1f
+        invalidatePlacement()
+        collect()
+    }
 
-    // A node recycled (lazy lists) or detached mid-press must not come back shrunk; the coroutine that would have
-    // animated it back is cancelled with the node's scope.
+    // The coroutines that would have animated the scale back are cancelled with the node's scope.
     override fun onReset() {
-        scale = Animatable(1f)
+        scale.floatValue = 1f
     }
 
     override fun onDetach() {
         collecting = null
-        scale = Animatable(1f)
+        animation = null
+        scale.floatValue = 1f
     }
 
     fun update(source: InteractionSource) {
         if (source == interactionSource) return
         interactionSource = source
+        // A press on the old source never gets its release here: drop it and stand at full size again.
         collecting?.cancel()
+        animation?.cancel()
+        scale.floatValue = 1f
         if (isAttached) collect()
     }
 
@@ -101,7 +114,12 @@ private class PressScaleNode(private var interactionSource: InteractionSource) :
                     is PressInteraction.Cancel -> presses -= interaction.press
                 }
                 val target = if (presses.isNotEmpty() && !currentValueOf(LocalReducedMotion)) PRESSED_SCALE else 1f
-                launch { scale.animateTo(target, PressSpring) }
+                animation?.cancel()
+                animation = launch {
+                    animate(scale.floatValue, target, animationSpec = PressSpring) { value, _ ->
+                        scale.floatValue = value
+                    }
+                }
             }
         }
     }
@@ -110,8 +128,9 @@ private class PressScaleNode(private var interactionSource: InteractionSource) :
         val placeable = measurable.measure(constraints)
         return layout(placeable.width, placeable.height) {
             placeable.placeWithLayer(0, 0) {
-                scaleX = scale.value
-                scaleY = scale.value
+                val value = scale.floatValue
+                scaleX = value
+                scaleY = value
             }
         }
     }

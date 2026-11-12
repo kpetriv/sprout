@@ -96,4 +96,14 @@
   <string name="feature_games_unknown">Check your wallet to see what you earned.</string>
   <string name="feature_games_play_again">Play again</string>
   <string name="feature_games_done">Done</string>
+
+  <!-- Playground components (M9-games §2.2). -->
+  <!-- The label above the amount on the result's reward card. -->
+  <string name="feature_games_game_reward">Game reward</string>
+  <!-- %1$d answers right in a row. -->
+  <string name="feature_games_streak">Streak %1$d</string>
+  <!-- The number pad's submit key. -->
+  <string name="feature_games_go">Go</string>
+  <!-- Content description of the number pad's backspace key. -->
+  <string name="feature_games_backspace">Delete last digit</string>
 </resources>

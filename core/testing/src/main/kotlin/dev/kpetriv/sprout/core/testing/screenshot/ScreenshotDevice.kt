@@ -20,4 +20,10 @@ object ScreenshotDevice {
      * Expanded width class. Used by `ScreenshotRule.captureWidthClasses`; a test may also pin it with `@Config`.
      */
     const val TABLET = "en-rGB-w1280dp-h800dp-xlarge-notlong-notround-any-mdpi-keyshidden-nonav"
+
+    /**
+     * A 10" tablet in portrait: 800 x 1280 dp at mdpi (800 x 1280 px images) in British English. A Medium width
+     * class (600 to 840 dp). Used by `ScreenshotWindow.TABLET_PORTRAIT` (M9-games §5, D-M9-G9).
+     */
+    const val TABLET_PORTRAIT = "en-rGB-w800dp-h1280dp-xlarge-notlong-notround-any-mdpi-keyshidden-nonav"
 }

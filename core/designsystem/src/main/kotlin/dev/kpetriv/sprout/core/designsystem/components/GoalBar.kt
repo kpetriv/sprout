@@ -94,7 +94,12 @@ fun GoalBar(
                 modifier = Modifier.size(GoalBarDefaults.IconCircleSize).background(tint.container, CircleShape),
                 contentAlignment = Alignment.Center,
             ) {
-                Icon(icon, contentDescription = null, tint = tint.content, modifier = Modifier.size(24.dp))
+                Icon(
+                    imageVector = icon,
+                    contentDescription = null,
+                    tint = tint.content,
+                    modifier = Modifier.size(GoalBarDefaults.IconSize),
+                )
             }
             // At large font sizes the chip goes under the title, so the title never breaks mid-word.
             val stacked = LocalDensity.current.fontScale >= STACK_FONT_SCALE

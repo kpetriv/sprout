@@ -37,6 +37,23 @@ class ScreenshotRuleTest : ScreenshotTest(checkAccessibility = true) {
     }
 
     @Test
+    fun `the portrait tablet window is 800 dp wide and Medium`() {
+        screenshot.captureWidthClasses(
+            "rule_width_portrait",
+            windows = listOf(ScreenshotWindow.TABLET_PORTRAIT),
+        ) { provided ->
+            var measured: WindowWidthClass? = null
+            CompositionLocalProvider(LocalWindowWidthClass provides null) { measured = rememberWindowWidthClass() }
+            BoxWithConstraints(Modifier.fillMaxWidth()) {
+                seen += "$provided ${rememberWindowWidthClass()} $measured ${maxWidth.value.roundToInt()}"
+                Text("$provided")
+            }
+        }
+
+        assertEquals(listOf("Medium Medium Medium 800"), seen.distinct())
+    }
+
+    @Test
     fun `width classes per tier name every window and tier`() {
         screenshot.captureWidthClassTiers("rule_width_tiers", tiers = listOf(KidUiTier.SEEDLING)) { widthClass, tier ->
             seen += "$widthClass $tier"
