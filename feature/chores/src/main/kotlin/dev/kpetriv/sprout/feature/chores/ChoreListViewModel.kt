@@ -96,9 +96,11 @@ class ChoreListViewModel @Inject constructor(
             }.distinctUntilChanged().flatMapLatest { chores.observeChores(includeArchived = it) },
             chores.observeSubmissions(SubmissionFilter.PendingForParent),
             local,
-        ) { kidList, choreList, pending, localState ->
+            // The household policy's currency, again when a pull brings it (D-REL-10).
+            fiat.observeFiatCurrency(),
+        ) { kidList, choreList, pending, localState, currency ->
             ChoreListUiState.Ready(
-                groups = group(kidList, choreList, fiat.fiatCurrency()),
+                groups = group(kidList, choreList, currency),
                 showArchived = localState.showArchived,
                 pendingApprovals = pending.size,
                 message = localState.message,

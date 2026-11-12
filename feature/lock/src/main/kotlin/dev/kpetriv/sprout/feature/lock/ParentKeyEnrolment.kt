@@ -14,6 +14,11 @@ import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -48,11 +53,28 @@ sealed interface ParentKeyChangeResult {
     /** The parent session is not unlocked. */
     data object NotAllowed : ParentKeyChangeResult
 
+    /**
+     * Enrolment refused before the PIN check and the proof prompt: this phone has not synced the household policy the
+     * key is registered in, and it cannot be recovered yet ([ParentKeyRegistry.householdPolicyReady], D-REL-15). The
+     * screens say they are waiting for the household policy to sync. Nothing was created or registered.
+     */
+    data object PolicyNotSynced : ParentKeyChangeResult
+
     /** The parent dismissed the proof prompt. No key was kept. */
     data object Cancelled : ParentKeyChangeResult
 
     /** Storage, Keystore, prompt or proof failure. No new key was kept or registered. */
     data object Failed : ParentKeyChangeResult
+}
+
+/**
+ * Whether a parent key is being created, proved and registered right now ([ParentKeyEnrolment], [ParentKeyRenewal]),
+ * from the moment the PIN setup hands its PIN to the background enrolment until the registration ended. The
+ * dashboard's "Fingerprint signing is off" and "Signing key not registered" cards wait for it (D-REL-12): the proof
+ * prompt runs over the dashboard, and those states are only true once the enrolment failed or was skipped.
+ */
+fun interface ParentKeyChangeProgress {
+    fun observeInProgress(): Flow<Boolean>
 }
 
 /**
@@ -126,14 +148,28 @@ internal class ParentKeyProvisioner @Inject constructor(
     private val random: SecureRandom,
     @LockScope private val scope: CoroutineScope,
     @Dispatcher(SproutDispatchers.IO) private val ioDispatcher: CoroutineDispatcher,
-) {
+) : ParentKeyChangeProgress {
     private val mutex = Mutex()
 
-    fun launch(block: suspend () -> ParentKeyChangeResult): Job = scope.launch { block() }
+    /** Key changes launched or running: counted from [launch] (before the coroutine starts) to the end of each. */
+    private val running = MutableStateFlow(0)
+
+    override fun observeInProgress(): Flow<Boolean> = running.map { it > 0 }.distinctUntilChanged()
+
+    fun launch(block: suspend () -> ParentKeyChangeResult): Job {
+        running.update { it + 1 }
+        // invokeOnCompletion also runs for a job cancelled before it started.
+        return scope.launch { block() }.apply { invokeOnCompletion { running.update { it - 1 } } }
+    }
 
     @Suppress("TooGenericExceptionCaught")
     suspend fun provision(pin: CharArray, renew: Boolean): ParentKeyChangeResult = try {
-        mutex.withLock { provisionLocked(pin, renew) }
+        running.update { it + 1 }
+        try {
+            mutex.withLock { provisionLocked(pin, renew) }
+        } finally {
+            running.update { it - 1 }
+        }
     } catch (e: CancellationException) {
         throw e
     } catch (expected: BiometricCancelledException) {
@@ -152,7 +188,10 @@ internal class ParentKeyProvisioner @Inject constructor(
     private suspend fun provisionLocked(pin: CharArray, renew: Boolean): ParentKeyChangeResult =
         refusal(pin, renew) ?: createProveAndRegister(renew)
 
-    /** Why the key must not change now, or null once the PIN is verified. Caller holds [mutex]. */
+    /**
+     * Why the key must not change now, or null once the PIN is verified. The checks that need no PIN come first:
+     * availability, the registered key, an unlocked session and the household policy. Caller holds [mutex].
+     */
     private suspend fun refusal(pin: CharArray, renew: Boolean): ParentKeyChangeResult? {
         val availability = authorizer.availability()
         val available = availability == ParentAuthAvailability.STRONG_BIOMETRIC_AVAILABLE
@@ -167,15 +206,27 @@ internal class ParentKeyProvisioner @Inject constructor(
 
             renew && registered == null -> ParentKeyChangeResult.NotRegistered
 
-            else -> when (val check = session.verifyPinForKeyChange(pin)) {
-                KeyChangePinCheck.Verified -> null
-                is KeyChangePinCheck.Wrong -> ParentKeyChangeResult.WrongPin(check.next)
-                is KeyChangePinCheck.LockedOut -> ParentKeyChangeResult.LockedOut(check.decision)
-                KeyChangePinCheck.NotAllowed -> ParentKeyChangeResult.NotAllowed
-                KeyChangePinCheck.Unavailable -> ParentKeyChangeResult.Failed
-            }
+            // A locked session is refused before any network work, without checking (or counting) a PIN (audit L3).
+            !session.isUnlocked() -> ParentKeyChangeResult.NotAllowed
+
+            // Before the PIN check, the challenge, the key and the prompt: a registration bound to be refused never
+            // asks for a fingerprint (D-REL-15). A renewal replaces a registered key, so its policy is there. The
+            // check is bounded (HouseholdPolicyRecovery answers "not synced" after its timeout).
+            !renew && !registry.householdPolicyReady() -> ParentKeyChangeResult.PolicyNotSynced
+
+            else -> pinRefusal(pin)
         }
     }
+
+    /** Null once [pin] is verified for a key change; otherwise why not. */
+    private suspend fun pinRefusal(pin: CharArray): ParentKeyChangeResult? =
+        when (val check = session.verifyPinForKeyChange(pin)) {
+            KeyChangePinCheck.Verified -> null
+            is KeyChangePinCheck.Wrong -> ParentKeyChangeResult.WrongPin(check.next)
+            is KeyChangePinCheck.LockedOut -> ParentKeyChangeResult.LockedOut(check.decision)
+            KeyChangePinCheck.NotAllowed -> ParentKeyChangeResult.NotAllowed
+            KeyChangePinCheck.Unavailable -> ParentKeyChangeResult.Failed
+        }
 
     /** After a verified PIN. Caller holds [mutex]. */
     private suspend fun createProveAndRegister(renew: Boolean): ParentKeyChangeResult {

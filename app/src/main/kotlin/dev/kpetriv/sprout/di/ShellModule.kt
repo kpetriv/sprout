@@ -15,6 +15,7 @@ import dev.kpetriv.sprout.feature.settings.DeviceAdmin
 import dev.kpetriv.sprout.feature.settings.ExportWriter
 import dev.kpetriv.sprout.feature.settings.HouseholdData
 import dev.kpetriv.sprout.feature.settings.HouseholdRules
+import dev.kpetriv.sprout.feature.settings.HouseholdSettingsRestorer
 import dev.kpetriv.sprout.feature.settings.KidLinking
 import dev.kpetriv.sprout.feature.settings.LockPreferences
 import dev.kpetriv.sprout.feature.settings.ParentConfirmation
@@ -31,6 +32,7 @@ import dev.kpetriv.sprout.settings.LockSettingsPreferences
 import dev.kpetriv.sprout.settings.ParentSessionPinChanger
 import dev.kpetriv.sprout.settings.PromptParentConfirmation
 import dev.kpetriv.sprout.settings.ReaderChatExportSource
+import dev.kpetriv.sprout.settings.RecoveryHouseholdSettingsRestorer
 import dev.kpetriv.sprout.settings.RegistryDeviceAdmin
 import dev.kpetriv.sprout.settings.RepositoryHouseholdRules
 import dev.kpetriv.sprout.settings.RetentionChatHistoryPurger
@@ -87,6 +89,9 @@ internal abstract class ShellModule {
 
     @Binds
     abstract fun parentConfirmation(impl: PromptParentConfirmation): ParentConfirmation
+
+    @Binds
+    abstract fun householdSettingsRestorer(impl: RecoveryHouseholdSettingsRestorer): HouseholdSettingsRestorer
 
     /** The dashboard's trial banner, sync line, refused events and new-device cards. */
     @Binds

@@ -26,8 +26,10 @@ class KidsSettingsViewModelTest {
     private val kids = FakeKidRepository(leo, zoe)
     private val accounts = FakeAccountRepository()
 
-    private fun TestScope.viewModel(): KidsSettingsViewModel {
-        val vm = KidsSettingsViewModel(kids, accounts, householdContext(), fixedToday())
+    private fun TestScope.viewModel(
+        policies: FakeHouseholdPolicyRepository = FakeHouseholdPolicyRepository(),
+    ): KidsSettingsViewModel {
+        val vm = KidsSettingsViewModel(kids, accounts, householdContext(policies), fixedToday())
         backgroundScope.launch(main.dispatcher) { vm.state.collect {} }
         return vm
     }
@@ -116,6 +118,34 @@ class KidsSettingsViewModelTest {
         assertNull(vm.state.value.editor)
         assertEquals(SettingsMessage.KID_ADDED, vm.state.value.message)
         assertEquals(3, vm.state.value.kids.size)
+    }
+
+    @Test
+    fun `a real household without its policy yet adds no kid and says it is waiting for the policy`() = test {
+        // The accounts would be created in the locale's currency, not the household's (D-REL-18).
+        val vm = viewModel(FakeHouseholdPolicyRepository(initial = null))
+        vm.onEvent(KidsSettingsEvent.AddKid)
+        vm.onEvent(KidsSettingsEvent.NameChanged("Mia"))
+        vm.onEvent(KidsSettingsEvent.BirthChanged(2020, 3))
+        vm.onEvent(KidsSettingsEvent.Save)
+
+        assertEquals(2, kids.kids.value.size, "nothing written")
+        assertTrue(accounts.ensured.isEmpty())
+        assertEquals(SettingsMessage.POLICY_NOT_SYNCED, vm.state.value.message)
+        val editor = assertNotNull(vm.state.value.editor, "the parent's input stays")
+        assertFalse(editor.isSaving)
+        assertFalse(editor.saveFailed)
+    }
+
+    @Test
+    fun `editing an existing kid needs no policy`() = test {
+        val vm = viewModel(FakeHouseholdPolicyRepository(initial = null))
+        vm.onEvent(KidsSettingsEvent.EditKid(leo.id))
+        vm.onEvent(KidsSettingsEvent.NameChanged("Leon"))
+        vm.onEvent(KidsSettingsEvent.Save)
+
+        assertEquals("Leon", kids.kids.value.single { it.id == leo.id }.firstName)
+        assertEquals(SettingsMessage.SAVED, vm.state.value.message)
     }
 
     @Test

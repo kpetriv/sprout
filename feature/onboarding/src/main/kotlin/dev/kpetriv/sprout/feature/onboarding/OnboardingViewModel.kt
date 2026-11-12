@@ -13,6 +13,7 @@ import dev.kpetriv.sprout.core.domainledger.Currency
 import dev.kpetriv.sprout.core.domainledger.toHex
 import dev.kpetriv.sprout.core.model.DeviceId
 import dev.kpetriv.sprout.core.model.HouseholdId
+import dev.kpetriv.sprout.core.model.KidId
 import dev.kpetriv.sprout.core.model.Role
 import dev.kpetriv.sprout.core.model.UserId
 import dev.kpetriv.sprout.core.time.Clock
@@ -35,10 +36,15 @@ import javax.inject.Inject
  *   → a fresh attested **pending** device key ([DeviceKeyStore.regenerateForRegistration]) → `createHousehold` → the
  *   returned device id must be this key's fingerprint → promote the key → save the ACTIVE PARENT session at once →
  *   create the household policy → claims refresh (a failure is retried without a new key) → the app's PIN and signing
- *   step. With a household: a phone the registry already knows is restored, never re-registered (the local mirror,
- *   else the token-less `deviceStatus` for the pending and then the current key: ACTIVE restores the session, PENDING
- *   goes back to waiting); otherwise this device registers PENDING with a pending key, saves a PENDING session and
- *   waits (one sync every [POLL_INTERVAL_MS]; the sync mirrors the registry into the session) until a parent approves.
+ *   step (a policy lost before it was stored or pushed is recovered after the first pull, with the currency the server
+ *   stored at creation, D-REL-14). With a household: a phone the registry already knows is restored, never
+ *   re-registered (the local mirror, else the token-less `deviceStatus` for the pending and then the current key:
+ *   ACTIVE restores the session, PENDING goes back to waiting); otherwise this device registers PENDING with a
+ *   pending key, saves a PENDING session and waits (one sync every [POLL_INTERVAL_MS]; the sync mirrors the registry
+ *   into the session) until a parent approves.
+ *   Every way into the PIN and signing step from an existing household (restored, approved, resumed) first pulls the
+ *   household ([OnboardingStep.FirstSync]), so enrolment finds the household's policy (D-REL-11), and recovers a
+ *   policy that exists nowhere through the same checks as Settings (D-REL-24).
  * - **Kid device**: the 8-character code → anonymous sign-in → (an anonymous user already linked whose key the
  *   registry has ACTIVE is restored) → pending key → `redeemLinkCode` → fingerprint check → promote → save the KID
  *   session → claims refresh (best effort) → first sync → kid mode.
@@ -46,6 +52,13 @@ import javax.inject.Inject
  * A registration key is promoted only after the server accepted it, and kept pending when a call fails without an
  * answer, so a registration the server did accept is found again on the next attempt (audit M1). A status that cannot
  * be read stops the flow with a network failure rather than registering over it.
+ *
+ * A parent's sign-out keeps this phone's chat encryption key with its device key (D-REL-6), so a restored device finds
+ * the key its registry entry lists. A device is restored only for the account (and role) its registry row names, read
+ * before anything is saved or synced (D-REL-27, D-REL-31). Every new registration (a household, a second parent phone,
+ * a kid link) is a new device id: the kept key is moved to a stash before its fresh registration key is made
+ * ([OnboardingHousehold.forgetChatKey], D-REL-7, D-REL-29), deleted once the server accepted the new key, and put back
+ * when the stash's own device is restored instead.
  *
  * When the pre-linking trial household has data, the parent or kid confirms first that it will be deleted
  * ([OnboardingStep.ConfirmPurge]); that screen comes before anything is created on the server, so "Cancel" leaves
@@ -147,7 +160,7 @@ class OnboardingViewModel @Inject constructor(
                 if (pending) {
                     // The ID token may predate the household's claims (the process died before the refresh).
                     attemptOrNull { auth.refreshClaims() }
-                    show(OnboardingStep.ParentLock)
+                    parentLockAfterPull()
                 }
             }
 
@@ -218,7 +231,11 @@ class OnboardingViewModel @Inject constructor(
         val created = backend.createHousehold(currency, key).orFail()
         val deviceId = promote(created.deviceId, key)
         purgeTrialDataIfAny()
+        // If the policy below is never written (a process death, a failure), a resume or a retried "Create" on this
+        // phone recovers it after its first pull, with the currency the server stored at creation (D-REL-14).
         household.startParentSetup(created.householdId)
+        // The session first: the policy is signed and published as this session's device, and saving a session of
+        // another account clears the local rows (D-M3-47), so the policy cannot come before it.
         household.saveSession(
             Session(account.uid, created.householdId, Role.PARENT, null, deviceId, RegistrationStatus.ACTIVE, now()),
         )
@@ -246,29 +263,52 @@ class OnboardingViewModel @Inject constructor(
     /**
      * True when this phone is already registered in [householdId]: its ACTIVE key restores the session, a PENDING one
      * goes back to waiting. A pending key the registry does not have is dropped.
+     *
+     * `deviceStatus` proves the key, not the account, so before anything is saved or synced the device's registry row
+     * must name [uid] as a PARENT ([isOwner], D-REL-27): another account's device on this phone (a co-parent
+     * signing in on the owner's signed-out phone) restores nothing, syncs nothing and keeps the owner's chat key. A
+     * PENDING key whose row names another account is skipped rather than refused, and discarded once the current key's
+     * restore saved this account's session, so it never stays next to the owner's live key (D-REL-39).
+     * Restoring the current key puts back a chat key that a failed registration moved away from it
+     * ([OnboardingHousehold.restoreChatKey], D-REL-29).
      */
     @Suppress("ReturnCount") // The local mirror, then each key: one return per way it ends.
     private suspend fun restoreParent(uid: UserId, householdId: HouseholdId): Boolean {
         household.activeDeviceOf(uid, householdId)?.let { active ->
             purgeTrialDataIfAny()
             saveActiveParent(uid, householdId, active)
+            parentLockAfterPull()
             return true
         }
+        var skippedPending = false
         for (key in listOf(RegistrationKey.PENDING, RegistrationKey.CURRENT)) {
-            val status = backend.deviceStatus(householdId, key).orFail()
-            if (status != RegistryStatus.ACTIVE && status != RegistryStatus.PENDING) {
-                if (key == RegistrationKey.PENDING) keys.discardPendingKey()
+            val registered = ownRegistered(householdId, key, uid)
+            if (registered == null) {
+                // Still here after [registered] dropped an unknown one: another account's pending key (D-REL-39).
+                if (key == RegistrationKey.PENDING) skippedPending = pendingDevice() != null
                 continue
             }
-            val deviceId = if (key == RegistrationKey.PENDING) deviceIdOf(keys.promotePendingKey()) else currentDevice()
+            val (status, candidate) = registered
+            val deviceId = if (key == RegistrationKey.PENDING) {
+                promotePending()
+            } else {
+                household.restoreChatKey(candidate)
+                candidate
+            }
             purgeTrialDataIfAny()
             if (status == RegistryStatus.ACTIVE) {
                 saveActiveParent(uid, householdId, deviceId)
-                confirmRestored(uid, householdId)
+                if (skippedPending) keys.discardPendingKey()
+                // The first pull runs before the PIN and signing step (D-REL-11): see parentLockAfterPull.
+                show(OnboardingStep.FirstSync)
+                val pulled = confirmRestored(uid, householdId)
+                recoverPolicy(pulled)
+                show(OnboardingStep.ParentLock)
             } else {
                 household.saveSession(
                     Session(uid, householdId, Role.PARENT, null, deviceId, RegistrationStatus.PENDING, now()),
                 )
+                if (skippedPending) keys.discardPendingKey()
                 waitForApproval(householdId, displayFingerprint(deviceId))
             }
             return true
@@ -276,23 +316,120 @@ class OnboardingViewModel @Inject constructor(
         return false
     }
 
+    /**
+     * [key]'s registry status in [householdId] and its device id when the registry has it ACTIVE or PENDING; null
+     * otherwise (a pending key the registry does not have is dropped).
+     */
+    private suspend fun registered(householdId: HouseholdId, key: RegistrationKey): Pair<RegistryStatus, DeviceId>? {
+        val status = backend.deviceStatus(householdId, key).orFail()
+        if (status != RegistryStatus.ACTIVE && status != RegistryStatus.PENDING) {
+            if (key == RegistrationKey.PENDING) keys.discardPendingKey()
+            return null
+        }
+        return deviceOf(key)?.let { status to it }
+    }
+
+    /**
+     * [registered], when [key]'s registry row names [uid] as a PARENT ([isOwner]). Another account's unfinished
+     * registration on this phone (the PENDING key) is not this account's device: it is skipped (null) and the current
+     * key decides; a new registration replaces it. Only the CURRENT key refuses ([refuseAnotherAccount], D-REL-39).
+     */
+    private suspend fun ownRegistered(
+        householdId: HouseholdId,
+        key: RegistrationKey,
+        uid: UserId,
+    ): Pair<RegistryStatus, DeviceId>? {
+        val registered = registered(householdId, key) ?: return null
+        return when {
+            isOwner(householdId, registered.second, uid, Role.PARENT, kidId = null) -> registered
+            key == RegistrationKey.PENDING -> null
+            else -> refuseAnotherAccount()
+        }
+    }
+
+    /** The device id of [key]: the current signing key's, or the pending registration key's (null when none). */
+    private suspend fun deviceOf(key: RegistrationKey): DeviceId? =
+        if (key == RegistrationKey.PENDING) pendingDevice() else currentDevice()
+
+    /**
+     * Whether [deviceId]'s registry row in [householdId] belongs to [uid] with [role] (and [kidId] for a kid): read
+     * from the server before anything is saved or synced (D-REL-27, D-REL-31). A row that cannot be read stops the
+     * flow with a network failure, never a restore.
+     */
+    @Suppress("LongParameterList") // The row and the account it must belong to.
+    private suspend fun isOwner(
+        householdId: HouseholdId,
+        deviceId: DeviceId,
+        uid: UserId,
+        role: Role,
+        kidId: KidId?,
+    ): Boolean {
+        val owner = household.registeredOwner(householdId, deviceId).orFail()
+        return owner != null && owner.uid == uid && owner.role == role && (role != Role.KID || owner.kidId == kidId)
+    }
+
+    /**
+     * This phone is another account's device: nothing is saved or synced, its chat key stays for its owner, the
+     * account is signed out and onboarding starts again from Welcome with NOT_ALLOWED (D-REL-27).
+     */
+    private suspend fun refuseAnotherAccount(): Nothing {
+        attemptOrNull { auth.signOut() }
+        claims = null
+        purgeConfirmed = false
+        afterPurge = null
+        mutableState.value = OnboardingUiState(busy = true)
+        throw OnboardingException(OnboardingFailure.NOT_ALLOWED)
+    }
+
     private suspend fun saveActiveParent(uid: UserId, householdId: HouseholdId, deviceId: DeviceId) {
         household.startParentSetup(householdId)
         household.saveSession(
             Session(uid, householdId, Role.PARENT, null, deviceId, RegistrationStatus.ACTIVE, now()),
         )
+    }
+
+    /**
+     * One pull ([OnboardingStep.FirstSync]), then the PIN and signing step (D-REL-11): fingerprint enrolment registers
+     * the parent key in the household policy, and a phone that joined or came back to an existing household must have
+     * that policy (its currency, its signature setting) before it does, or the enrolment is refused rather than
+     * publishing this phone's defaults over it. Offline the pull fails quietly and the PIN can still be set; signing
+     * then stays off ("Fingerprint signing is off" on the dashboard once the policy arrives) until the parent turns it
+     * on in Settings.
+     */
+    private suspend fun parentLockAfterPull() {
+        show(OnboardingStep.FirstSync)
+        val pulled = attemptOrNull { household.syncNow() } == true
+        recoverPolicy(pulled)
         show(OnboardingStep.ParentLock)
     }
 
     /**
-     * `deviceStatus` proves the key, not the account: once a sync mirrored the registry, a device that belongs to
-     * another parent account is erased again (the rules would refuse its writes anyway). Offline, it is kept.
+     * A household policy that exists nowhere is written again (D-REL-14, audit L1): `createHousehold` stores no policy
+     * on the server, so one lost before the creating phone stored or pushed it (a process death between the session
+     * and the policy, a write that failed) would be lost for good. Only after a pull that [pulled] the household
+     * without an error, and then only through the same checks as every other recovery
+     * ([OnboardingHousehold.recoverHouseholdPolicy]: nothing held, nothing on the server, the server's currency).
+     * Best effort: the dashboard's "Restore household settings" and the recovery at enrolment cover the rest.
      */
-    private suspend fun confirmRestored(uid: UserId, householdId: HouseholdId) {
-        if (attemptOrNull { household.syncNow() } == true && household.activeDeviceOf(uid, householdId) == null) {
-            household.eraseLocalHousehold()
+    private suspend fun recoverPolicy(pulled: Boolean) {
+        if (pulled) attemptOrNull { household.recoverHouseholdPolicy() }
+    }
+
+    /**
+     * A second line behind [isOwner]: once a sync mirrored the registry, a device that belongs to another parent
+     * account is erased again with a removal that does not keep its chat key (`ANOTHER_ACCOUNT`, D-REL-27; the
+     * durable wipe owns the deletion and retries it). Offline, it is kept. True when the sync completed without an
+     * error.
+     */
+    private suspend fun confirmRestored(uid: UserId, householdId: HouseholdId): Boolean {
+        val pulled = attemptOrNull { household.syncNow() } == true
+        if (pulled && household.activeDeviceOf(uid, householdId) == null) {
+            household.eraseForAnotherAccount()
+            claims = null
+            show(OnboardingStep.Welcome)
             throw OnboardingException(OnboardingFailure.NOT_ALLOWED)
         }
+        return pulled
     }
 
     private suspend fun registerSecondDevice(uid: UserId, householdId: HouseholdId) {
@@ -321,7 +458,8 @@ class OnboardingViewModel @Inject constructor(
             poll.cancel()
             if (status == RegistrationStatus.ACTIVE) {
                 attemptOrNull { household.startParentSetup(householdId) }
-                show(OnboardingStep.ParentLock)
+                // A PENDING phone cannot read the household's documents: pull them now that it is ACTIVE.
+                parentLockAfterPull()
             } else {
                 // Revoked while waiting (or the session went): whatever the sync pulled is erased, not kept.
                 leavePending(householdId)
@@ -386,21 +524,44 @@ class OnboardingViewModel @Inject constructor(
         firstSync()
     }
 
+    /**
+     * Restores a kid device an earlier attempt linked (the server answered after a process death): only when the
+     * device's registry row belongs to this anonymous account as the KID of its claims (D-REL-31), so a kid account is
+     * never restored onto another device of this phone (a parent's kept device id). Anything else is not restored.
+     * A pending key skipped on the way is discarded once the current key's restore saved the session (D-REL-39).
+     */
     @Suppress("ReturnCount") // No household or kid in the claims, then each key: one return per way it ends.
     private suspend fun restoreKid(account: AccountClaims): Boolean {
         val householdId = account.householdId ?: return false
         val kidId = account.kidId ?: return false
+        var skippedPending = false
         for (key in listOf(RegistrationKey.PENDING, RegistrationKey.CURRENT)) {
-            if (backend.deviceStatus(householdId, key).orFail() != RegistryStatus.ACTIVE) continue
-            val deviceId = if (key == RegistrationKey.PENDING) deviceIdOf(keys.promotePendingKey()) else currentDevice()
+            val candidate = restorableKidDevice(householdId, key, account.uid, kidId)
+            if (candidate == null) {
+                if (key == RegistrationKey.PENDING) skippedPending = pendingDevice() != null
+                continue
+            }
+            val deviceId = if (key == RegistrationKey.PENDING) promotePending() else candidate
             purgeTrialDataIfAny()
             household.saveSession(
                 Session(account.uid, householdId, Role.KID, kidId, deviceId, RegistrationStatus.ACTIVE, now()),
             )
+            if (skippedPending) keys.discardPendingKey()
             firstSync()
             return true
         }
         return false
+    }
+
+    /** [key]'s device id when the registry has it ACTIVE as [uid]'s device for [kidId]; null otherwise. */
+    private suspend fun restorableKidDevice(
+        householdId: HouseholdId,
+        key: RegistrationKey,
+        uid: UserId,
+        kidId: KidId,
+    ): DeviceId? {
+        if (backend.deviceStatus(householdId, key).orFail() != RegistryStatus.ACTIVE) return null
+        return deviceOf(key)?.takeIf { isOwner(householdId, it, uid, Role.KID, kidId) }
     }
 
     private suspend fun firstSync() {
@@ -476,8 +637,12 @@ class OnboardingViewModel @Inject constructor(
         }
     }
 
-    /** A fresh pending registration key bound to a new server challenge. */
+    /**
+     * A fresh pending registration key bound to a new server challenge: a new device id. The chat key of the current
+     * device id is moved to a stash first (D-REL-7, D-REL-29); if it cannot be, nothing is registered.
+     */
     private suspend fun pendingKey(): DeviceRegistrationMaterial {
+        household.forgetChatKey()
         val challenge = backend.beginDeviceRegistration().orFail()
         return keys.regenerateForRegistration(challenge)
     }
@@ -493,9 +658,23 @@ class OnboardingViewModel @Inject constructor(
             throw OnboardingException(OnboardingFailure.UNKNOWN)
         }
         // The key promoted must be the one the server accepted (a pending key replaced in between is not).
-        if (deviceIdOf(keys.promotePendingKey()) != local) throw OnboardingException(OnboardingFailure.UNKNOWN)
+        if (promotePending() != local) throw OnboardingException(OnboardingFailure.UNKNOWN)
         return local
     }
+
+    /**
+     * Promotes the pending key: this phone is a new device from now on, so the stashed chat key of its previous
+     * device id can never be restored again and is deleted (best effort: a stash of another device is dropped anyway
+     * when found, D-REL-29).
+     */
+    private suspend fun promotePending(): DeviceId {
+        val promoted = deviceIdOf(keys.promotePendingKey())
+        attemptOrNull { household.dropStashedChatKey() }
+        return promoted
+    }
+
+    /** The pending registration key's device id, or null when there is none. */
+    private suspend fun pendingDevice(): DeviceId? = keys.pendingSigningKey()?.publicKey?.let(::deviceIdOf)
 
     private suspend fun currentDevice(): DeviceId = deviceIdOf(keys.deviceSigningKey().publicKey)
 

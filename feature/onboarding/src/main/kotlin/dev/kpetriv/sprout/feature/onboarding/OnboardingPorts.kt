@@ -147,6 +147,15 @@ interface OnboardingHousehold {
     /** Creates the household policy document with [fiatCurrency] (a new household, after its session is saved). */
     suspend fun ensureHouseholdPolicy(fiatCurrency: Currency.Fiat)
 
+    /**
+     * Writes the household policy if it exists nowhere (D-REL-14, audit L1): only when this phone has no policy row,
+     * after one more pull that completed without an error, with no pulled policy held for its author and no policy
+     * document on the server, and then with the currency `createHousehold` stored on the household (never a currency
+     * kept on this phone); parent signatures off, as a new household's. The app routes it through the same recovery
+     * as Settings and the key registration. True when it wrote the policy.
+     */
+    suspend fun recoverHouseholdPolicy(): Boolean
+
     /** One sync now; false when it failed. */
     suspend fun syncNow(): Boolean
 
@@ -179,10 +188,44 @@ interface OnboardingHousehold {
 
     /**
      * Erases this phone's copy of the household (a phone that leaves onboarding after its sync pulled household data)
-     * and signs out; the app then shows the erase screen and restarts.
+     * and signs out; the app then shows the erase screen and restarts. Like a parent's sign-out it keeps this phone's
+     * chat encryption key while the session is a PARENT's, ACTIVE or PENDING (D-REL-6, D-REL-28).
      */
     suspend fun eraseLocalHousehold()
+
+    /**
+     * Erases a device restored for an account that its synced registry mirror says is not the owner (the second line
+     * behind the owner check, D-REL-27): a removal that never keeps the chat key, so the durable wipe deletes it and
+     * retries until it is gone.
+     */
+    suspend fun eraseForAnotherAccount()
+
+    /**
+     * The registry row of [deviceId] in [householdId] as the server holds it, read with the signed-in account (no
+     * session needed): who it belongs to, or null when there is no such row. A row that cannot be read is a failure
+     * ([OnboardingFailure.NETWORK]), never null. Read before a device is restored (D-REL-27, D-REL-31).
+     */
+    suspend fun registeredOwner(householdId: HouseholdId, deviceId: DeviceId): Result<RegisteredOwner?>
+
+    /**
+     * Moves the chat encryption key of this phone's current device id to a stash before it registers a new device id
+     * (D-REL-7, D-REL-29), so no other household, parent or kid inherits it while a failed registration does not
+     * destroy it either. Throws when a key is still live afterwards; nothing may be registered then.
+     */
+    suspend fun forgetChatKey()
+
+    /**
+     * Restoring [deviceId] (the current key): puts back the chat key a failed registration stashed for it, replacing
+     * any key that attempt created (D-REL-29). Nothing stashed for it: nothing to do.
+     */
+    suspend fun restoreChatKey(deviceId: DeviceId)
+
+    /** A new device id was promoted: the stashed key of the previous one can never be restored and is deleted. */
+    suspend fun dropStashedChatKey()
 }
+
+/** Who a device's registry row belongs to: the account, its role and (for a kid device) the kid. */
+data class RegisteredOwner(val uid: UserId, val role: Role, val kidId: KidId? = null)
 
 /**
  * Registers this device's parent authorisation key with the household's server-side registry (backend
@@ -212,5 +255,8 @@ enum class SigningSetupResult {
     WRONG_PIN,
     LOCKED_OUT,
     CANCELLED,
+
+    /** Refused before the PIN check and the prompt: the household policy has not synced to this phone (D-REL-15). */
+    POLICY_NOT_SYNCED,
     FAILED,
 }

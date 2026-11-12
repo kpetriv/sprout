@@ -301,6 +301,98 @@ describe('registration callables with an encryption key', () => {
   });
 });
 
+describe('one encryption key per device row in a household (D-REL-32)', () => {
+  it('registerEncryptionKey refuses a key another device row holds, and its own row may repeat it', async () => {
+    const h = await newHousehold();
+    const second = newDevice();
+    const key = newEncryptionKey();
+    await call(
+      fns.registerParentDevice,
+      req(h.parent, {
+        devicePublicKey: second.publicKey,
+        encryptionKey: key.toString('base64'),
+        encryptionKeySignature: encryptionKeyBinding(second, h.hid, key),
+      }),
+    );
+
+    await expectCode(register(h.parent, encryptionKeyArgs(h.device, h.hid, key)), 'failed-precondition');
+    expect((await deviceRow(h, h.device)).encryptionKey).toBeUndefined();
+
+    // Another key is fine, and so is repeating it on its own row.
+    const own = newEncryptionKey();
+    expect(await register(h.parent, encryptionKeyArgs(h.device, h.hid, own))).toMatchObject({ created: true });
+    expect(await register(h.parent, encryptionKeyArgs(h.device, h.hid, own))).toMatchObject({ created: false });
+  });
+
+  it('a pending registerParentDevice retry adds a free key and refuses one another device row holds', async () => {
+    const h = await newHousehold();
+    const taken = newEncryptionKey();
+    await register(h.parent, encryptionKeyArgs(h.device, h.hid, taken));
+    const second = newDevice();
+    await call(fns.registerParentDevice, req(h.parent, { devicePublicKey: second.publicKey }));
+    expect(await deviceRow(h, second)).toMatchObject({ status: 'PENDING' });
+    expect((await deviceRow(h, second)).encryptionKey).toBeUndefined();
+
+    const retry = (key: Buffer) =>
+      call(
+        fns.registerParentDevice,
+        req(h.parent, {
+          devicePublicKey: second.publicKey,
+          encryptionKey: key.toString('base64'),
+          encryptionKeySignature: encryptionKeyBinding(second, h.hid, key),
+        }),
+      );
+    await expectCode(retry(taken), 'failed-precondition');
+    expect((await deviceRow(h, second)).encryptionKey).toBeUndefined();
+
+    const own = newEncryptionKey();
+    await retry(own);
+    expect(await deviceRow(h, second)).toMatchObject({ status: 'PENDING', encryptionKey: own.toString('base64') });
+    // Once the row has a key, a retry changes nothing, whatever key it sends.
+    await retry(newEncryptionKey());
+    expect((await deviceRow(h, second)).encryptionKey).toBe(own.toString('base64'));
+  });
+
+  it('registerParentDevice and redeemLinkCode refuse a key a device row already holds and create nothing', async () => {
+    const h = await newHousehold();
+    const key = newEncryptionKey();
+    await register(h.parent, encryptionKeyArgs(h.device, h.hid, key));
+
+    const second = newDevice();
+    await expectCode(
+      call(
+        fns.registerParentDevice,
+        req(h.parent, {
+          devicePublicKey: second.publicKey,
+          encryptionKey: key.toString('base64'),
+          encryptionKeySignature: encryptionKeyBinding(second, h.hid, key),
+        }),
+      ),
+      'failed-precondition',
+    );
+    expect((await db.doc(`households/${h.hid}/devices/${second.deviceId}`).get()).exists).toBe(false);
+
+    await db.doc(`households/${h.hid}/kids/kid-a`).set({ docId: 'kid-a', deleted: false });
+    const { code } = await call(fns.createLinkCode, req(h.parent, withProof(h, 'createLinkCode', { kidId: 'kid-a' })));
+    const uid = await newUser();
+    const kid = newDevice();
+    await expectCode(
+      call(
+        fns.redeemLinkCode,
+        req({ uid, anonymous: true }, {
+          code,
+          devicePublicKey: kid.publicKey,
+          encryptionKey: key.toString('base64'),
+          encryptionKeySignature: encryptionKeyBinding(kid, h.hid, key),
+        }),
+      ),
+      'failed-precondition',
+    );
+    expect((await db.doc(`households/${h.hid}/devices/${kid.deviceId}`).get()).exists).toBe(false);
+    expect((await db.doc(`userHouseholds/${uid}`).get()).exists).toBe(false);
+  });
+});
+
 describe('chat collections on the server', () => {
   it('threadKeys is a document collection', () => {
     expect(DOCUMENT_COLLECTIONS.threadKeys).toBe('thread_key');

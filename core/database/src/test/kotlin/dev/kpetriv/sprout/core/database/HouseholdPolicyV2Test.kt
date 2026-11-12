@@ -1,6 +1,7 @@
 package dev.kpetriv.sprout.core.database
 
 import dev.kpetriv.sprout.core.database.entity.AuditAction
+import dev.kpetriv.sprout.core.database.entity.DocumentInboxEntity
 import dev.kpetriv.sprout.core.domainledger.Currency
 import dev.kpetriv.sprout.core.domainledger.GameCreditResult
 import dev.kpetriv.sprout.core.domainledger.LedgerAnomaly
@@ -62,6 +63,130 @@ class HouseholdPolicyV2Test {
         } finally {
             fresh.close()
         }
+    }
+
+    @Test
+    fun aRestoredPhoneWithoutThePolicyYetRefusesToRegisterAParentKey() = runTest {
+        // A wiped phone signed in again: enrolment must not publish this phone's locale and defaults (D-REL-11).
+        val fresh = parentDevice()
+        try {
+            val key = fresh.parentAuthorizer.createParentKey().encoded
+            assertFailsWith<NoHouseholdPolicyYetException> { fresh.registerKey.register(key) }
+            assertNull(fresh.policies.get())
+            assertEquals(0, fresh.database.outboxDao().count(), "nothing queued")
+            assertEquals(emptyList(), fresh.database.parentKeyDao().all())
+            assertEquals(emptyList(), fresh.database.auditLogDao().withAction(AuditAction.PARENT_KEY_REGISTERED))
+            assertEquals(emptyList(), fresh.database.auditLogDao().withAction(AuditAction.HOUSEHOLD_POLICY_UPDATED))
+        } finally {
+            fresh.close()
+        }
+    }
+
+    @Test
+    fun aHouseholdWhosePolicyWasNeverPushedIsRecoveredWithTheServersCurrencyAndSignaturesOn() = runTest {
+        // D-REL-14: the creating phone died before its outbox pushed the policy; the caller read the server's currency.
+        val fresh = parentDevice()
+        try {
+            val chf = Currency.Fiat("CHF")
+            val key = fresh.parentAuthorizer.createParentKey().encoded
+            val policy = fresh.registerKey.register(key, recoveredCurrency = chf)
+
+            assertEquals(chf, policy.fiatCurrency)
+            assertTrue(policy.requireParentSignature)
+            assertEquals(chf, fresh.policies.get()?.fiatCurrency)
+            val published = policyDocument(fresh)
+            assertEquals("CHF", published.payload["fiatCurrency"]?.jsonPrimitive?.content)
+            assertEquals(true, published.payload["requireParentSignature"]?.jsonPrimitive?.content?.toBoolean())
+        } finally {
+            fresh.close()
+        }
+    }
+
+    @Test
+    fun aRecoveryQueuesExactlyOnePolicyDocument() = runTest {
+        // D-REL-14: the policy is created and the key registered over it in one transaction, published once.
+        val fresh = parentDevice()
+        try {
+            val key = fresh.parentAuthorizer.createParentKey().encoded
+            fresh.registerKey.register(key, recoveredCurrency = Currency.Fiat("CHF"))
+
+            val policies = fresh.queuedDocuments().filter { it.docType == DocTypes.HOUSEHOLD_POLICY }
+            assertEquals(1, policies.size, "one envelope, with signatures on")
+            assertEquals(true, policies.single().payload["requireParentSignature"]?.jsonPrimitive?.content?.toBoolean())
+        } finally {
+            fresh.close()
+        }
+    }
+
+    @Test
+    fun aKidSessionNeverRecoversThePolicy() = runTest {
+        // The repository's own role check, whatever the caller vouches for (D-REL-14).
+        val fresh = kidDevice()
+        try {
+            val key = fresh.parentAuthorizer.createParentKey().encoded
+            assertFailsWith<NoHouseholdPolicyYetException> {
+                fresh.registerKey.register(key, recoveredCurrency = Currency.Fiat("CHF"))
+            }
+            assertNull(fresh.policies.get())
+            assertEquals(0, fresh.database.outboxDao().count(), "nothing queued")
+        } finally {
+            fresh.close()
+        }
+    }
+
+    @Test
+    fun aRestoreWithoutAKeyWritesThePolicyWithSignaturesOffAndQueuesOneDocument() = runTest {
+        // D-REL-22: "Restore household settings" on a phone without a strong biometric ensures the policy with the
+        // server's currency, exactly as a creating phone without a biometric does.
+        val fresh = parentDevice()
+        try {
+            val chf = Currency.Fiat("CHF")
+            val policy = fresh.policies.ensure(chf)
+
+            assertEquals(chf, policy.fiatCurrency)
+            assertEquals(false, policy.requireParentSignature)
+            assertEquals(false, policy.hasParentKey)
+            val policies = fresh.queuedDocuments().filter { it.docType == DocTypes.HOUSEHOLD_POLICY }
+            assertEquals(1, policies.size)
+            assertEquals("CHF", policies.single().payload["fiatCurrency"]?.jsonPrimitive?.content)
+            assertEquals(
+                false,
+                policies.single().payload["requireParentSignature"]?.jsonPrimitive?.content?.toBoolean(),
+            )
+
+            // A second restore (a retry) finds the row and writes nothing more.
+            fresh.policies.ensure(Currency.Fiat("JPY"))
+            assertEquals(1, fresh.queuedDocuments().count { it.docType == DocTypes.HOUSEHOLD_POLICY })
+            assertEquals(chf, fresh.policies.get()?.fiatCurrency)
+        } finally {
+            fresh.close()
+        }
+    }
+
+    @Test
+    fun aHeldPolicyIsNeverRecoveredOver() = runTest {
+        val fresh = parentDevice()
+        try {
+            fresh.database.documentInboxDao().upsert(
+                DocumentInboxEntity(DocTypes.HOUSEHOLD_POLICY, HOME.value, "{}", "UNKNOWN_DEVICE", 0L),
+            )
+            assertTrue(fresh.policies.policyHeld())
+            val key = fresh.parentAuthorizer.createParentKey().encoded
+            assertFailsWith<NoHouseholdPolicyYetException> {
+                fresh.registerKey.register(key, recoveredCurrency = Currency.Fiat("CHF"))
+            }
+            assertNull(fresh.policies.get())
+            assertEquals(0, fresh.database.outboxDao().count(), "nothing queued")
+        } finally {
+            fresh.close()
+        }
+    }
+
+    @Test
+    fun aRecoveredCurrencyNeverReplacesAnExistingPolicy() = runTest {
+        val key = parent.parentAuthorizer.createParentKey().encoded
+        val policy = parent.registerKey.register(key, recoveredCurrency = Currency.Fiat("CHF"))
+        assertEquals(parent.gbp, policy.fiatCurrency)
     }
 
     private suspend fun policyDocument(on: TestHousehold) =

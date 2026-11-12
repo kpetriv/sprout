@@ -94,7 +94,8 @@ sealed interface KidsSettingsEvent {
 
 /**
  * Kids & tiers. Edits go through [KidRepository] (audited); a new kid also gets its default accounts through
- * [AccountRepository.ensureDefaultAccounts] in the household currency.
+ * [AccountRepository.ensureDefaultAccounts] in the household currency (refused while a real household has no policy
+ * row yet: [HouseholdContext.policyCurrency], D-REL-18).
  */
 @HiltViewModel
 class KidsSettingsViewModel @Inject constructor(
@@ -194,11 +195,16 @@ class KidsSettingsViewModel @Inject constructor(
     private fun persist(editor: KidEditorUi, name: String, birth: YearMonth) {
         updateEditor { it.copy(isSaving = true, saveFailed = false) }
         viewModelScope.launch {
-            val existing = editor.kidId?.let { kids.getKid(it) }
-            val saved = attempt {
-                if (existing != null) {
-                    kids.upsert(existing.copy(firstName = name, birthYearMonth = birth, uiTier = editor.tier))
+            var existing: Kid? = null
+            val write = policyWrite {
+                existing = editor.kidId?.let { kids.getKid(it) }
+                val current = existing
+                if (current != null) {
+                    kids.upsert(current.copy(firstName = name, birthYearMonth = birth, uiTier = editor.tier))
                 } else {
+                    // The accounts are a persistent write in the household's currency: a real household without its
+                    // policy yet refuses before anything is written (D-REL-18).
+                    val currency = household.policyCurrency()
                     val kid = Kid(
                         id = KidId(UUID.randomUUID().toString()),
                         householdId = household.householdId(),
@@ -208,10 +214,22 @@ class KidsSettingsViewModel @Inject constructor(
                         uiTier = editor.tier,
                     )
                     kids.upsert(kid)
-                    accounts.ensureDefaultAccounts(kid.id, household.fiatCurrency())
+                    accounts.ensureDefaultAccounts(kid.id, currency)
                 }
             }
-            finish(saved, if (existing != null) SettingsMessage.SAVED else SettingsMessage.KID_ADDED)
+            if (write == PolicyWrite.NO_POLICY_YET) {
+                local.update { current ->
+                    current.copy(
+                        editor = current.editor?.copy(isSaving = false),
+                        message = SettingsMessage.POLICY_NOT_SYNCED,
+                    )
+                }
+            } else {
+                finish(
+                    write == PolicyWrite.SAVED,
+                    if (existing != null) SettingsMessage.SAVED else SettingsMessage.KID_ADDED,
+                )
+            }
         }
     }
 

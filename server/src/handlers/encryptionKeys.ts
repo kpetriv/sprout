@@ -1,7 +1,7 @@
 import { HttpsError, type CallableRequest } from '../https.js';
 import { decodeBase64, parseEncryptionKey, registerEncryptionKeyPayload } from '../crypto.js';
 import { proofOf, verifyOwnDeviceProof } from '../deviceProof.js';
-import { verifiedEncryptionKey } from '../encryptionKeys.js';
+import { requireKeyNotBoundElsewhere, verifiedEncryptionKey } from '../encryptionKeys.js';
 import { db } from '../firebase.js';
 import { dataOf, member } from '../guards.js';
 import { log } from '../log.js';
@@ -21,7 +21,8 @@ import { log } from '../log.js';
  *   it does not verify.
  * - Registering the key the row already has answers `created: false` and changes nothing (the stored binding is
  *   kept); a different key already on the row is `failed-precondition` (a changed key needs a new device
- *   registration, D-M4-2). The device is read again in the write transaction: one revoked meanwhile is refused.
+ *   registration, D-M4-2), and so is a key another device row of the household holds (D-REL-32). The device is read
+ *   again in the write transaction: one revoked meanwhile is refused.
  */
 export async function registerEncryptionKey(
   request: CallableRequest,
@@ -55,6 +56,7 @@ export async function registerEncryptionKey(
     if (existing !== undefined && existing !== null) {
       throw new HttpsError('failed-precondition', 'The device already has another encryption key');
     }
+    await requireKeyNotBoundElsewhere(tx, caller.hid, proof.deviceId, fields.encryptionKey);
     tx.update(deviceRef, { ...fields });
     return true;
   });

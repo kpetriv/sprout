@@ -137,10 +137,21 @@ class InterestSettingsViewModel @Inject constructor(
 
     init {
         viewModelScope.launch {
+            // The currency follows the policy: a pull that brings it after the screen opened switches it (D-REL-18).
+            household.observeFiatCurrency()
+                .catch { }
+                .collect { currency ->
+                    mutableState.update { current ->
+                        val switched = current.copy(currency = currency)
+                        // The preview is in the currency's units: recompute it once the form is filled.
+                        if (switched.isLoading) switched else switched.withForm(switched.rateText, switched.accrualDay)
+                    }
+                }
+        }
+        viewModelScope.launch {
             flow {
                 val id = household.householdId()
                 householdId = id
-                mutableState.update { it.copy(currency = household.fiatCurrency()) }
                 emit(id)
             }
                 .flatMapLatest { interest.observe(it) }

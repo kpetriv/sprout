@@ -79,8 +79,17 @@ class GameViewModel @Inject constructor(
     private var submitting: Job? = null
     private var roundKey = 0L
 
+    /** The household policy's currency as last observed (D-REL-10). */
+    private var fiat = currency.fiatCurrency()
+
     init {
         restore()
+        viewModelScope.launch {
+            currency.observeFiatCurrency().collect { latest ->
+                fiat = latest
+                mutableState.update { state -> (state as? GamePlayUiState.Result)?.copy(currency = latest) ?: state }
+            }
+        }
     }
 
     fun onEvent(event: GamePlayEvent) {
@@ -280,7 +289,7 @@ class GameViewModel @Inject constructor(
         kind = kind,
         score = score,
         credit = credit,
-        currency = currency.fiatCurrency(),
+        currency = fiat,
     )
 
     // endregion

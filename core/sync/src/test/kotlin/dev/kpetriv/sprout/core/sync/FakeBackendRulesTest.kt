@@ -5,8 +5,10 @@ import dev.kpetriv.sprout.core.domainledger.DeviceStatus
 import dev.kpetriv.sprout.core.domainledger.EncryptionKeyBindingPayload
 import dev.kpetriv.sprout.core.domainledger.chat.MessageKind
 import dev.kpetriv.sprout.core.model.BlobId
+import dev.kpetriv.sprout.core.model.DeviceId
 import dev.kpetriv.sprout.core.model.HouseholdId
 import dev.kpetriv.sprout.core.model.Role
+import dev.kpetriv.sprout.core.model.UserId
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
@@ -15,6 +17,7 @@ import kotlinx.serialization.json.put
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -88,6 +91,26 @@ class FakeBackendRulesTest {
 
     /** How a rules refusal of a blob chunk is reported (D-M4-22): transient, never permanent. */
     private val deferred = listOf(SyncError.Transient().code)
+
+    @Test
+    fun `one registry row reads for a member and is refused to anyone else, as the rules do (D-REL-27)`() = runTest {
+        assertEquals(kid.uid, transport.registeredDevice(HOUSEHOLD, kid.deviceId)?.uid)
+        assertEquals(parent.uid, kidTransport.registeredDevice(HOUSEHOLD, parent.deviceId)?.uid)
+        assertNull(transport.registeredDevice(HOUSEHOLD, DeviceId("unknown-device")), "no such row")
+
+        val stranger = FakeSyncTransport(backend, DeviceId("stranger-device"), UserId("stranger-uid"), Role.PARENT)
+        assertEquals(
+            SyncError.Permanent(FakeBackend.PERMISSION_DENIED),
+            assertFailsWith<SyncException> { stranger.registeredDevice(HOUSEHOLD, parent.deviceId) }.error,
+            "a non-member is refused, never told \"no row\"",
+        )
+        assertEquals(
+            SyncError.Permanent(FakeBackend.PERMISSION_DENIED),
+            assertFailsWith<SyncException> {
+                transport.registeredDevice(HouseholdId("another-household"), parent.deviceId)
+            }.error,
+        )
+    }
 
     @Test
     fun aParentCannotWriteRegistryDocuments() = runTest {
@@ -527,6 +550,61 @@ class FakeBackendRulesTest {
         // A kid never writes the policy.
         val kidPolicy = kid.signed(DocTypes.HOUSEHOLD_POLICY, HOUSEHOLD.value, lamport = 50)
         assertEquals(denied, codes(kidTransport.push(emptyList(), listOf(kidPolicy))))
+    }
+
+    @Test
+    fun requiredParentSignaturesAreNeverTurnedOff() = runTest {
+        // D-REL-23 (audit L2), as firestore.rules: off to on is allowed, on to off never, whatever the lamport.
+        fun signatures(on: Boolean, lamport: Long) = policy(
+            buildJsonObject { put("requireParentSignature", on) },
+            lamport = lamport,
+        )
+        assertEquals(emptyList(), transport.push(emptyList(), listOf(signatures(on = false, lamport = 2))).rejected)
+        assertEquals(emptyList(), transport.push(emptyList(), listOf(signatures(on = true, lamport = 3))).rejected)
+
+        assertEquals(denied, codes(transport.push(emptyList(), listOf(signatures(on = false, lamport = 4)))))
+        val withoutFlag = policy(buildJsonObject {}, lamport = 5).let {
+            it.copy(payload = JsonObject(it.payload - "requireParentSignature"))
+        }
+        assertEquals(denied, codes(transport.push(emptyList(), listOf(withoutFlag))), "absent is off")
+        val stored = assertNotNull(backend.document(DocTypes.HOUSEHOLD_POLICY, HOUSEHOLD.value))
+        assertEquals(3L, stored.lamport)
+        // Other settings still change with signatures kept on.
+        assertEquals(
+            emptyList(),
+            transport.push(emptyList(), listOf(policy(buildJsonObject { put("chatRetentionDays", 30) }, 6))).rejected,
+        )
+    }
+
+    @Test
+    fun theHouseholdRootIsReadWithTheCurrencyAndWhetherAPolicyIsStored() = runTest {
+        backend.fiatCurrency = "CHF"
+        assertEquals(HouseholdRoot("CHF", policyStored = false), transport.householdRoot())
+        transport.push(emptyList(), listOf(policy(buildJsonObject {})))
+        assertEquals(HouseholdRoot("CHF", policyStored = true), transport.householdRoot())
+    }
+
+    @Test
+    fun aMissingHouseholdRootOrADeniedReadIsAFailureNeverAnAnswer() = runTest {
+        backend.fiatCurrency = "CHF"
+        backend.householdRootStored = false
+        assertEquals(
+            SyncError.Transient(),
+            assertFailsWith<SyncException> { transport.householdRoot() }.error,
+            "no root document",
+        )
+        backend.householdRootStored = true
+
+        for (path in FakeBackend.RootPath.entries) {
+            backend.householdRootDenied = path
+            assertEquals(
+                SyncError.Permanent(FakeBackend.PERMISSION_DENIED),
+                assertFailsWith<SyncException> { transport.householdRoot() }.error,
+                "denied on $path",
+            )
+        }
+        backend.householdRootDenied = null
+        assertEquals(HouseholdRoot("CHF", policyStored = false), transport.householdRoot())
     }
 
     @Test

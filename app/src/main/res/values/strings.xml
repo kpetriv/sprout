@@ -57,7 +57,8 @@
   <string name="gate_failure_network">Couldn’t reach Sprout. Check the connection and try again.</string>
   <string name="gate_failure_failed">Something went wrong. Try again.</string>
   <string name="gate_erase_title">Erase this phone’s copy?</string>
-  <string name="gate_erase_text">Your household stays in the cloud. This phone’s copy is erased and the app starts over.</string>
+  <string name="gate_erase_text">Your household stays in the cloud. This phone’s copy is erased except its chat key, which stays until Sprout is set up again here, this phone is removed from the household, or Sprout is uninstalled. The app starts over.</string>
+  <string name="gate_erase_text_unverified">Your household stays in the cloud. This phone’s copy is erased, its chat key too, and the app starts over. Chat will need setting up again on this phone.</string>
   <plurals name="gate_erase_unsynced">
     <item quantity="one">%1$d change made on this phone hasn’t synced yet. It will be lost.</item>
     <item quantity="other">%1$d changes made on this phone haven’t synced yet. They will be lost.</item>
@@ -95,4 +96,5 @@
   <string name="confirm_reason_delete_chat">Delete every chat message</string>
   <string name="confirm_reason_retention">Change how long chats are kept</string>
   <string name="confirm_reason_game_cap">Change the daily game limit</string>
+  <string name="confirm_reason_restore_settings">Restore the household settings</string>
 </resources>

@@ -26,3 +26,9 @@ private fun SeedlingPreview() = SproutTheme {
 private fun SproutNudgePreview() = SproutTheme {
     ChatScreen(state = ChatPreviewData.kidNudge(KidUiTier.SPROUT), onEvent = {})
 }
+
+@Preview(name = "Parent, chat key conflict", showBackground = true, heightDp = 900)
+@Composable
+private fun ParentKeyConflictPreview() = SproutTheme {
+    ChatScreen(state = ChatPreviewData.parentKeyConflict(), onEvent = {})
+}

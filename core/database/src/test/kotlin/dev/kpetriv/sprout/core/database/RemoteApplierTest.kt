@@ -80,6 +80,49 @@ class RemoteApplierTest {
     }
 
     @Test
+    fun aPulledPolicyNeverTurnsRequiredParentSignaturesOff() = runTest {
+        // D-REL-23 (audit L2): requireParentSignature is one-way, on the client as in the rules. Another parent phone
+        // that never saw the key's policy writes its own (signatures off) at a higher lamport: the race of D-REL-14.
+        val other = parentDevice()
+        try {
+            registerEachOther(parent, kid, other)
+            parent.policies.ensure(parent.gbp)
+            parent.registerParentKey()
+            val signed = parent.queuedDocuments().last { it.docType == DocTypes.HOUSEHOLD_POLICY }
+            assertEquals(DocumentApplyReport(applied = 1), kid.applier.applyDocuments(listOf(signed)))
+            assertEquals(true, kid.database.householdPolicyDao().get()?.requireParentSignature)
+
+            other.policies.ensure(parent.gbp)
+            val older = other.queuedDocuments().last { it.docType == DocTypes.HOUSEHOLD_POLICY }
+            var days = 1
+            while (other.queuedDocuments().last { it.docType == DocTypes.HOUSEHOLD_POLICY }.lamport <= signed.lamport) {
+                other.policies.setChatRetention(days++)
+            }
+            val downgrade = other.queuedDocuments().last { it.docType == DocTypes.HOUSEHOLD_POLICY }
+            assertEquals(false, other.policies.get()?.requireParentSignature)
+
+            assertEquals(DocumentApplyReport(ignored = 1), kid.applier.applyDocuments(listOf(downgrade)))
+
+            val stored = assertNotNull(kid.database.householdPolicyDao().get())
+            assertTrue(stored.requireParentSignature, "never turned off by a pulled policy")
+            assertEquals(signed.lamport, stored.lamport, "nothing of the refused copy was applied")
+            val rejected = kid.database.auditLogDao().all().single { it.action == AuditAction.DOCUMENT_REJECTED }
+            assertTrue(RoomRemoteApplier.POLICY_SIGNATURE_DOWNGRADE in rejected.detailsJson)
+
+            // An older copy that loses anyway is ignored as usual, not audited again.
+            if (older.lamport < signed.lamport) {
+                assertEquals(DocumentApplyReport(ignored = 1), kid.applier.applyDocuments(listOf(older)))
+                assertEquals(
+                    1,
+                    kid.database.auditLogDao().all().count { it.action == AuditAction.DOCUMENT_REJECTED },
+                )
+            }
+        } finally {
+            other.close()
+        }
+    }
+
+    @Test
     fun aTombstoneHidesTheRowAndALateUpdateCannotResurrectIt() = runTest {
         registerEachOther(parent, kid)
         parent.addKid(KID_X.value)

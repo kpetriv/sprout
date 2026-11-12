@@ -2,6 +2,7 @@ package dev.kpetriv.sprout.feature.settings
 
 import dev.kpetriv.sprout.core.database.FiatCurrencyProvider
 import dev.kpetriv.sprout.core.database.HouseholdPolicyRepository
+import dev.kpetriv.sprout.core.database.LocalTrial
 import dev.kpetriv.sprout.core.database.NoHouseholdPolicyYetException
 import dev.kpetriv.sprout.core.database.SessionAuthorProvider
 import dev.kpetriv.sprout.core.domainledger.Currency
@@ -9,6 +10,9 @@ import dev.kpetriv.sprout.core.model.HouseholdId
 import dev.kpetriv.sprout.core.ui.AmountInputError
 import dev.kpetriv.sprout.core.ui.MinorUnitsParser
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import javax.inject.Inject
 
 /** The household settings write into: its id (from the session author) and its money currency. */
@@ -19,8 +23,23 @@ class HouseholdContext @Inject constructor(
 ) {
     suspend fun householdId(): HouseholdId = authors.currentAuthor().householdId
 
-    /** The household policy's currency, or the locale's until the policy exists. */
-    suspend fun fiatCurrency(): Currency.Fiat = policies.get()?.fiatCurrency ?: currencies.fiatCurrency()
+    /**
+     * The household policy's currency (the locale's until the policy exists) now and whenever the policy changes (a
+     * pull brings it): for what a screen shows or offers.
+     */
+    fun observeFiatCurrency(): Flow<Currency.Fiat> =
+        policies.observe().map { it?.fiatCurrency ?: currencies.currentFiatCurrency() }.distinctUntilChanged()
+
+    /**
+     * The currency a persistent write is made in (a new kid's accounts): the policy's. The trial household without a
+     * policy row yet takes the locale's; a real household without one refuses with [NoHouseholdPolicyYetException], so
+     * nothing is written in a currency the household did not choose (D-REL-18).
+     */
+    suspend fun policyCurrency(): Currency.Fiat {
+        policies.get()?.let { return it.fiatCurrency }
+        if (householdId() != LocalTrial.HOUSEHOLD) throw NoHouseholdPolicyYetException()
+        return currencies.currentFiatCurrency()
+    }
 }
 
 /** Why typed amount text was refused. */
@@ -97,6 +116,9 @@ enum class SettingsMessage {
 
     /** This phone has no household policy yet, so it does not write one (D-M7-57). */
     POLICY_NOT_SYNCED,
+
+    /** The household policy that existed nowhere was restored from this phone (D-REL-22). */
+    SETTINGS_RESTORED,
 
     /** Nothing on this phone could open a web link (About). */
     LINK_NOT_OPENED,

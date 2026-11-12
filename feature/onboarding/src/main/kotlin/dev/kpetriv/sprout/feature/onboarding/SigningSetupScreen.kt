@@ -104,6 +104,8 @@ private fun SigningSetupResult.messageRes(): Int = when (this) {
 
     SigningSetupResult.CANCELLED -> R.string.feature_onboarding_signing_cancelled
 
+    SigningSetupResult.POLICY_NOT_SYNCED -> R.string.feature_onboarding_signing_policy_not_synced
+
     SigningSetupResult.REGISTERED, SigningSetupResult.UNAVAILABLE, SigningSetupResult.FAILED ->
         R.string.feature_onboarding_signing_failed
 }

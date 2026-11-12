@@ -20,7 +20,9 @@ import dev.kpetriv.sprout.feature.lock.HostedParentAuthorizationRequester
 import dev.kpetriv.sprout.feature.lock.HostedParentKeyProofPrompter
 import dev.kpetriv.sprout.feature.lock.LockScope
 import dev.kpetriv.sprout.feature.lock.LockSettings
+import dev.kpetriv.sprout.feature.lock.ParentKeyChangeProgress
 import dev.kpetriv.sprout.feature.lock.ParentKeyProofPrompter
+import dev.kpetriv.sprout.feature.lock.ParentKeyProvisioner
 import dev.kpetriv.sprout.feature.lock.ParentKeyStatusCheck
 import dev.kpetriv.sprout.feature.lock.ParentPinStore
 import dev.kpetriv.sprout.feature.lock.ProcessLifecycleForegroundSource
@@ -50,6 +52,10 @@ internal abstract class LockModule {
     /** `PinLockoutPolicy` closes the PIN path at the cap only while a biometric unlock can really succeed. */
     @Binds
     abstract fun parentKeyHealth(impl: ParentKeyStatusCheck): ParentKeyHealth
+
+    /** Whether a parent key change runs now, for the dashboard's signing cards (D-REL-12). */
+    @Binds
+    abstract fun parentKeyChangeProgress(impl: ParentKeyProvisioner): ParentKeyChangeProgress
 
     /** The enrolment and renewal proof prompt, over the activity hosting `ParentAuthorizationHost()`. */
     @Binds

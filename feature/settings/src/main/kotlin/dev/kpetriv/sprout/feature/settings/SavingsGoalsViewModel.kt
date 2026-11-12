@@ -25,7 +25,6 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flatMapLatest
-import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.onStart
@@ -149,7 +148,7 @@ class SavingsGoalsViewModel @Inject constructor(
     private fun savingsCurrency(kidId: KidId): Flow<Currency.Fiat> = accounts.accountsFor(kidId).flatMapLatest { list ->
         val savings = list.firstOrNull { it.kind == AccountKind.SAVINGS && it.currency is Currency.Fiat }
         val currency = savings?.currency as? Currency.Fiat
-        if (currency != null) flowOf(currency) else flow { emit(household.fiatCurrency()) }
+        if (currency != null) flowOf(currency) else household.observeFiatCurrency()
     }
 
     private fun openNew() {

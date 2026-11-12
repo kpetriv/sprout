@@ -14,6 +14,7 @@ import dev.kpetriv.sprout.core.crypto.InMemoryKeyWrapper
 import dev.kpetriv.sprout.core.crypto.JceEcdsaVerifier
 import dev.kpetriv.sprout.core.crypto.JceX25519KeyAgreement
 import dev.kpetriv.sprout.core.crypto.ParentSigner
+import dev.kpetriv.sprout.core.crypto.SecretStore
 import dev.kpetriv.sprout.core.crypto.SecretStoreEncryptionKeyStore
 import dev.kpetriv.sprout.core.crypto.WrappedSecretStore
 import dev.kpetriv.sprout.core.crypto.X25519KeyAgreement
@@ -67,6 +68,7 @@ import kotlinx.coroutines.runBlocking
 import java.io.File
 import java.security.SecureRandom
 import java.time.ZoneOffset
+import java.util.Locale
 import java.util.UUID
 import kotlin.time.Instant
 
@@ -91,6 +93,9 @@ class TestHousehold(
     val keyStore: DeviceKeyStore = InMemoryDeviceKeyStore(clock),
     sessionFor: (DeviceId) -> Session = { Session.localTrial(it, clock.now()) },
     agreement: (SecureRandom) -> X25519KeyAgreement = ::JceX25519KeyAgreement,
+    /** This device's wrapped `SecretStore` (in memory); pass one to keep a phone's secrets across a wipe. */
+    val secretStore: SecretStore =
+        WrappedSecretStore(InMemoryKeyWrapper(), InMemoryBlobStorage(), SecureRandom(), Dispatchers.Unconfined),
 ) : AutoCloseable {
     val database: SproutDatabase = inMemoryDatabase(context)
     val gbp = Currency.Fiat("GBP")
@@ -111,8 +116,6 @@ class TestHousehold(
     val outbox = RoomOutboxSource(database, clock)
     private val random = SecureRandom()
     private val aead = AesGcmAead(random)
-    private val secretStore =
-        WrappedSecretStore(InMemoryKeyWrapper(), InMemoryBlobStorage(), random, Dispatchers.Unconfined)
 
     /** This device's X25519 chat key (`chat.x25519.v1`), in memory. */
     val encryptionKeys: EncryptionKeyStore = SecretStoreEncryptionKeyStore(secretStore, agreement(random))
@@ -123,6 +126,9 @@ class TestHousehold(
         encryptionKeys,
     )
     val applier = RoomRemoteApplier(database, ledger, clock, signatureCheck, chatCrypto)
+
+    /** The chat key's lifecycle across a sign-out on this phone ([ChatIdentityKeeper]). */
+    val chatIdentity = ChatIdentityKeeper(database, secretStore)
 
     val photoDirectory = newPhotoDirectory(context)
     val blobDirectory = File(context.noBackupFilesDir, "blobs-${UUID.randomUUID()}")
@@ -142,7 +148,17 @@ class TestHousehold(
     val allowances = RoomAllowanceRepository(database, authors, clock, signer)
     val goals = RoomSavingsGoalRepository(database, authors, clock, signer)
     val interest = RoomInterestPolicyRepository(database, authors, clock, signer)
-    val policies = RoomHouseholdPolicyRepository(database, authors, { gbp }, clock, signer, ledger)
+    val policies =
+        RoomHouseholdPolicyRepository(
+            database,
+            authors,
+            LocaleFiatCurrencyProvider {
+                Locale.UK
+            },
+            clock,
+            signer,
+            ledger,
+        )
     val pending = RoomPendingParentActionRepository(database, authors, clock)
 
     val parentAuthorizer = FakeParentAuthorizer()
@@ -211,9 +227,13 @@ class TestHousehold(
 
     /**
      * What `feature/lock`'s PIN-gated enrolment does once the PIN is verified: creates the parent key and registers
-     * it. Returns the policy with parent signatures required.
+     * it. Returns the policy with parent signatures required. Without a policy row it first creates one in GBP, as
+     * household creation (or the trial) would: registration alone never creates a real household's policy (D-REL-11).
      */
-    suspend fun registerParentKey(): HouseholdPolicy = registerKey.register(parentAuthorizer.createParentKey().encoded)
+    suspend fun registerParentKey(): HouseholdPolicy {
+        if (policies.get() == null) policies.ensure(gbp)
+        return registerKey.register(parentAuthorizer.createParentKey().encoded)
+    }
 
     /** One parent prompt: a fresh single-use authorisation from the parent key (create it first). */
     fun authorization(): ParentAuthorization = parentAuthorizations.from(parentAuthorizer.initSignature())

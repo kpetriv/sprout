@@ -8,7 +8,7 @@ import { dataOf, parent, requireId, signedIn } from '../guards.js';
 import { log } from '../log.js';
 import { hit, LIMITS } from '../rateLimit.js';
 import { attestDevice } from '../registration.js';
-import { encryptionKeyClaimOf, verifiedEncryptionKey } from '../encryptionKeys.js';
+import { encryptionKeyClaimOf, requireKeyNotBoundElsewhere, verifiedEncryptionKey } from '../encryptionKeys.js';
 import { deviceDocument } from './registry.js';
 
 /**
@@ -116,6 +116,10 @@ export async function redeemLinkCode(
     if (!householdSnap.exists) throw new HttpsError('not-found', INVALID_CODE);
     if (userSnap.exists) throw new HttpsError('failed-precondition', 'This device is already linked');
     if (deviceSnap.exists) throw new HttpsError('already-exists', 'Device already registered');
+    // A kid device never takes a key another device of the household holds (D-REL-32).
+    if (encryptionKey !== undefined) {
+      await requireKeyNotBoundElsewhere(tx, hid, key.deviceId, encryptionKey.encryptionKey);
+    }
     tx.create(userRef, { hid });
     tx.update(codeRef, { used: true, usedAt: FieldValue.serverTimestamp(), usedBy: caller.uid });
     tx.create(household.collection('members').doc(caller.uid), {

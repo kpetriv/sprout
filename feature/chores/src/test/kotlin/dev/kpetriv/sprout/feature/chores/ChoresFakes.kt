@@ -2,7 +2,11 @@ package dev.kpetriv.sprout.feature.chores
 
 import dev.kpetriv.sprout.core.database.ChoreRepository
 import dev.kpetriv.sprout.core.database.DecisionResult
+import dev.kpetriv.sprout.core.database.HouseholdFiatCurrencyProvider
+import dev.kpetriv.sprout.core.database.HouseholdPolicy
+import dev.kpetriv.sprout.core.database.HouseholdPolicyRepository
 import dev.kpetriv.sprout.core.database.KidRepository
+import dev.kpetriv.sprout.core.database.LocaleFiatCurrencyProvider
 import dev.kpetriv.sprout.core.database.PhotoIntegrityException
 import dev.kpetriv.sprout.core.database.PhotoStore
 import dev.kpetriv.sprout.core.database.SubmissionDecision
@@ -50,6 +54,7 @@ import kotlinx.coroutines.test.setMain
 import org.junit.rules.TestWatcher
 import org.junit.runner.Description
 import java.time.ZoneOffset
+import java.util.Locale
 import kotlin.time.Instant
 
 /** Replaces Dispatchers.Main (used by viewModelScope) with a test dispatcher. */
@@ -283,3 +288,32 @@ class FakeChoreSuggestions : ChoreSuggestions {
         return result
     }
 }
+
+/**
+ * The household policy as a restored phone sees it: none until [pulled] (the first pull), never created here. With
+ * [householdCurrency] it is the app's [HouseholdFiatCurrencyProvider] on a German (EUR) phone.
+ */
+class FakeHouseholdPolicies : HouseholdPolicyRepository {
+    val policy = MutableStateFlow<HouseholdPolicy?>(null)
+
+    fun pulled(currency: Currency.Fiat) {
+        policy.value = HouseholdPolicy(
+            requireParentSignature = false,
+            parentSignatureFromLamport = null,
+            parentPublicKey = null,
+            fiatCurrency = currency,
+            createdAt = Instant.fromEpochSeconds(0),
+        )
+    }
+
+    override fun observe(): Flow<HouseholdPolicy?> = policy
+
+    override suspend fun get(): HouseholdPolicy? = policy.value
+
+    override suspend fun ensure(fiatCurrency: Currency.Fiat): HouseholdPolicy = error("not created by these screens")
+
+    override suspend fun registerParentKey(publicKeyDer: ByteArray): HouseholdPolicy = error("not registered here")
+}
+
+fun householdCurrency(policies: HouseholdPolicyRepository): HouseholdFiatCurrencyProvider =
+    HouseholdFiatCurrencyProvider(policies, LocaleFiatCurrencyProvider { Locale.GERMANY })

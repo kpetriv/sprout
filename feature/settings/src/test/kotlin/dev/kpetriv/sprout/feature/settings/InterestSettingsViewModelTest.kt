@@ -1,5 +1,6 @@
 package dev.kpetriv.sprout.feature.settings
 
+import dev.kpetriv.sprout.core.domainledger.Currency
 import dev.kpetriv.sprout.core.domainledger.Money
 import dev.kpetriv.sprout.core.model.InterestPolicy
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -54,6 +55,17 @@ class InterestSettingsViewModelTest {
         // £100.00 × 250 bps × 30 days / 3 650 000 = 20.55p, half-even to 21p.
         assertEquals(InterestPreview(Money(10_000), Money(21)), state.preview)
         assertFalse(state.canSave)
+    }
+
+    @Test
+    fun `the currency follows a household policy that arrives after the screen opened`() = test {
+        val policies = FakeHouseholdPolicyRepository(initial = null)
+        val vm = InterestSettingsViewModel(repository, householdContext(policies))
+        assertEquals(Currency.Fiat("EUR"), vm.state.value.currency, "the locale's until the first pull")
+
+        policies.policy.value = FakeHouseholdPolicyRepository.policy(hasKey = false)
+
+        assertEquals(GBP, vm.state.value.currency)
     }
 
     @Test

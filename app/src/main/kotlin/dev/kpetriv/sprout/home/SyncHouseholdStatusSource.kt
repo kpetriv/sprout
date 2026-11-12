@@ -1,5 +1,8 @@
 package dev.kpetriv.sprout.home
 
+import dev.kpetriv.sprout.core.crypto.ParentAuthAvailability
+import dev.kpetriv.sprout.core.crypto.ParentAuthorizer
+import dev.kpetriv.sprout.core.database.HouseholdPolicy
 import dev.kpetriv.sprout.core.database.HouseholdPolicyRepository
 import dev.kpetriv.sprout.core.database.KidRepository
 import dev.kpetriv.sprout.core.database.RoomLedgerRepository
@@ -9,6 +12,7 @@ import dev.kpetriv.sprout.core.database.SproutDatabase
 import dev.kpetriv.sprout.core.database.entity.RegistrationStatus
 import dev.kpetriv.sprout.core.model.DeviceId
 import dev.kpetriv.sprout.core.model.Role
+import dev.kpetriv.sprout.feature.lock.ParentKeyChangeProgress
 import dev.kpetriv.sprout.feature.parenthome.DeviceLabel
 import dev.kpetriv.sprout.feature.parenthome.HouseholdStatus
 import dev.kpetriv.sprout.feature.parenthome.HouseholdStatusSource
@@ -16,8 +20,14 @@ import dev.kpetriv.sprout.feature.parenthome.PendingDevice
 import dev.kpetriv.sprout.feature.parenthome.RejectedEvent
 import dev.kpetriv.sprout.feature.parenthome.SyncLine
 import dev.kpetriv.sprout.sync.SyncController
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.emitAll
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.transformLatest
 import javax.inject.Inject
 
 /**
@@ -28,6 +38,14 @@ import javax.inject.Inject
  * ([HouseholdPolicyRepository.observeServerRegistrationPending], D-M3-39). Sync never retries that registration (the
  * server needs a fresh attestation challenge and the parent's fingerprint); the card stays until the parent retries.
  * "Fingerprint signing is off" shows while the household policy has no parent key for this parent phone (D-M3-46).
+ * Neither signing card shows while a parent key change runs ([ParentKeyChangeProgress], D-REL-12): right after the PIN
+ * setup the enrolment's fingerprint prompt and its server registration run over the dashboard, and the policy passes
+ * through "no key" and "key not registered yet" on the way; only an enrolment that ended leaves a state worth a card.
+ * The end of a key change is held back by [KEY_CHANGE_SETTLE_MS] so Room's re-query of its last write lands first
+ * (D-REL-16). "Household settings have not synced yet" shows for a parent phone of a real household that has no policy
+ * row although a sync completed (D-REL-14); on a phone without a strong biometric ([ParentAuthorizer.availability],
+ * read with every update) its action is "Restore household settings" with the PIN (D-REL-22). "Fingerprint signing is
+ * off" also shows when the policy does not require parent signatures in a real household (D-REL-26).
  */
 @Suppress("LongParameterList") // One source per card.
 class SyncHouseholdStatusSource @Inject constructor(
@@ -38,14 +56,22 @@ class SyncHouseholdStatusSource @Inject constructor(
     private val database: SproutDatabase,
     private val kids: KidRepository,
     private val policies: HouseholdPolicyRepository,
+    private val keyChanges: ParentKeyChangeProgress,
+    private val authorizer: ParentAuthorizer,
 ) : HouseholdStatusSource {
     override fun observe(): Flow<HouseholdStatus> = combine(
         combine(sessions.observe(), sync.status, outbox.observeBlocked(), ::Triple),
         ledger.observeQuarantined(),
         database.deviceDao().observeAll(),
         kids.observeKids(),
-        combine(policies.observeServerRegistrationPending(), policies.observe(), ::Pair),
-    ) { (session, status, blocked), quarantined, devices, kidList, (keyPending, policy) ->
+        combine(
+            policies.observeServerRegistrationPending(),
+            policies.observe(),
+            keyChanges.observeInProgress().holdingFallingEdge(KEY_CHANGE_SETTLE_MS),
+            ::Triple,
+        ),
+    ) { (session, status, blocked), quarantined, devices, kidList, (keyPending, policy, enrolling) ->
+        val parent = session?.role == Role.PARENT && !enrolling
         val trial = session?.isLocalTrial ?: false
         val byId = devices.associateBy { it.deviceId }
         val names = kidList.associate { it.id to it.firstName }
@@ -74,14 +100,62 @@ class SyncHouseholdStatusSource @Inject constructor(
                         it.deviceId != session?.deviceId
                 }
                 .map { PendingDevice(it.deviceId, label(it.deviceId).fingerprint) },
-            signingKeyNotRegistered = keyPending && session?.role == Role.PARENT,
-            // A real household's parent phone whose policy exists without its parent key (D-M3-46).
-            signingOff = !trial && session?.role == Role.PARENT && policy != null && !policy.hasParentKey,
+        ).withSigningCards(
+            parent = parent,
+            realParent = parent && !trial,
+            keyPending = keyPending,
+            policy = policy,
+            synced = status.lastSyncedAt != null && !status.lastFailed,
         )
     }
+
+    /** The signing and policy cards; [parent] is false while a key change runs. */
+    private fun HouseholdStatus.withSigningCards(
+        parent: Boolean,
+        realParent: Boolean,
+        keyPending: Boolean,
+        policy: HouseholdPolicy?,
+        synced: Boolean,
+    ) = copy(
+        signingKeyNotRegistered = keyPending && parent,
+        // A real household's parent phone whose policy exists without its parent key (D-M3-46), or whose policy does
+        // not require parent signatures (D-REL-26: written before they became one-way, D-REL-23).
+        signingOff = realParent && policy != null && (!policy.hasParentKey || !policy.requireParentSignature),
+        // A real household's parent phone with no policy row after a sync that completed (D-REL-14): signatures are
+        // off (the ledger default) and enrolment waits for the policy or recovers it; without a strong biometric the
+        // PIN restores it (D-REL-22).
+        policyMissing = realParent && policy == null && synced,
+        policyRestoreWithPin = realParent && policy == null && synced && !strongBiometric(),
+    )
+
+    private fun strongBiometric(): Boolean =
+        authorizer.availability() == ParentAuthAvailability.STRONG_BIOMETRIC_AVAILABLE
 
     private companion object {
         const val FINGERPRINT_CHARS = 16
         const val GROUP = 4
+
+        /**
+         * How long the signing cards stay hidden after a key change ended (D-REL-16): the change's last write (the
+         * `PARENT_KEY_REGISTERED` audit row) reaches the policy flows only when Room re-runs their queries, after the
+         * progress has already dropped, so without it "Signing key not registered" flashes for a frame or two.
+         */
+        const val KEY_CHANGE_SETTLE_MS = 500L
     }
+}
+
+/**
+ * This flow with every change to false held back by [settleMs] (a change back to true within it cancels the false);
+ * the first value and every true pass at once.
+ */
+@OptIn(ExperimentalCoroutinesApi::class)
+internal fun Flow<Boolean>.holdingFallingEdge(settleMs: Long): Flow<Boolean> = flow {
+    var first = true
+    emitAll(
+        distinctUntilChanged().transformLatest { value ->
+            if (!value && !first) delay(settleMs)
+            first = false
+            emit(value)
+        },
+    )
 }

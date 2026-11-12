@@ -3,11 +3,13 @@ package dev.kpetriv.sprout.core.syncfirebase
 import app.cash.turbine.test
 import dev.kpetriv.sprout.core.domainledger.AttestationLevel
 import dev.kpetriv.sprout.core.domainledger.DeviceStatus
+import dev.kpetriv.sprout.core.model.DeviceId
 import dev.kpetriv.sprout.core.model.HouseholdId
 import dev.kpetriv.sprout.core.model.KidId
 import dev.kpetriv.sprout.core.model.Role
 import dev.kpetriv.sprout.core.model.UserId
 import dev.kpetriv.sprout.core.sync.DocTypes
+import dev.kpetriv.sprout.core.sync.HouseholdRoot
 import dev.kpetriv.sprout.core.sync.RemoteChange
 import dev.kpetriv.sprout.core.sync.SyncCursor
 import dev.kpetriv.sprout.core.sync.SyncError
@@ -295,6 +297,37 @@ class FirebaseSyncTransportPullTest {
     }
 
     @Test
+    fun `the household root gives the server's currency and whether a policy document is stored`() = runTest {
+        firestore.seed("households/h1", mapOf("createdBy" to "x", "fiatCurrency" to "GBP"))
+        assertEquals(HouseholdRoot("GBP", policyStored = false), transport().householdRoot())
+
+        firestore.seed("households/h1/householdPolicy/h1", mapOf("docType" to DocTypes.HOUSEHOLD_POLICY))
+        assertEquals(HouseholdRoot("GBP", policyStored = true), transport().householdRoot())
+
+        firestore.seed("households/h1", mapOf("createdBy" to "x", "fiatCurrency" to 7L))
+        assertNull(transport().householdRoot().fiatCurrency, "a field that is not a string is no currency")
+    }
+
+    @Test
+    fun `a household root that cannot be read is a sync failure, never an answer`() = runTest {
+        assertEquals(
+            SyncError.Transient(),
+            assertFailsWith<SyncException> { transport().householdRoot() }.error,
+            "no root document",
+        )
+
+        firestore.seed("households/h1", mapOf("fiatCurrency" to "GBP"))
+        firestore.readFailures["households/h1/householdPolicy/h1"] = FirestoreCode.UNAVAILABLE
+        assertEquals(SyncError.Transient(), assertFailsWith<SyncException> { transport().householdRoot() }.error)
+
+        hid = null
+        assertEquals(
+            SyncError.Unauthenticated,
+            assertFailsWith<SyncException> { transport().householdRoot() }.error,
+        )
+    }
+
+    @Test
     fun `changes come from listeners only while the app is in the foreground`() = runTest {
         foreground.value = false
         transport().changes().test {
@@ -339,5 +372,33 @@ class FirebaseSyncTransportPullTest {
             SyncError.Unauthenticated,
             assertFailsWith<SyncException> { transport().pull(SyncCursor.START) }.error,
         )
+    }
+
+    @Test
+    fun `one registry row is read by path for any household, before a session exists (D-REL-27)`() = runTest {
+        hid = null
+        val parent = TestData.DEVICE
+        firestore.seed("households/h2/devices/$parent", device("p-uid", "PARENT", "ACTIVE"))
+        // A row whose key is not its id's (audit H1) does not parse: a failure, never "no row".
+        firestore.seed("households/h2/devices/${"f".repeat(64)}", device("p-uid", "PARENT", "ACTIVE"))
+
+        val row = transport().registeredDevice(HouseholdId("h2"), DeviceId(parent))
+
+        assertEquals(UserId("p-uid"), row?.uid)
+        assertEquals(Role.PARENT, row?.role)
+        assertEquals(DeviceStatus.Active, row?.status)
+        assertNull(transport().registeredDevice(HID, DeviceId(parent)))
+        assertEquals(
+            SyncError.Permanent(FirebaseSyncTransport.MALFORMED),
+            assertFailsWith<SyncException> {
+                transport().registeredDevice(HouseholdId("h2"), DeviceId("f".repeat(64)))
+            }.error,
+        )
+
+        firestore.readFailures["households/h2/devices/$parent"] = FirestoreCode.UNAVAILABLE
+        val failure = assertFailsWith<SyncException> {
+            transport().registeredDevice(HouseholdId("h2"), DeviceId(parent))
+        }
+        assertEquals(SyncError.Transient(), failure.error, "an unreadable row is never \"no row\"")
     }
 }

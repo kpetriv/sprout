@@ -576,10 +576,20 @@ service cloud.firestore {
             && (o == null || o.authorDeviceId == n.authorDeviceId);
         }
 
+        // householdPolicy (D-REL-23, audit L2): requireParentSignature is one-way. No write (an update, a tombstone,
+        // any lamport) turns it off over a stored policy that has it on; an absent flag counts as off. Creating a
+        // policy with it off, or turning it on, stays allowed.
+        function keepsParentSignatures(n, o) {
+          return o == null
+            || o.payload.get('requireParentSignature', false) != true
+            || n.payload.get('requireParentSignature', false) == true;
+        }
+
         // n: written envelope; m: caller's member row; o: stored envelope on update, null on create.
         function mayWrite(n, m, o) {
           return validDocument(n, m)
             && (coll != 'threadKeys' || threadKeyEnvelope(n, o))
+            && (coll != 'householdPolicy' || keepsParentSignatures(n, o))
             && (o == null || winsConflict(n, o, m))
             && (m.role == 'PARENT' || (m.role == 'KID' && kidMayWrite(n, m.kidId, o)));
         }

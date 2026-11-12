@@ -7,6 +7,7 @@ import dev.kpetriv.sprout.core.domainledger.Currency
 import dev.kpetriv.sprout.core.model.DeviceId
 import dev.kpetriv.sprout.core.model.HouseholdId
 import dev.kpetriv.sprout.core.model.Role
+import dev.kpetriv.sprout.core.model.UserId
 import dev.kpetriv.sprout.core.time.FakeClock
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -15,6 +16,7 @@ import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.Rule
 import org.junit.Test
+import java.io.IOException
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNotEquals
@@ -23,6 +25,7 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 @OptIn(ExperimentalCoroutinesApi::class)
+@Suppress("LargeClass") // One flow end to end; every case shares the same fakes and step helpers.
 class OnboardingViewModelTest {
     @get:Rule
     val main = MainDispatcherRule()
@@ -34,6 +37,11 @@ class OnboardingViewModelTest {
     private val sessions = FakeSessionStore(log)
     private val household = FakeOnboardingHousehold(log, sessions)
     private val keys = InMemoryDeviceKeyStore(clock)
+
+    init {
+        // Every registry row belongs to the signed-in account unless a test says otherwise (D-REL-27).
+        household.ownerOf = { auth.lastClaims?.let { RegisteredOwner(it.uid, it.role ?: Role.PARENT, it.kidId) } }
+    }
 
     private fun viewModel() = OnboardingViewModel(auth, backend, household, keys, sessions, clock)
 
@@ -138,6 +146,11 @@ class OnboardingViewModelTest {
             log.calls,
         )
         assertEquals(1, keys.registrations, "every registration uses a fresh key")
+        assertEquals(
+            listOf("signInWithEmail", "refreshClaims", "refreshClaims"),
+            household.chatKeyForgotten.single(),
+            "a new household is a new device id: a chat key a sign-out kept is deleted first (D-REL-7)",
+        )
         val registered = backend.registeredKeys.single().publicKey
         assertEquals(registered, keys.publicKey(), "the accepted key is this device's signing key now")
         assertNotEquals(provisional, currentDevice())
@@ -276,7 +289,11 @@ class OnboardingViewModelTest {
         val viewModel = viewModel()
 
         assertEquals(OnboardingStep.ParentLock, viewModel.state.value.step)
-        assertEquals(listOf("refreshClaims"), log.calls, "the token is refreshed for the household's claims")
+        assertEquals(
+            listOf("refreshClaims", "sync"),
+            log.calls,
+            "the token is refreshed for the household's claims, then the household is pulled before the PIN step",
+        )
         viewModel.onEvent(OnboardingEvent.ParentLockDone)
         assertTrue(viewModel.state.value.finished)
     }
@@ -306,6 +323,11 @@ class OnboardingViewModelTest {
             log.calls.drop(2).take(5),
         )
         assertEquals(
+            listOf("signInWithEmail", "refreshClaims", "status:PENDING", "status:CURRENT"),
+            household.chatKeyForgotten.single(),
+            "a new device id: the kept chat key goes before the registration key is made (D-REL-7)",
+        )
+        assertEquals(
             OnboardingStep.WaitingForApproval(displayFingerprint(currentDevice())),
             viewModel.state.value.step,
             "computed from the key, not the server's answer",
@@ -318,12 +340,13 @@ class OnboardingViewModelTest {
         assertEquals(2, household.syncs)
         advanceTimeBy(OnboardingViewModel.POLL_INTERVAL_MS)
         runCurrent()
-        assertEquals(3, household.syncs)
+        // The approval, then one pull of what a PENDING phone could not read, before the PIN step (D-REL-11).
+        assertEquals(4, household.syncs)
         assertEquals(OnboardingStep.ParentLock, viewModel.state.value.step)
         assertEquals(HOUSEHOLD, household.setupPending)
         advanceTimeBy(OnboardingViewModel.POLL_INTERVAL_MS * 3)
         runCurrent()
-        assertEquals(3, household.syncs, "polling stops once approved")
+        assertEquals(4, household.syncs, "polling stops once approved")
     }
 
     @Test
@@ -404,6 +427,23 @@ class OnboardingViewModelTest {
     }
 
     @Test
+    fun `a phone restored from the local registry mirror pulls the household before the PIN step`() {
+        auth.claims[0] = parentClaims()
+        household.activeDevice = NEW_DEVICE
+        lateinit var viewModel: OnboardingViewModel
+        val stepsAtSync = mutableListOf<OnboardingStep>()
+        household.onSync = { stepsAtSync += viewModel.state.value.step }
+        viewModel = viewModel()
+        viewModel.signIn()
+
+        // D-REL-11: the enrolment on the PIN step must find the pulled policy, on this path too.
+        assertEquals(listOf<OnboardingStep>(OnboardingStep.FirstSync), stepsAtSync)
+        assertTrue(log.calls.indexOf("saveSession:PARENT:ACTIVE") < log.calls.indexOf("sync"))
+        assertFalse("ensurePolicy" in log.calls, "this phone did not create the household")
+        assertEquals(OnboardingStep.ParentLock, viewModel.state.value.step)
+    }
+
+    @Test
     fun `after a sign-out wipe the server registry restores the same ACTIVE key without regenerating it`() {
         auth.claims[0] = parentClaims()
         val device = currentDevice()
@@ -414,19 +454,166 @@ class OnboardingViewModelTest {
 
         assertEquals(0, keys.registrations)
         assertFalse("begin" in log.calls)
+        assertTrue(household.chatKeyForgotten.isEmpty(), "the same device id keeps the chat key its registry lists")
+        assertFalse("erase" in log.calls)
         assertEquals(device, sessions.session.value?.deviceId)
         assertEquals(RegistrationStatus.ACTIVE, sessions.session.value?.deviceStatus)
         assertEquals(OnboardingStep.ParentLock, viewModel.state.value.step)
     }
 
     @Test
-    fun `a restored key that belongs to another parent account is erased again`() {
+    fun `a restore reads the device's registry row before anything is saved or synced and puts its stash back`() {
+        auth.claims[0] = parentClaims()
+        val device = currentDevice()
+        backend.statuses[RegistrationKey.CURRENT] = RegistryStatus.ACTIVE
+        household.onSync = { household.activeDevice = device }
+        val viewModel = viewModel()
+        viewModel.signIn()
+
+        val (read, before) = household.ownerReads.single()
+        assertEquals(device, read)
+        assertFalse(before.any { it.startsWith("saveSession") || it == "sync" }, "checked first (D-REL-27)")
+        assertEquals(listOf(device), household.chatKeysRestored, "a stash of this device id comes back (D-REL-29)")
+    }
+
+    @Test
+    fun `another parent account's device on this phone restores nothing, syncs nothing and keeps its chat key`() {
+        auth.claims[0] = parentClaims()
+        backend.statuses[RegistrationKey.CURRENT] = RegistryStatus.ACTIVE
+        household.ownerOf = { RegisteredOwner(UserId("co-parent"), Role.PARENT) }
+        val viewModel = viewModel()
+        viewModel.signIn()
+
+        assertFalse(log.calls.any { it.startsWith("saveSession") }, "nothing saved")
+        assertFalse("sync" in log.calls, "nothing synced, so no thread key is unwrapped as this device")
+        assertFalse("erase" in log.calls || "eraseAnotherAccount" in log.calls)
+        assertTrue(household.chatKeyForgotten.isEmpty() && household.chatKeysRestored.isEmpty(), "the owner keeps it")
+        assertTrue("signOut" in log.calls)
+        assertEquals(OnboardingStep.Welcome, viewModel.state.value.step)
+        assertEquals(OnboardingFailure.NOT_ALLOWED, viewModel.state.value.failure)
+        assertFalse(viewModel.state.value.busy)
+        assertNull(sessions.session.value)
+    }
+
+    @Test
+    fun `another account's pending key is skipped, the current key restored, then the pending key discarded`() {
+        auth.claims[0] = parentClaims()
+        val current = currentDevice()
+        // An unfinished registration of a co-parent's account left its pending key on this phone.
+        val pending = kotlinx.coroutines.runBlocking { keys.regenerateForRegistration(byteArrayOf(7)) }
+            .publicKey.deviceId()
+        backend.statuses[RegistrationKey.PENDING] = RegistryStatus.PENDING
+        backend.statuses[RegistrationKey.CURRENT] = RegistryStatus.ACTIVE
+        household.ownerOf = { device ->
+            if (device ==
+                pending
+            ) {
+                RegisteredOwner(UserId("co-parent"), Role.PARENT)
+            } else {
+                RegisteredOwner(PARENT_UID, Role.PARENT)
+            }
+        }
+        household.onSync = { household.activeDevice = current }
+        val viewModel = viewModel()
+        viewModel.signIn()
+
+        assertEquals(listOf(pending, current), household.ownerReads.map { it.first })
+        assertNull(viewModel.state.value.failure)
+        assertEquals(current, sessions.session.value?.deviceId)
+        assertEquals(RegistrationStatus.ACTIVE, sessions.session.value?.deviceStatus)
+        assertEquals(OnboardingStep.ParentLock, viewModel.state.value.step)
+        assertFalse("signOut" in log.calls)
+        assertNull(keys.pendingSigningKeyBlocking(), "never kept next to the owner's live key (D-REL-39)")
+        assertEquals(current, keys.publicKey().deviceId(), "the owner's key stays")
+    }
+
+    @Test
+    fun `another account's pending key and current key refuse on the current key`() {
+        auth.claims[0] = parentClaims()
+        val pending = kotlinx.coroutines.runBlocking { keys.regenerateForRegistration(byteArrayOf(7)) }.publicKey
+        backend.statuses[RegistrationKey.PENDING] = RegistryStatus.PENDING
+        backend.statuses[RegistrationKey.CURRENT] = RegistryStatus.ACTIVE
+        household.ownerOf = { RegisteredOwner(UserId("co-parent"), Role.PARENT) }
+        val viewModel = viewModel()
+        viewModel.signIn()
+
+        assertEquals(2, household.ownerReads.size, "the pending key is skipped, the current one refuses")
+        assertEquals(OnboardingFailure.NOT_ALLOWED, viewModel.state.value.failure)
+        assertFalse(log.calls.any { it.startsWith("saveSession") })
+        assertNull(sessions.session.value)
+        assertEquals(pending, keys.pendingSigningKeyBlocking()?.publicKey, "a refusal discards nothing")
+    }
+
+    @Test
+    fun `a device row that cannot be read is a network failure, never a restore`() {
+        auth.claims[0] = parentClaims()
+        backend.statuses[RegistrationKey.CURRENT] = RegistryStatus.ACTIVE
+        household.ownerFailure = OnboardingException(OnboardingFailure.NETWORK)
+        val viewModel = viewModel()
+        viewModel.signIn()
+
+        assertEquals(OnboardingFailure.NETWORK, viewModel.state.value.failure)
+        assertFalse(log.calls.any { it.startsWith("saveSession") })
+        assertEquals(0, keys.registrations, "and never a new registration over it")
+    }
+
+    @Test
+    fun `a restored phone pulls the household before the PIN and signing step`() {
+        auth.claims[0] = parentClaims()
+        val device = currentDevice()
+        backend.statuses[RegistrationKey.CURRENT] = RegistryStatus.ACTIVE
+        lateinit var viewModel: OnboardingViewModel
+        val stepsAtSync = mutableListOf<OnboardingStep>()
+        household.onSync = {
+            household.activeDevice = device
+            stepsAtSync += viewModel.state.value.step
+        }
+        viewModel = viewModel()
+        viewModel.signIn()
+
+        // Enrolment on the PIN step registers the key in the household policy: it must be the pulled one (D-REL-11).
+        assertEquals(listOf<OnboardingStep>(OnboardingStep.FirstSync), stepsAtSync)
+        assertEquals(OnboardingStep.ParentLock, viewModel.state.value.step)
+    }
+
+    @Test
+    fun `a restored phone that is offline still reaches the PIN step`() {
+        auth.claims[0] = parentClaims()
+        household.syncSucceeds = false
+        backend.statuses[RegistrationKey.CURRENT] = RegistryStatus.ACTIVE
+        val viewModel = viewModel()
+        viewModel.signIn()
+
+        assertEquals(1, household.syncs)
+        assertFalse("erase" in log.calls)
+        assertEquals(RegistrationStatus.ACTIVE, sessions.session.value?.deviceStatus)
+        assertEquals(OnboardingStep.ParentLock, viewModel.state.value.step)
+        assertNull(viewModel.state.value.failure)
+    }
+
+    @Test
+    fun `a restored device whose synced mirror names another account is erased without keeping its chat key`() {
         auth.claims[0] = parentClaims()
         backend.statuses[RegistrationKey.CURRENT] = RegistryStatus.ACTIVE
         val viewModel = viewModel()
         viewModel.signIn()
-        assertTrue("erase" in log.calls)
+        assertTrue("eraseAnotherAccount" in log.calls)
+        assertFalse("erase" in log.calls)
         assertEquals(OnboardingFailure.NOT_ALLOWED, viewModel.state.value.failure)
+        assertEquals(OnboardingStep.Welcome, viewModel.state.value.step, "never left on the pull step")
+        assertNull(sessions.session.value)
+    }
+
+    @Test
+    fun `a chat key that cannot be deleted stops a new registration before anything is sent`() {
+        auth.claims[0] = parentClaims()
+        household.forgetFailure = IOException("stuck")
+        val viewModel = viewModel()
+        viewModel.signIn()
+        assertFalse("begin" in log.calls)
+        assertFalse("registerParentDevice" in log.calls)
+        assertEquals(0, keys.registrations)
+        assertEquals(OnboardingFailure.UNKNOWN, viewModel.state.value.failure)
         assertNull(sessions.session.value)
     }
 
@@ -504,6 +691,12 @@ class OnboardingViewModelTest {
             sessions.session.value,
         )
         assertEquals(backend.registeredKeys.single().publicKey, keys.publicKey())
+        assertEquals(
+            listOf("signInAnonymously", "refreshClaims"),
+            household.chatKeyForgotten.single(),
+            "a kid linked on this phone never inherits a parent's kept chat key (D-REL-7)",
+        )
+        assertEquals(1, household.stashesDropped, "accepted: the stash of the old device id goes (D-REL-29)")
         assertTrue(viewModel.state.value.finished)
     }
 
@@ -529,6 +722,47 @@ class OnboardingViewModelTest {
         assertEquals(pending, keys.publicKey())
         assertEquals(1, keys.registrations)
         assertTrue(viewModel.state.value.finished)
+    }
+
+    @Test
+    fun `a kid account is never restored onto a device id whose row names another account or role (D-REL-31)`() {
+        // This phone's current key is a parent's device (kept by a sign-out); the anonymous user already has claims.
+        claimsSequence(AccountClaims(KID_UID, HOUSEHOLD, Role.KID, LEO), NEW_KID_CLAIMS)
+        backend.statuses[RegistrationKey.CURRENT] = RegistryStatus.ACTIVE
+        household.ownerOf = { RegisteredOwner(PARENT_UID, Role.PARENT) }
+        val parentDevice = currentDevice()
+        val viewModel = viewModel()
+        viewModel.redeem()
+
+        assertEquals(
+            parentDevice to listOf("signInAnonymously", "refreshClaims", "status:PENDING", "status:CURRENT"),
+            household.ownerReads.first(),
+        )
+        assertFalse("saveSession:KID:ACTIVE" in log.calls.take(5), "not restored")
+        assertTrue("signOut" in log.calls, "a fresh anonymous user links instead")
+        assertEquals(1, household.chatKeyForgotten.size, "and the parent's key is stashed before that link")
+        assertEquals(1, keys.registrations)
+        assertTrue(viewModel.state.value.finished)
+    }
+
+    @Test
+    fun `a kid device restored through its current key discards another account's skipped pending key`() {
+        claimsSequence(AccountClaims(KID_UID, HOUSEHOLD, Role.KID, LEO))
+        val current = currentDevice()
+        val pending = kotlinx.coroutines.runBlocking { keys.regenerateForRegistration(byteArrayOf(7)) }
+            .publicKey.deviceId()
+        backend.statuses[RegistrationKey.PENDING] = RegistryStatus.ACTIVE
+        backend.statuses[RegistrationKey.CURRENT] = RegistryStatus.ACTIVE
+        household.ownerOf = { device ->
+            if (device == pending) RegisteredOwner(PARENT_UID, Role.PARENT) else RegisteredOwner(KID_UID, Role.KID, LEO)
+        }
+        val viewModel = viewModel()
+        viewModel.redeem()
+
+        assertEquals(current, sessions.session.value?.deviceId)
+        assertTrue(viewModel.state.value.finished)
+        assertNull(keys.pendingSigningKeyBlocking(), "never kept next to the kid's live key (D-REL-39)")
+        assertEquals(current, keys.publicKey().deviceId())
     }
 
     @Test

@@ -88,7 +88,11 @@ class FakeShellPreferences : dev.kpetriv.sprout.sync.ShellPreferences {
 
     override fun removal(): dev.kpetriv.sprout.sync.Removal? = storedRemoval
 
+    /** Which removals [setRemoval] fails to store (a full disk), for tests. */
+    var failSetRemoval: (dev.kpetriv.sprout.sync.Removal) -> Boolean = { false }
+
     override fun setRemoval(removal: dev.kpetriv.sprout.sync.Removal?) {
+        check(removal == null || !failSetRemoval(removal)) { "shell preferences could not be saved" }
         storedRemoval = removal
     }
 

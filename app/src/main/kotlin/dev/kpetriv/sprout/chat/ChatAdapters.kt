@@ -193,7 +193,7 @@ class RoomMessageSender @Inject constructor(
 
 /**
  * [ThreadKeyStatus] over [ThreadKeyStatusReader]: not sendable means "waiting for a parent device", unless this
- * phone's chat key conflicts with the registry (audit I2): then the screen asks to remove and re-link it.
+ * phone's chat key conflicts with the registry (audit I2): then the screen says the phone must be set up again.
  */
 class RoomThreadKeyStatus @Inject constructor(private val reader: ThreadKeyStatusReader) : ThreadKeyStatus {
     override fun observe(threadId: KidId): Flow<ThreadKeyState> = reader.observe(ThreadId.of(threadId)).map {

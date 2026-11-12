@@ -130,6 +130,11 @@
   <string name="feature_parent_home_signing_off_title">Fingerprint signing is off</string>
   <string name="feature_parent_home_signing_off_text">Money changes from this phone are not signed with your fingerprint, so the household can’t tell them apart from changes made by someone else holding it unlocked.</string>
   <string name="feature_parent_home_signing_off_turn_on">Turn on</string>
+  <string name="feature_parent_home_policy_missing_title">Household settings have not synced yet</string>
+  <string name="feature_parent_home_policy_missing_text">Until they arrive, money changes from this phone are not signed with your fingerprint and the household’s settings can’t be changed here. If the phone that set up the household is gone, set up fingerprint signing here to restore them.</string>
+  <string name="feature_parent_home_policy_missing_set_up">Set up fingerprint signing</string>
+  <string name="feature_parent_home_policy_missing_restore_text">Until they arrive, money changes from this phone are not signed and the household’s settings can’t be changed here. If the phone that set up the household is gone, restore them here with your PIN.</string>
+  <string name="feature_parent_home_policy_missing_restore">Restore household settings</string>
   <string name="feature_parent_home_devices_title">New device waiting</string>
   <string name="feature_parent_home_devices_text">A parent’s phone wants to join the household. Compare the code with that phone before approving.</string>
   <string name="feature_parent_home_devices_review">Review</string>

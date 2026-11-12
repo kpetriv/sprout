@@ -4,7 +4,9 @@ import dev.kpetriv.sprout.core.crypto.PublicKeyBytes
 import dev.kpetriv.sprout.core.database.FiatCurrencyProvider
 import dev.kpetriv.sprout.core.database.HouseholdPolicyRepository
 import dev.kpetriv.sprout.core.database.SessionStore
+import dev.kpetriv.sprout.core.database.entity.RegistrationStatus
 import dev.kpetriv.sprout.core.database.usecase.RegisterParentKeyUseCase
+import dev.kpetriv.sprout.core.model.Role
 import dev.kpetriv.sprout.feature.lock.ChangePinResult
 import dev.kpetriv.sprout.feature.lock.LockSettings
 import dev.kpetriv.sprout.feature.lock.ParentKeyChangeResult
@@ -14,13 +16,20 @@ import dev.kpetriv.sprout.feature.lock.ParentKeyRenewal
 import dev.kpetriv.sprout.feature.lock.ParentKeyStatus
 import dev.kpetriv.sprout.feature.lock.ParentSession
 import dev.kpetriv.sprout.feature.lock.PinRuleViolation
+import dev.kpetriv.sprout.feature.settings.HouseholdSettingsRestorer
 import dev.kpetriv.sprout.feature.settings.LockPreferences
 import dev.kpetriv.sprout.feature.settings.NewPinProblem
 import dev.kpetriv.sprout.feature.settings.ParentKeyRegistrar
 import dev.kpetriv.sprout.feature.settings.PinChangeOutcome
 import dev.kpetriv.sprout.feature.settings.PinChanger
+import dev.kpetriv.sprout.feature.settings.RestoreCheck
 import dev.kpetriv.sprout.feature.settings.SigningKeyOutcome
+import dev.kpetriv.sprout.household.HouseholdPolicyRecovery
+import dev.kpetriv.sprout.household.PolicyReadiness
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
 import javax.inject.Inject
 import dev.kpetriv.sprout.feature.onboarding.ParentKeyRegistrar as BackendParentKeyRegistrar
 
@@ -76,6 +85,7 @@ class LockParentKeyRegistrar @Inject constructor(
 /** Maps `feature/lock`'s key-change result onto the settings port's. */
 internal fun ParentKeyChangeResult.toOutcome(): SigningKeyOutcome = when (this) {
     ParentKeyChangeResult.Registered -> SigningKeyOutcome.Registered
+    ParentKeyChangeResult.PolicyNotSynced -> SigningKeyOutcome.PolicyNotSynced
     is ParentKeyChangeResult.Unavailable -> SigningKeyOutcome.Unavailable(availability)
     ParentKeyChangeResult.AlreadyRegistered -> SigningKeyOutcome.AlreadyOn
     ParentKeyChangeResult.NotRegistered -> SigningKeyOutcome.NotRegistered
@@ -83,6 +93,30 @@ internal fun ParentKeyChangeResult.toOutcome(): SigningKeyOutcome = when (this) 
     is ParentKeyChangeResult.LockedOut -> SigningKeyOutcome.LockedOut(decision)
     ParentKeyChangeResult.Cancelled -> SigningKeyOutcome.Cancelled
     ParentKeyChangeResult.NotAllowed, ParentKeyChangeResult.Failed -> SigningKeyOutcome.Failed
+}
+
+/**
+ * Settings' [HouseholdSettingsRestorer] over [HouseholdPolicyRecovery] (D-REL-22, audit M1): the same checks as the
+ * recovery at key registration, then the policy with the server's currency and signatures off. Offered on an ACTIVE
+ * parent phone of a real household without its policy row; the screen asks for the PIN between [check] and [restore].
+ */
+class RecoveryHouseholdSettingsRestorer @Inject constructor(
+    private val sessions: SessionStore,
+    private val policies: HouseholdPolicyRepository,
+    private val recovery: HouseholdPolicyRecovery,
+) : HouseholdSettingsRestorer {
+    override fun observeNeeded(): Flow<Boolean> = combine(sessions.observe(), policies.observe()) { session, policy ->
+        session != null && !session.isLocalTrial && session.role == Role.PARENT &&
+            session.deviceStatus == RegistrationStatus.ACTIVE && policy == null
+    }.distinctUntilChanged()
+
+    override suspend fun check(): RestoreCheck = when (recovery.readiness()) {
+        PolicyReadiness.Present -> RestoreCheck.PRESENT
+        is PolicyReadiness.Recoverable -> RestoreCheck.READY
+        PolicyReadiness.NotSynced -> RestoreCheck.NOT_SYNCED
+    }
+
+    override suspend fun restore(): Boolean = recovery.restoreWithoutKey()
 }
 
 /**
@@ -98,18 +132,31 @@ internal fun ParentKeyChangeResult.toOutcome(): SigningKeyOutcome = when (this) 
  * dashboard and in Settings → Security with a retry that renews the key (D-M3-39); other devices learn a key only
  * from the registry.
  */
+@Suppress("LongParameterList") // The policy, its use case and recovery, the currency, the session and the backend.
 class HouseholdParentKeyRegistry @Inject constructor(
     private val policies: HouseholdPolicyRepository,
     private val useCase: RegisterParentKeyUseCase,
     private val currency: FiatCurrencyProvider,
     private val sessions: SessionStore,
     private val registrar: BackendParentKeyRegistrar,
+    private val recovery: HouseholdPolicyRecovery,
 ) : ParentKeyRegistry {
     override suspend fun registeredParentKey(): PublicKeyBytes? = policies.get()?.parentPublicKey?.let(::PublicKeyBytes)
 
+    /**
+     * Present, or recoverable after a clean pull with no policy anywhere ([HouseholdPolicyRecovery], D-REL-14 and
+     * D-REL-15); asked by the enrolment before the PIN check and the fingerprint prompt.
+     */
+    override suspend fun householdPolicyReady(): Boolean = recovery.readiness() != PolicyReadiness.NotSynced
+
+    /**
+     * Registers the key; a real household without its policy row recovers it in the same write with the currency
+     * [householdPolicyReady] just read from the server, and only then (the repository refuses otherwise).
+     */
     override suspend fun registerParentKey(publicKey: PublicKeyBytes, attestationChain: List<ByteArray>) {
         check(policies.get()?.hasParentKey != true) { "A parent key is already registered" }
-        useCase.register(publicKey.encoded)
+        val recovered = sessions.get()?.takeUnless { it.isLocalTrial }?.let { recovery.takeRecovered(it.householdId) }
+        useCase.register(publicKey.encoded, recovered)
         publish(publicKey, attestationChain)
     }
 
@@ -124,7 +171,13 @@ class HouseholdParentKeyRegistry @Inject constructor(
         if (!session.isLocalTrial) registrar.register(publicKey.encoded, attestationChain)
     }
 
+    /**
+     * The D-M2-1 state is a policy without a parent key. Only the trial household's policy is created here: a real
+     * household's comes from household creation or the first pull, never from this phone's locale (D-REL-11), and
+     * without a row the ledger default (signatures not required) applies anyway.
+     */
     override suspend fun recordSigningUnavailable() {
-        policies.ensure(currency.fiatCurrency())
+        if (sessions.get()?.isLocalTrial != true) return
+        policies.ensure(currency.currentFiatCurrency())
     }
 }
