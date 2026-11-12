@@ -9,6 +9,7 @@ import dev.kpetriv.sprout.core.crypto.DeviceSigner
 import dev.kpetriv.sprout.core.crypto.EncryptionKeyStore
 import dev.kpetriv.sprout.core.crypto.JceEcdsaSigner
 import dev.kpetriv.sprout.core.crypto.chat.EncryptionKeyBinding
+import dev.kpetriv.sprout.core.database.ChatIdentityKeeper
 import dev.kpetriv.sprout.core.database.HouseholdPolicyRepository
 import dev.kpetriv.sprout.core.database.LocalTrial
 import dev.kpetriv.sprout.core.database.LocaleFiatCurrencyProvider
@@ -17,13 +18,16 @@ import dev.kpetriv.sprout.core.database.SessionStore
 import dev.kpetriv.sprout.core.database.SproutDatabase
 import dev.kpetriv.sprout.core.database.deviceId
 import dev.kpetriv.sprout.core.database.entity.RegistrationStatus
+import dev.kpetriv.sprout.core.database.usecase.ForgetChatKeyUseCase
 import dev.kpetriv.sprout.core.database.usecase.PurgeLocalHouseholdUseCase
 import dev.kpetriv.sprout.core.domainledger.Currency
 import dev.kpetriv.sprout.core.domainledger.toHex
 import dev.kpetriv.sprout.core.model.DeviceId
 import dev.kpetriv.sprout.core.model.HouseholdId
 import dev.kpetriv.sprout.core.model.UserId
+import dev.kpetriv.sprout.core.sync.SyncException
 import dev.kpetriv.sprout.core.sync.SyncReport
+import dev.kpetriv.sprout.core.sync.SyncTransport
 import dev.kpetriv.sprout.core.syncfirebase.AuthError
 import dev.kpetriv.sprout.core.syncfirebase.AuthException
 import dev.kpetriv.sprout.core.syncfirebase.AuthState
@@ -51,6 +55,7 @@ import dev.kpetriv.sprout.feature.onboarding.ParentKeyRegistrar
 import dev.kpetriv.sprout.feature.onboarding.ParentSigningSetup
 import dev.kpetriv.sprout.feature.onboarding.PendingParentDevice
 import dev.kpetriv.sprout.feature.onboarding.RegisteredHousehold
+import dev.kpetriv.sprout.feature.onboarding.RegisteredOwner
 import dev.kpetriv.sprout.feature.onboarding.RegistrationBackend
 import dev.kpetriv.sprout.feature.onboarding.RegistrationKey
 import dev.kpetriv.sprout.feature.onboarding.RegistryStatus
@@ -182,7 +187,10 @@ class FunctionsRegistrationBackend @Inject constructor(
 /**
  * Onboarding's view of the local household: the trial household (its session or any of its kids), the purge, the
  * household policy, sync through [SyncController], this device's registry entry, the session (guarded by the account
- * the local rows belong to, [ShellPreferences.linkedAccount]), the parent setup marker and the erase.
+ * the local rows belong to, [ShellPreferences.linkedAccount], and the chat counters a sign-out kept for a restored
+ * device, [ChatIdentityKeeper.seed]), the parent setup marker, the erase, one registry row read from the server
+ * ([SyncTransport.registeredDevice], D-REL-27) and the chat key a sign-out kept ([ForgetChatKeyUseCase], stashed and
+ * put back, D-REL-29).
  */
 @Suppress("LongParameterList", "TooManyFunctions") // One collaborator per question onboarding asks.
 class RoomOnboardingHousehold @Inject constructor(
@@ -197,6 +205,9 @@ class RoomOnboardingHousehold @Inject constructor(
     private val parentSetup: ParentSetupTracker,
     private val removals: HouseholdRemovals,
     private val localRows: LocalHouseholdRows,
+    private val chatKey: ForgetChatKeyUseCase,
+    private val chatIdentity: ChatIdentityKeeper,
+    private val transport: SyncTransport,
     private val recovery: HouseholdPolicyRecovery,
 ) : OnboardingHousehold {
     /** A new household's suggested currency: the locale's (the parent picks it; it is then the policy's). */
@@ -233,8 +244,13 @@ class RoomOnboardingHousehold @Inject constructor(
             val linked = preferences.linkedAccount()
             // Rows of another account or household must never mix with this one's (D-M3-47).
             if (linked != null && linked != digest) localRows.clear()
+            // A restored device goes on from its own chat counters, not from what the pull rebuilds (D-REL-30). Seeded
+            // before the session is saved, so no session ever runs without them; the record goes only once the session
+            // is saved, and a start that finds both seeds again (D-REL-38).
+            chatIdentity.seed(session)
             sessions.save(session)
             preferences.setLinkedAccount(digest)
+            chatIdentity.discardRecord()
         } else {
             sessions.save(session)
         }
@@ -255,6 +271,27 @@ class RoomOnboardingHousehold @Inject constructor(
         database.outboxDao().count() > 0
 
     override suspend fun eraseLocalHousehold() = removals.remove(RemovalReason.SIGNED_OUT)
+
+    override suspend fun eraseForAnotherAccount() = removals.remove(RemovalReason.ANOTHER_ACCOUNT)
+
+    /** Any failure reading the row is [OnboardingFailure.NETWORK]: an unreadable row is never "no row". */
+    override suspend fun registeredOwner(householdId: HouseholdId, deviceId: DeviceId): Result<RegisteredOwner?> = try {
+        Result.success(
+            transport.registeredDevice(householdId, deviceId)?.let { RegisteredOwner(it.uid, it.role, it.kidId) },
+        )
+    } catch (cancellation: CancellationException) {
+        throw cancellation
+    } catch (failure: SyncException) {
+        Result.failure(OnboardingException(OnboardingFailure.NETWORK))
+    }
+
+    override suspend fun forgetChatKey() = chatKey(signer.deviceId())
+
+    override suspend fun restoreChatKey(deviceId: DeviceId) {
+        chatIdentity.unstash(deviceId)
+    }
+
+    override suspend fun dropStashedChatKey() = chatIdentity.dropStash()
 }
 
 /** Onboarding's signing step over `feature/lock`'s status check and PIN-gated enrolment. */

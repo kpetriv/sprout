@@ -415,6 +415,20 @@ class FakeBackend(val householdId: HouseholdId, private val pageSize: Int = DEFA
     // ---- what transports call ----
 
     /**
+     * One registry row, as `households/{hid}/devices/{deviceId}` reads for a signed-in member: null for an unknown
+     * device of the household; [PERMISSION_DENIED] for another household or a caller who is not a member (no
+     * registered device of its uid), as the rules refuse the read; a partitioned caller fails transiently.
+     */
+    @Synchronized
+    internal fun registeredDevice(caller: Caller, hid: HouseholdId, deviceId: DeviceId): RegisteredDevice? {
+        checkReachable(caller.deviceId)
+        if (hid != householdId || devices.values.none { it.value.uid == caller.uid }) {
+            throw SyncException(SyncError.Permanent(PERMISSION_DENIED))
+        }
+        return devices[deviceId]?.value
+    }
+
+    /**
      * The server's household root as [SyncTransport.householdRoot] reads it: the root document first (missing:
      * [householdRootStored]), then the policy document; either read may be denied ([householdRootDenied]).
      */

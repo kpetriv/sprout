@@ -32,7 +32,7 @@ sealed interface ChatUiState {
      * @property messages oldest first: stored messages, then the ones still being handed to [MessageSender].
      * @property hasMore older messages exist ([ChatEvent.LoadOlder]).
      * @property keyState anything but [ThreadKeyState.USABLE] disables sending and shows a banner (waiting for a
-     *   parent device, or [ThreadKeyState.KEY_CONFLICT]: remove and re-link this phone).
+     *   parent device, or [ThreadKeyState.KEY_CONFLICT]: set this phone up again, worded for [mode]).
      * @property draft the free-text composer (Sprout, Sapling, parent).
      * @property selectedPreset the Seedling preset tile picked for [ChatEvent.SendSelection].
      * @property selectedEmoji the Seedling emoji picked for [ChatEvent.SendSelection].

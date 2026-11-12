@@ -168,11 +168,24 @@ class ChatScreenTest {
     }
 
     @Test
-    fun `a replaced chat key says to remove and re-link the phone`() {
+    fun `a replaced chat key tells a kid to ask a parent to remove and re-link the phone`() {
         show(ChatPreviewData.kidKeyConflict(KidUiTier.SAPLING))
 
         compose.onNodeWithText("This phone's chat key was replaced. Ask a parent to remove and re-link it.")
             .assertIsDisplayed()
+        compose.onNodeWithText("Send").assertIsNotEnabled()
+    }
+
+    @Test
+    fun `a replaced chat key on a parent's phone gives the steps, the approval and where to contact us`() {
+        show(ChatPreviewData.parentKeyConflict())
+
+        compose.onNodeWithText(
+            "Chat can't be used on this phone until it is set up again. On another parent's phone, remove this " +
+                "phone in Settings → Devices, sign in here again, then approve this phone on that one. No other " +
+                "parent phone? Contact us: the address is in the privacy policy (Settings → About).",
+        ).assertIsDisplayed()
+        compose.onNodeWithText("Ask a parent", substring = true).assertDoesNotExist()
         compose.onNodeWithText("Send").assertIsNotEnabled()
     }
 

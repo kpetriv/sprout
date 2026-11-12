@@ -212,9 +212,15 @@ internal constructor(
         GateState.Checking, null -> false
     }
 
-    /** "Erase this phone's copy" instead of signing in (once confirmed); ignored while [canEraseInstead] is false. */
+    /**
+     * "Erase this phone's copy" instead of signing in (once confirmed); ignored while [canEraseInstead] is false. While
+     * the registry was unreachable nothing proves this device is still in the household, so the erase does not keep
+     * its chat key ([RemovalReason.ERASED_UNVERIFIED], D-REL-28); after the registry answered, it is a sign-out.
+     */
     fun eraseInstead() {
-        if (canEraseInstead()) removals.remove(RemovalReason.SIGNED_OUT)
+        if (!canEraseInstead()) return
+        val unverified = mutableState.value == GateState.Unreachable
+        removals.remove(if (unverified) RemovalReason.ERASED_UNVERIFIED else RemovalReason.SIGNED_OUT)
     }
 
     fun signInWithGoogle(activityContext: Context) = signIn { auth.signInWithGoogle(activityContext) }

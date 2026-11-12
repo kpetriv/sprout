@@ -117,7 +117,7 @@ internal fun RemovedScreen(
         ) {
             Text(
                 stringResource(
-                    if (reason == RemovalReason.SIGNED_OUT) {
+                    if (reason.isSignOut) {
                         R.string.removed_signed_out_title
                     } else {
                         R.string.removed_title
@@ -131,8 +131,13 @@ internal fun RemovedScreen(
                 stringResource(
                     when (reason) {
                         RemovalReason.HOUSEHOLD_GONE -> R.string.removed_household_gone
+
                         RemovalReason.DEVICE_REVOKED -> R.string.removed_device_revoked
-                        RemovalReason.SIGNED_OUT -> R.string.removed_signed_out
+
+                        RemovalReason.SIGNED_OUT,
+                        RemovalReason.ERASED_UNVERIFIED,
+                        RemovalReason.ANOTHER_ACCOUNT,
+                        -> R.string.removed_signed_out
                     },
                 ),
                 style = MaterialTheme.typography.bodyLarge,

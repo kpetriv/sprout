@@ -175,7 +175,7 @@ class CredentialGateTest {
         assertEquals(GateState.Unreachable, gate.state.value)
         assertTrue(gate.canEraseInstead())
         gate.eraseInstead()
-        assertEquals(listOf(RemovalReason.SIGNED_OUT), removals)
+        assertEquals(listOf(RemovalReason.ERASED_UNVERIFIED), removals, "unverified: the chat key goes too (D-REL-28)")
     }
 
     @Test
@@ -197,6 +197,8 @@ class CredentialGateTest {
         assertEquals(emptyList(), removals)
         answer.complete(Result.success(GateDeviceStatus(DeviceStatusValue.ACTIVE, false)))
         assertTrue(gate.canEraseInstead())
+        gate.eraseInstead()
+        assertEquals(listOf(RemovalReason.SIGNED_OUT), removals, "the registry still lists it: a sign-out")
     }
 
     @Test

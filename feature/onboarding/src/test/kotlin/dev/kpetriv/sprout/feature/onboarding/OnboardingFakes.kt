@@ -54,9 +54,14 @@ class FakeOnboardingAuth(private val log: CallLog, override val usesEmailPasswor
         return Result.success(Unit)
     }
 
+    /** The claims the last refresh returned: the signed-in account. */
+    var lastClaims: AccountClaims? = null
+
     override suspend fun refreshClaims(): Result<AccountClaims> {
         log += "refreshClaims"
-        return Result.success(if (claims.size > 1) claims.removeAt(0) else claims.first())
+        val next = if (claims.size > 1) claims.removeAt(0) else claims.first()
+        lastClaims = next
+        return Result.success(next)
     }
 
     override suspend fun signOut() {
@@ -217,6 +222,51 @@ class FakeOnboardingHousehold(
     override suspend fun eraseLocalHousehold() {
         log += "erase"
         sessions.session.value = null
+    }
+
+    override suspend fun eraseForAnotherAccount() {
+        log += "eraseAnotherAccount"
+        sessions.session.value = null
+    }
+
+    /** Who each registry row belongs to ([registeredOwner]); null: no row. Tests set it to the signed-in account. */
+    var ownerOf: (DeviceId) -> RegisteredOwner? = { null }
+
+    /** What [registeredOwner] fails with, if anything (offline). */
+    var ownerFailure: Throwable? = null
+
+    /** The rows read, with the calls logged before each read (kept out of the log, whose order other tests check). */
+    val ownerReads = mutableListOf<Pair<DeviceId, List<String>>>()
+
+    override suspend fun registeredOwner(householdId: HouseholdId, deviceId: DeviceId): Result<RegisteredOwner?> {
+        ownerReads += deviceId to log.calls.toList()
+        ownerFailure?.let { return Result.failure(it) }
+        return Result.success(ownerOf(deviceId))
+    }
+
+    /** What [forgetChatKey] throws, if anything. */
+    var forgetFailure: Throwable? = null
+
+    /** The calls logged before each [forgetChatKey] (kept out of the log, whose exact order other tests check). */
+    val chatKeyForgotten = mutableListOf<List<String>>()
+
+    override suspend fun forgetChatKey() {
+        forgetFailure?.let { throw it }
+        chatKeyForgotten += log.calls.toList()
+    }
+
+    /** The device ids whose stashed chat key was put back ([restoreChatKey]). */
+    val chatKeysRestored = mutableListOf<DeviceId>()
+
+    override suspend fun restoreChatKey(deviceId: DeviceId) {
+        chatKeysRestored += deviceId
+    }
+
+    /** How often the stash was dropped after a promotion. */
+    var stashesDropped = 0
+
+    override suspend fun dropStashedChatKey() {
+        stashesDropped += 1
     }
 }
 

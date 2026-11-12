@@ -4,8 +4,10 @@ import android.database.SQLException
 import dagger.Lazy
 import dev.kpetriv.sprout.BuildConfig
 import dev.kpetriv.sprout.chat.ChatMaintenance
+import dev.kpetriv.sprout.chat.KeptChatKeyCheck
 import dev.kpetriv.sprout.chat.VoiceTempFiles
 import dev.kpetriv.sprout.core.ai.AiGateway
+import dev.kpetriv.sprout.core.database.ChatIdentityKeeper
 import dev.kpetriv.sprout.core.database.ChatPruneScheduler
 import dev.kpetriv.sprout.core.database.HouseholdBootstrap
 import dev.kpetriv.sprout.core.database.RoomLedgerRepository
@@ -43,7 +45,10 @@ import javax.inject.Singleton
  * 1. initialise Firebase and install App Check (core/sync-firebase, M3 §5), best effort: the app works offline and
  *    sync retries later;
  * 2. restore the session and reconcile it with Firebase Auth ([SessionReconciler]): another account or household
- *    wipes, an account that is gone wipes, lost credentials raise the "Sign in again" gate;
+ *    wipes, an account that is gone wipes, lost credentials raise the "Sign in again" gate; with no session, a chat key
+ *    a sign-out kept is checked with the token-less `deviceStatus` in the background ([KeptChatKeyCheck], D-REL-33);
+ *    with a real session, a sign-out's record of its own device that a process death left behind seeds the chat
+ *    counters again and is deleted ([ChatIdentityKeeper.resumeSeed], best effort, D-REL-30, D-REL-38);
  * 3. debug builds only, and only on a device that has no session and never belonged to a real household: seed the
  *    demo trial household ([HouseholdBootstrap]; release builds never create demo kids);
  * 4. ledger maintenance: quarantine stored events whose hash or signature no longer verifies
@@ -98,6 +103,8 @@ class AppInitializer internal constructor(
     private val refreshAiStatus: suspend () -> Unit = {},
     private val scheduleM7: () -> Unit = {},
     private val blankWidgets: suspend () -> Unit = {},
+    private val checkKeptChatKey: suspend () -> Unit = {},
+    private val resumeChatSeed: suspend (Session) -> Unit = {},
 ) : StartupStatus {
     @Inject
     @Suppress("LongParameterList") // One lazily built dependency per startup step.
@@ -121,6 +128,8 @@ class AppInitializer internal constructor(
         chatPrunes: Lazy<ChatPruneScheduler>,
         widgets: Lazy<WidgetDataObserver>,
         widgetBlanker: Lazy<WidgetBlanker>,
+        keptChatKey: Lazy<KeptChatKeyCheck>,
+        chatIdentity: Lazy<ChatIdentityKeeper>,
     ) : this(
         scope = scope,
         seedDemoHousehold = if (BenchmarkSeed.enabled) {
@@ -150,6 +159,8 @@ class AppInitializer internal constructor(
             widgets.get().start()
         },
         blankWidgets = { widgetBlanker.get().blankNow() },
+        checkKeptChatKey = { keptChatKey.get()() },
+        resumeChatSeed = { chatIdentity.get().resumeSeed(it) },
     )
 
     private val started = AtomicBoolean(false)
@@ -203,6 +214,12 @@ class AppInitializer internal constructor(
         if (resumeRemoval()) return
         var session = reconcileSession()
         if (removing()) return
+        val reconciled = session
+        if (reconciled == null) {
+            scope.launch { checkKeptChatKeyBestEffort() }
+        } else if (!reconciled.isLocalTrial) {
+            resumeChatSeedBestEffort(reconciled)
+        }
         if (session == null && !wasLinked()) {
             seedDemoHousehold?.let { seed ->
                 seed()
@@ -261,6 +278,30 @@ class AppInitializer internal constructor(
     private suspend fun blankWidgetsIfRemovedBestEffort() {
         try {
             if (removing()) blankWidgets()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (expected: Exception) {
+            // Nothing to show or log.
+        }
+    }
+
+    /** The kept chat key check (D-REL-33) never fails or delays startup; the next start without a session repeats. */
+    @Suppress("TooGenericExceptionCaught", "SwallowedException")
+    private suspend fun checkKeptChatKeyBestEffort() {
+        try {
+            checkKeptChatKey()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (expected: Exception) {
+            // Nothing to show or log.
+        }
+    }
+
+    /** Before sync or chat runs; a failure never fails startup (the record stays, and the next start tries again). */
+    @Suppress("TooGenericExceptionCaught", "SwallowedException")
+    private suspend fun resumeChatSeedBestEffort(session: Session) {
+        try {
+            resumeChatSeed(session)
         } catch (e: CancellationException) {
             throw e
         } catch (expected: Exception) {

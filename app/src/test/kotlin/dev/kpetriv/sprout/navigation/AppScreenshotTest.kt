@@ -84,6 +84,17 @@ class AppScreenshotTest : ScreenshotTest(checkAccessibility = true) {
         EraseConfirmDialog(EraseConfirmState(unsyncedChanges = 3, needsPin = false), onEvent = {})
     }
 
+    // After the registry answered, a parent's erase is a sign-out that keeps the chat key (D-REL-28, D-REL-41).
+    @Test
+    fun `erase this phone's copy, keeping the chat key`() =
+        screenshot.capture("app_erase_dialog_keeps_chat_key", screen = true) {
+            SignInAgainScreen(GateState.SignInRequired(emailPassword = false), onEvent = {})
+            EraseConfirmDialog(
+                EraseConfirmState(unsyncedChanges = 0, needsPin = false, keepsChatKey = true),
+                onEvent = {},
+            )
+        }
+
     @Test
     fun `removed, wiping`() = screenshot.captureLightDark("app_removed_wiping") {
         RemovedScreen(RemovalReason.DEVICE_REVOKED, RemovedProgress.WIPING, onEvent = {})

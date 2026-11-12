@@ -51,7 +51,8 @@ import kotlin.time.Instant
 
 /**
  * The banner while this device has no usable thread key; sending is off until it goes. [keyState]
- * [ThreadKeyState.KEY_CONFLICT] says to remove and re-link the phone instead of waiting (audit I2).
+ * [ThreadKeyState.KEY_CONFLICT] says the phone must be set up again instead of waiting (audit I2), in the words of
+ * whoever reads it ([mode]): a kid asks a parent; a parent is told the steps (there may be no other parent to ask).
  */
 @Composable
 internal fun WaitingBanner(mode: ChatMode, keyState: ThreadKeyState, modifier: Modifier = Modifier) {
@@ -67,8 +68,13 @@ internal fun WaitingBanner(mode: ChatMode, keyState: ThreadKeyState, modifier: M
             Text(
                 text = stringResource(
                     when {
-                        keyState == ThreadKeyState.KEY_CONFLICT -> R.string.feature_chat_key_conflict
+                        keyState == ThreadKeyState.KEY_CONFLICT && mode == ChatMode.KID ->
+                            R.string.feature_chat_key_conflict_kid
+
+                        keyState == ThreadKeyState.KEY_CONFLICT -> R.string.feature_chat_key_conflict_parent
+
                         mode == ChatMode.KID -> R.string.feature_chat_waiting_kid
+
                         else -> R.string.feature_chat_waiting_parent
                     },
                 ),

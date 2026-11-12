@@ -72,6 +72,31 @@ class EncryptionKeyRegistrarTest {
     }
 
     @Test
+    fun `a phone restored after a sign-out sends its kept key again, and created false is not a conflict`() = runTest {
+        // Before the sign-out: registered and mirrored.
+        assertEquals(KeyRegistration.SENT, registrar.ensureRegistered())
+        val kept = requireNotNull(stored)
+        // The sign-out wipe kept the key and the device id but not the mirror (D-REL-6).
+        mirrored = null
+        session = null
+        assertEquals(KeyRegistration.NOT_NEEDED, registrar.ensureRegistered())
+        session = parentSession()
+
+        // The restore's first check runs before any pull: an empty mirror, so the same key goes again, and the
+        // server answers created: false for the key the row already has.
+        answer = Result.success(false)
+        assertEquals(KeyRegistration.ALREADY_SENT, registrar.ensureRegistered())
+        assertEquals(2, sent.size)
+        assertContentEquals(kept.bytes, sent.last().first, "the kept key, never a fresh one")
+        assertEquals(kept, stored)
+
+        // After the pull the mirror lists it.
+        mirrored = kept.bytes
+        assertEquals(KeyRegistration.REGISTERED, registrar.ensureRegistered())
+        assertEquals(2, sent.size, "nothing is registered again")
+    }
+
+    @Test
     fun `the server refusing another key is a conflict, any other failure is retried later`() = runTest {
         answer = Result.failure(FunctionsException(FunctionsError.Unavailable))
         assertEquals(KeyRegistration.FAILED, registrar.ensureRegistered())

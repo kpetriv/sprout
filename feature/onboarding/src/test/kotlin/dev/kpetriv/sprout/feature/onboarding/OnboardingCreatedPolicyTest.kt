@@ -32,6 +32,11 @@ class OnboardingCreatedPolicyTest {
     private val household = FakeOnboardingHousehold(log, sessions)
     private val keys = InMemoryDeviceKeyStore(clock)
 
+    init {
+        // Every registry row belongs to the signed-in account unless a test says otherwise (D-REL-27).
+        household.ownerOf = { auth.lastClaims?.let { RegisteredOwner(it.uid, it.role ?: Role.PARENT, it.kidId) } }
+    }
+
     private fun viewModel() = OnboardingViewModel(auth, backend, household, keys, sessions, clock)
 
     private fun currentDevice(): DeviceId = keys.publicKey().deviceId()

@@ -214,6 +214,21 @@ class ChatViewModelTest {
     }
 
     @Test
+    fun `a parent's phone with a replaced chat key keeps its parent mode for the banner and sends nothing`() = runTest {
+        keys.state.value = ThreadKeyState.KEY_CONFLICT
+        val vm = viewModel(ChatMode.PARENT)
+        val state = ready(vm)
+
+        vm.onEvent(ChatEvent.DraftChanged("hello"))
+        vm.onEvent(ChatEvent.SendText)
+
+        assertEquals(ChatMode.PARENT, state().mode, "the banner words it for a parent, not \"ask a parent\"")
+        assertEquals(ThreadKeyState.KEY_CONFLICT, state().keyState)
+        assertFalse(state().canSend)
+        assertTrue(sender.sent.isEmpty())
+    }
+
+    @Test
     fun `sprout text goes through the kindness filter and a nudge never blocks`() = runTest {
         filter.verdict = FilterVerdict.Nudge("Can we talk later?")
         val vm = kid(KidUiTier.SPROUT)

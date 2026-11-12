@@ -14,6 +14,7 @@ import org.junit.Test
 import java.security.GeneralSecurityException
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertTrue
 
 class AppInitializerTest {
     private val scope = TestScope(StandardTestDispatcher())
@@ -70,7 +71,63 @@ class AppInitializerTest {
         },
         removing = { removing || storedRemoval },
         blankWidgets = { steps += "blank widget" },
+        checkKeptChatKey = {
+            keptKeyChecks += 1
+            keptKeyCheck()
+        },
+        resumeChatSeed = {
+            steps += "chat seed"
+            chatSeed(it)
+        },
     )
+
+    private var chatSeed: suspend (Session) -> Unit = {}
+
+    private var keptKeyChecks = 0
+    private var keptKeyCheck: suspend () -> Unit = {}
+
+    @Test
+    fun `only a start without a session checks a chat key a sign-out kept, and its failure never fails startup`() =
+        scope.runTest {
+            keptKeyCheck = { error("offline") }
+            withSession(null, linked = true).apply {
+                start()
+                advanceUntilIdle()
+                assertEquals(StartupState.Ready, state.value)
+            }
+            assertEquals(1, keptKeyChecks)
+            assertEquals(listOf("firebase", "session", "check", "schedule", "sync"), steps)
+
+            keptKeyChecks = 0
+            withSession(parentSession()).apply {
+                start()
+                advanceUntilIdle()
+            }
+            assertEquals(0, keptKeyChecks, "a session owns the key: nothing to check (D-REL-33)")
+        }
+
+    @Test
+    fun `a real session resumes the chat seeding before sync, and its failure never fails startup`() = scope.runTest {
+        val seeded = mutableListOf<Session>()
+        chatSeed = {
+            seeded += it
+            error("disk")
+        }
+        withSession(parentSession()).apply {
+            start()
+            advanceUntilIdle()
+            assertEquals(StartupState.Ready, state.value)
+        }
+        assertEquals(listOf(parentSession()), seeded, "D-REL-38: a record a process death left is used")
+        assertTrue(steps.indexOf("chat seed") in 0 until steps.indexOf("sync"))
+
+        seeded.clear()
+        withSession(null, linked = true).apply {
+            start()
+            advanceUntilIdle()
+        }
+        assertTrue(seeded.isEmpty(), "no session: the kept key is checked instead")
+    }
 
     @Test
     fun `a real household's session is not seeded and plans only after its first pull, then sync starts`() =
@@ -80,7 +137,7 @@ class AppInitializerTest {
                 advanceUntilIdle()
                 assertEquals(StartupState.Ready, state.value)
             }
-            assertEquals(listOf("firebase", "session", "check", "schedule", "sync"), steps)
+            assertEquals(listOf("firebase", "session", "chat seed", "check", "schedule", "sync"), steps)
         }
 
     @Test
@@ -196,7 +253,7 @@ class AppInitializerTest {
             advanceUntilIdle()
             assertEquals(StartupState.Ready, state.value)
         }
-        assertEquals(listOf("firebase", "session"), steps)
+        assertEquals(listOf("firebase", "session", "chat seed"), steps)
     }
 
     @Test
@@ -215,7 +272,7 @@ class AppInitializerTest {
             advanceUntilIdle()
             assertEquals(StartupState.Ready, state.value)
         }
-        assertEquals(listOf("session", "check", "schedule", "sync"), steps)
+        assertEquals(listOf("session", "chat seed", "check", "schedule", "sync"), steps)
     }
 
     @Test
