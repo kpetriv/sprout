@@ -2,24 +2,43 @@ package dev.kpetriv.sprout.feature.wallet
 
 import androidx.annotation.StringRes
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
+import dev.kpetriv.sprout.core.designsystem.components.LedgerRowKind
+import dev.kpetriv.sprout.core.designsystem.icon.SproutIcons
 import dev.kpetriv.sprout.core.domainledger.AccountKind
 import dev.kpetriv.sprout.core.domainledger.Currency
 import dev.kpetriv.sprout.core.ui.AmountDirection
 import dev.kpetriv.sprout.core.ui.AmountInputError
 
-/** Decorative glyph for a history row; the title carries the meaning for accessibility. */
-internal val EventCategory.icon: String
-    get() = when (this) {
-        EventCategory.CHORES -> "🧹"
-        EventCategory.ALLOWANCE -> "💰"
-        EventCategory.GAMES -> "🎮"
-        EventCategory.SHOP -> "🛍️"
-        EventCategory.SAVINGS -> "🐷"
-        EventCategory.INTEREST -> "🌱"
-        EventCategory.SCREEN_TIME -> "⏱️"
-        EventCategory.ADJUSTMENT -> "✏️"
+/**
+ * The history row's icon (M9 §3 and the renders): a single-colour Material Symbol that `LedgerRow` tints by
+ * [rowKind]. Decorative; the row's title carries the meaning.
+ */
+internal val EventCategory.icon: ImageVector
+    @Composable get() = when (this) {
+        EventCategory.CHORES -> SproutIcons.Checklist
+        EventCategory.ALLOWANCE -> SproutIcons.Payments
+        EventCategory.GAMES -> SproutIcons.SportsEsports
+        EventCategory.SHOP -> SproutIcons.ShoppingBag
+        EventCategory.SAVINGS -> SproutIcons.Savings
+        EventCategory.INTEREST -> SproutIcons.Eco
+        EventCategory.SCREEN_TIME -> SproutIcons.Timer
+        EventCategory.ADJUSTMENT -> SproutIcons.Edit
+    }
+
+/**
+ * The [LedgerRowKind] that tints a history row's icon circle and amount (M9 §3): screen time is Sky, moves between
+ * the kid's own pots are Linen, money out is the spending tint, game credits are Honey and other money in is Leaf.
+ */
+internal val EventUi.rowKind: LedgerRowKind
+    get() = when {
+        category == EventCategory.SCREEN_TIME || currency == Currency.Minutes -> LedgerRowKind.Time
+        direction == AmountDirection.MOVE || category == EventCategory.SAVINGS -> LedgerRowKind.Transfer
+        direction == AmountDirection.OUT -> LedgerRowKind.Spending
+        category == EventCategory.GAMES -> LedgerRowKind.Reward
+        else -> LedgerRowKind.Credit
     }
 
 @get:StringRes

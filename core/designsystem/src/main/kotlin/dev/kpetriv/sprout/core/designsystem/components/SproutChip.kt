@@ -21,6 +21,9 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -39,7 +42,8 @@ object SproutChipDefaults {
 
 /**
  * A filter or choice chip (M9 §3): a Linen pill with a hairline; selected, a Leaf-tint pill with Botanical-deep text
- * and a check icon in place of [icon] (state is never colour alone). Announced as selected or not.
+ * and a check icon in place of [icon] (state is never colour alone). Announced as selected or not, with [role]:
+ * [Role.Checkbox] for a filter, [Role.RadioButton] for one choice of several (put those in a `selectableGroup()`).
  */
 @Composable
 fun SproutChip(
@@ -49,13 +53,16 @@ fun SproutChip(
     modifier: Modifier = Modifier,
     icon: ImageVector? = null,
     enabled: Boolean = true,
+    role: Role = Role.Checkbox,
 ) {
     val interactionSource = remember { MutableInteractionSource() }
     val scheme = MaterialTheme.colorScheme
     Surface(
         selected = selected,
         onClick = onClick,
-        modifier = modifier.pressScale(interactionSource),
+        modifier = modifier
+            .pressScale(interactionSource)
+            .semantics { this.role = role },
         enabled = enabled,
         shape = CircleShape,
         color = if (selected) scheme.primaryContainer else scheme.surfaceContainerLow,

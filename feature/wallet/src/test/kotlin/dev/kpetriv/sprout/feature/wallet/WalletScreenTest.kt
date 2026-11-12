@@ -5,13 +5,17 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.ProgressBarRangeInfo
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assert
+import androidx.compose.ui.test.assertHasClickAction
+import androidx.compose.ui.test.assertHasNoClickAction
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertIsSelected
+import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createComposeRule
@@ -50,20 +54,33 @@ class WalletScreenTest {
     private var exports = 0
     private val opened = mutableListOf<String>()
 
-    private fun show(state: WalletUiState, readAloud: ReadAloud = ReadAloud { spoken += it }) {
+    private fun show(
+        state: WalletUiState,
+        readAloud: ReadAloud = ReadAloud { spoken += it },
+        onBack: (() -> Unit)? = null,
+        timeBank: Boolean = true,
+    ) {
         compose.setContent {
             SproutTheme {
                 WalletScreen(
                     state = state,
                     onEvent = { events += it },
+                    onBack = onBack,
                     readAloud = readAloud,
                     onExport = { exports++ },
                     onOpenShop = { opened += "shop" },
                     onOpenChores = { opened += "chores" },
+                    onOpenTimeBank = if (timeBank) ({ opened += "timebank" }) else null,
                 )
             }
         }
     }
+
+    private fun hasRole(role: Role) = SemanticsMatcher.expectValue(SemanticsProperties.Role, role)
+
+    /** The pill button labelled [label] (a filter chip or a history row can carry the same word). */
+    private fun button(label: String) =
+        compose.onNode(hasText(label) and SemanticsMatcher.expectValue(SemanticsProperties.Role, Role.Button))
 
     @Test
     fun `seedling shows the jar, the sun and big buttons but no history`() {
@@ -117,10 +134,62 @@ class WalletScreenTest {
         show(WalletPreviewData.ready(KidUiTier.SAPLING))
 
         compose.onNodeWithText("Saving for a new bike").assertIsDisplayed()
-        compose.onNodeWithText("£40.00").assertIsDisplayed()
-        compose.onNodeWithText("🛍️  Shop").performClick()
-        compose.onNodeWithText("🧹  Chores").performClick()
+        compose.onNodeWithText("Target £40.00").assertIsDisplayed()
+        compose.onNodeWithText("£27.50 to go").assertIsDisplayed()
+        button("Shop").performClick()
+        button("Chores").performClick()
         assertEquals(listOf("shop", "chores"), opened)
+    }
+
+    @Test
+    fun `the screen-time badge opens the time bank in kid mode`() {
+        show(WalletPreviewData.ready(KidUiTier.SPROUT, canAdjust = false))
+        compose.onNode(hasText("1 h 20 min") and hasClickAction()).assert(hasRole(Role.Button)).performClick()
+        assertEquals(listOf("timebank"), opened)
+    }
+
+    @Test
+    fun `the seedling sun opens the time bank in kid mode`() {
+        show(WalletPreviewData.ready(KidUiTier.SEEDLING, canAdjust = false))
+        compose.onNodeWithContentDescription("1 h 20 min of screen time")
+            .assertHasClickAction()
+            .assert(hasRole(Role.Button))
+            .performClick()
+        assertEquals(listOf("timebank"), opened)
+    }
+
+    @Test
+    fun `a parent's seedling sun is not a button`() {
+        show(WalletPreviewData.ready(KidUiTier.SEEDLING), timeBank = false)
+        compose.onNodeWithContentDescription("1 h 20 min of screen time").assertIsDisplayed().assertHasNoClickAction()
+    }
+
+    @Test
+    fun `the sapling screen-time tile is a button in kid mode`() {
+        show(WalletPreviewData.ready(KidUiTier.SAPLING, canAdjust = false))
+        compose.onNode(hasText("1 h 20 min") and hasClickAction()).assert(hasRole(Role.Button)).performClick()
+        assertEquals(listOf("timebank"), opened)
+    }
+
+    @Test
+    fun `a parent's screen-time badge only shows the balance`() {
+        show(WalletPreviewData.ready(KidUiTier.SAPLING), timeBank = false)
+        compose.onNode(hasText("1 h 20 min")).assertIsDisplayed().assertHasNoClickAction()
+        compose.onNodeWithText("Tap to start your timer").assertDoesNotExist()
+    }
+
+    @Test
+    fun `the kid wallet is a tab root without a back arrow`() {
+        show(WalletPreviewData.ready(KidUiTier.SPROUT, canAdjust = false))
+        compose.onNodeWithContentDescription("Back").assertDoesNotExist()
+    }
+
+    @Test
+    fun `the parent's wallet has a back arrow`() {
+        var backs = 0
+        show(WalletPreviewData.ready(KidUiTier.SPROUT), onBack = { backs++ })
+        compose.onNodeWithContentDescription("Back").performClick()
+        assertEquals(1, backs)
     }
 
     @Test
@@ -203,7 +272,9 @@ class WalletScreenTest {
             }
         }
 
-        compose.onNodeWithText("Take away").assertIsSelected()
+        compose.onNodeWithText("Take away").assertIsSelected().assert(hasRole(Role.RadioButton))
+        compose.onNodeWithText("Add").assert(hasRole(Role.RadioButton))
+        compose.onNode(SemanticsMatcher.keyIsDefined(SemanticsProperties.SelectableGroup)).assertExists()
         compose.onNodeWithText("Scan a receipt").performClick()
         compose.onNodeWithText("Save").performClick()
 
@@ -335,7 +406,8 @@ class WalletScreenTest {
 
         compose.onNodeWithText("£7.45").assertIsDisplayed()
         compose.onNodeWithText("Saving for a new bike").assertIsDisplayed()
-        compose.onNodeWithText("£12.50").assertIsDisplayed()
+        compose.onNodeWithText("£12.50 saved").assertIsDisplayed()
+        compose.onNodeWithText("Sprout tier").assertIsDisplayed()
         compose.onNodeWithText("Recent").assertIsDisplayed()
         compose.onNodeWithContentDescription("Chore reward, +£1.50").assertIsDisplayed()
         compose.onNodeWithContentDescription("Shop, -£3.99").assertIsDisplayed()
@@ -350,10 +422,10 @@ class WalletScreenTest {
         compose.onNodeWithText("Accounts").assertIsDisplayed()
         compose.onNodeWithText("You've earned £0.12 interest so far.").assertIsDisplayed()
         compose.onNodeWithText("Budget and spending charts are coming soon.").assertIsDisplayed()
-        compose.onNodeWithText("All").assertIsSelected()
+        compose.onNodeWithText("All").assertIsSelected().assert(hasRole(Role.Checkbox))
 
         compose.onNode(hasText("Shop") and SemanticsMatcher.keyIsDefined(SemanticsProperties.Selected)).performClick()
-        compose.onNodeWithText("Export CSV").performClick()
+        button("Export CSV").performClick()
 
         assertEquals(listOf<WalletEvent>(WalletEvent.FilterChanged(EventCategory.SHOP)), events)
         assertEquals(1, exports)
@@ -363,14 +435,14 @@ class WalletScreenTest {
     fun `parent sees the adjust action and anomalies, kid mode does not`() {
         show(WalletPreviewData.ready(KidUiTier.SPROUT, anomaliesCount = 1))
         compose.onNodeWithText("1 ledger issue needs a look").assertIsDisplayed()
-        compose.onNodeWithText("Adjust balance").performClick()
+        compose.onNodeWithContentDescription("Adjust balance").assertHasClickAction().performClick()
         assertEquals(listOf<WalletEvent>(WalletEvent.OpenAdjust), events)
     }
 
     @Test
     fun `kid mode hides parent controls`() {
         show(WalletPreviewData.ready(KidUiTier.SPROUT, canAdjust = false, anomaliesCount = 1))
-        compose.onNodeWithText("Adjust balance").assertDoesNotExist()
+        compose.onNodeWithContentDescription("Adjust balance").assertDoesNotExist()
         compose.onNodeWithText("1 ledger issue needs a look").assertDoesNotExist()
     }
 

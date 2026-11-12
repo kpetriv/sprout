@@ -1,21 +1,23 @@
 package dev.kpetriv.sprout.feature.wallet
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
-import androidx.compose.material3.Button
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material3.Icon
 import androidx.compose.material3.IconToggleButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -26,10 +28,18 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import dev.kpetriv.sprout.core.designsystem.components.CardMeaning
+import dev.kpetriv.sprout.core.designsystem.components.Pictogram
+import dev.kpetriv.sprout.core.designsystem.components.SproutButton
+import dev.kpetriv.sprout.core.designsystem.components.SproutCard
+import dev.kpetriv.sprout.core.designsystem.icon.SproutIcons
+import dev.kpetriv.sprout.core.designsystem.theme.ColourLevel
+import dev.kpetriv.sprout.core.designsystem.theme.SproutSpacing
 import dev.kpetriv.sprout.core.designsystem.theme.SproutTheme
+import dev.kpetriv.sprout.core.designsystem.theme.amount
 import dev.kpetriv.sprout.core.model.KidUiTier
+import dev.kpetriv.sprout.core.model.RewardKind
 import dev.kpetriv.sprout.core.ui.AdaptiveColumns
 import dev.kpetriv.sprout.core.ui.ContentWidth
 import dev.kpetriv.sprout.core.ui.TierScaledText
@@ -37,10 +47,11 @@ import dev.kpetriv.sprout.core.ui.TierTextRole
 import dev.kpetriv.sprout.core.ui.withGutters
 
 /**
- * Seedling shop: big picture tiles, green with a tick when the kid can buy the reward and grey with a piggy bank when
- * not (never colour alone, M7 §8). Two columns on a phone, more on a wider window (tiles at least
- * [SEEDLING_TILE_MIN_WIDTH], the grid capped at [GRID_MAX_WIDTH], D-M7-2). Tapping a tile opens the confirm (or "not
- * yet") dialog; a parent browsing cannot tap.
+ * Seedling shop, as the Morning garden render: picture tiles ([SproutCard] with a [Pictogram], the price in the
+ * display face), tinted with a tick and "You can buy this now" when the kid can buy the reward and white with a piggy
+ * bank and "Keep saving" when not (never colour alone, M7 §8). Two columns on a phone, more on a wider window (tiles
+ * at least [SEEDLING_TILE_MIN_WIDTH], the grid capped at [GRID_MAX_WIDTH], D-M7-2). Tapping a tile opens the confirm
+ * (or "not yet") dialog; a parent browsing cannot tap.
  */
 @Composable
 internal fun SeedlingShopContent(
@@ -52,9 +63,10 @@ internal fun SeedlingShopContent(
         LazyVerticalGrid(
             columns = AdaptiveColumns(minColumnWidth = SEEDLING_TILE_MIN_WIDTH, minColumns = SEEDLING_COLUMNS),
             modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(24.dp).withGutters(gutters),
-            horizontalArrangement = Arrangement.spacedBy(16.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp),
+            contentPadding = PaddingValues(horizontal = SproutSpacing.gutter, vertical = SproutSpacing.md)
+                .withGutters(gutters),
+            horizontalArrangement = Arrangement.spacedBy(SproutSpacing.md),
+            verticalArrangement = Arrangement.spacedBy(SproutSpacing.md),
         ) {
             item(span = { GridItemSpan(maxLineSpan) }) { ShopBalanceHeader(state) }
             items(state.items, key = { it.rewardId.value }) { item ->
@@ -66,53 +78,71 @@ internal fun SeedlingShopContent(
 
 @Composable
 private fun PictureTile(item: ShopItemUi, enabled: Boolean, onClick: () -> Unit) {
-    val tier = KidUiTier.SEEDLING
     val status = stringResource(
         if (item.canAfford) R.string.feature_wallet_shop_can_afford else R.string.feature_wallet_shop_cannot_afford,
     )
     val description = listOf(item.title, item.priceText, status).joinToString(", ")
-    val colors = if (item.canAfford) {
-        CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.primaryContainer,
-            contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
-            disabledContainerColor = MaterialTheme.colorScheme.primaryContainer,
-            disabledContentColor = MaterialTheme.colorScheme.onPrimaryContainer,
-        )
-    } else {
-        CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surfaceVariant,
-            contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
-            disabledContainerColor = MaterialTheme.colorScheme.surfaceVariant,
-            disabledContentColor = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-    }
-    Card(
-        onClick = onClick,
-        enabled = enabled,
-        colors = colors,
-        shape = MaterialTheme.shapes.large,
-        modifier = Modifier
-            .fillMaxWidth()
-            .heightIn(min = SproutTheme.tierTokens.minTouchTarget * 2)
-            .clearAndSetSemantics { contentDescription = description },
+    SproutCard(
+        meaning = if (item.canAfford) item.kind.tileMeaning else CardMeaning.Content,
+        onClick = onClick.takeIf { enabled },
+        modifier = Modifier.fillMaxWidth(),
+        contentPadding = PaddingValues(SproutSpacing.md),
     ) {
+        // One description for the whole tile; the card itself keeps its click action and button role.
         Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(16.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(8.dp),
+            modifier = Modifier.clearAndSetSemantics { contentDescription = description },
+            verticalArrangement = Arrangement.spacedBy(SproutSpacing.md - SproutSpacing.xs),
         ) {
-            Text(text = item.kind.icon, style = MaterialTheme.typography.displayMedium)
-            TierScaledText(text = item.title, role = TierTextRole.Body, tier = tier, textAlign = TextAlign.Center)
-            TierScaledText(text = item.priceText, role = TierTextRole.Label, tier = tier, textAlign = TextAlign.Center)
-            TierScaledText(
-                text = (if (item.canAfford) "✓ " else "🐷 ") + status,
-                role = TierTextRole.Label,
-                tier = tier,
-                textAlign = TextAlign.Center,
+            Pill {
+                Box(Modifier.size(PriceDot).background(MaterialTheme.colorScheme.secondary, CircleShape))
+                Text(text = item.priceText, style = MaterialTheme.typography.amount)
+            }
+            Pictogram(
+                item.kind.pictogram,
+                size = TilePictogramSize,
+                modifier = Modifier.align(Alignment.CenterHorizontally),
             )
+            Text(text = item.title, style = MaterialTheme.typography.titleLarge)
+            Pill(modifier = Modifier.fillMaxWidth()) {
+                Icon(
+                    imageVector = if (item.canAfford) SproutIcons.CheckCircle else SproutIcons.Savings,
+                    contentDescription = null,
+                    tint = if (item.canAfford) {
+                        MaterialTheme.colorScheme.primary
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    },
+                )
+                Text(text = status, style = MaterialTheme.typography.labelLarge, modifier = Modifier.weight(1f))
+            }
         }
+    }
+}
+
+/**
+ * The Seedling tile's tint when the kid can buy it (Leaf, Sky or Honey on `FULL`, white elsewhere); a reward the kid
+ * cannot buy yet stays white, and its "Keep saving" pill says so in words.
+ */
+private val RewardKind.tileMeaning: CardMeaning
+    get() = when (this) {
+        RewardKind.SCREEN_TIME -> CardMeaning.Time
+        RewardKind.TREAT -> CardMeaning.Attention
+        RewardKind.OUTING -> CardMeaning.Goal
+        RewardKind.OTHER -> CardMeaning.Money
+    }
+
+/** A small white card with a hairline: a tile's price and its "can buy" line. */
+@Composable
+private fun Pill(modifier: Modifier = Modifier, content: @Composable RowScope.() -> Unit) {
+    SproutCard(
+        modifier = modifier,
+        contentPadding = PaddingValues(horizontal = SproutSpacing.md - SproutSpacing.xs, vertical = SproutSpacing.sm),
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(SproutSpacing.sm),
+            content = content,
+        )
     }
 }
 
@@ -126,8 +156,9 @@ internal fun SproutShopContent(
     ContentWidth(modifier = modifier.fillMaxSize()) { gutters ->
         LazyColumn(
             modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(16.dp).withGutters(gutters),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
+            contentPadding = PaddingValues(horizontal = SproutSpacing.gutter, vertical = SproutSpacing.md)
+                .withGutters(gutters),
+            verticalArrangement = Arrangement.spacedBy(SproutSpacing.md),
         ) {
             item { ShopBalanceHeader(state) }
             items(state.items, key = { it.rewardId.value }) { item ->
@@ -152,8 +183,9 @@ internal fun SaplingShopContent(
     ContentWidth(modifier = modifier.fillMaxSize()) { gutters ->
         LazyColumn(
             modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(16.dp).withGutters(gutters),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
+            contentPadding = PaddingValues(horizontal = SproutSpacing.gutter, vertical = SproutSpacing.md)
+                .withGutters(gutters),
+            verticalArrangement = Arrangement.spacedBy(SproutSpacing.md),
         ) {
             item { ShopBalanceHeader(state) }
             if (state.items.isNotEmpty()) {
@@ -187,8 +219,8 @@ internal fun SaplingShopContent(
 }
 
 /**
- * One reward in the Sprout and Sapling lists: picture, title, price, the affordability line (Sprout) or savings plan
- * (Sapling), the screen time it grants, a Buy button (kid mode, enabled when affordable) and, with
+ * One reward in the Sprout and Sapling lists: picture, title, price (display face), the screen time it grants, the
+ * affordability line (Sprout) or savings plan (Sapling), a Buy pill (kid mode, enabled when affordable) and, with
  * [onToggleWishlist], a wishlist heart.
  */
 @Composable
@@ -199,50 +231,54 @@ private fun RewardRow(
     onBuy: () -> Unit,
     onToggleWishlist: (() -> Unit)? = null,
 ) {
-    Card(modifier = Modifier.fillMaxWidth()) {
-        Row(
-            modifier = Modifier.padding(16.dp),
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text(
-                text = item.kind.icon,
-                style = MaterialTheme.typography.headlineMedium,
-                modifier = Modifier.clearAndSetSemantics { },
-            )
-            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                TierScaledText(text = item.title, role = TierTextRole.Body, tier = tier)
-                TierScaledText(text = item.priceText, role = TierTextRole.Title, tier = tier)
-                item.minutesText?.let {
-                    TierScaledText(
-                        text = stringResource(R.string.feature_wallet_shop_grants_minutes, it),
-                        role = TierTextRole.Label,
-                        tier = tier,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
+    SproutCard(modifier = Modifier.fillMaxWidth()) {
+        Column(verticalArrangement = Arrangement.spacedBy(SproutSpacing.sm)) {
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(SproutSpacing.md),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Pictogram(item.kind.pictogram, size = RowPictogramSize)
+                Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(SproutSpacing.xs)) {
+                    TierScaledText(text = item.title, role = TierTextRole.Body, tier = tier)
+                    Text(text = item.priceText, style = MaterialTheme.typography.titleLarge)
                 }
-                val status = if (tier == KidUiTier.SAPLING) item.savingsPlanText() else item.affordabilityText()
-                status?.let {
-                    TierScaledText(
-                        text = it,
-                        role = TierTextRole.Label,
-                        tier = tier,
-                        color = if (item.canAfford) {
-                            MaterialTheme.colorScheme.primary
-                        } else {
-                            MaterialTheme.colorScheme.onSurfaceVariant
-                        },
-                    )
-                }
+                if (onToggleWishlist != null) WishlistToggle(item, onToggleWishlist)
             }
-            if (onToggleWishlist != null) WishlistToggle(item, onToggleWishlist)
-            if (canPurchase) {
-                Button(
-                    onClick = onBuy,
-                    enabled = item.canAfford,
-                    modifier = Modifier.heightIn(min = SproutTheme.tierTokens.minTouchTarget),
+            item.minutesText?.let {
+                TierScaledText(
+                    text = stringResource(R.string.feature_wallet_shop_grants_minutes, it),
+                    role = TierTextRole.Label,
+                    tier = tier,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            val status = if (tier == KidUiTier.SAPLING) item.savingsPlanText() else item.affordabilityText()
+            if (status != null || canPurchase) {
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(SproutSpacing.md),
+                    verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Text(stringResource(R.string.feature_wallet_shop_buy))
+                    Box(modifier = Modifier.weight(1f)) {
+                        status?.let {
+                            TierScaledText(
+                                text = it,
+                                role = TierTextRole.Label,
+                                tier = tier,
+                                color = if (item.canAfford) {
+                                    MaterialTheme.colorScheme.primary
+                                } else {
+                                    MaterialTheme.colorScheme.onSurfaceVariant
+                                },
+                            )
+                        }
+                    }
+                    if (canPurchase) {
+                        SproutButton(
+                            text = stringResource(R.string.feature_wallet_shop_buy),
+                            onClick = onBuy,
+                            enabled = item.canAfford,
+                        )
+                    }
                 }
             }
         }
@@ -257,21 +293,30 @@ private fun WishlistToggle(item: ShopItemUi, onToggle: () -> Unit) {
         R.string.feature_wallet_shop_wishlist_add
     }
     val description = stringResource(label, item.title)
-    val colors = MaterialTheme.colorScheme
+    val scheme = MaterialTheme.colorScheme
     IconToggleButton(
         checked = item.wishlisted,
         onCheckedChange = { onToggle() },
         modifier = Modifier.semantics { contentDescription = description },
     ) {
-        Text(
-            text = if (item.wishlisted) "♥" else "♡",
-            style = MaterialTheme.typography.headlineSmall,
-            color = if (item.wishlisted) colors.error else colors.onSurfaceVariant,
-            modifier = Modifier.clearAndSetSemantics { },
+        Icon(
+            imageVector = if (item.wishlisted) SproutIcons.FavoriteFilled else SproutIcons.Favorite,
+            contentDescription = null,
+            // Filled or outlined carries the state; the colour is Botanical, or Ink where colour is restrained.
+            tint = if (SproutTheme.tierTokens.colourLevel ==
+                ColourLevel.RESTRAINED
+            ) {
+                scheme.onSurface
+            } else {
+                scheme.primary
+            },
         )
     }
 }
 
 private const val SEEDLING_COLUMNS = 2
+private val PriceDot = 10.dp
+private val TilePictogramSize = 88.dp
+private val RowPictogramSize = 56.dp
 private val SEEDLING_TILE_MIN_WIDTH = 160.dp
 private val GRID_MAX_WIDTH = 960.dp

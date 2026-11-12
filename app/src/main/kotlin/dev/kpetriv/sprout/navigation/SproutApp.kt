@@ -89,8 +89,9 @@ import kotlinx.coroutines.flow.Flow
  * - **Kid**: the kid shell in the kid's tier: Wallet ([KidHomeKey]), Chores ([KidChoresKey]), Shop ([ShopKey]), Games
  *   ([KidGamesKey], one [GamePlayKey] per play, read aloud by text-to-speech) and Chat ([ChatThreadKey], real
  *   households only, read aloud too) on Sprout and Sapling; Wallet, Chores and Shop on Seedling, whose wallet keeps
- *   giant Chat, Screen time and Games buttons. Screen time ([TimeBankKey]) is pushed from the wallet. No lock. On a
- *   parent's phone back at the root (system back or the wallet's back arrow) opens `KidModeExitGate`; a successful
+ *   giant Chat, Screen time and Games buttons. Screen time ([TimeBankKey]) is pushed from the wallet's screen-time
+ *   badge (Seedling: its sun and giant button). No lock. On a parent's phone back at the root (the system back; the
+ *   kid wallet is a tab root without a back arrow) opens `KidModeExitGate`; a successful
  *   unlock returns to the parent area. On a kid's own linked phone there is no parent area: back at the root leaves
  *   the app.
  * - **SignInAgain**: the "Sign in again" gate for a phone whose sign-in ended; no household data behind it, but it
@@ -604,6 +605,7 @@ private val KidRouteEntries = KidEntries { navigation, tier, chatAvailable, back
                     onBack = back,
                     onOpenShop = { navigation.push(ShopKey(key.kidId, WalletMode.KID)) },
                     onOpenChores = { navigation.push(KidChoresKey(key.kidId, tier)) },
+                    onOpenTimeBank = { navigation.push(TimeBankKey(key.kidId)) },
                 )
             }
         }

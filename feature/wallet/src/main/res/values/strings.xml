@@ -2,7 +2,6 @@
 <resources>
   <string name="feature_wallet_title">Wallet</string>
   <string name="feature_wallet_title_named">%1$s\'s wallet</string>
-  <string name="feature_wallet_back">Back</string>
   <string name="feature_wallet_loading">Loading wallet</string>
   <string name="feature_wallet_error_kid_not_found">We couldn\'t find this wallet.</string>
   <string name="feature_wallet_error_load_failed">Something went wrong while loading the wallet.</string>
@@ -23,6 +22,9 @@
   <string name="feature_wallet_recent_activity">Recent activity</string>
   <string name="feature_wallet_read_aloud_coins">You have %1$s.</string>
   <string name="feature_wallet_read_aloud_coins_and_minutes">You have %1$s and %2$s of screen time.</string>
+  <string name="feature_wallet_your_coins">Your coins</string>
+  <!-- Under the screen-time sun, which opens the time bank in kid mode. -->
+  <string name="feature_wallet_time_bank_hint">Tap to start your timer</string>
 
   <!-- Sprout and Sapling -->
   <string name="feature_wallet_balance">Your money</string>
@@ -31,6 +33,15 @@
   <!-- %1$s is the savings goal's title. -->
   <string name="feature_wallet_saving_for">Saving for %1$s</string>
   <string name="feature_wallet_goal_reached">Goal reached!</string>
+  <!-- Under the savings goal's title. %1$s is the amount still to save ("£27.50"). -->
+  <string name="feature_wallet_goal_to_go">%1$s to go</string>
+  <!-- The chip under the Sprout money hero. %1$s is the tier's name. -->
+  <string name="feature_wallet_tier_chip">%1$s tier</string>
+  <string name="feature_wallet_tier_seedling">Seedling</string>
+  <string name="feature_wallet_tier_sprout">Sprout</string>
+  <string name="feature_wallet_tier_sapling">Sapling</string>
+  <!-- A history row read aloud: %1$s is the title and details, %2$s the amount. -->
+  <string name="feature_wallet_event_row_description">%1$s, %2$s</string>
   <string name="feature_wallet_recent">Recent</string>
   <string name="feature_wallet_history">History</string>
   <string name="feature_wallet_history_empty">Nothing here yet.</string>

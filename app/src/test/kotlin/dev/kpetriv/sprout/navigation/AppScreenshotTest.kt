@@ -105,9 +105,13 @@ class AppScreenshotTest : ScreenshotTest(checkAccessibility = true) {
         StartupErrorScreen(StartupFailure.DATABASE, onRetry = {})
     }
 
-    // Seedling's giant Chat, Screen time and Games buttons; Sprout and Sapling have only Screen time left (M9 §5.1).
+    // Seedling's giant Chat, Screen time and Games buttons (M9 §5.1); Sprout and Sapling have none since slice B (the
+    // wallet's screen-time badge opens the time bank).
     @Test
-    fun `kid shortcut bar`() = screenshot.captureWidthClassTiers("app_kid_shortcuts") { _, tier ->
+    fun `kid shortcut bar`() = screenshot.captureWidthClassTiers(
+        "app_kid_shortcuts",
+        tiers = listOf(KidUiTier.SEEDLING),
+    ) { _, tier ->
         WithShortcuts(kidShortcuts(tier, chat = true, onChat = {}, onScreenTime = {}, onGames = {})) {
             HomePlaceholder()
         }

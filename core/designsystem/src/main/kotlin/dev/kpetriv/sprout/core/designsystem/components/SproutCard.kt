@@ -15,6 +15,9 @@ import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.ReadOnlyComposable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import dev.kpetriv.sprout.core.designsystem.theme.ColourLevel
@@ -106,7 +109,7 @@ fun CardMeaning.accentTint(): SproutTint {
 /**
  * Sprout's one card (M9 §3): white with a hairline border, the tier's corner radius (18 / 24 / 28 dp), 20 dp
  * padding, no shadow. [meaning] tints it on Seedling ([SproutCardDefaults.colors]). With [onClick] the whole card
- * is one button; it never moves when pressed.
+ * is one button (announced as one); it never moves when pressed.
  */
 @Composable
 fun SproutCard(
@@ -132,7 +135,7 @@ fun SproutCard(
     } else {
         Surface(
             onClick = onClick,
-            modifier = modifier,
+            modifier = modifier.semantics { role = Role.Button },
             shape = shape,
             color = colors.container,
             contentColor = colors.content,

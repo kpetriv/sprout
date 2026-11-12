@@ -78,9 +78,9 @@ private fun ShortcutBar(shortcuts: List<Shortcut>) {
 }
 
 /**
- * The kid's home shortcuts under the wallet. Seedling keeps its three giant buttons, Chat (real households only),
- * Screen time and Games (M9 §5.1: its bar has only Wallet, Chores and Shop). Sprout and Sapling have Chat and Games in
- * the bar, so only Screen time is left here.
+ * The kid's home shortcuts under the wallet: only Seedling has any, its three giant buttons, Chat (real households
+ * only), Screen time and Games (M9 §5.1: its bar has only Wallet, Chores and Shop). Sprout and Sapling have Chat and
+ * Games in the bar and reach Screen time from the wallet's screen-time badge, so they get none.
  */
 internal fun kidShortcuts(
     tier: KidUiTier,
@@ -95,6 +95,5 @@ internal fun kidShortcuts(
         add(Shortcut(R.string.home_games, onGames))
     }
 } else {
-    // Interim until M9 slice B: the wallet's screen-time badge opens the time bank and this bar goes.
-    listOf(Shortcut(R.string.home_screen_time, onScreenTime))
+    emptyList()
 }

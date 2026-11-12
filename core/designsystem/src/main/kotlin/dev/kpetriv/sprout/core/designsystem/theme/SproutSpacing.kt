@@ -26,3 +26,9 @@ object SproutSpacing {
     /** Reading width cap for scrolling content on tablets (D-V1-22). */
     val contentMaxWidth: Dp = 640.dp
 }
+
+/**
+ * From this font scale (the user's system setting, not the tier's type scale) a row that puts text beside a chip or a
+ * second button stacks them instead, so no word breaks mid-way (M7 §8 font-scale goldens).
+ */
+const val STACK_FONT_SCALE: Float = 1.5f

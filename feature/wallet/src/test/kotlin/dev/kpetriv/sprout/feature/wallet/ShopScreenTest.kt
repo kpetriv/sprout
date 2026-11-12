@@ -1,10 +1,18 @@
 package dev.kpetriv.sprout.feature.wallet
 
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.test.SemanticsMatcher
+import androidx.compose.ui.test.assert
+import androidx.compose.ui.test.assertHasClickAction
+import androidx.compose.ui.test.assertHasNoClickAction
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
+import androidx.compose.ui.test.assertIsOff
+import androidx.compose.ui.test.assertIsOn
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onFirst
 import androidx.compose.ui.test.onNodeWithContentDescription
@@ -34,8 +42,8 @@ class ShopScreenTest {
 
     private val events = mutableListOf<ShopEvent>()
 
-    private fun show(state: ShopUiState) {
-        compose.setContent { SproutTheme { ShopScreen(state = state, onEvent = { events += it }) } }
+    private fun show(state: ShopUiState, onBack: (() -> Unit)? = null) {
+        compose.setContent { SproutTheme { ShopScreen(state = state, onEvent = { events += it }, onBack = onBack) } }
     }
 
     @Test
@@ -44,7 +52,10 @@ class ShopScreenTest {
 
         compose.onNodeWithText("You have 1 coin").assertIsDisplayed()
         compose.onNodeWithContentDescription("Sticker pack, 2 coins, Keep saving").assertIsDisplayed()
-        compose.onNodeWithContentDescription("Ice cream, 5 coins, Keep saving").performClick()
+        compose.onNodeWithContentDescription("Ice cream, 5 coins, Keep saving")
+            .assertHasClickAction()
+            .assert(SemanticsMatcher.expectValue(SemanticsProperties.Role, Role.Button))
+            .performClick()
 
         assertEquals(listOf<ShopEvent>(ShopEvent.Select(RewardId("reward-ice-cream"))), events)
     }
@@ -106,7 +117,8 @@ class ShopScreenTest {
         compose.onNodeWithText("All rewards").assertIsDisplayed()
         compose.onAllNodesWithText("Savings plan: about 2 weeks of pocket money").onFirst().assertIsDisplayed()
         compose.onAllNodesWithText("Savings plan: about 6 weeks of pocket money").onFirst().assertIsDisplayed()
-        compose.onNodeWithContentDescription("Add Ice cream to wishlist").performClick()
+        compose.onAllNodesWithContentDescription("Remove Cinema trip from wishlist").onFirst().assertIsOn()
+        compose.onNodeWithContentDescription("Add Ice cream to wishlist").assertIsOff().performClick()
 
         assertEquals(listOf<ShopEvent>(ShopEvent.ToggleWishlist(RewardId("reward-ice-cream"))), events)
     }
@@ -115,6 +127,26 @@ class ShopScreenTest {
     fun `sapling with an empty wishlist explains the heart`() {
         show(ShopPreviewData.ready(KidUiTier.SAPLING, affordable = true, wishlist = emptySet()))
         compose.onNodeWithText("Tap the heart on a reward to save it here.").assertIsDisplayed()
+    }
+
+    @Test
+    fun `the kid's shop is a tab root without a back arrow`() {
+        show(ShopPreviewData.ready(KidUiTier.SPROUT, affordable = true))
+        compose.onNodeWithContentDescription("Back").assertDoesNotExist()
+    }
+
+    @Test
+    fun `a parent browsing gets a back arrow`() {
+        var backs = 0
+        show(ShopPreviewData.ready(KidUiTier.SPROUT, affordable = true, canPurchase = false), onBack = { backs++ })
+        compose.onNodeWithContentDescription("Back").assertHasClickAction().performClick()
+        assertEquals(1, backs)
+    }
+
+    @Test
+    fun `a parent's seedling tiles are not buttons`() {
+        show(ShopPreviewData.ready(KidUiTier.SEEDLING, affordable = true, canPurchase = false))
+        compose.onNodeWithContentDescription("Ice cream, 5 coins, You can buy this now").assertHasNoClickAction()
     }
 
     @Test

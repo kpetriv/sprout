@@ -89,7 +89,7 @@ private fun KidShellOnWallet(tier: KidUiTier) {
         tier = tier,
     ) {
         WithShortcuts(kidShortcuts(tier, chat = true, onChat = {}, onScreenTime = {}, onGames = {})) {
-            WalletScreen(state = WalletPreviewData.ready(tier, canAdjust = false), onEvent = {})
+            WalletScreen(state = WalletPreviewData.ready(tier, canAdjust = false), onEvent = {}, onOpenTimeBank = {})
         }
     }
 }

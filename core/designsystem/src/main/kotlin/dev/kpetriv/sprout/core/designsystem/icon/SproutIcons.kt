@@ -84,6 +84,14 @@ object SproutIcons {
     val EmojiEvents: ImageVector
         @Composable get() = ImageVector.vectorResource(R.drawable.sprout_ic_emoji_events)
 
+    /** Material Symbols "favorite" (a wishlist heart, not yet on the list). */
+    val Favorite: ImageVector
+        @Composable get() = ImageVector.vectorResource(R.drawable.sprout_ic_favorite)
+
+    /** Material Symbols "favorite", filled (on the wishlist). */
+    val FavoriteFilled: ImageVector
+        @Composable get() = ImageVector.vectorResource(R.drawable.sprout_ic_favorite_filled)
+
     /** Material Symbols "home". */
     val Home: ImageVector
         @Composable get() = ImageVector.vectorResource(R.drawable.sprout_ic_home)

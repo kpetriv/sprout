@@ -4,26 +4,19 @@ import android.os.Bundle
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
-import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.LiveRegionMode
@@ -35,8 +28,14 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import dev.kpetriv.sprout.core.designsystem.components.CardMeaning
+import dev.kpetriv.sprout.core.designsystem.components.Pictogram
+import dev.kpetriv.sprout.core.designsystem.components.SproutButton
+import dev.kpetriv.sprout.core.designsystem.components.SproutButtonStyle
+import dev.kpetriv.sprout.core.designsystem.components.SproutCard
+import dev.kpetriv.sprout.core.designsystem.components.SproutTopBar
 import dev.kpetriv.sprout.core.designsystem.theme.ProvideKidTier
-import dev.kpetriv.sprout.core.designsystem.theme.SproutTheme
+import dev.kpetriv.sprout.core.designsystem.theme.SproutSpacing
 import dev.kpetriv.sprout.core.model.KidId
 import dev.kpetriv.sprout.core.model.KidUiTier
 import dev.kpetriv.sprout.core.model.RewardKind
@@ -47,7 +46,8 @@ import dev.kpetriv.sprout.core.ui.TierTextRole
  * Navigation entry for the rewards shop of [kidId]. Creates a [ShopViewModel] scoped to the current
  * `ViewModelStoreOwner` (the nav entry), passing [kidId] and [mode] through its `SavedStateHandle`.
  *
- * @param mode [WalletMode.KID] lets the kid buy; [WalletMode.PARENT] only browses.
+ * @param mode [WalletMode.KID] lets the kid buy, and the shop is a tab root there (no back arrow, M9 §5.2);
+ *   [WalletMode.PARENT] only browses, on a pushed screen with a back arrow ([onBack]).
  */
 @Composable
 fun ShopRoute(kidId: KidId, mode: WalletMode, onBack: () -> Unit, modifier: Modifier = Modifier) {
@@ -59,45 +59,41 @@ fun ShopRoute(kidId: KidId, mode: WalletMode, onBack: () -> Unit, modifier: Modi
         },
     )
     val state by viewModel.state.collectAsStateWithLifecycle()
-    ShopScreen(state = state, onEvent = viewModel::onEvent, modifier = modifier, onBack = onBack)
+    ShopScreen(
+        state = state,
+        onEvent = viewModel::onEvent,
+        modifier = modifier,
+        onBack = onBack.takeIf { mode == WalletMode.PARENT },
+    )
 }
 
 /**
  * The shop for any [ShopUiState]. Ready content renders inside [ProvideKidTier] for the kid's tier and switches to
  * [SeedlingShopContent] (picture tiles), [SproutShopContent] (prices and "days until") or [SaplingShopContent] (full
- * catalogue, wishlist and savings plans). The confirm dialog and the purchase outcome dialog use the tier's touch
- * target, so Seedling gets big buttons.
+ * catalogue, wishlist and savings plans). The confirm dialog and the purchase outcome dialog use the tier's pill
+ * height, so Seedling gets big buttons. A kid's top bar takes the tier; a parent's keeps parent sizing.
+ *
+ * @param onBack the top bar's back arrow; null on a tab root (the kid's shop, M9 §5.2).
  */
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ShopScreen(
     state: ShopUiState,
     onEvent: (ShopEvent) -> Unit,
     modifier: Modifier = Modifier,
-    onBack: () -> Unit = {},
+    onBack: (() -> Unit)? = null,
 ) {
     val ready = state as? ShopUiState.Ready
+    val kidTier = ready?.tier?.takeIf { ready.canPurchase }
+    val bar: @Composable () -> Unit = {
+        SproutTopBar(
+            title = ready?.let { stringResource(R.string.feature_wallet_shop_title_named, it.kid.firstName) }
+                ?: stringResource(R.string.feature_wallet_shop_title),
+            onBack = onBack,
+        )
+    }
     Scaffold(
         modifier = modifier,
-        topBar = {
-            TopAppBar(
-                title = {
-                    Text(
-                        text = ready?.let { stringResource(R.string.feature_wallet_shop_title_named, it.kid.firstName) }
-                            ?: stringResource(R.string.feature_wallet_shop_title),
-                        modifier = Modifier.semantics { heading() },
-                    )
-                },
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(
-                            painter = painterResource(R.drawable.feature_wallet_ic_arrow_back),
-                            contentDescription = stringResource(R.string.feature_wallet_back),
-                        )
-                    }
-                },
-            )
-        },
+        topBar = { if (kidTier == null) bar() else ProvideKidTier(kidTier, bar) },
     ) { padding ->
         Box(modifier = Modifier.padding(padding).fillMaxSize()) {
             when (state) {
@@ -131,13 +127,16 @@ private fun ShopReadyContent(state: ShopUiState.Ready, onEvent: (ShopEvent) -> U
     }
 }
 
-/** Decorative picture for a reward; the title carries the meaning for accessibility. */
-internal val RewardKind.icon: String
+/**
+ * The reward's picture (M9 §2.7, D-M9-5): screen time is a TV, a treat an ice cream, an outing a Ferris wheel and
+ * anything else a gift. Decorative; the title carries the meaning.
+ */
+internal val RewardKind.pictogram: Pictogram
     get() = when (this) {
-        RewardKind.SCREEN_TIME -> "📺"
-        RewardKind.TREAT -> "🍦"
-        RewardKind.OUTING -> "🎡"
-        RewardKind.OTHER -> "🎁"
+        RewardKind.SCREEN_TIME -> Pictogram.TV
+        RewardKind.TREAT -> Pictogram.ICE_CREAM
+        RewardKind.OUTING -> Pictogram.FERRIS_WHEEL
+        RewardKind.OTHER -> Pictogram.GIFT
     }
 
 /** The status line under a reward on Sprout: ready to buy, days of pocket money to go, or the amount missing. */
@@ -172,16 +171,28 @@ internal fun ShopItemUi.savingsPlanText(): String? {
     }
 }
 
+/**
+ * The balance card over the rewards ("You have 20 coins" and a coin, Honey on Seedling), then the parent-preview
+ * note and the empty-shop note when they apply.
+ */
 @Composable
 internal fun ShopBalanceHeader(state: ShopUiState.Ready, modifier: Modifier = Modifier) {
-    Column(modifier = modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    Column(modifier = modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(SproutSpacing.md)) {
         state.balanceText?.let {
-            TierScaledText(
-                text = stringResource(R.string.feature_wallet_shop_balance, it),
-                role = TierTextRole.Title,
-                tier = state.tier,
-                modifier = Modifier.semantics { heading() },
-            )
+            SproutCard(modifier = Modifier.fillMaxWidth(), meaning = CardMeaning.Attention) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(SproutSpacing.md),
+                ) {
+                    TierScaledText(
+                        text = stringResource(R.string.feature_wallet_shop_balance, it),
+                        role = TierTextRole.Title,
+                        tier = state.tier,
+                        modifier = Modifier.weight(1f).semantics { heading() },
+                    )
+                    Pictogram(Pictogram.COIN, size = HeaderCoinSize)
+                }
+            }
         }
         if (!state.canPurchase) {
             TierScaledText(
@@ -202,41 +213,49 @@ internal fun ShopBalanceHeader(state: ShopUiState.Ready, modifier: Modifier = Mo
     }
 }
 
-/** Confirm (affordable) or "not yet" (too expensive) for [item]; buttons at least the tier's touch target. */
+/** Confirm (affordable) or "not yet" (too expensive) for [item]; pills at the tier's height. */
 @Composable
 private fun ConfirmDialog(item: ShopItemUi, tier: KidUiTier, isPurchasing: Boolean, onEvent: (ShopEvent) -> Unit) {
     val dismiss = { onEvent(ShopEvent.DismissConfirm) }
     if (item.canAfford) {
         ShopDialog(
-            icon = item.kind.icon,
+            pictogram = item.kind.pictogram,
             title = stringResource(R.string.feature_wallet_shop_confirm_title, item.title),
             body = stringResource(R.string.feature_wallet_shop_confirm_body, item.priceText),
             tier = tier,
             onDismiss = dismiss,
         ) {
-            DialogButton(onClick = { onEvent(ShopEvent.ConfirmPurchase) }, enabled = !isPurchasing, primary = true) {
-                if (isPurchasing) {
-                    val buying = stringResource(R.string.feature_wallet_shop_buying)
-                    CircularProgressIndicator(modifier = Modifier.semantics { contentDescription = buying })
-                } else {
-                    Text(stringResource(R.string.feature_wallet_shop_confirm_yes))
-                }
+            if (isPurchasing) {
+                val buying = stringResource(R.string.feature_wallet_shop_buying)
+                CircularProgressIndicator(modifier = Modifier.semantics { contentDescription = buying })
             }
-            DialogButton(onClick = dismiss, enabled = !isPurchasing, primary = false) {
-                Text(stringResource(R.string.feature_wallet_shop_confirm_no))
-            }
+            SproutButton(
+                text = stringResource(R.string.feature_wallet_shop_confirm_yes),
+                onClick = { onEvent(ShopEvent.ConfirmPurchase) },
+                enabled = !isPurchasing,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            SproutButton(
+                text = stringResource(R.string.feature_wallet_shop_confirm_no),
+                onClick = dismiss,
+                style = SproutButtonStyle.Tertiary,
+                enabled = !isPurchasing,
+                modifier = Modifier.fillMaxWidth(),
+            )
         }
     } else {
         ShopDialog(
-            icon = item.kind.icon,
+            pictogram = item.kind.pictogram,
             title = stringResource(R.string.feature_wallet_shop_not_yet_title),
             body = item.affordabilityText(),
             tier = tier,
             onDismiss = dismiss,
         ) {
-            DialogButton(onClick = dismiss, enabled = true, primary = true) {
-                Text(stringResource(R.string.feature_wallet_shop_ok))
-            }
+            SproutButton(
+                text = stringResource(R.string.feature_wallet_shop_ok),
+                onClick = dismiss,
+                modifier = Modifier.fillMaxWidth(),
+            )
         }
     }
 }
@@ -258,15 +277,17 @@ private fun OutcomeDialog(message: ShopMessage, tier: KidUiTier, onDismiss: () -
         is ShopMessage.Failed -> stringResource(R.string.feature_wallet_shop_oops) to message.failure.message()
     }
     ShopDialog(
-        icon = if (message is ShopMessage.Purchased) "🎉" else "🙈",
+        pictogram = if (message is ShopMessage.Purchased) Pictogram.PARTY else Pictogram.GENERIC,
         title = title,
         body = body,
         tier = tier,
         onDismiss = onDismiss,
     ) {
-        DialogButton(onClick = onDismiss, enabled = true, primary = true) {
-            Text(stringResource(R.string.feature_wallet_shop_ok))
-        }
+        SproutButton(
+            text = stringResource(R.string.feature_wallet_shop_ok),
+            onClick = onDismiss,
+            modifier = Modifier.fillMaxWidth(),
+        )
     }
 }
 
@@ -285,10 +306,10 @@ internal fun PurchaseFailure.message(): String = when (this) {
     PurchaseFailure.Failed -> stringResource(R.string.feature_wallet_shop_failed)
 }
 
-/** A centred dialog: big picture, title, body, then [buttons] stacked full width. */
+/** A centred dialog on a [SproutCard]: the pictogram, title, body, then [buttons] stacked full width. */
 @Composable
 private fun ShopDialog(
-    icon: String,
+    pictogram: Pictogram,
     title: String,
     body: String,
     tier: KidUiTier,
@@ -296,13 +317,13 @@ private fun ShopDialog(
     buttons: @Composable () -> Unit,
 ) {
     Dialog(onDismissRequest = onDismiss) {
-        Surface(shape = MaterialTheme.shapes.extraLarge, tonalElevation = 6.dp) {
+        SproutCard(contentPadding = PaddingValues(SproutSpacing.lg)) {
             Column(
-                modifier = Modifier.padding(24.dp),
+                modifier = Modifier.fillMaxWidth(),
                 horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(16.dp),
+                verticalArrangement = Arrangement.spacedBy(SproutSpacing.md),
             ) {
-                Text(text = icon, style = MaterialTheme.typography.displayMedium)
+                Pictogram(pictogram, size = DialogPictogramSize)
                 TierScaledText(
                     text = title,
                     role = TierTextRole.Title,
@@ -324,18 +345,6 @@ private fun ShopDialog(
 }
 
 @Composable
-private fun DialogButton(onClick: () -> Unit, enabled: Boolean, primary: Boolean, content: @Composable () -> Unit) {
-    val modifier = Modifier
-        .fillMaxWidth()
-        .heightIn(min = SproutTheme.tierTokens.minTouchTarget)
-    if (primary) {
-        Button(onClick = onClick, enabled = enabled, modifier = modifier) { content() }
-    } else {
-        OutlinedButton(onClick = onClick, enabled = enabled, modifier = modifier) { content() }
-    }
-}
-
-@Composable
 private fun ShopLoading() {
     val description = stringResource(R.string.feature_wallet_shop_loading)
     Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -346,8 +355,8 @@ private fun ShopLoading() {
 @Composable
 private fun ShopErrorContent(reason: ShopError, onRetry: () -> Unit) {
     Column(
-        modifier = Modifier.fillMaxSize().padding(24.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp, Alignment.CenterVertically),
+        modifier = Modifier.fillMaxSize().padding(SproutSpacing.lg),
+        verticalArrangement = Arrangement.spacedBy(SproutSpacing.md, Alignment.CenterVertically),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         Text(
@@ -361,6 +370,9 @@ private fun ShopErrorContent(reason: ShopError, onRetry: () -> Unit) {
             textAlign = TextAlign.Center,
             modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
         )
-        Button(onClick = onRetry) { Text(stringResource(R.string.feature_wallet_retry)) }
+        SproutButton(text = stringResource(R.string.feature_wallet_retry), onClick = onRetry)
     }
 }
+
+private val HeaderCoinSize = 64.dp
+private val DialogPictogramSize = 96.dp

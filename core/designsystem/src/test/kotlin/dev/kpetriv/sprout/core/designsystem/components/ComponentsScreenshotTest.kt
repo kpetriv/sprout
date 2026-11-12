@@ -100,4 +100,8 @@ class LargeFontComponentsScreenshotTest : ScreenshotTest(checkAccessibility = tr
 
     @Test
     fun avatarTiers() = screenshot.captureFontScaleTiers("component_avatar") { InitialAvatarSample() }
+
+    // The percent chip stacks under the title from STACK_FONT_SCALE, so the title never breaks mid-word.
+    @Test
+    fun goalBarTiers() = screenshot.captureFontScaleTiers("component_goal_bar") { GoalBarSample() }
 }

@@ -21,6 +21,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.ProgressBarRangeInfo
 import androidx.compose.ui.semantics.progressBarRangeInfo
@@ -33,6 +34,7 @@ import dev.kpetriv.sprout.core.designsystem.R
 import dev.kpetriv.sprout.core.designsystem.icon.SproutIcons
 import dev.kpetriv.sprout.core.designsystem.theme.ColourLevel
 import dev.kpetriv.sprout.core.designsystem.theme.OutfitFontFamily
+import dev.kpetriv.sprout.core.designsystem.theme.STACK_FONT_SCALE
 import dev.kpetriv.sprout.core.designsystem.theme.SproutPreviewFrame
 import dev.kpetriv.sprout.core.designsystem.theme.SproutSpacing
 import dev.kpetriv.sprout.core.designsystem.theme.SproutTheme
@@ -94,7 +96,12 @@ fun GoalBar(
             ) {
                 Icon(icon, contentDescription = null, tint = tint.content, modifier = Modifier.size(24.dp))
             }
-            Column(modifier = Modifier.weight(1f)) {
+            // At large font sizes the chip goes under the title, so the title never breaks mid-word.
+            val stacked = LocalDensity.current.fontScale >= STACK_FONT_SCALE
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(if (stacked) SproutSpacing.xs else 0.dp),
+            ) {
                 Text(
                     text = title,
                     style = MaterialTheme.typography.titleMedium.copy(
@@ -106,16 +113,9 @@ fun GoalBar(
                 if (caption != null) {
                     Text(text = caption, style = MaterialTheme.typography.bodyMedium, color = scheme.onSurfaceVariant)
                 }
+                if (stacked) PercentChip(clamped)
             }
-            val money = CardMeaning.Money.accentTint()
-            Text(
-                text = stringResource(R.string.core_designsystem_goal_percent_saved, clamped),
-                style = MaterialTheme.typography.labelLarge,
-                color = money.content,
-                modifier = Modifier
-                    .background(money.container, CircleShape)
-                    .padding(horizontal = SproutSpacing.md - SproutSpacing.xs, vertical = SproutSpacing.xs + 2.dp),
-            )
+            if (!stacked) PercentChip(clamped)
         }
         GoalTrack(fraction = clamped / PERCENT.toFloat())
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -138,6 +138,20 @@ fun GoalBar(
             )
         }
     }
+}
+
+/** The "31% saved" chip on Leaf tint. */
+@Composable
+private fun PercentChip(percent: Int) {
+    val money = CardMeaning.Money.accentTint()
+    Text(
+        text = stringResource(R.string.core_designsystem_goal_percent_saved, percent),
+        style = MaterialTheme.typography.labelLarge,
+        color = money.content,
+        modifier = Modifier
+            .background(money.container, CircleShape)
+            .padding(horizontal = SproutSpacing.md - SproutSpacing.xs, vertical = SproutSpacing.xs + 2.dp),
+    )
 }
 
 @Composable
