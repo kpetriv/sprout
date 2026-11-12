@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
@@ -59,8 +60,9 @@ internal object PlayFieldDefaults {
 /**
  * The full-bleed game scaffold (M9-games §2.2): the Field green behind the system bars (edge to edge, with light
  * status- and navigation-bar icons while it is shown), then a transparent top bar with a back tile (Chalk at 12 %),
- * [title] in Outfit 800 announced as a heading, and the Lime sprout mark, then [content] filling the rest, inside the
- * safe-drawing insets. [backEnabled] = false dims the back tile (Sapling's "Saving…"). Use inside [PlaygroundTheme].
+ * [title] in Outfit 800 announced as a heading, and the Lime sprout mark (or [trailing], such as the Times tables setup
+ * chip), then [content] filling the rest, inside the safe-drawing insets. [backEnabled] = false dims the back tile
+ * (Sapling's "Saving…"). Use inside [PlaygroundTheme].
  */
 @Composable
 internal fun PlayField(
@@ -68,6 +70,7 @@ internal fun PlayField(
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
     backEnabled: Boolean = true,
+    trailing: (@Composable () -> Unit)? = null,
     content: @Composable BoxScope.() -> Unit,
 ) {
     LightSystemBarIcons()
@@ -77,13 +80,13 @@ internal fun PlayField(
             .background(Playground.colors.field)
             .windowInsetsPadding(WindowInsets.safeDrawing),
     ) {
-        PlayTopBar(title = title, onBack = onBack, backEnabled = backEnabled)
+        PlayTopBar(title = title, onBack = onBack, backEnabled = backEnabled, trailing = trailing)
         Box(modifier = Modifier.weight(1f).fillMaxWidth(), content = content)
     }
 }
 
 @Composable
-private fun PlayTopBar(title: String, onBack: () -> Unit, backEnabled: Boolean) {
+private fun PlayTopBar(title: String, onBack: () -> Unit, backEnabled: Boolean, trailing: (@Composable () -> Unit)?) {
     val colors = Playground.colors
     val tileSize = SproutTheme.tierTokens.minTouchTarget
     val back = PlaygroundAccent(
@@ -109,19 +112,24 @@ private fun PlayTopBar(title: String, onBack: () -> Unit, backEnabled: Boolean) 
         }
         Text(
             text = title,
-            style = PlaygroundType.title,
+            // Beside a trailing chip the title steps down a size, so "Times tables" keeps its whole name.
+            style = if (trailing == null) PlaygroundType.title else PlaygroundType.figure,
             color = colors.chalk,
             textAlign = TextAlign.Center,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier.weight(1f).semantics { heading() },
         )
-        // The sprout mark balances the back tile, so the title stays centred. Decorative.
-        Box(
-            modifier = Modifier.size(tileSize).clearAndSetSemantics { },
-            contentAlignment = Alignment.Center,
-        ) {
-            Icon(SproutIcons.Eco, contentDescription = null, tint = colors.lime)
+        if (trailing != null) {
+            Box(modifier = Modifier.heightIn(min = tileSize), contentAlignment = Alignment.CenterEnd) { trailing() }
+        } else {
+            // The sprout mark balances the back tile, so the title stays centred. Decorative.
+            Box(
+                modifier = Modifier.size(tileSize).clearAndSetSemantics { },
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(SproutIcons.Eco, contentDescription = null, tint = colors.lime)
+            }
         }
     }
 }

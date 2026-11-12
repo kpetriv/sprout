@@ -17,11 +17,9 @@
   <string name="feature_games_kind_memory_seedling_description">Remember the pictures</string>
   <string name="feature_games_kind_memory_description">Remember the order</string>
   <string name="feature_games_kind_words_description">Put the letters back in order</string>
-  <!-- Interim until M9-games slice G-C. -->
   <string name="feature_games_kind_tables">Times tables</string>
-  <string name="feature_games_kind_tables_description">20 typed questions from the tables you choose</string>
-  <!-- %1$s is a game name. -->
-  <string name="feature_games_play_game">Play %1$s</string>
+  <!-- A hub card: %1$s is a game name, %2$s its subtitle ("Sums and times tables", or the chosen tables "3, 4, 6"). -->
+  <string name="feature_games_play_game_detail">Play %1$s, %2$s</string>
 
   <!-- Hub. %1$s is an amount ("23p"). -->
   <string name="feature_games_remaining">You can still earn %1$s today</string>
@@ -39,6 +37,10 @@
   <string name="feature_games_timed">Timed</string>
   <string name="feature_games_timed_description">Beat the clock in every round for a bonus</string>
   <string name="feature_games_start">Start</string>
+  <!-- Heading of the Sapling start card's list of the kid's last three credited plays. -->
+  <string name="feature_games_last_plays">Your last plays</string>
+  <!-- A past play's score: %1$d right of %2$d rounds. -->
+  <string name="feature_games_history_score">%1$d of %2$d</string>
   <string name="feature_games_unavailable">This game is not available yet.</string>
 
   <!-- Rounds. "3 of 8". -->
@@ -53,10 +55,11 @@
   <string name="feature_games_question_description">What is %1$s?</string>
   <string name="feature_games_answer_label">Your answer</string>
   <string name="feature_games_minus">Plus or minus</string>
-  <string name="feature_games_check">Check</string>
 
   <string name="feature_games_memory_watch">Watch carefully!</string>
   <string name="feature_games_memory_tap">Now tap them in the same order</string>
+  <!-- Under Sapling's timed memory choices. -->
+  <string name="feature_games_memory_timed">Timed · bonus if every round beats the clock</string>
   <!-- The memory card while the sequence shows (one announcement, not one per symbol). -->
   <string name="feature_games_memory_showing">Showing the order</string>
   <!-- %1$s is the sequence, such as "cat, dog, sun". Announced once, when the sequence hides. -->
@@ -102,8 +105,30 @@
   <string name="feature_games_game_reward">Game reward</string>
   <!-- %1$d answers right in a row. -->
   <string name="feature_games_streak">Streak %1$d</string>
+  <!-- %1$d answers right in this play ("Right 6"). -->
+  <string name="feature_games_right">Right %1$d</string>
   <!-- The number pad's submit key. -->
   <string name="feature_games_go">Go</string>
   <!-- Content description of the number pad's backspace key. -->
   <string name="feature_games_backspace">Delete last digit</string>
+
+  <!-- Times tables (M9-games §6.3). -->
+  <string name="feature_games_tables_which">Which tables?</string>
+  <!-- Selects every table, 2 to 12. -->
+  <string name="feature_games_tables_mix">Mix</string>
+  <!-- What TalkBack reads for the Mix tile. -->
+  <string name="feature_games_tables_mix_description">Mix, every table</string>
+  <string name="feature_games_tables_level">Level</string>
+  <string name="feature_games_level_gentle_line">Gentle · 20 seconds a question</string>
+  <string name="feature_games_level_steady_line">Steady · 10 seconds a question</string>
+  <string name="feature_games_level_rock_star_line">Rock star · 5 seconds, bonus credit</string>
+  <string name="feature_games_level_gentle">Gentle</string>
+  <string name="feature_games_level_steady">Steady</string>
+  <string name="feature_games_level_rock_star">Rock star</string>
+  <!-- %1$d is the number of questions (20). -->
+  <string name="feature_games_tables_start">Start · %1$d questions</string>
+  <!-- The best score of this week's Times tables plays: %1$d right of %2$d. -->
+  <string name="feature_games_tables_best">Best this week: %1$d of %2$d</string>
+  <!-- The setup chip in the top bar: %1$s the tables ("3, 4, 6" or "Mix"), %2$s the level ("Gentle"). -->
+  <string name="feature_games_tables_chip">%1$s · %2$s</string>
 </resources>

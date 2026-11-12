@@ -74,12 +74,16 @@ The single source for what is covered. Rule: **parent screens light and dark; ki
 | wallet | Wallet, parent view | loading, error | L/D |
 | wallet | Adjustment form | empty, prefilled from a receipt, rejected, signatures off | L/D |
 | wallet | Shop | can afford, cannot afford, loading, error, empty, confirm, not yet, bought, purchase failed, parent browsing | tiers |
-| games | Hub | ready, daily cap reached | tiers |
-| games | Hub | ready | tablet per tier |
-| games | Rounds | arithmetic, memory showing, memory answering | tiers |
-| games | Rounds | word | Sprout, Sapling |
-| games | Rounds | timed start, timed arithmetic | Sapling |
-| games | Result | credited, capped, clamped, refused, unknown | tiers |
+| games | Hub (Morning garden, four tiles with Times tables) | ready, daily cap reached | tiers |
+| games | Hub | ready | tablet and tablet portrait per tier |
+| games | Rounds (Playground) | arithmetic, memory showing, memory answering | tiers; tablet and tablet portrait per tier |
+| games | Rounds (Playground) | word | Sprout, Sapling; tablet and tablet portrait for both |
+| games | Start cards (Playground) | timed start, start with "Your last plays", timed arithmetic | Sapling |
+| games | Times tables (Playground) | setup, question | Sprout, Sapling; tablet and tablet portrait for both |
+| games | Times tables (Playground) | Rock star (timed) question | Sapling |
+| games | Result (Playground) | credited | tiers; tablet and tablet portrait per tier |
+| games | Result (Playground) | capped, clamped, refused, unknown | tiers |
+| games | Playground components | play field, tiles, segment progress, countdown ring, sequence panel (also font 2.0), shape and picture glyphs, reward card, rosette, streak pill, number pad, read-aloud tile | tiers |
 | timebank | Time bank | idle, running, empty, time up, loading, error | tiers |
 | timebank | Time bank | running | tiers, dark |
 | lock | PIN entry | entry, wait, fingerprint required, fingerprint changed | L/D |

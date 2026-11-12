@@ -7,6 +7,9 @@ import dev.kpetriv.sprout.core.games.GameKind
 import dev.kpetriv.sprout.core.games.MemoryRound
 import dev.kpetriv.sprout.core.games.Score
 import dev.kpetriv.sprout.core.games.Symbol
+import dev.kpetriv.sprout.core.games.TablesLevel
+import dev.kpetriv.sprout.core.games.TablesRound
+import dev.kpetriv.sprout.core.games.TablesSetup
 import dev.kpetriv.sprout.core.games.WordRound
 import dev.kpetriv.sprout.core.model.KidUiTier
 
@@ -17,6 +20,9 @@ sealed interface GamePlayUiState {
 
     /**
      * Before the first round: how many [rounds] the play has, and (Sapling only, [timedAvailable]) the "Timed" switch.
+     * Times tables show their [setup] instead (which tables, which level; the level decides [timed], so the switch is
+     * never shown for them) with the kid's [bestThisWeek] score from the ledger. Sapling's other games list the
+     * [history] of their last plays ("Your last plays", at most three), their amounts in [currency].
      */
     data class Start(
         override val tier: KidUiTier,
@@ -24,12 +30,18 @@ sealed interface GamePlayUiState {
         val rounds: Int,
         val timedAvailable: Boolean,
         val timed: Boolean,
+        val setup: TablesSetup? = null,
+        val history: List<GamePlaySummary> = emptyList(),
+        val bestThisWeek: Int? = null,
+        val currency: Currency.Fiat? = null,
     ) : GamePlayUiState
 
     /**
-     * Round [roundNumber] (1-based) of [roundCount]. With [timed], a time bar runs for [timeLimitMs] once the round
-     * takes answers (for memory, after the sequence is hidden). [roundKey] changes with every new round, so effects
-     * (read-aloud, the time bar) restart even when two rounds look alike.
+     * Round [roundNumber] (1-based) of [roundCount]. With [timed], a countdown ring runs for [timeLimitMs] once the
+     * round takes answers (for memory, after the sequence is hidden); Times tables always show it (informational
+     * below Rock star). [roundKey] changes with every new round, so effects (read-aloud, the ring) restart even when
+     * two rounds look alike. [right] and [streak] count this play's right answers and the run of them up to now (the
+     * "Right 6 · Streak 4" line and the streak pill); [setup] is the Times tables setup of the play.
      */
     data class Playing(
         override val tier: KidUiTier,
@@ -40,6 +52,9 @@ sealed interface GamePlayUiState {
         val timeLimitMs: Long,
         val round: RoundUi,
         val roundKey: Long,
+        val right: Int = 0,
+        val streak: Int = 0,
+        val setup: TablesSetup? = null,
     ) : GamePlayUiState
 
     /** The play is over: [score] and what it earned ([credit]). */
@@ -76,6 +91,9 @@ sealed interface RoundUi {
      * scrambled letter tiles already used.
      */
     data class Word(val round: WordRound, val answer: String = "", val used: List<Int> = emptyList()) : RoundUi
+
+    /** A Times tables question; [typed] is the answer entered so far on the number pad (digits only). */
+    data class Tables(val round: TablesRound, val typed: String = "") : RoundUi
 }
 
 /** What the finished play earned, as the result screen shows it. */
@@ -118,13 +136,25 @@ sealed interface GamePlayEvent {
     /** An arithmetic choice (Seedling and Sprout). */
     data class Choose(val value: Int) : GamePlayEvent
 
-    /** The Sapling answer field changed; only digits and one leading minus are kept. */
+    /** The typed answer field changed; only digits (and, for arithmetic, one leading minus) are kept. */
     data class AnswerChanged(val text: String) : GamePlayEvent
+
+    /** A number-pad digit (0 to 9) for the typed answer (Sapling arithmetic, Times tables). */
+    data class Digit(val digit: Int) : GamePlayEvent
+
+    /** The number pad's backspace: removes the last character of the typed answer. */
+    data object Backspace : GamePlayEvent
+
+    /** The Times tables start card: the tables chosen (2 to 12, at least one). */
+    data class TablesChanged(val tables: Set<Int>) : GamePlayEvent
+
+    /** The Times tables start card: the level chosen. */
+    data class LevelChanged(val level: TablesLevel) : GamePlayEvent
 
     /** Flips the sign of the Sapling answer. */
     data object ToggleMinus : GamePlayEvent
 
-    /** Checks the Sapling typed answer (IME done or the check button). */
+    /** Checks the typed answer (IME done, "Check" or the number pad's "Go"). */
     data object SubmitAnswer : GamePlayEvent
 
     data class TapSymbol(val symbol: Symbol) : GamePlayEvent

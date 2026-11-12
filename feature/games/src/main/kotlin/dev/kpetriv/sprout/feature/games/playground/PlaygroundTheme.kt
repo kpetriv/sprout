@@ -18,6 +18,9 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.tooling.preview.PreviewParameterProvider
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.em
+import androidx.compose.ui.unit.sp
+import dev.kpetriv.sprout.core.designsystem.theme.AccentLevel
 import dev.kpetriv.sprout.core.designsystem.theme.OutfitFontFamily
 import dev.kpetriv.sprout.core.designsystem.theme.PlaygroundColors
 import dev.kpetriv.sprout.core.designsystem.theme.PlaygroundTokens
@@ -139,6 +142,28 @@ internal object PlaygroundType {
         @ReadOnlyComposable
         get() = MaterialTheme.typography.titleMedium.outfit()
 
+    /**
+     * The question of a round ("30 − 25", "6 × 7"): Outfit 800 at 68 sp, 48 sp on the quiet Sapling set
+     * (M9-games §4), from displayLarge. Not tier-scaled (the sizes are the tiers'); the user's font scale applies.
+     */
+    val prompt: TextStyle
+        @Composable
+        @ReadOnlyComposable
+        get() {
+            val size = if (Playground.tokens.accents == AccentLevel.QUIET) PROMPT_QUIET_SP.sp else PROMPT_SP.sp
+            return MaterialTheme.typography.displayLarge.outfit().copy(
+                fontSize = size,
+                lineHeight = size * PROMPT_LINE_HEIGHT,
+                letterSpacing = PROMPT_TRACKING.em,
+            )
+        }
+
+    /** A heading on the field ("How many?", "Watch carefully!", "Which tables?"): Outfit 800 at headlineMedium. */
+    val heading: TextStyle
+        @Composable
+        @ReadOnlyComposable
+        get() = MaterialTheme.typography.headlineMedium.outfit()
+
     /** The amount on the reward card: Outfit 800 at displaySmall (36 sp unscaled). */
     val amount: TextStyle
         @Composable
@@ -146,6 +171,11 @@ internal object PlaygroundType {
         get() = MaterialTheme.typography.displaySmall.outfit()
 
     private fun TextStyle.outfit() = copy(fontFamily = OutfitFontFamily, fontWeight = FontWeight.ExtraBold)
+
+    private const val PROMPT_SP = 68
+    private const val PROMPT_QUIET_SP = 48
+    private const val PROMPT_LINE_HEIGHT = 1.06f
+    private const val PROMPT_TRACKING = -0.02f
 }
 
 /** A component sample on the field, the way goldens and previews show it. */

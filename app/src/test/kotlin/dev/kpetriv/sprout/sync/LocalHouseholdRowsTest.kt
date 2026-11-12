@@ -3,6 +3,8 @@ package dev.kpetriv.sprout.sync
 import android.app.Application
 import dev.kpetriv.sprout.core.database.BlobTarget
 import dev.kpetriv.sprout.core.database.HouseholdFiatCurrencyProvider
+import dev.kpetriv.sprout.core.database.LocalPreferenceStore
+import dev.kpetriv.sprout.core.database.LocalPreferenceStores
 import dev.kpetriv.sprout.core.database.LocaleFiatCurrencyProvider
 import dev.kpetriv.sprout.core.database.TestHousehold
 import dev.kpetriv.sprout.core.domainledger.AttestationLevel
@@ -65,7 +67,12 @@ class LocalHouseholdRowsTest {
         assertEquals(household.gbp, currencies.currentFiatCurrency())
 
         val secrets = ParentSecrets { secretsCleared += 1 }
-        LocalHouseholdRows(household.database, household.files, secrets, Dispatchers.IO, currencies).clear()
+        var preferencesCleared = 0
+        // The previous household's kids' local preferences (their Times tables setup) do not carry over.
+        val preferences = LocalPreferenceStores(setOf(LocalPreferenceStore { preferencesCleared += 1 }))
+        LocalHouseholdRows(household.database, household.files, secrets, Dispatchers.IO, currencies, preferences)
+            .clear()
+        assertEquals(1, preferencesCleared)
 
         assertEquals(Currency.Fiat("EUR"), currencies.fiatCurrency(), "the previous household's currency is forgotten")
 

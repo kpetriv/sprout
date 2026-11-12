@@ -6,6 +6,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assert
@@ -15,6 +16,9 @@ import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.hasSetTextAction
+import androidx.compose.ui.test.hasText
+import androidx.compose.ui.test.isOff
+import androidx.compose.ui.test.isOn
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
@@ -30,6 +34,8 @@ import dev.kpetriv.sprout.core.games.GameId
 import dev.kpetriv.sprout.core.games.GameKind
 import dev.kpetriv.sprout.core.games.GameSession
 import dev.kpetriv.sprout.core.games.MemoryRound
+import dev.kpetriv.sprout.core.games.TablesLevel
+import dev.kpetriv.sprout.core.games.TablesSetup
 import dev.kpetriv.sprout.core.model.KidUiTier
 import dev.kpetriv.sprout.core.testing.accessibility.AccessibilityRule
 import dev.kpetriv.sprout.core.ui.ReadAloud
@@ -72,6 +78,8 @@ class GamesScreensTest {
             currency = { TestData.gbp },
             timer = FakeGameTimer(),
             creditScope = creditScope(main.dispatcher),
+            setups = FakeTablesSetupStore(),
+            history = FakeHistorySource(),
         )
         compose.setContent {
             SproutTheme {
@@ -112,6 +120,11 @@ class GamesScreensTest {
 
         compose.onNodeWithContentDescription("Read this to me").performClick()
         assertEquals(listOf(prompt, prompt), spoken)
+
+        // Tapping the prompt itself reads it too.
+        compose.onNode(hasClickAction() and hasContentDescription(round.spokenPrompt, substring = true))
+            .performClick()
+        assertEquals(listOf(prompt, prompt, prompt), spoken)
     }
 
     @Test
@@ -205,7 +218,7 @@ class GamesScreensTest {
         }
 
         compose.onNodeWithText("Come back tomorrow, you can still play for fun").assertIsDisplayed()
-        compose.onNodeWithContentDescription("Play Word scramble").performClick()
+        compose.onNodeWithContentDescription("Play Word scramble, Put the letters back in order").performClick()
         assertEquals(listOf(GameKind.WORDS), played)
     }
 
@@ -260,12 +273,14 @@ class GamesScreensTest {
 
         compose.onNodeWithText("You got 4 of 5!").assertIsDisplayed()
         compose.onNodeWithText("+4 pennies").assertIsDisplayed()
+        compose.onNodeWithText("Game reward").assertDoesNotExist()
 
         state = GamesPreviewData.resultCredited(KidUiTier.SPROUT).copy(
             credit = CreditUi.Credited(Money(7), Money(15), clamped = false),
         )
-        compose.onNodeWithText("You earned +£0.07").assertIsDisplayed()
-        compose.onNodeWithText("You can still earn £0.15 today").assertIsDisplayed()
+        compose.onNodeWithText("Game reward", useUnmergedTree = true).assertIsDisplayed()
+        compose.onNodeWithText("+£0.07", useUnmergedTree = true).assertIsDisplayed()
+        compose.onNodeWithText("You can still earn £0.15 today", useUnmergedTree = true).assertIsDisplayed()
     }
 
     @Test
@@ -287,12 +302,73 @@ class GamesScreensTest {
         compose.onNodeWithText("pennies", substring = true).assertDoesNotExist()
 
         state = GamesPreviewData.resultClamped(KidUiTier.SPROUT)
-        compose.onNodeWithText("You reached today's limit, so this game earned +£0.04").assertIsDisplayed()
+        compose.onNodeWithText("You reached today's limit, so this game earned +£0.04", useUnmergedTree = true)
+            .assertIsDisplayed()
 
         state = GamesPreviewData.resultCredited(KidUiTier.SPROUT).copy(credit = CreditUi.CheckDate)
         compose.onNodeWithText("Check this phone's date, then try again.").assertIsDisplayed()
         compose.onNodeWithText("Try again").performClick()
         assertEquals(listOf<GamePlayEvent>(GamePlayEvent.RetryCredit), events)
+    }
+
+    @Test
+    fun `times tables, pick the tables and the level, start, and answer on the number pad`() {
+        val setups = FakeTablesSetupStore()
+        val vm = GameViewModel(
+            handle = TestData.handle(KidUiTier.SPROUT, GameKind.TABLES),
+            submitter = FakeCreditSubmitter(),
+            seeds = FixedSeeds(SEED),
+            currency = { TestData.gbp },
+            timer = FakeGameTimer(),
+            creditScope = creditScope(main.dispatcher),
+            setups = setups,
+            history = FakeHistorySource(),
+        )
+        a11y.forTier(KidUiTier.SPROUT)
+        compose.setContent {
+            SproutTheme {
+                val state by vm.state.collectAsStateWithLifecycle()
+                GamePlayScreen(state = state, onEvent = vm::onEvent, onFinished = {})
+            }
+        }
+
+        compose.onNodeWithText("Which tables?").assertIsDisplayed()
+        val checkbox = SemanticsMatcher.expectValue(SemanticsProperties.Role, Role.Checkbox)
+        compose.onNodeWithContentDescription("2").assert(isOn()).assert(checkbox).performClick()
+        compose.onNodeWithContentDescription("7").performClick()
+        compose.onNodeWithText("Rock star · 5 seconds, bonus credit").performClick()
+        val chosen = TablesSetup(setOf(5, 7, 10), TablesLevel.ROCK_STAR)
+        assertEquals(chosen, assertIs<GamePlayUiState.Start>(vm.state.value).setup)
+        compose.onNodeWithContentDescription("7").assert(isOn())
+        compose.onNodeWithContentDescription("2").assert(isOff())
+        compose.onNodeWithContentDescription("Mix, every table").assert(isOff())
+
+        compose.onNodeWithText("Start · 20 questions").performClick()
+        compose.onNodeWithText("5, 7, 10 · Rock star").assertIsDisplayed()
+        compose.onNodeWithContentDescription("Round 1 of 20").assertIsDisplayed()
+        val round = (assertIs<GamePlayUiState.Playing>(vm.state.value).round as RoundUi.Tables).round
+        round.answer.toString().forEach { digit ->
+            compose.onNode(hasText("$digit") and hasClickAction() and !hasSetTextAction()).performClick()
+        }
+        compose.onNodeWithText("Go").performClick()
+
+        compose.onNodeWithContentDescription("Round 2 of 20").assertIsDisplayed()
+        compose.onNodeWithText("Right 1", useUnmergedTree = true).assertIsDisplayed()
+        assertEquals(listOf(TestData.kid to chosen), setups.saved)
+    }
+
+    @Test
+    fun `the hub's times tables tile shows the kid's tables`() {
+        compose.setContent {
+            SproutTheme {
+                GamesHubScreen(state = GamesPreviewData.hub(KidUiTier.SPROUT), onEvent = {}, onPlay = {})
+            }
+        }
+
+        compose.onNodeWithText("3, 4, 6", useUnmergedTree = true).assertIsDisplayed()
+        // TalkBack reads the card's description, so the chosen tables are in it.
+        compose.onNodeWithContentDescription("Play Times tables, 3, 4, 6").assertIsDisplayed()
+        compose.onNodeWithContentDescription("Back").assertDoesNotExist()
     }
 
     private companion object {

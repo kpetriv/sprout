@@ -4,7 +4,10 @@ import androidx.lifecycle.SavedStateHandle
 import app.cash.turbine.test
 import dev.kpetriv.sprout.core.domainledger.Currency
 import dev.kpetriv.sprout.core.domainledger.Money
+import dev.kpetriv.sprout.core.games.Difficulty
 import dev.kpetriv.sprout.core.games.GameKind
+import dev.kpetriv.sprout.core.games.TablesLevel
+import dev.kpetriv.sprout.core.games.TablesSetup
 import dev.kpetriv.sprout.core.model.KidUiTier
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -21,6 +24,7 @@ class GamesHubViewModelTest {
     val main = MainDispatcherRule()
 
     private val cap = FakeCapSource()
+    private val setups = FakeTablesSetupStore()
 
     private fun viewModel(tier: KidUiTier, currency: GameCurrencySource = GameCurrencySource { TestData.gbp }) =
         GamesHubViewModel(
@@ -29,6 +33,7 @@ class GamesHubViewModelTest {
             ),
             cap = cap,
             currency = currency,
+            setups = setups,
         )
 
     @Test
@@ -43,6 +48,29 @@ class GamesHubViewModelTest {
         viewModel(KidUiTier.SAPLING).state.test {
             val ready = assertIs<GamesHubUiState.Ready>(expectMostRecentItem())
             assertEquals(GameKind.entries, ready.games)
+        }
+    }
+
+    @Test
+    fun `the times tables tile shows the stored setup, the default until there is one`() = runTest {
+        viewModel(KidUiTier.SEEDLING).state.test {
+            assertEquals(null, assertIs<GamesHubUiState.Ready>(expectMostRecentItem()).tablesSetup)
+        }
+        viewModel(KidUiTier.SPROUT).state.test {
+            val default = TablesSetup.defaultFor(Difficulty.SPROUT)
+            assertEquals(default, assertIs<GamesHubUiState.Ready>(expectMostRecentItem()).tablesSetup)
+            val chosen = TablesSetup(setOf(3, 4, 6), TablesLevel.STEADY)
+            setups.save(TestData.kid, chosen)
+            assertEquals(chosen, assertIs<GamesHubUiState.Ready>(awaitItem()).tablesSetup)
+        }
+    }
+
+    @Test
+    fun `an unreadable setup store shows the default setup, not an error`() = runTest {
+        setups.fail = true
+        viewModel(KidUiTier.SAPLING).state.test {
+            val ready = assertIs<GamesHubUiState.Ready>(expectMostRecentItem())
+            assertEquals(TablesSetup.defaultFor(Difficulty.SAPLING), ready.tablesSetup)
         }
     }
 

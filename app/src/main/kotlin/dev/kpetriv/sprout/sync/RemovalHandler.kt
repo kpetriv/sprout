@@ -13,6 +13,7 @@ import dev.kpetriv.sprout.core.crypto.FilesDirBlobStorage
 import dev.kpetriv.sprout.core.crypto.ParentAuthorizer
 import dev.kpetriv.sprout.core.database.HouseholdFiatCurrencyProvider
 import dev.kpetriv.sprout.core.database.LocalDataFiles
+import dev.kpetriv.sprout.core.database.LocalPreferenceStores
 import dev.kpetriv.sprout.core.database.Session
 import dev.kpetriv.sprout.core.database.SessionStore
 import dev.kpetriv.sprout.core.database.SproutDatabase
@@ -230,7 +231,8 @@ internal fun keepsDeviceIdentity(session: Session?): Boolean = session != null &
  * blob cache keys stay, and so does this device's chat encryption key (like its device key, it belongs to the
  * device id): onboarding moves it to a stash before this phone registers as a new device (`ForgetChatKeyUseCase`,
  * D-REL-7, D-REL-29) and restores a device only for the account its registry row names (D-REL-27), so a new
- * household, parent or kid never inherits it.
+ * household, parent or kid never inherits it. The local preference stores ([LocalPreferenceStores]: the kids' Times
+ * tables setup) are cleared as well, so the previous household's kid ids do not carry over.
  */
 class LocalHouseholdRows @Inject constructor(
     private val database: SproutDatabase,
@@ -238,8 +240,10 @@ class LocalHouseholdRows @Inject constructor(
     private val parentSecrets: ParentSecrets,
     @param:Dispatcher(SproutDispatchers.IO) private val dispatcher: CoroutineDispatcher,
     private val currencies: HouseholdFiatCurrencyProvider,
+    private val preferences: LocalPreferenceStores,
 ) {
     suspend fun clear() {
+        preferences.clearAll()
         withContext(dispatcher) {
             database.clearAllTables()
             files.photoDirectory.listFiles()?.forEach { it.deleteRecursively() }

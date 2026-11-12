@@ -17,6 +17,7 @@ import dev.kpetriv.sprout.core.database.entity.ReadMarkEntity
 import dev.kpetriv.sprout.core.database.entity.RegistrationStatus
 import dev.kpetriv.sprout.core.database.entity.ThreadKeyEntity
 import dev.kpetriv.sprout.core.database.usecase.ForgetChatKeyUseCase
+import dev.kpetriv.sprout.core.database.usecase.PurgeLocalHouseholdUseCase
 import dev.kpetriv.sprout.core.database.usecase.WipeLocalDataUseCase
 import dev.kpetriv.sprout.core.domainhousehold.Chore
 import dev.kpetriv.sprout.core.domainhousehold.ChoreReward
@@ -205,7 +206,8 @@ class PurgeAndWipeTest {
         File(blobs, "b-1.blob").writeBytes(byteArrayOf(1))
         val secrets = File(context.noBackupFilesDir, "secrets-${UUID.randomUUID()}").apply { mkdirs() }
         LocalDataFiles.SECRET_NAMES.forEach { File(secrets, "$it.bin").writeBytes(byteArrayOf(1)) }
-        return database to LocalDataFiles(context.getDatabasePath(name), photos, secrets, blobs)
+        val tablesSetup = File(context.noBackupFilesDir, "datastore-${UUID.randomUUID()}/tables.preferences_pb")
+        return database to LocalDataFiles(context.getDatabasePath(name), photos, secrets, blobs, tablesSetup)
     }
 
     private fun LocalDataFiles.chatKey() = File(secretsDirectory, "${EncryptionKeyStore.SECRET_NAME}.bin")
@@ -225,19 +227,102 @@ class PurgeAndWipeTest {
         assertTrue(files.secretsDirectory.listFiles().orEmpty().isEmpty())
     }
 
+    // The kids' Times tables setup names kid ids: it goes with the household (M9-games §6.3, D-M9-G7).
+    @Test
+    fun wipeClearsTheTimesTablesSetupStoreThenDeletesItsFiles() = runTest {
+        for (keepDeviceIdentity in listOf(false, true)) {
+            val (database, files) = filesWithEverySecret("wipe-tables-$keepDeviceIdentity")
+            files.tablesSetupFile.parentFile?.mkdirs()
+            files.tablesSetupFile.writeBytes(byteArrayOf(1))
+            File("${files.tablesSetupFile.path}.tmp").writeBytes(byteArrayOf(2))
+            // The live store is cleared through its own writer while its file is still there, then the file goes.
+            val clearedWhileFileExisted = mutableListOf<Boolean>()
+            val store = LocalPreferenceStore { clearedWhileFileExisted += files.tablesSetupFile.exists() }
+
+            val wiped = wipe(database, files, preferences = LocalPreferenceStores(setOf(store)))
+            assertTrue(wiped(keepDeviceIdentity = keepDeviceIdentity), "keepDeviceIdentity = $keepDeviceIdentity")
+
+            assertEquals(listOf(true), clearedWhileFileExisted, "keepDeviceIdentity = $keepDeviceIdentity")
+            assertTrue(files.preferenceFiles.none { it.exists() }, "keepDeviceIdentity = $keepDeviceIdentity")
+        }
+    }
+
+    @Test
+    fun aStoreThatFailsToClearDoesNotStopTheWipe() = runTest {
+        val (database, files) = filesWithEverySecret("wipe-tables-failing")
+        files.tablesSetupFile.parentFile?.mkdirs()
+        files.tablesSetupFile.writeBytes(byteArrayOf(1))
+        var other = 0
+        val failing = LocalPreferenceStore { error("disk full") }
+        val stores = LocalPreferenceStores(setOf(failing, LocalPreferenceStore { other++ }))
+
+        assertTrue(wipe(database, files, preferences = stores)(keepDeviceIdentity = false))
+
+        assertEquals(1, other)
+        assertFalse(files.tablesSetupFile.exists())
+    }
+
+    // A trial kid's Times tables setup does not survive linking a real household.
+    @Test
+    fun purgeClearsTheLocalPreferenceStores() = runTest {
+        household.addKid()
+        var cleared = 0
+        val purge = PurgeLocalHouseholdUseCase(
+            household.database,
+            household.files,
+            household.clock,
+            Dispatchers.Unconfined,
+            LocalPreferenceStores(setOf(LocalPreferenceStore { cleared++ })),
+        )
+
+        purge()
+
+        assertEquals(1, cleared)
+    }
+
+    @Test
+    fun theTablesSetupLivesInNoBackupDatastoreByDefault() {
+        val context = RuntimeEnvironment.getApplication()
+        val files = LocalDataFiles(
+            context.getDatabasePath("x.db"),
+            File(context.noBackupFilesDir, "photos"),
+            File(context.noBackupFilesDir, LocalDataFiles.SECRETS_DIRECTORY_NAME),
+        )
+        assertEquals(
+            File(File(context.noBackupFilesDir, "datastore"), "games_tables_setup.preferences_pb"),
+            files.tablesSetupFile.absoluteFile,
+        )
+    }
+
+    @Test
+    fun aTablesSetupThatCannotBeDeletedLeavesTheWipeIncomplete() = runTest {
+        val (database, files) = filesWithEverySecret("wipe-tables-stuck")
+        // A non-empty directory in the file's place cannot be deleted by File.delete().
+        File(files.tablesSetupFile, "child").apply { parentFile?.mkdirs() }.writeBytes(byteArrayOf(1))
+
+        assertFalse(wipe(database, files)(keepDeviceIdentity = false))
+        files.tablesSetupFile.deleteRecursively()
+    }
+
     /** A keeper over an in-memory secret store, for wipes whose secrets are plain files. */
     private fun memoryKeeper(database: SproutDatabase) = ChatIdentityKeeper(
         database,
         WrappedSecretStore(InMemoryKeyWrapper(), InMemoryBlobStorage(), SecureRandom(), Dispatchers.Unconfined),
     )
 
-    private fun wipe(database: SproutDatabase, files: LocalDataFiles, cache: File? = null) = WipeLocalDataUseCase(
+    private fun wipe(
+        database: SproutDatabase,
+        files: LocalDataFiles,
+        cache: File? = null,
+        preferences: LocalPreferenceStores = LocalPreferenceStores.None,
+    ) = WipeLocalDataUseCase(
         database,
         RoomSessionStore(database, household.clock),
         files,
         memoryKeeper(database),
         Dispatchers.Unconfined,
         cache,
+        preferences,
     )
 
     /**

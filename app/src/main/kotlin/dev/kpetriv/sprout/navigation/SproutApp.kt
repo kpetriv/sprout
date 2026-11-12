@@ -625,7 +625,8 @@ private val KidRouteEntries = KidEntries { navigation, tier, chatAvailable, back
                 kidId = key.kidId,
                 tier = key.tier,
                 onPlay = { kind -> navigation.push(GamePlayKey(key.kidId, key.tier, kind)) },
-                onBack = back,
+                // A tab root on Sprout and Sapling (no back arrow); pushed from the wallet on Seedling (M9 §5.2).
+                onBack = back.takeIf { tier == KidUiTier.SEEDLING },
                 readAloud = rememberReadAloud(),
             )
         }

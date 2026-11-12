@@ -5,52 +5,27 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.sizeIn
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilledTonalIconButton
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
-import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.LiveRegionMode
-import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
-import dev.kpetriv.sprout.core.designsystem.theme.SproutTheme
 import dev.kpetriv.sprout.core.domainledger.Currency
 import dev.kpetriv.sprout.core.domainledger.Money
+import dev.kpetriv.sprout.core.games.Difficulty
 import dev.kpetriv.sprout.core.games.GameKind
+import dev.kpetriv.sprout.core.games.TablesSetup
 import dev.kpetriv.sprout.core.model.KidUiTier
 import dev.kpetriv.sprout.core.ui.MoneyFormatter
-import dev.kpetriv.sprout.core.ui.ReadAloud
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-internal fun GamesTopBar(title: String, onBack: () -> Unit, backEnabled: Boolean = true) {
-    TopAppBar(
-        title = { Text(text = title, modifier = Modifier.semantics { heading() }) },
-        navigationIcon = {
-            IconButton(onClick = onBack, enabled = backEnabled) {
-                Icon(
-                    painter = painterResource(R.drawable.feature_games_ic_arrow_back),
-                    contentDescription = stringResource(R.string.feature_games_back),
-                )
-            }
-        },
-    )
-}
 
 @Composable
 internal fun LoadingContent(modifier: Modifier = Modifier) {
@@ -82,30 +57,6 @@ internal fun ErrorContent(
     }
 }
 
-/** Seedling's 🔊 button that speaks [spoken]; hidden when [readAloud] is [ReadAloud.None]. */
-@Composable
-internal fun ReadAloudButton(spoken: String, readAloud: ReadAloud, modifier: Modifier = Modifier) {
-    if (readAloud === ReadAloud.None) return
-    val touch = SproutTheme.tierTokens.minTouchTarget
-    val description = stringResource(R.string.feature_games_read_aloud)
-    FilledTonalIconButton(
-        onClick = { readAloud.speak(spoken) },
-        modifier = modifier
-            .sizeIn(minWidth = touch, minHeight = touch)
-            .semantics { contentDescription = description },
-    ) { Text(text = "🔊", modifier = Modifier.clearAndSetSemantics { }) }
-}
-
-/** A decorative emoji, hidden from accessibility. */
-@Composable
-internal fun Glyph(text: String, modifier: Modifier = Modifier) {
-    Text(
-        text = text,
-        style = MaterialTheme.typography.displaySmall,
-        modifier = modifier.clearAndSetSemantics { },
-    )
-}
-
 @Composable
 internal fun gameName(kind: GameKind): String = stringResource(
     when (kind) {
@@ -116,8 +67,13 @@ internal fun gameName(kind: GameKind): String = stringResource(
     },
 )
 
+/**
+ * The line under a game's name (the hub tile, the start card). Times tables show the kid's tables, "3, 4, 6" or
+ * "Mix" ([setup], the tier's default when null).
+ */
 @Composable
-internal fun gameDescription(kind: GameKind, tier: KidUiTier): String {
+internal fun gameDescription(kind: GameKind, tier: KidUiTier, setup: TablesSetup? = null): String {
+    if (kind == GameKind.TABLES) return tablesLabel(setup ?: TablesSetup.defaultFor(Difficulty.forTier(tier)))
     val seedling = tier == KidUiTier.SEEDLING
     return stringResource(
         when (kind) {
@@ -133,23 +89,9 @@ internal fun gameDescription(kind: GameKind, tier: KidUiTier): String {
                 R.string.feature_games_kind_memory_description
             }
 
-            GameKind.WORDS -> R.string.feature_games_kind_words_description
-
-            // Interim until M9-games slice G-C.
-            GameKind.TABLES -> R.string.feature_games_kind_tables_description
+            GameKind.WORDS, GameKind.TABLES -> R.string.feature_games_kind_words_description
         },
     )
-}
-
-internal fun gameGlyph(kind: GameKind): String = when (kind) {
-    GameKind.ARITHMETIC -> "🔢"
-
-    GameKind.MEMORY -> "🧠"
-
-    GameKind.WORDS -> "🔤"
-
-    // Interim until M9-games slice G-C.
-    GameKind.TABLES -> "✖️"
 }
 
 /**

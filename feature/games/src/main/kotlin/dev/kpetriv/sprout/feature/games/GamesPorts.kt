@@ -4,7 +4,10 @@ import dev.kpetriv.sprout.core.domainledger.Currency
 import dev.kpetriv.sprout.core.domainledger.GameCreditResult
 import dev.kpetriv.sprout.core.domainledger.Money
 import dev.kpetriv.sprout.core.games.GameId
+import dev.kpetriv.sprout.core.games.GameKind
 import dev.kpetriv.sprout.core.games.Score
+import dev.kpetriv.sprout.core.games.TablesSetup
+import dev.kpetriv.sprout.core.model.CalendarDate
 import dev.kpetriv.sprout.core.model.KidId
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.Flow
@@ -12,8 +15,9 @@ import kotlinx.coroutines.flow.flowOf
 import kotlin.random.Random
 
 /*
- * Ports of the brain games screens. The app adapts them to `PlayGameUseCase`, `GameCapReader` and the household's
- * fiat currency in `core/database` (M5 §3); this module depends on none of them.
+ * Ports of the brain games screens. The app adapts them to `PlayGameUseCase`, `GameCapReader`, `GameHistoryReader`
+ * and the household's fiat currency in `core/database` (M5 §3, M9-games §6.3), and keeps the Times tables setup in a
+ * local DataStore; this module depends on none of them.
  */
 
 /**
@@ -79,4 +83,39 @@ fun interface GameCurrencySource {
 
     /** The currency now and whenever it changes. */
     fun observeFiatCurrency(): Flow<Currency.Fiat> = flowOf(fiatCurrency())
+}
+
+/**
+ * One credited play of a game, as the ledger recorded it (`GameHistoryReader`'s `GamePlaySummary`): the
+ * household-local day it was played, the game, how many rounds were right and what it credited. No time per play is
+ * recorded anywhere (D-M9-G6).
+ */
+data class GamePlaySummary(val playedOn: CalendarDate, val gameId: GameId, val score: Int, val amount: Money)
+
+/**
+ * A kid's past credited plays of one game (`GameHistoryReader`, M9-games §6.2): the Sapling start card's "Your last
+ * plays" and the Times tables setup's "Best this week". Only plays that credited something exist (D-M9-G12).
+ */
+interface GameHistorySource {
+    /** The newest [limit] plays of [kind] by [kidId], newest first. */
+    fun observeRecent(kidId: KidId, kind: GameKind, limit: Int = RECENT_PLAYS): Flow<List<GamePlaySummary>>
+
+    /** The best score of [kidId]'s plays of [kind] in the last seven household-local days, or null. */
+    fun observeBestScoreThisWeek(kidId: KidId, kind: GameKind): Flow<Int?>
+
+    companion object {
+        /** How many plays the Sapling start card lists. */
+        const val RECENT_PLAYS: Int = 3
+    }
+}
+
+/**
+ * The kid's last Times tables setup (which tables, which level), kept on this device per kid (D-M9-G7): a local
+ * preference, never synced and never on the wire, deleted by the wipe. [observe] emits null until one is saved (or
+ * when the stored one cannot be read); the screens then use [TablesSetup.defaultFor] the tier's difficulty.
+ */
+interface TablesSetupStore {
+    fun observe(kidId: KidId): Flow<TablesSetup?>
+
+    suspend fun save(kidId: KidId, setup: TablesSetup)
 }
