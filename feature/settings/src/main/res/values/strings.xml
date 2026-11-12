@@ -146,6 +146,8 @@
   <string name="feature_settings_security_signing_not_shared_title">Signing key not registered with the household</string>
   <string name="feature_settings_security_signing_not_shared">Your signing key works on this phone, but the household never received it, so your other devices can\'t check your signatures. Retry with your PIN and fingerprint to make a new key and register it.</string>
   <string name="feature_settings_security_signing_retry">Retry</string>
+  <string name="feature_settings_security_signing_not_required_title">Household accepts unsigned money changes</string>
+  <string name="feature_settings_security_signing_not_required">Your signing key works on this phone, but the household’s settings say parent signatures aren’t required. Renew the key with your PIN and fingerprint to require them again.</string>
   <string name="feature_settings_security_signing_pin_enrol">Enter your PIN to turn on fingerprint signing</string>
   <string name="feature_settings_security_signing_pin_renew">Enter your PIN to renew the signing key</string>
   <string name="feature_settings_security_lock_title">Lock when leaving the app</string>
@@ -295,6 +297,11 @@
   <!-- D-M7-57: a phone without the household policy yet never writes one. -->
   <string name="feature_settings_policy_waiting">Waiting for the household policy to sync</string>
   <string name="feature_settings_policy_not_synced">Waiting for the household policy to sync. Try again in a moment.</string>
+  <!-- D-REL-22: a household policy that exists nowhere, restored with the PIN from a phone without a strong biometric. -->
+  <string name="feature_settings_security_restore_text">This phone hasn’t received the household’s settings. If the phone that set up the household is gone, restore them here with your PIN.</string>
+  <string name="feature_settings_security_restore">Restore household settings</string>
+  <string name="feature_settings_security_restoring">Restoring…</string>
+  <string name="feature_settings_message_settings_restored">Household settings restored</string>
   <!-- M7: the parent-configurable daily game cap (D-M5-4, D-M7-10). -->
   <string name="feature_settings_allowance_games_title">Games</string>
   <string name="feature_settings_game_cap_title">Daily game limit</string>

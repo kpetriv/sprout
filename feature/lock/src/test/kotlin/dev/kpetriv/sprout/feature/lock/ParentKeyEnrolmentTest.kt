@@ -6,7 +6,9 @@ import dev.kpetriv.sprout.core.crypto.ParentAuthAvailability
 import dev.kpetriv.sprout.core.crypto.PinLockoutPolicy
 import dev.kpetriv.sprout.feature.lock.SessionFixture.Companion.PIN
 import dev.kpetriv.sprout.feature.lock.SessionFixture.Companion.WRONG_PIN
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.runTest
@@ -43,6 +45,35 @@ class ParentKeyEnrolmentTest {
         assertTrue(pin.all { it == '\u0000' })
         assertEquals(ParentKeyStatus.READY, f.session.parentKeyStatus())
         assertIs<BiometricUnlockRequest.Ready>(f.session.unlockWithBiometric())
+    }
+
+    @Test
+    fun `a background enrolment is in progress from the hand-off until it ended`() = test {
+        val f = unlocked()
+        val progress: ParentKeyChangeProgress = f.provisioner
+        val gate = CompletableDeferred<Unit>()
+        f.prompter.gate = gate
+        assertFalse(progress.observeInProgress().first())
+
+        val job = f.enrolment.enrolInBackground(PIN.toCharArray())
+
+        // The dashboard hides its signing cards meanwhile (D-REL-12).
+        assertEquals(1, f.prompter.prompts, "the proof prompt is open")
+        assertTrue(progress.observeInProgress().first())
+        gate.complete(Unit)
+        job.join()
+        assertFalse(progress.observeInProgress().first())
+        assertNotNull(f.registry.key)
+    }
+
+    @Test
+    fun `a failed enrolment is no longer in progress`() = test {
+        val f = unlocked()
+        f.prompter.answer = { throw BiometricCancelledException(errorCode = 10) }
+
+        assertEquals(ParentKeyChangeResult.Cancelled, f.enrolment.enrol(PIN.toCharArray()))
+
+        assertFalse(f.provisioner.observeInProgress().first())
     }
 
     @Test
@@ -83,6 +114,54 @@ class ParentKeyEnrolmentTest {
         assertEquals(0, f.prompter.prompts)
         // Not even a PIN attempt was spent.
         assertEquals(0, f.lockoutStore.state?.consecutiveFailures ?: 0)
+    }
+
+    @Test
+    fun `a locked session is refused before the household policy check and no PIN attempt is counted`() = test {
+        // Audit L3: the policy check may sync and read the server; a locked session never starts it.
+        val f = SessionFixture(backgroundScope, pin = PIN)
+
+        assertEquals(ParentKeyChangeResult.NotAllowed, f.enrolment.enrol(WRONG_PIN.toCharArray()))
+
+        assertEquals(0, f.registry.policyChecks, "no sync, no server read")
+        assertEquals(0, f.lockoutStore.state?.consecutiveFailures ?: 0, "the PIN was not checked")
+        assertEquals(0, f.prompter.prompts)
+        assertEquals(emptyList(), f.challenges.issued)
+    }
+
+    @Test
+    fun `without the household policy enrolment stops before the PIN, the challenge, the key and the prompt`() = test {
+        val f = unlocked()
+        f.registry.policyReady = false
+
+        assertEquals(ParentKeyChangeResult.PolicyNotSynced, f.enrolment.enrol(PIN.toCharArray()))
+
+        // D-REL-15: no fingerprint prompt for a registration that is bound to be refused.
+        assertEquals(1, f.registry.policyChecks)
+        assertEquals(0, f.prompter.prompts)
+        assertEquals(0, f.authorizer.keysCreated)
+        assertEquals(emptyList(), f.challenges.issued)
+        assertEquals(0, f.lockoutStore.state?.consecutiveFailures ?: 0, "the PIN was not checked")
+        assertEquals(
+            ParentKeyChangeResult.PolicyNotSynced,
+            f.enrolment.enrol(WRONG_PIN.toCharArray()),
+            "not even a wrong PIN is counted",
+        )
+        assertEquals(0, f.lockoutStore.state?.consecutiveFailures ?: 0)
+        assertNull(f.registry.key)
+
+        f.registry.policyReady = true
+        assertEquals(ParentKeyChangeResult.Registered, f.enrolment.enrol(PIN.toCharArray()))
+    }
+
+    @Test
+    fun `a renewal does not ask for the household policy`() = test {
+        val f = unlocked()
+        f.enrolKeyDirectly()
+        f.registry.policyReady = false
+
+        assertEquals(ParentKeyChangeResult.Registered, f.renewal.renew(PIN.toCharArray()))
+        assertEquals(0, f.registry.policyChecks)
     }
 
     @Test

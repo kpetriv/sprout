@@ -1,10 +1,12 @@
 package dev.kpetriv.sprout.feature.chores
 
 import androidx.lifecycle.SavedStateHandle
+import dev.kpetriv.sprout.core.database.FiatCurrencyProvider
 import dev.kpetriv.sprout.core.database.usecase.ApprovalResult
 import dev.kpetriv.sprout.core.database.usecase.RewardOutcome
 import dev.kpetriv.sprout.core.domainhousehold.ChoreSubmissions
 import dev.kpetriv.sprout.core.domainledger.AppendResult
+import dev.kpetriv.sprout.core.domainledger.Currency
 import dev.kpetriv.sprout.core.domainledger.EventId
 import dev.kpetriv.sprout.core.domainledger.Money
 import dev.kpetriv.sprout.core.model.AgeBand
@@ -79,6 +81,20 @@ class ChoreListViewModelTest {
     }
 
     @Test
+    fun `a GBP household on a EUR-locale phone shows GBP, from the moment its policy is pulled`() = runTest {
+        chores.chores.value = listOf(TestData.chore("c1", "kid-leo", "Make bed"))
+        val policies = FakeHouseholdPolicies()
+        val state = subscribe(ChoreListViewModel(chores, kids, householdCurrency(policies)).state)
+        fun currency() = assertIs<ChoreListUiState.Ready>(state.value).groups[0].chores.single().reward.currency
+
+        // A restored phone before its first pull: the locale's, the only thing it knows (D-REL-10).
+        assertEquals(Currency.Fiat("EUR"), currency())
+
+        policies.pulled(TestData.gbp)
+        assertEquals(TestData.gbp, currency(), "the household's choice, not the phone's locale")
+    }
+
+    @Test
     fun `counts pending approvals`() = runTest {
         val chore = TestData.chore("c1", "kid-leo", "Make bed")
         chores.chores.value = listOf(chore)
@@ -110,6 +126,68 @@ class ChoreEditorViewModelTest {
         calendar = TestData.calendar(),
         suggestions = suggestions,
     )
+
+    @Test
+    fun `the editor parses amounts in the household's currency, not the phone's locale`() = runTest {
+        val policies = FakeHouseholdPolicies().apply { pulled(Currency.Fiat("JPY")) }
+        val viewModel = ChoreEditorViewModel(
+            savedStateHandle = SavedStateHandle(),
+            chores = chores,
+            kids = kids,
+            fiat = householdCurrency(policies),
+            clock = TestData.clock(),
+            calendar = TestData.calendar(),
+            suggestions = suggestions,
+        )
+
+        // A German phone (EUR) in a yen household (D-REL-10).
+        assertEquals(Currency.Fiat("JPY"), viewModel.state.value.currency)
+    }
+
+    @Test
+    fun `an open editor switches to the household's currency when the policy is pulled`() = runTest {
+        // A German phone (EUR) restored into a yen household, editing before its first pull (D-REL-19).
+        val policies = FakeHouseholdPolicies()
+        chores.chores.value = listOf(TestData.chore("c1", "kid-leo", "Wash car", money = 150))
+        val viewModel = ChoreEditorViewModel(
+            savedStateHandle = SavedStateHandle(mapOf(ChoreEditorViewModel.CHORE_ID_KEY to "c1")),
+            chores = chores,
+            kids = kids,
+            fiat = householdCurrency(policies),
+            clock = TestData.clock(),
+            calendar = TestData.calendar(),
+            suggestions = suggestions,
+        )
+        assertEquals(Currency.Fiat("EUR"), viewModel.state.value.currency)
+        assertEquals("1.50", viewModel.state.value.moneyText)
+
+        policies.pulled(Currency.Fiat("JPY"))
+
+        assertEquals(Currency.Fiat("JPY"), viewModel.state.value.currency)
+        assertEquals("150", viewModel.state.value.moneyText, "the stored amount, in the new decimals")
+        viewModel.onEvent(ChoreEditorEvent.Save)
+        assertEquals(Money(150), chores.chores.value.single { it.id == ChoreId("c1") }.reward.money, "never 100x")
+    }
+
+    @Test
+    fun `typed text is kept and read in the currency that arrived`() = runTest {
+        val policies = FakeHouseholdPolicies()
+        val viewModel = ChoreEditorViewModel(
+            savedStateHandle = SavedStateHandle(mapOf(ChoreEditorViewModel.KID_ID_KEY to "kid-leo")),
+            chores = chores,
+            kids = kids,
+            fiat = householdCurrency(policies),
+            clock = TestData.clock(),
+            calendar = TestData.calendar(),
+            suggestions = suggestions,
+        )
+        viewModel.onEvent(ChoreEditorEvent.MoneyChanged("3"))
+
+        policies.pulled(Currency.Fiat("JPY"))
+
+        assertEquals("3", viewModel.state.value.moneyText)
+        assertEquals(Currency.Fiat("JPY"), viewModel.state.value.currency)
+    }
 
     @Test
     fun `kid options carry this month's age band`() = runTest {
@@ -360,7 +438,7 @@ class ApprovalsViewModelTest {
     private val uploaded = mutableMapOf<String, Pair<SubmissionId?, ByteArray>>()
     private val fetched = mutableListOf<String>()
 
-    private fun viewModel() = ApprovalsViewModel(
+    private fun viewModel(fiat: FiatCurrencyProvider = FiatCurrencyProvider { TestData.gbp }) = ApprovalsViewModel(
         chores = chores,
         kids = kids,
         photoStore = photos,
@@ -369,7 +447,7 @@ class ApprovalsViewModelTest {
         requester = requester,
         reasons = TestReasons,
         decoder = { decoded },
-        fiat = { TestData.gbp },
+        fiat = fiat,
         remotePhotos = { blobId, _, submissionId, _ ->
             fetched += blobId
             val blob = uploaded[blobId]
@@ -382,6 +460,20 @@ class ApprovalsViewModelTest {
     )
 
     private val bed = TestData.chore("bed", "kid-leo", "Make bed", money = 250, minutes = 15)
+
+    @Test
+    fun `rewards show the household's currency once its policy is pulled`() = runTest {
+        val policies = FakeHouseholdPolicies()
+        chores.chores.value = listOf(bed)
+        chores.submissions.value = listOf(TestData.submission(bed))
+        val state = subscribe(viewModel(fiat = householdCurrency(policies)).state)
+        fun currency() = assertIs<ApprovalsUiState.Ready>(state.value).submissions.single().reward.currency
+        assertEquals(Currency.Fiat("EUR"), currency())
+
+        policies.pulled(TestData.gbp)
+
+        assertEquals(TestData.gbp, currency())
+    }
 
     @Test
     fun `lists pending submissions newest first with kid name and decoded photo`() = runTest {

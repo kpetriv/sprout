@@ -34,6 +34,9 @@ object FirestoreLayout {
     const val CHAT_PRUNE: String = "chatPrune"
     const val PRUNED_BEFORE: String = "prunedBefore"
 
+    /** The ISO 4217 code `createHousehold` stores on the household root document; members read it (D-REL-14). */
+    const val FIAT_CURRENCY: String = "fiatCurrency"
+
     /** Separator between `eventId` and `hash` in the id of a conflicting event copy. */
     const val CONFLICT_SEPARATOR: String = "__"
 

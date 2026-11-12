@@ -86,4 +86,5 @@
   <string name="confirm_reason_delete_chat">Delete every chat message</string>
   <string name="confirm_reason_retention">Change how long chats are kept</string>
   <string name="confirm_reason_game_cap">Change the daily game limit</string>
+  <string name="confirm_reason_restore_settings">Restore the household settings</string>
 </resources>

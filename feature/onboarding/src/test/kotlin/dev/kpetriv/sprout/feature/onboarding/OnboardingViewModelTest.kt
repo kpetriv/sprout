@@ -276,7 +276,11 @@ class OnboardingViewModelTest {
         val viewModel = viewModel()
 
         assertEquals(OnboardingStep.ParentLock, viewModel.state.value.step)
-        assertEquals(listOf("refreshClaims"), log.calls, "the token is refreshed for the household's claims")
+        assertEquals(
+            listOf("refreshClaims", "sync"),
+            log.calls,
+            "the token is refreshed for the household's claims, then the household is pulled before the PIN step",
+        )
         viewModel.onEvent(OnboardingEvent.ParentLockDone)
         assertTrue(viewModel.state.value.finished)
     }
@@ -318,12 +322,13 @@ class OnboardingViewModelTest {
         assertEquals(2, household.syncs)
         advanceTimeBy(OnboardingViewModel.POLL_INTERVAL_MS)
         runCurrent()
-        assertEquals(3, household.syncs)
+        // The approval, then one pull of what a PENDING phone could not read, before the PIN step (D-REL-11).
+        assertEquals(4, household.syncs)
         assertEquals(OnboardingStep.ParentLock, viewModel.state.value.step)
         assertEquals(HOUSEHOLD, household.setupPending)
         advanceTimeBy(OnboardingViewModel.POLL_INTERVAL_MS * 3)
         runCurrent()
-        assertEquals(3, household.syncs, "polling stops once approved")
+        assertEquals(4, household.syncs, "polling stops once approved")
     }
 
     @Test
@@ -404,6 +409,23 @@ class OnboardingViewModelTest {
     }
 
     @Test
+    fun `a phone restored from the local registry mirror pulls the household before the PIN step`() {
+        auth.claims[0] = parentClaims()
+        household.activeDevice = NEW_DEVICE
+        lateinit var viewModel: OnboardingViewModel
+        val stepsAtSync = mutableListOf<OnboardingStep>()
+        household.onSync = { stepsAtSync += viewModel.state.value.step }
+        viewModel = viewModel()
+        viewModel.signIn()
+
+        // D-REL-11: the enrolment on the PIN step must find the pulled policy, on this path too.
+        assertEquals(listOf<OnboardingStep>(OnboardingStep.FirstSync), stepsAtSync)
+        assertTrue(log.calls.indexOf("saveSession:PARENT:ACTIVE") < log.calls.indexOf("sync"))
+        assertFalse("ensurePolicy" in log.calls, "this phone did not create the household")
+        assertEquals(OnboardingStep.ParentLock, viewModel.state.value.step)
+    }
+
+    @Test
     fun `after a sign-out wipe the server registry restores the same ACTIVE key without regenerating it`() {
         auth.claims[0] = parentClaims()
         val device = currentDevice()
@@ -420,6 +442,40 @@ class OnboardingViewModelTest {
     }
 
     @Test
+    fun `a restored phone pulls the household before the PIN and signing step`() {
+        auth.claims[0] = parentClaims()
+        val device = currentDevice()
+        backend.statuses[RegistrationKey.CURRENT] = RegistryStatus.ACTIVE
+        lateinit var viewModel: OnboardingViewModel
+        val stepsAtSync = mutableListOf<OnboardingStep>()
+        household.onSync = {
+            household.activeDevice = device
+            stepsAtSync += viewModel.state.value.step
+        }
+        viewModel = viewModel()
+        viewModel.signIn()
+
+        // Enrolment on the PIN step registers the key in the household policy: it must be the pulled one (D-REL-11).
+        assertEquals(listOf<OnboardingStep>(OnboardingStep.FirstSync), stepsAtSync)
+        assertEquals(OnboardingStep.ParentLock, viewModel.state.value.step)
+    }
+
+    @Test
+    fun `a restored phone that is offline still reaches the PIN step`() {
+        auth.claims[0] = parentClaims()
+        household.syncSucceeds = false
+        backend.statuses[RegistrationKey.CURRENT] = RegistryStatus.ACTIVE
+        val viewModel = viewModel()
+        viewModel.signIn()
+
+        assertEquals(1, household.syncs)
+        assertFalse("erase" in log.calls)
+        assertEquals(RegistrationStatus.ACTIVE, sessions.session.value?.deviceStatus)
+        assertEquals(OnboardingStep.ParentLock, viewModel.state.value.step)
+        assertNull(viewModel.state.value.failure)
+    }
+
+    @Test
     fun `a restored key that belongs to another parent account is erased again`() {
         auth.claims[0] = parentClaims()
         backend.statuses[RegistrationKey.CURRENT] = RegistryStatus.ACTIVE
@@ -427,6 +483,7 @@ class OnboardingViewModelTest {
         viewModel.signIn()
         assertTrue("erase" in log.calls)
         assertEquals(OnboardingFailure.NOT_ALLOWED, viewModel.state.value.failure)
+        assertEquals(OnboardingStep.Welcome, viewModel.state.value.step, "never left on the pull step")
         assertNull(sessions.session.value)
     }
 

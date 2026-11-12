@@ -46,8 +46,8 @@ import kotlin.time.Instant
  * ADR-0002, so an event written offline with a wrong device clock lands on the wrong day), a submission's
  * `submittedAt` for "submitted" and its `decidedAt` for "approved" or "rejected". Only events the projection applied
  * count: invalid ones, games over the daily cap or outside their played-on window and the losing copies of a
- * conflicting duplicate are left out. Money is the household currency ([FiatCurrencyProvider]); events in another
- * fiat currency are ignored.
+ * conflicting duplicate are left out. Money is the household policy's currency, read on every call
+ * ([FiatCurrencyProvider.currentFiatCurrency], D-REL-10); events in another fiat currency are ignored.
  *
  * Cost (review L15): submissions are read per active kid; the ledger is read once as the verified snapshot, because
  * only the household projection says which events were applied (caps, conflicts and invalid events span the stream).
@@ -80,7 +80,7 @@ class WeeklyFactsUseCase @Inject constructor(
         return WeeklyFactsCalculator.compute(
             week = week,
             through = through,
-            currency = currency.fiatCurrency(),
+            currency = currency.currentFiatCurrency(),
             kids = activeKids,
             events = snapshot.events,
             projection = snapshot.projection,

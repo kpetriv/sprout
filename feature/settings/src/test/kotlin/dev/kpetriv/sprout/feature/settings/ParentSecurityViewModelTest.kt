@@ -3,6 +3,7 @@ package dev.kpetriv.sprout.feature.settings
 import dev.kpetriv.sprout.core.crypto.FakeParentAuthorizer
 import dev.kpetriv.sprout.core.crypto.LockoutDecision
 import dev.kpetriv.sprout.core.crypto.ParentAuthAvailability
+import dev.kpetriv.sprout.core.database.HouseholdPolicy
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.TestScope
@@ -29,9 +30,19 @@ class ParentSecurityViewModelTest {
         if (purpose == "enrol") policies.registerParentKey(byteArrayOf(1))
         SigningKeyOutcome.Registered
     }
+    private val restorer = FakeHouseholdSettingsRestorer()
+    private val confirmation = FakeParentConfirmation()
 
-    private fun TestScope.viewModel(): ParentSecurityViewModel {
-        val vm = ParentSecurityViewModel(pinChanger, registrar, lockPreferences, authorizer, policies)
+    private fun TestScope.viewModel(keys: ParentKeyRegistrar = registrar): ParentSecurityViewModel {
+        val vm = ParentSecurityViewModel(
+            pinChanger,
+            keys,
+            lockPreferences,
+            authorizer,
+            policies,
+            restorer,
+            confirmation,
+        )
         backgroundScope.launch(main.dispatcher) { vm.state.collect {} }
         return vm
     }
@@ -113,8 +124,7 @@ class ParentSecurityViewModelTest {
             if (purpose == "renew") policies.serverPending.value = false
             SigningKeyOutcome.Registered
         }
-        val vm = ParentSecurityViewModel(pinChanger, retry, lockPreferences, authorizer, policies)
-        backgroundScope.launch(main.dispatcher) { vm.state.collect {} }
+        val vm = viewModel(retry)
         assertEquals(SigningStatus.NOT_REGISTERED_WITH_HOUSEHOLD, vm.state.value.signing)
         assertTrue(vm.state.value.keyNotRegisteredWithHousehold)
 
@@ -131,14 +141,115 @@ class ParentSecurityViewModelTest {
     fun `a retry the household still did not receive says so and keeps the row`() = test {
         policies.policy.value = FakeHouseholdPolicyRepository.policy(hasKey = true)
         policies.serverPending.value = true
-        val vm = ParentSecurityViewModel(pinChanger, registrar, lockPreferences, authorizer, policies)
-        backgroundScope.launch(main.dispatcher) { vm.state.collect {} }
+        val vm = viewModel()
 
         vm.onEvent(ParentSecurityEvent.StartSigningKeyChange)
         vm.typeSigning("482913")
 
         assertEquals(SettingsMessage.KEY_NOT_SHARED, vm.state.value.message)
         assertEquals(SigningStatus.NOT_REGISTERED_WITH_HOUSEHOLD, vm.state.value.signing)
+    }
+
+    // region Restore household settings (D-REL-22)
+
+    @Test
+    fun `without a strong biometric a missing policy is restored after the check and the PIN`() = test {
+        authorizer.availability = ParentAuthAvailability.NO_HARDWARE
+        restorer.needed.value = true
+        restorer.onRestore = {
+            policies.policy.value = FakeHouseholdPolicyRepository.policy(hasKey = false)
+            true
+        }
+        val vm = viewModel()
+        assertTrue(vm.state.value.offerRestore)
+
+        vm.onEvent(ParentSecurityEvent.RestoreHouseholdSettings)
+
+        assertEquals(1, restorer.checks)
+        assertEquals(listOf(ConfirmationPurpose.RESTORE_HOUSEHOLD_SETTINGS), confirmation.asked)
+        assertEquals(1, restorer.restores)
+        assertEquals(SettingsMessage.SETTINGS_RESTORED, vm.state.value.message)
+        assertFalse(vm.state.value.isRestoring)
+    }
+
+    @Test
+    fun `the restore asks for no PIN when the check says the policy is on its way`() = test {
+        authorizer.availability = ParentAuthAvailability.NOT_ENROLLED
+        restorer.needed.value = true
+        restorer.check = RestoreCheck.NOT_SYNCED
+        val vm = viewModel()
+
+        vm.onEvent(ParentSecurityEvent.RestoreHouseholdSettings)
+
+        assertEquals(emptyList(), confirmation.asked, "a restore bound to be refused never asks for the PIN")
+        assertEquals(0, restorer.restores)
+        assertEquals(SettingsMessage.POLICY_NOT_SYNCED, vm.state.value.message)
+
+        restorer.check = RestoreCheck.PRESENT
+        vm.onEvent(ParentSecurityEvent.MessageShown)
+        vm.onEvent(ParentSecurityEvent.RestoreHouseholdSettings)
+        assertEquals(emptyList(), confirmation.asked)
+        assertNull(vm.state.value.message, "it arrived meanwhile: nothing to say")
+    }
+
+    @Test
+    fun `a dismissed or failed confirmation writes nothing`() = test {
+        authorizer.availability = ParentAuthAvailability.NO_HARDWARE
+        restorer.needed.value = true
+        confirmation.outcome = ConfirmationOutcome.CANCELLED
+        val vm = viewModel()
+
+        vm.onEvent(ParentSecurityEvent.RestoreHouseholdSettings)
+        assertEquals(0, restorer.restores)
+        assertNull(vm.state.value.message)
+
+        confirmation.outcome = ConfirmationOutcome.FAILED
+        vm.onEvent(ParentSecurityEvent.RestoreHouseholdSettings)
+        assertEquals(0, restorer.restores)
+        assertEquals(SettingsMessage.NOT_CONFIRMED, vm.state.value.message)
+    }
+
+    @Test
+    fun `a restore refused at the write says the policy is on its way`() = test {
+        authorizer.availability = ParentAuthAvailability.NO_HARDWARE
+        restorer.needed.value = true
+        restorer.onRestore = { false }
+        val vm = viewModel()
+
+        vm.onEvent(ParentSecurityEvent.RestoreHouseholdSettings)
+
+        assertEquals(1, restorer.restores)
+        assertEquals(SettingsMessage.POLICY_NOT_SYNCED, vm.state.value.message)
+    }
+
+    @Test
+    fun `the restore is offered only without a strong biometric and while the policy is missing`() = test {
+        restorer.needed.value = true
+        val vm = viewModel()
+        assertFalse(vm.state.value.offerRestore, "fingerprint signing recovers it with the key")
+        vm.onEvent(ParentSecurityEvent.RestoreHouseholdSettings)
+        assertEquals(0, restorer.checks)
+
+        authorizer.availability = ParentAuthAvailability.NO_HARDWARE
+        vm.onEvent(ParentSecurityEvent.Refresh)
+        assertTrue(vm.state.value.offerRestore)
+
+        restorer.needed.value = false
+        assertFalse(vm.state.value.offerRestore)
+    }
+
+    // endregion
+
+    @Test
+    fun `a key in a household that accepts unsigned changes offers a renewal (D-REL-26)`() = test {
+        policies.policy.value = FakeHouseholdPolicyRepository.policy(hasKey = true).let {
+            HouseholdPolicy(false, it.parentSignatureFromLamport, it.parentPublicKey, it.fiatCurrency, it.createdAt)
+        }
+        val vm = viewModel()
+        assertEquals(SigningStatus.SIGNATURES_NOT_REQUIRED, vm.state.value.signing)
+
+        vm.onEvent(ParentSecurityEvent.StartSigningKeyChange)
+        assertEquals(SigningPinPurpose.RENEW, vm.state.value.signingPin?.purpose)
     }
 
     @Test

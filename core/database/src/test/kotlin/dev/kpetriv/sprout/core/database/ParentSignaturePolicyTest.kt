@@ -127,6 +127,15 @@ class ParentSignaturePolicyTest {
     }
 
     @Test
+    fun theTrialHouseholdStillGetsItsPolicyFromTheFirstRegistration() = runTest {
+        // Only a real household's policy is never created by registration (D-REL-11); the trial's has the locale's.
+        val policy = household.registerKey.register(household.parentAuthorizer.createParentKey().encoded)
+
+        assertTrue(policy.requireParentSignature)
+        assertEquals(household.gbp, policy.fiatCurrency, "the fixture's locale is the UK")
+    }
+
+    @Test
     fun onlyAnEcP256KeyCanBeRegistered() = runTest {
         assertFailsWith<IllegalArgumentException> { household.registerKey.register(byteArrayOf(1, 2, 3)) }
         assertEquals(null, household.policies.get())

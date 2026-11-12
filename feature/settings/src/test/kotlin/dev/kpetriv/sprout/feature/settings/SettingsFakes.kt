@@ -246,3 +246,29 @@ class FakeLockPreferences(initial: Boolean = true) : LockPreferences {
 
 /** A lockout wait used across the PIN tests. */
 val WAIT_30_SECONDS: LockoutDecision = LockoutDecision.Wait(kotlin.time.Duration.parse("30s"))
+
+/**
+ * [HouseholdSettingsRestorer] answering [check] and writing nothing itself: [onRestore] does (D-REL-22). Counts what
+ * was asked.
+ */
+class FakeHouseholdSettingsRestorer(
+    needed: Boolean = false,
+    var check: RestoreCheck = RestoreCheck.READY,
+    var onRestore: suspend () -> Boolean = { true },
+) : HouseholdSettingsRestorer {
+    val needed = MutableStateFlow(needed)
+    var checks = 0
+    var restores = 0
+
+    override fun observeNeeded(): Flow<Boolean> = needed
+
+    override suspend fun check(): RestoreCheck {
+        checks += 1
+        return check
+    }
+
+    override suspend fun restore(): Boolean {
+        restores += 1
+        return onRestore()
+    }
+}

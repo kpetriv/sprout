@@ -56,6 +56,7 @@ class ParentKeyServerRegistrationTest {
     @Test
     fun aRenewedKeyIsPendingAgainEvenWhenTheOldOneWasRecorded() = runTest {
         val household = household()
+        household.policies.ensure(household.gbp) // created with the household; registration never creates it
         val first = household.parentAuthorizer.createParentKey().encoded
         household.policies.registerParentKey(first)
         household.policies.recordServerRegisteredKey(fingerprint(first), validFromLamport = 2)
@@ -81,6 +82,7 @@ class ParentKeyServerRegistrationTest {
     @Test
     fun aRecordForAnUnknownFingerprintChangesNothing() = runTest {
         val household = household()
+        household.policies.ensure(household.gbp) // created with the household; registration never creates it
         household.policies.registerParentKey(household.parentAuthorizer.createParentKey().encoded)
 
         assertFalse(household.policies.recordServerRegisteredKey("0".repeat(64), validFromLamport = 3))
