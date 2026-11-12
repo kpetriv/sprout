@@ -19,10 +19,10 @@ short_description: "Chores, pocket money and screen time for your family, on a l
 full_description: |
   Sprout is a family economy for parents and kids. Kids earn credits by doing chores and playing short brain games, then spend them on pocket money, screen time or rewards you choose. You run the allowances, savings goals and rewards, and every credit and debit lands in a ledger that shows who did what, on which phone, and when.
 
-  One app, two roles. The parent area sits behind a PIN or your fingerprint. Kid mode runs on your child's own phone with a layout that grows with them:
-  • Seedling (about 5 to 7): a coin jar, picture chores, preset messages and voice notes, read aloud.
+  One app, two roles. The parent area sits behind a PIN or your fingerprint. Kid mode runs on your child's own phone with a layout that grows with them, and a calm garden look whose colour follows their age:
+  • Seedling (about 5 to 7): a coin jar, picture chores, big buttons, preset messages and voice notes, read aloud.
   • Sprout (about 8 to 11): real money, goals, due dates and a kindness check before sending a message.
-  • Sapling (12 and up): the full ledger with filters, interest explained, proposing chores and a wishlist.
+  • Sapling (12 and up): the full ledger with filters, interest explained, proposing chores and a wishlist, as calm as the parent side.
 
   FOR PARENTS
   • Chores, one-off or recurring, that earn money, screen time or both; approve submissions with an optional photo.
@@ -30,12 +30,13 @@ full_description: |
   • A dashboard of every child's balance, time and goals, with a weekly summary written on your phone.
   • A rewards catalogue: screen time, treats and outings, priced in credits.
   • Approve each money payment with your fingerprint, so nobody else can award credits from your phone.
-  • Tablets and foldables: list and detail side by side.
+  • A bottom bar for Home, Chores, Chat and Settings; on tablets and foldables a side rail, with list and detail side by side.
 
   FOR KIDS
-  • Today's chores and a big "Done!" button.
+  • A bottom bar to their wallet, chores, shop, games and chat; the youngest get wallet, chores and shop, with big Chat, Games and Screen time buttons on the wallet.
+  • Today's chores and a big "I did it" button.
   • A wallet and a shop that show what they can afford and how long until they can.
-  • Brain games (numbers, memory, word scramble) with a small daily credit.
+  • Brain games with a small daily credit, played on a bright play field: numbers, memory, word scramble and Times tables, where they pick the tables to practise and a level from Gentle to Rock star.
   • A screen-time bank they start and stop themselves. Sprout records screen time; it does not lock the phone.
   • Chat with their parent, end-to-end encrypted.
 
@@ -49,29 +50,33 @@ full_description: |
 
   Sprout syncs your family's phones through Google Firebase in Europe. Read the privacy policy before you sign up.
 
-# Brand colours: the launcher icon's background and foreground, the app's surface and the dark surface.
+# Brand colours, Morning garden (M9 §2.1): Leaf tint as the light frame, Botanical for the card outline, Botanical deep
+# for the feature graphic's name, the dark theme's background as the dark frame. Captions: Botanical deep on Leaf tint
+# (8.8:1) and the dark theme's on-primary-container on the dark background (well over 4.5:1).
 colours:
-  brand_light: "#B7F0B1"
-  brand: "#2E7D32"
-  brand_dark: "#1B5E20"
-  surface_dark: "#121411"
-  caption_light: "#10380F"
-  caption_dark: "#CDEFC8"
+  brand_light: "#E9F3EB"
+  brand: "#2A6B45"
+  brand_dark: "#1E4B33"
+  surface_dark: "#141A16"
+  caption_light: "#1E4B33"
+  caption_dark: "#C8F2C0"
 
+# Phone and tablet shots come from the app shell goldens (M9 §5.3) where they exist, so the listing shows the bottom
+# bar or the rail; the kid's chores, the shop, the game, the time bank and the household data are feature goldens.
 phone:
   - name: 01-parent-dashboard
     caption: "Every child's money, time and goals at a glance"
-    light: feature/parent-home/src/test/screenshots/parent_home_busy_light.png
-    dark: feature/parent-home/src/test/screenshots/parent_home_busy_dark.png
+    light: app/src/test/screenshots/app_shell_parent_home_light.png
+    dark: app/src/test/screenshots/app_shell_parent_home_dark.png
   - name: 02-grows-with-your-child
     caption: "One app that grows with each child"
     tiers:
       - label: "Seedling 5–7"
-        image: feature/wallet/src/test/screenshots/wallet_ready_kid_seedling.png
+        image: app/src/test/screenshots/app_shell_kid_seedling.png
       - label: "Sprout 8–11"
-        image: feature/wallet/src/test/screenshots/wallet_ready_kid_sprout.png
+        image: app/src/test/screenshots/app_shell_kid_sprout.png
       - label: "Sapling 12+"
-        image: feature/wallet/src/test/screenshots/wallet_ready_kid_sapling.png
+        image: app/src/test/screenshots/app_shell_kid_sapling.png
   - name: 03-chores
     caption: "Chores that earn pocket money and screen time"
     light: feature/chores/src/test/screenshots/chores_today_sprout.png
@@ -83,8 +88,8 @@ phone:
     light: feature/chat/src/test/screenshots/chat_parent_thread_light.png
     dark: feature/chat/src/test/screenshots/chat_parent_thread_dark.png
   - name: 06-games
-    caption: "Brain games with a small daily credit"
-    light: feature/games/src/test/screenshots/games_hub_sprout.png
+    caption: "Brain games and times tables"
+    light: feature/games/src/test/screenshots/games_tables_sprout.png
   - name: 07-time-bank
     caption: "A screen-time bank kids start and stop"
     light: feature/timebank/src/test/screenshots/timebank_running_seedling.png
@@ -98,7 +103,7 @@ phone:
 tablet:
   - name: 01-parent-dashboard
     caption: "Every child's money, time and goals at a glance"
-    light: feature/parent-home/src/test/screenshots/parent_home_busy_tablet.png
+    light: app/src/test/screenshots/app_shell_parent_home_tablet.png
   - name: 02-chores
     caption: "Plan chores with the list and the editor side by side"
     light: feature/chores/src/test/screenshots/chores_list_detail_tablet.png
@@ -107,4 +112,4 @@ tablet:
     light: feature/chat/src/test/screenshots/chat_threads_detail_tablet.png
   - name: 04-kid-wallet
     caption: "A wallet that grows with each child"
-    light: feature/wallet/src/test/screenshots/wallet_ready_kid_tablet_sprout.png
+    light: app/src/test/screenshots/app_shell_kid_tablet_sprout.png

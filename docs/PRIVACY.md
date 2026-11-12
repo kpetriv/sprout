@@ -47,6 +47,7 @@ Sprout's Play audience is adults (18+). Kid mode is a feature the parent configu
 | Ledger entries | Every credit and debit of pocket money and screen-time minutes, with who made it, from which household phone, and when | Signed, so tampering is detectable. These are household pocket-money records, not payments: Sprout never handles real money or card details. |
 | Free text in ledger entries | A parent's reason for a manual adjustment (it may be prefilled from a receipt as "Receipt: &lt;shop&gt;", which the parent reviews before signing), and an optional note when covering an overdraft | Up to 200 characters each. **Not end-to-end encrypted**: like the rest of the ledger, readable by our server. Please don't put sensitive details in these notes. |
 | Game results | Score and credit for each brain game played | One signed ledger entry per play: which game and difficulty, how many rounds were right, the credit and the day played. The questions, answers and timings stay on the phone and are not stored. Credit is subject to a daily cap. |
+| Times tables setup | Starts the next Times tables play where the child left off | Which tables (2 to 12, or Mix) and which level (Gentle, Steady, Rock star) each child last chose, kept only on that phone in a small local preference file. Never synced, never sent to our server and not part of the ledger. Erased with the rest of the household's data when the phone is wiped (sign-out, removal, household deletion), when trial data is deleted on joining a household, and when another account signs in on the phone. |
 | Time bank sessions | When screen time was started and stopped | Recorded only; the app does not control the phone |
 
 ### Chat and photos (end-to-end encrypted)
@@ -143,7 +144,7 @@ For young children Sprout can read chat messages aloud. The message text is hand
 
 ## Where your data is stored
 
-- **On your phones.** Everything is stored in an encrypted database (SQLCipher) whose key is protected by the phone's hardware-backed keystore. Sprout's data is excluded from Android cloud backup and phone-to-phone transfer.
+- **On your phones.** Everything is stored in an encrypted database (SQLCipher) whose key is protected by the phone's hardware-backed keystore, except a few device settings (the on-device AI settings and each child's Times tables setup), which hold no names. Sprout's data is excluded from Android cloud backup and phone-to-phone transfer.
 - **In the cloud.** Household data syncs between your family's phones through Google Firebase: **Cloud Firestore in the `eur3` multi-region (Europe)** holds the household's data, including the encrypted chat, photos and voice notes, and Firebase Authentication (a global Google service, not pinned to the EU) holds the sign-in accounts. Account and admin operations (creating a household, linking phones, export, deletion, chat clean-up) run on **our server, hosted by Vercel in Frankfurt (`fra1`)**, which processes requests and stores nothing of its own beyond logs. Data is encrypted in transit (TLS) and, by Google, at rest.
 - **Before you set up sync, nothing leaves the phone.** A household tried out on one phone stays there. When that phone joins a real household, the app tells you the trial data will be deleted, and deletes it; it is never uploaded.
 
@@ -194,6 +195,8 @@ A parent can download the household's data from Settings → Household data → 
 - `household.json`: the household, its members' roles, its phones and parent keys, every kid profile, chore, submission, reward, schedule, goal and policy, and every ledger entry, plus chat messages and photo and voice-note records in their encrypted form;
 - `ledger.csv`: the ledger as a spreadsheet, made on the phone;
 - `chat/`: after the parent confirms with their fingerprint or parent PIN, each child's chat in readable form (`chat/<child>.json`: time, who wrote it, the text, preset or voice-note length), the photos and voice notes the phone can decrypt (`chat/media/`), and a list of any it could not include (`chat/missing.json`).
+
+Settings kept only on one phone (the on-device AI settings, each child's Times tables setup) are not in the export.
 
 The readable chat is decrypted on the parent's phone from its own copy (voice notes and photos the phone has not cached are fetched from our server still encrypted and decrypted on the phone) and written straight into the file the parent chose; nothing readable is sent to us. Keep the file safe: it is no longer encrypted. Households above 4 MB of server data cannot be exported in one file yet; contact us and we will export it for you.
 

@@ -4,6 +4,8 @@ import androidx.room.withTransaction
 import dev.kpetriv.sprout.core.common.Dispatcher
 import dev.kpetriv.sprout.core.common.SproutDispatchers
 import dev.kpetriv.sprout.core.database.LocalDataFiles
+import dev.kpetriv.sprout.core.database.LocalPreferenceStore
+import dev.kpetriv.sprout.core.database.LocalPreferenceStores
 import dev.kpetriv.sprout.core.database.LocalTrial
 import dev.kpetriv.sprout.core.database.SproutDatabase
 import dev.kpetriv.sprout.core.database.entity.AuditAction
@@ -44,7 +46,7 @@ data class PurgeReport(val counts: Map<String, Int>) {
  * and held inbox rows of the trial household; the audit rows its
  * trial parent (and, before M3, its kids) wrote; and the trial session. It then writes one
  * `LOCAL_HOUSEHOLD_PURGED` audit row with the counts. The photo and blob files are deleted after the transaction
- * commits.
+ * commits, and every [LocalPreferenceStore] (the kids' Times tables setup) is cleared.
  * Nothing of a real household is touched; `device_state` (the Lamport clock, which only moves forward) is kept.
  */
 class PurgeLocalHouseholdUseCase @Inject constructor(
@@ -52,9 +54,12 @@ class PurgeLocalHouseholdUseCase @Inject constructor(
     private val files: LocalDataFiles,
     private val clock: Clock,
     @param:Dispatcher(SproutDispatchers.IO) private val dispatcher: CoroutineDispatcher,
+    private val preferences: LocalPreferenceStores = LocalPreferenceStores.None,
 ) {
     suspend operator fun invoke(): PurgeReport {
         val purged = database.withTransaction { purge() }
+        // The trial kids' local preferences (their Times tables setup) go with them.
+        preferences.clearAll()
         withContext(dispatcher) {
             deleteIn(files.photoDirectory, purged.photoFiles)
             deleteIn(files.blobDirectory, purged.blobFiles)

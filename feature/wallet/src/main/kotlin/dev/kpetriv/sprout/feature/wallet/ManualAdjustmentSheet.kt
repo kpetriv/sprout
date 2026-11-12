@@ -10,20 +10,15 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.SegmentedButton
-import androidx.compose.material3.SegmentedButtonDefaults
-import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -36,6 +31,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.liveRegion
@@ -44,6 +40,10 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
+import dev.kpetriv.sprout.core.designsystem.components.SproutButton
+import dev.kpetriv.sprout.core.designsystem.components.SproutButtonStyle
+import dev.kpetriv.sprout.core.designsystem.components.SproutChip
+import dev.kpetriv.sprout.core.designsystem.theme.SproutSpacing
 import dev.kpetriv.sprout.core.ui.MinorUnitsParser
 
 /**
@@ -63,7 +63,11 @@ internal fun ManualAdjustmentSheet(
     val pickReceipt = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
         uri?.let { onReceiptPicked(it.toString()) }
     }
-    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheetState) {
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+        containerColor = MaterialTheme.colorScheme.surfaceContainerLowest,
+    ) {
         ManualAdjustmentForm(
             adjustment = adjustment,
             onSubmit = onSubmit,
@@ -129,7 +133,7 @@ internal fun ManualAdjustmentForm(
 
     Column(
         modifier = modifier.verticalScroll(rememberScrollState()),
-        verticalArrangement = Arrangement.spacedBy(16.dp),
+        verticalArrangement = Arrangement.spacedBy(SproutSpacing.md),
     ) {
         Text(
             text = stringResource(R.string.feature_wallet_adjust),
@@ -137,25 +141,26 @@ internal fun ManualAdjustmentForm(
             modifier = Modifier.semantics { heading() },
         )
         ScanReceipt(adjustment, scan)
-        SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
-            AdjustmentSign.entries.forEachIndexed { index, option ->
-                SegmentedButton(
+        // One choice of two, announced as radio buttons (as the segmented buttons were).
+        Row(
+            modifier = Modifier.selectableGroup(),
+            horizontalArrangement = Arrangement.spacedBy(SproutSpacing.sm),
+        ) {
+            AdjustmentSign.entries.forEach { option ->
+                SproutChip(
                     selected = sign == option,
+                    role = Role.RadioButton,
+                    label = stringResource(
+                        when (option) {
+                            AdjustmentSign.CREDIT -> R.string.feature_wallet_adjust_credit
+                            AdjustmentSign.DEBIT -> R.string.feature_wallet_adjust_debit
+                        },
+                    ),
                     onClick = {
                         sign = option
                         signEdited = true // Even the one already selected: the parent chose it.
                     },
-                    shape = SegmentedButtonDefaults.itemShape(index, AdjustmentSign.entries.size),
-                ) {
-                    Text(
-                        stringResource(
-                            when (option) {
-                                AdjustmentSign.CREDIT -> R.string.feature_wallet_adjust_credit
-                                AdjustmentSign.DEBIT -> R.string.feature_wallet_adjust_debit
-                            },
-                        ),
-                    )
-                }
+                )
             }
         }
         OutlinedTextField(
@@ -208,26 +213,28 @@ internal fun ManualAdjustmentForm(
         }
         Row(
             modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
+            horizontalArrangement = Arrangement.spacedBy(SproutSpacing.sm, Alignment.End),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            TextButton(onClick = onCancel) { Text(stringResource(R.string.feature_wallet_adjust_cancel)) }
-            Button(
+            if (adjustment.isSubmitting) {
+                val saving = stringResource(R.string.feature_wallet_adjust_saving)
+                CircularProgressIndicator(
+                    modifier = Modifier
+                        .size(18.dp)
+                        .semantics { contentDescription = saving },
+                    strokeWidth = 2.dp,
+                )
+            }
+            SproutButton(
+                text = stringResource(R.string.feature_wallet_adjust_cancel),
+                onClick = onCancel,
+                style = SproutButtonStyle.Tertiary,
+            )
+            SproutButton(
+                text = stringResource(R.string.feature_wallet_adjust_submit),
                 onClick = { if (amountMinor != null) onSubmit(amountMinor, sign, reason.trim()) },
                 enabled = canSubmit,
-            ) {
-                if (adjustment.isSubmitting) {
-                    val saving = stringResource(R.string.feature_wallet_adjust_saving)
-                    CircularProgressIndicator(
-                        modifier = Modifier
-                            .size(18.dp)
-                            .semantics { contentDescription = saving },
-                        strokeWidth = 2.dp,
-                    )
-                } else {
-                    Text(stringResource(R.string.feature_wallet_adjust_submit))
-                }
-            }
+            )
         }
     }
 }
@@ -257,12 +264,20 @@ private fun PrefillEffect(
 private fun ScanReceipt(adjustment: AdjustmentUi, onScan: (() -> Unit)?) {
     val onScanReceipt = onScan ?: return
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        OutlinedButton(onClick = onScanReceipt, enabled = !adjustment.scanning && !adjustment.isSubmitting) {
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(SproutSpacing.sm),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            SproutButton(
+                text = stringResource(R.string.feature_wallet_receipt_scan),
+                onClick = onScanReceipt,
+                style = SproutButtonStyle.Tertiary,
+                enabled = !adjustment.scanning && !adjustment.isSubmitting,
+            )
             if (adjustment.scanning) {
                 val reading = stringResource(R.string.feature_wallet_receipt_scanning)
                 CircularProgressIndicator(
                     modifier = Modifier
-                        .padding(end = 8.dp)
                         .size(16.dp)
                         .semantics {
                             contentDescription = reading
@@ -271,7 +286,6 @@ private fun ScanReceipt(adjustment: AdjustmentUi, onScan: (() -> Unit)?) {
                     strokeWidth = 2.dp,
                 )
             }
-            Text(stringResource(R.string.feature_wallet_receipt_scan))
         }
         if (adjustment.scanning && adjustment.scanSlow) {
             // D-M6-54: the first scan on a device waits for Play services to load its text recognition.

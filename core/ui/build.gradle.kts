@@ -8,6 +8,6 @@ android {
 
 dependencies {
     api(projects.core.designsystem)
-    // MoneyFormatter and LedgerEventRow take the ledger's Money and Currency.
+    // MoneyFormatter and ledgerAmountText take the ledger's Money and Currency.
     api(projects.core.domainLedger)
 }

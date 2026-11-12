@@ -43,7 +43,8 @@ sealed interface ChoreListUiState {
     ) : ChoreListUiState
 }
 
-data class KidChoresUi(val kidId: KidId, val kidName: String, val chores: List<ChoreRowUi>)
+/** One kid's chores; [tintIndex] is the kid's place in the household (their avatar tint, as on the dashboard). */
+data class KidChoresUi(val kidId: KidId, val kidName: String, val chores: List<ChoreRowUi>, val tintIndex: Int = 0)
 
 data class ChoreRowUi(
     val id: ChoreId,
@@ -131,8 +132,9 @@ class ChoreListViewModel @Inject constructor(
         /** Groups [chores] under [kids] (in that order); chores of kids not in [kids] are left out. */
         fun group(kids: List<Kid>, chores: List<Chore>, currency: Currency.Fiat): List<KidChoresUi> {
             val byKid = chores.groupBy { it.kidId }
-            return kids.map { kid ->
+            return kids.mapIndexed { index, kid ->
                 KidChoresUi(
+                    tintIndex = index,
                     kidId = kid.id,
                     kidName = kid.firstName,
                     chores = byKid[kid.id].orEmpty()

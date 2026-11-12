@@ -15,9 +15,8 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -26,11 +25,14 @@ import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.navigation3.rememberViewModelStoreNavEntryDecorator
 import androidx.navigation3.runtime.EntryProviderScope
-import androidx.navigation3.runtime.NavBackStack
+import androidx.navigation3.runtime.NavEntry
+import androidx.navigation3.runtime.NavEntryDecorator
 import androidx.navigation3.runtime.NavKey
 import androidx.navigation3.runtime.entryProvider
-import androidx.navigation3.runtime.rememberNavBackStack
+import androidx.navigation3.runtime.rememberDecoratedNavEntries
 import androidx.navigation3.runtime.rememberSaveableStateHolderNavEntryDecorator
+import androidx.navigation3.scene.SceneStrategy
+import androidx.navigation3.scene.SinglePaneSceneStrategy
 import androidx.navigation3.ui.NavDisplay
 import dev.kpetriv.sprout.chat.rememberReadAloud
 import dev.kpetriv.sprout.core.domainledger.ParentAuthorizationRequester
@@ -70,8 +72,7 @@ import dev.kpetriv.sprout.kids.KidsUiState
 import dev.kpetriv.sprout.kids.KidsViewModel
 import dev.kpetriv.sprout.kids.StartupErrorScreen
 import dev.kpetriv.sprout.settings.PinConfirmationDialog
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.Flow
 
 /**
  * The app shell. Shows a full-screen error when the process-start work failed, otherwise the area for the current
@@ -79,17 +80,20 @@ import kotlinx.coroutines.launch
  * areas `FLAG_SECURE`):
  * - **Onboarding** (no session, a phone waiting for approval, or the trial's "Set up sync"): `feature/onboarding`,
  *   with `feature/lock`'s PIN setup (or, for an existing PIN, fingerprint-signing setup) as its last parent step.
- * - **Parent**: everything behind `RequireParent` (PIN or fingerprint; `FLAG_SECURE`), one Navigation 3 back stack
- *   from [ParentHomeKey]. "Switch to kid mode" picks a kid, locks the parent session and enters kid mode. In a real
- *   household the dashboard's Chat shortcut opens the chat inbox ([ChatThreadsKey]) and each kid's thread
- *   ([ChatThreadKey]); on an Expanded window the inbox and a thread, and the chore list and its editor, sit side by
- *   side (list-detail, M7 §5).
- * - **Kid**: the kid's wallet ([KidHomeKey]) with its shop and today's chores, no lock, and shortcuts to the kid's
- *   chat ([ChatThreadKey], real households only, read aloud by text-to-speech), screen time
- *   ([TimeBankKey]) and the brain games hub ([KidGamesKey], one [GamePlayKey] per play, read aloud by
- *   text-to-speech too), each in the kid's tier. On a parent's phone back at the root (system back or the wallet's
- *   back arrow) opens `KidModeExitGate`; a successful unlock returns to the parent area. On a kid's own linked phone
- *   there is no parent area: back at the root leaves the app.
+ * - **Parent**: everything behind `RequireParent` (PIN or fingerprint; `FLAG_SECURE`), in the parent shell (M9 §5):
+ *   a bottom bar (a rail on Expanded windows) with Home ([ParentHomeKey]), Chores ([ChoresKey]), Chat
+ *   ([ChatThreadsKey], real households only) and Settings ([SettingsKey]), one back stack per tab
+ *   ([TopLevelBackStack]). "Switch to kid mode" picks a kid, locks the parent session and enters kid mode. On an
+ *   Expanded window the chat inbox and a thread, and the chore list and its editor, sit side by side (list-detail,
+ *   M7 §5).
+ * - **Kid**: the kid shell in the kid's tier: Wallet ([KidHomeKey]), Chores ([KidChoresKey]), Shop ([ShopKey]), Games
+ *   ([KidGamesKey], one [GamePlayKey] per play, read aloud by text-to-speech) and Chat ([ChatThreadKey], real
+ *   households only, read aloud too) on Sprout and Sapling; Wallet, Chores and Shop on Seedling, whose wallet keeps
+ *   giant Chat, Screen time and Games buttons. Screen time ([TimeBankKey]) is pushed from the wallet's screen-time
+ *   badge (Seedling: its sun and giant button). No lock. On a parent's phone back at the root (the system back; the
+ *   kid wallet is a tab root without a back arrow) opens `KidModeExitGate`; a successful
+ *   unlock returns to the parent area. On a kid's own linked phone there is no parent area: back at the root leaves
+ *   the app.
  * - **SignInAgain**: the "Sign in again" gate for a phone whose sign-in ended; no household data behind it, but it
  *   takes credentials, so it is `FLAG_SECURE` too.
  * - **Removed**: the blocking wipe screen.
@@ -143,7 +147,7 @@ fun SproutApp(requester: ParentAuthorizationRequester, modifier: Modifier = Modi
                     kidId = current.kidId,
                     linkedDevice = current.linkedDevice,
                     chatAvailable = chatAvailable,
-                    tierOf = modeViewModel::tierOf,
+                    observeTier = modeViewModel::observeTier,
                     onExit = { modeViewModel.onEvent(ModeEvent.ExitKidMode) },
                     modifier = modifier,
                 )
@@ -238,15 +242,59 @@ private fun ParentLockStep(onDone: () -> Unit) {
 }
 
 /**
- * Entry decorators, in order: saveable state per entry, then a ViewModel store per entry (cleared on pop). Remembered
- * next to the back stack, so anything that takes the [NavDisplay] out of composition (the parent lock) keeps each
- * entry's saved state and ViewModels.
+ * Each tab's entry decorators, in order: saveable state per entry, then a ViewModel store per entry (cleared on pop).
+ * One set per tab, as Navigation 3's multiple back stacks need, remembered under the tab's key next to the back
+ * stacks, so anything that takes the [NavDisplay] out of composition (the parent lock) or a tab out of view (another
+ * tab selected) keeps each entry's saved state and ViewModels.
  */
 @Composable
-private fun entryDecorators() = listOf(
-    rememberSaveableStateHolderNavEntryDecorator<NavKey>(),
-    rememberViewModelStoreNavEntryDecorator(),
-)
+internal fun rememberTabDecorators(tabs: List<NavKey>): Map<NavKey, List<NavEntryDecorator<NavKey>>> =
+    tabs.associateWith { tab ->
+        key(tab) {
+            listOf(
+                rememberSaveableStateHolderNavEntryDecorator<NavKey>(),
+                rememberViewModelStoreNavEntryDecorator(),
+            )
+        }
+    }
+
+/**
+ * The shell's [NavDisplay] (M9 §5.2, D-M9-11): every tab's stack is decorated on its own, and the display gets the
+ * first tab's entries followed by the selected tab's ([TopLevelBackStack.visibleTabs]). Back is enabled while that
+ * list has somewhere to go; at the first tab's root it is not, so the system back (or the caller's own handler)
+ * leaves the mode.
+ *
+ * Every entry's content key is scoped to its tab ([tabScoped]): the same screen can sit in two tabs at once (approvals
+ * from the dashboard and from the chore list), and `NavDisplay` tells scenes, saved state and movable content apart
+ * by content key alone.
+ */
+@Composable
+internal fun ShellNavDisplay(
+    navigation: TopLevelBackStack,
+    decorators: Map<NavKey, List<NavEntryDecorator<NavKey>>>,
+    entryProvider: (NavKey) -> NavEntry<NavKey>,
+    modifier: Modifier = Modifier,
+    sceneStrategies: List<SceneStrategy<NavKey>> = listOf(SinglePaneSceneStrategy()),
+    onBack: () -> Unit = { navigation.back() },
+) {
+    val entries = navigation.tabs.associateWith { tab ->
+        key(tab) {
+            rememberDecoratedNavEntries(navigation.stackOf(tab), decorators.getValue(tab)) { navKey ->
+                tabScoped(tab, entryProvider(navKey), navKey)
+            }
+        }
+    }
+    NavDisplay(
+        entries = navigation.visibleTabs.flatMap { entries.getValue(it) },
+        modifier = modifier,
+        sceneStrategies = sceneStrategies,
+        onBack = onBack,
+    )
+}
+
+/** [entry] for [navKey] with its content key prefixed by [tab]'s, so each tab's copy of a screen is its own entry. */
+internal fun tabScoped(tab: NavKey, entry: NavEntry<NavKey>, navKey: NavKey): NavEntry<NavKey> =
+    NavEntry(navKey, contentKey = "$tab/${entry.contentKey}", metadata = entry.metadata) { entry.Content() }
 
 @OptIn(ExperimentalMaterial3AdaptiveApi::class)
 @Composable
@@ -258,41 +306,45 @@ private fun ParentArea(
     onSetUpSync: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    // Hoisted above the gate so locking (auto-lock in the background) keeps where the parent was, and the entries'
-    // saved state and ViewModels with it.
-    val backStack = rememberNavBackStack(ParentHomeKey)
-    val decorators = entryDecorators()
+    // Hoisted above the gate so locking (auto-lock in the background) keeps where the parent was in every tab, and
+    // the entries' saved state and ViewModels with it.
+    val tabs = parentTabs(chatAvailable)
+    val roots = tabs.map { it.root }
+    val navigation = rememberTopLevelBackStack(roots)
+    val decorators = rememberTabDecorators(navigation.tabs)
     var picking by rememberSaveable { mutableStateOf<KidPickPurpose?>(null) }
     // On an Expanded window the chat inbox and a thread, and the chore list and its editor, share the screen
     // (M7 §5, D-M7-2); a Compact or Medium window shows one pane as before.
     val listDetail = rememberListDetailSceneStrategy<NavKey>()
+    // The shell sits inside the gate: no bar or rail on the PIN entry or setup (D-M9-10).
     RequireParent(modifier = modifier) {
-        NavDisplay(
-            backStack = backStack,
-            onBack = { backStack.removeLastOrNull() },
-            entryDecorators = decorators,
-            sceneStrategies = listOf(listDetail),
-            entryProvider = entryProvider {
-                entry<ParentHomeKey> {
-                    WithShortcuts(parentShortcuts(chatAvailable) { backStack.push(ChatThreadsKey) }) {
+        SproutShell(
+            tabs = tabs,
+            selectedIndex = navigation.selectedIndexIn(roots),
+            onSelect = { navigation.select(roots[it]) },
+        ) {
+            ShellNavDisplay(
+                navigation = navigation,
+                decorators = decorators,
+                sceneStrategies = listOf(listDetail),
+                entryProvider = entryProvider {
+                    entry<ParentHomeKey> {
                         ParentHomeRoute(
                             requester = requester,
-                            onOpenChores = { backStack.push(ChoresKey) },
-                            onOpenApprovals = { backStack.push(ApprovalsKey) },
+                            onOpenApprovals = { navigation.push(ApprovalsKey) },
                             onOpenShop = { picking = KidPickPurpose.SHOP },
-                            onOpenSettings = { backStack.push(SettingsKey) },
                             onSwitchToKidMode = { picking = KidPickPurpose.KID_MODE },
-                            onOpenKid = { kidId -> backStack.push(WalletKey(kidId, WalletMode.PARENT)) },
+                            onOpenKid = { kidId -> navigation.push(WalletKey(kidId, WalletMode.PARENT)) },
                             onSetUpSync = onSetUpSync,
-                            onReviewDevice = { deviceId -> backStack.push(DevicesKey(deviceId)) },
-                            onRegisterSigningKey = { backStack.push(SecurityKey) },
-                            onOpenAiSettings = { backStack.push(AiSettingsKey) },
+                            onReviewDevice = { deviceId -> navigation.push(DevicesKey(deviceId)) },
+                            onRegisterSigningKey = { navigation.push(SecurityKey) },
+                            onOpenAiSettings = { navigation.push(AiSettingsKey) },
                         )
                     }
-                }
-                parentEntries(backStack)
-            },
-        )
+                    parentEntries(navigation)
+                },
+            )
+        }
         // The parent PIN when a sensitive setting asks for the parent again and no fingerprint can answer (M7).
         PinConfirmationDialog()
         picking?.let { purpose ->
@@ -303,7 +355,7 @@ private fun ParentArea(
                     picking = null
                     when (purpose) {
                         KidPickPurpose.KID_MODE -> onEnterKidMode(kidId)
-                        KidPickPurpose.SHOP -> backStack.push(ShopKey(kidId, WalletMode.PARENT))
+                        KidPickPurpose.SHOP -> navigation.push(ShopKey(kidId, WalletMode.PARENT))
                     }
                 },
                 onDismiss = { picking = null },
@@ -313,101 +365,82 @@ private fun ParentArea(
 }
 
 /**
- * Opens [key] unless it is already on top: a double tap on a link, or a second tap while a slow lookup was running,
- * must not stack the same screen twice.
+ * The parent area's entries other than the dashboard. Pushed screens go onto the selected tab ([TopLevelBackStack.push]
+ * selects a tab instead when the key is one, such as the parent wallet's link to the chore list). A back arrow is the
+ * system back; "Done" closes only the screen it is on.
  */
-internal fun NavBackStack<NavKey>.push(key: NavKey) {
-    if (lastOrNull() != key) add(key)
-}
-
-/** Closes [key] if it is on top; a no-op otherwise (a second tap on a "Done" that already closed it). */
-internal fun NavBackStack<NavKey>.popIf(key: NavKey) {
-    if (lastOrNull() == key) removeLastOrNull()
-}
-
-/** The parent area's entries other than the dashboard. */
-private fun EntryProviderScope<NavKey>.parentEntries(backStack: NavBackStack<NavKey>) {
-    val pop: () -> Unit = { backStack.removeLastOrNull() }
+private fun EntryProviderScope<NavKey>.parentEntries(navigation: TopLevelBackStack) {
+    val back: () -> Unit = { navigation.back() }
     entry<WalletKey> { key ->
         WalletRoute(
             kidId = key.kidId,
             mode = key.mode,
-            onBack = pop,
-            onOpenShop = { backStack.push(ShopKey(key.kidId, key.mode)) },
-            onOpenChores = { backStack.push(ChoresKey) },
+            onBack = back,
+            onOpenShop = { navigation.push(ShopKey(key.kidId, key.mode)) },
+            onOpenChores = { navigation.push(ChoresKey) },
         )
     }
-    entry<ShopKey> { key -> ShopRoute(kidId = key.kidId, mode = key.mode, onBack = pop) }
-    entry<ApprovalsKey> { ApprovalsInboxRoute(onBack = pop) }
-    entry<SettingsKey> { SettingsRoute(onBack = pop) }
+    entry<ShopKey> { key -> ShopRoute(kidId = key.kidId, mode = key.mode, onBack = back) }
+    entry<ApprovalsKey> { ApprovalsInboxRoute(onBack = back) }
+    // The Settings tab root: no back arrow (M9 §5.2); system back still leaves the tab.
+    entry<SettingsKey> { SettingsRoute(onBack = null) }
     entry<DevicesKey> { key ->
         SettingsRoute(
-            onBack = pop,
+            onBack = back,
             initialSection = SettingsSection.DEVICES,
             reviewDeviceId = key.reviewDeviceId,
         )
     }
     entry<SecurityKey> {
         SettingsRoute(
-            onBack = pop,
+            onBack = back,
             initialSection = SettingsSection.PARENT_SECURITY,
         )
     }
     entry<AiSettingsKey> {
         SettingsRoute(
-            onBack = pop,
+            onBack = back,
             initialSection = SettingsSection.AI,
         )
     }
-    listDetailEntries(backStack, pop)
+    listDetailEntries(navigation, back)
 }
 
 /**
- * The parent's list-detail flows (M7 §5, D-M7-2): the chore list and its editor, the chat inbox and a thread. On an
- * Expanded window `ListDetailSceneStrategy` shows each list with its open item (or a placeholder) beside it.
+ * The parent's list-detail flows (M7 §5, D-M7-2): the chore list and its editor, the chat inbox and a thread, each the
+ * root of its own tab. On an Expanded window `ListDetailSceneStrategy` shows each list with its open item (or a
+ * placeholder) beside it.
  */
 @OptIn(ExperimentalMaterial3AdaptiveApi::class)
-private fun EntryProviderScope<NavKey>.listDetailEntries(backStack: NavBackStack<NavKey>, pop: () -> Unit) {
+private fun EntryProviderScope<NavKey>.listDetailEntries(navigation: TopLevelBackStack, back: () -> Unit) {
     val choresList = ListDetailSceneStrategy.listPane(detailPlaceholder = { ChoreEditorPlaceholder() })
     val chatList = ListDetailSceneStrategy.listPane(detailPlaceholder = { ChatThreadPlaceholder() })
     entry<ChoresKey>(metadata = choresList) {
         ListPane {
             ChoreListRoute(
-                onCreateChore = { backStack.openDetail(ChoreEditorKey()) },
-                onEditChore = { choreId -> backStack.openDetail(ChoreEditorKey(choreId)) },
-                onOpenApprovals = { backStack.push(ApprovalsKey) },
-                onBack = pop,
-                selectedChoreId = (backStack.lastOrNull() as? ChoreEditorKey)?.choreId,
+                onCreateChore = { navigation.openDetail(ChoreEditorKey()) },
+                onEditChore = { choreId -> navigation.openDetail(ChoreEditorKey(choreId)) },
+                onOpenApprovals = { navigation.push(ApprovalsKey) },
+                selectedChoreId = (navigation.stackOf(ChoresKey).lastOrNull() as? ChoreEditorKey)?.choreId,
             )
         }
     }
     entry<ChoreEditorKey>(metadata = ListDetailSceneStrategy.detailPane()) { key ->
-        ChoreEditorRoute(choreId = key.choreId, onDone = pop, onBack = pop)
+        ChoreEditorRoute(choreId = key.choreId, onDone = { navigation.popIf(key) }, onBack = back)
     }
     entry<ChatThreadsKey>(metadata = chatList) {
         ListPane {
             ChatThreadListRoute(
-                onOpenThread = { kidId -> backStack.openDetail(ChatThreadKey(kidId)) },
-                onBack = pop,
-                selectedThreadId = (backStack.lastOrNull() as? ChatThreadKey)?.kidId,
+                onOpenThread = { kidId -> navigation.openDetail(ChatThreadKey(kidId)) },
+                onBack = null,
+                selectedThreadId = navigation.tabs
+                    .takeIf { ChatThreadsKey in it }
+                    ?.let { (navigation.stackOf(ChatThreadsKey).lastOrNull() as? ChatThreadKey)?.kidId },
             )
         }
     }
     entry<ChatThreadKey>(metadata = ListDetailSceneStrategy.detailPane()) { key ->
-        ParentChatRoute(threadId = key.kidId, onBack = pop)
-    }
-}
-
-/**
- * Opens [detail] beside its list: it replaces the detail already open (another thread, another chore), so back from
- * a list-detail screen returns to the list rather than walking through every item opened, on a phone too.
- */
-private fun NavBackStack<NavKey>.openDetail(detail: NavKey) {
-    val top = lastOrNull()
-    when {
-        top == detail -> Unit
-        top != null && top::class == detail::class -> set(lastIndex, detail)
-        else -> add(detail)
+        ParentChatRoute(threadId = key.kidId, onBack = back)
     }
 }
 
@@ -420,93 +453,33 @@ private fun ListPane(content: @Composable () -> Unit) {
     CompositionLocalProvider(LocalWindowWidthClass provides WindowWidthClass.Compact, content = content)
 }
 
+/**
+ * Kid mode: the kid's tier is observed ([observeTier]; a parent can change it from another phone), and the kid shell
+ * is built for it ([KidAreaContent]). On a parent's phone back at the root (system back or the wallet's back arrow)
+ * opens `KidModeExitGate` and a successful unlock returns to the parent area; on a kid's own linked phone back at the
+ * root leaves the app.
+ */
 @Composable
 private fun KidArea(
     kidId: KidId,
     linkedDevice: Boolean,
     chatAvailable: Boolean,
-    tierOf: suspend (KidId) -> KidUiTier?,
+    observeTier: (KidId) -> Flow<KidUiTier?>,
     onExit: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val activity = LocalActivity.current
-    val backStack = rememberNavBackStack(KidHomeKey(kidId))
-    val decorators = entryDecorators()
     var exiting by rememberSaveable { mutableStateOf(false) }
-    val scope = rememberCoroutineScope()
-    // The chores and games taps look the tier up first; a second tap while that runs is ignored instead of opening a
-    // screen twice.
-    var opening by remember { mutableStateOf<Job?>(null) }
-    val openWithTier: (KidId, (KidUiTier) -> NavKey) -> Unit = { id, keyFor ->
-        if (opening?.isActive != true) {
-            opening = scope.launch { tierOf(id)?.let { backStack.push(keyFor(it)) } }
-        }
-    }
-    val atRoot = backStack.size <= 1
-    val back: () -> Unit = {
-        when {
-            backStack.size > 1 -> backStack.removeLastOrNull()
-            linkedDevice -> activity?.finish()
-            else -> exiting = true
-        }
-    }
-    // On a parent's phone back at the root never leaves kid mode by accident: it asks for the parent instead. A kid's
-    // own phone has no parent area, so back at the root leaves the app as usual.
-    BackHandler(enabled = atRoot && !exiting && !linkedDevice) { exiting = true }
-    NavDisplay(
-        backStack = backStack,
+    val tierFlow = remember(kidId) { observeTier(kidId) }
+    val tier by tierFlow.collectAsStateWithLifecycle(initialValue = null)
+    KidAreaContent(
+        kidId = kidId,
+        tier = tier,
+        linkedDevice = linkedDevice,
+        chatAvailable = chatAvailable,
+        exiting = exiting,
+        onOpenExitGate = { exiting = true },
+        entries = KidRouteEntries,
         modifier = modifier,
-        onBack = back,
-        entryDecorators = decorators,
-        entryProvider = entryProvider {
-            entry<KidHomeKey> { key ->
-                val shortcuts = kidShortcuts(
-                    chat = chatAvailable,
-                    onChat = { backStack.push(ChatThreadKey(key.kidId)) },
-                    onScreenTime = { backStack.push(TimeBankKey(key.kidId)) },
-                    onGames = { openWithTier(key.kidId) { tier -> KidGamesKey(key.kidId, tier) } },
-                )
-                WithShortcuts(shortcuts) {
-                    WalletRoute(
-                        kidId = key.kidId,
-                        mode = WalletMode.KID,
-                        onBack = back,
-                        onOpenShop = { backStack.push(ShopKey(key.kidId, WalletMode.KID)) },
-                        onOpenChores = { openWithTier(key.kidId) { tier -> KidChoresKey(key.kidId, tier) } },
-                    )
-                }
-            }
-            entry<ShopKey> { key -> ShopRoute(kidId = key.kidId, mode = key.mode, onBack = back) }
-            entry<KidChoresKey> { key -> KidTodayRoute(kidId = key.kidId, tier = key.tier, onBack = back) }
-            entry<ChatThreadKey> { key ->
-                WithTier(key.kidId, tierOf) { tier ->
-                    KidChatRoute(kidId = key.kidId, tier = tier, onBack = back, readAloud = rememberReadAloud())
-                }
-            }
-            entry<TimeBankKey> { key ->
-                WithTier(key.kidId, tierOf) { tier -> TimeBankRoute(kidId = key.kidId, tier = tier, onBack = back) }
-            }
-            entry<KidGamesKey> { key ->
-                GamesHubRoute(
-                    kidId = key.kidId,
-                    tier = key.tier,
-                    onPlay = { kind -> backStack.push(GamePlayKey(key.kidId, key.tier, kind)) },
-                    onBack = back,
-                    readAloud = rememberReadAloud(),
-                )
-            }
-            entry<GamePlayKey> { key ->
-                GamePlayRoute(
-                    kidId = key.kidId,
-                    tier = key.tier,
-                    kind = key.kind,
-                    // Back to the hub; a second tap on Done must not leave the hub too.
-                    onFinished = { backStack.popIf(key) },
-                    onBack = back,
-                    readAloud = rememberReadAloud(),
-                )
-            }
-        },
     )
     if (exiting && !linkedDevice) {
         KidModeExitGate(
@@ -520,16 +493,153 @@ private fun KidArea(
 }
 
 /**
- * [content] in [kidId]'s UI tier, looked up first ([tierOf]); a progress indicator meanwhile, and nothing for a kid
- * that does not exist (any more).
+ * The kid area without its exit gate, so its back routing is tested without Hilt: a progress indicator until [tier]
+ * is known, then [KidShell] in that tier, rebuilt when the tier changes. Leaving (back at the first tab's root, from
+ * the system back or a top-level back arrow, or back while the tier is still unknown) asks for the parent on a
+ * parent's phone ([onOpenExitGate], not while [exiting] already) and finishes the activity on a kid's linked phone.
  */
 @Composable
-private fun WithTier(kidId: KidId, tierOf: suspend (KidId) -> KidUiTier?, content: @Composable (KidUiTier) -> Unit) {
-    val tier by produceState<KidUiTier?>(initialValue = null, kidId) { value = tierOf(kidId) }
-    val current = tier
-    if (current == null) {
-        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
+internal fun KidAreaContent(
+    kidId: KidId,
+    tier: KidUiTier?,
+    linkedDevice: Boolean,
+    chatAvailable: Boolean,
+    exiting: Boolean,
+    onOpenExitGate: () -> Unit,
+    entries: KidEntries,
+    modifier: Modifier = Modifier,
+) {
+    val activity = LocalActivity.current
+    val leave: () -> Unit = { if (linkedDevice) activity?.finish() else onOpenExitGate() }
+    // On a parent's phone back at the root never leaves kid mode by accident: it asks for the parent instead. A kid's
+    // own phone has no parent area, so back at the root leaves the app as usual (the system's own handling).
+    val interceptRootBack = !exiting && !linkedDevice
+    if (tier == null) {
+        Box(modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
+        BackHandler(enabled = interceptRootBack, onBack = leave)
     } else {
-        content(current)
+        key(tier) {
+            KidShell(
+                kidId = kidId,
+                tier = tier,
+                chatAvailable = chatAvailable,
+                onLeave = leave,
+                interceptRootBack = interceptRootBack,
+                entries = entries,
+                modifier = modifier,
+            )
+        }
+    }
+}
+
+/**
+ * The kid shell's screens: what each key shows, given the shell's [navigation], the kid's tier, whether chat is
+ * available (read when shown) and the shell's back. [KidRouteEntries] in the app; placeholders in tests.
+ */
+internal fun interface KidEntries {
+    fun provider(
+        navigation: TopLevelBackStack,
+        tier: KidUiTier,
+        chatAvailable: () -> Boolean,
+        back: () -> Unit,
+    ): (NavKey) -> NavEntry<NavKey>
+}
+
+/**
+ * The kid shell in [tier] (M9 §5.1): Wallet, Chores, Shop, Games and Chat tabs (Wallet, Chores and Shop on Seedling,
+ * whose wallet keeps the giant Chat, Screen time and Games buttons). The bar is hidden while a game is in play
+ * ([GamePlayKey] on top of the selected tab) and while the time bank's timer runs (the screen asks, D-M9-10). Back at
+ * the first tab's root calls [onLeave]; the system back there only when [interceptRootBack].
+ */
+@Composable
+private fun KidShell(
+    kidId: KidId,
+    tier: KidUiTier,
+    chatAvailable: Boolean,
+    onLeave: () -> Unit,
+    interceptRootBack: Boolean,
+    entries: KidEntries,
+    modifier: Modifier = Modifier,
+) {
+    val tabs = kidTabs(kidId, tier, chatAvailable)
+    val roots = tabs.map { it.root }
+    val navigation = rememberTopLevelBackStack(roots)
+    val decorators = rememberTabDecorators(navigation.tabs)
+    val chat by rememberUpdatedState(chatAvailable)
+    val leave by rememberUpdatedState(onLeave)
+    val back: () -> Unit = { if (!navigation.back()) leave() }
+    BackHandler(enabled = navigation.atStart && interceptRootBack) { leave() }
+    SproutShell(
+        tabs = tabs,
+        selectedIndex = navigation.selectedIndexIn(roots),
+        onSelect = { navigation.select(roots[it]) },
+        modifier = modifier,
+        tier = tier,
+        navigationHidden = navigation.top is GamePlayKey,
+    ) {
+        ShellNavDisplay(
+            navigation = navigation,
+            decorators = decorators,
+            onBack = back,
+            entryProvider = entries.provider(navigation, tier, { chat }, back),
+        )
+    }
+}
+
+/** The kid shell's real screens. */
+private val KidRouteEntries = KidEntries { navigation, tier, chatAvailable, back ->
+    entryProvider {
+        entry<KidHomeKey> { key ->
+            val shortcuts = kidShortcuts(
+                tier = tier,
+                chat = chatAvailable(),
+                onChat = { navigation.push(ChatThreadKey(key.kidId)) },
+                onScreenTime = { navigation.push(TimeBankKey(key.kidId)) },
+                onGames = { navigation.push(KidGamesKey(key.kidId, tier)) },
+            )
+            WithShortcuts(shortcuts) {
+                WalletRoute(
+                    kidId = key.kidId,
+                    mode = WalletMode.KID,
+                    onBack = back,
+                    onOpenShop = { navigation.push(ShopKey(key.kidId, WalletMode.KID)) },
+                    onOpenChores = { navigation.push(KidChoresKey(key.kidId, tier)) },
+                    onOpenTimeBank = { navigation.push(TimeBankKey(key.kidId)) },
+                )
+            }
+        }
+        entry<ShopKey> { key -> ShopRoute(kidId = key.kidId, mode = key.mode, onBack = back) }
+        entry<KidChoresKey> { key -> KidTodayRoute(kidId = key.kidId, tier = key.tier) }
+        entry<ChatThreadKey> { key ->
+            // A tab root on Sprout and Sapling (no back arrow); pushed from the wallet on Seedling (M9 §5.2).
+            KidChatRoute(
+                kidId = key.kidId,
+                tier = tier,
+                onBack = back.takeIf { tier == KidUiTier.SEEDLING },
+                readAloud = rememberReadAloud(),
+            )
+        }
+        entry<TimeBankKey> { key -> TimeBankRoute(kidId = key.kidId, tier = tier, onBack = back) }
+        entry<KidGamesKey> { key ->
+            GamesHubRoute(
+                kidId = key.kidId,
+                tier = key.tier,
+                onPlay = { kind -> navigation.push(GamePlayKey(key.kidId, key.tier, kind)) },
+                // A tab root on Sprout and Sapling (no back arrow); pushed from the wallet on Seedling (M9 §5.2).
+                onBack = back.takeIf { tier == KidUiTier.SEEDLING },
+                readAloud = rememberReadAloud(),
+            )
+        }
+        entry<GamePlayKey> { key ->
+            GamePlayRoute(
+                kidId = key.kidId,
+                tier = key.tier,
+                kind = key.kind,
+                // Back to the hub; a second tap on Done must not leave the hub too.
+                onFinished = { navigation.popIf(key) },
+                onBack = back,
+                readAloud = rememberReadAloud(),
+            )
+        }
     }
 }

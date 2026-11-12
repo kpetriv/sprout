@@ -1,40 +1,33 @@
 package dev.kpetriv.sprout.feature.settings
 
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.HorizontalDivider
-import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.input.KeyboardType
-import androidx.compose.ui.unit.dp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import dev.kpetriv.sprout.core.designsystem.components.SproutButton
+import dev.kpetriv.sprout.core.designsystem.icon.SproutIcons
+import dev.kpetriv.sprout.core.designsystem.theme.SproutSpacing
 import dev.kpetriv.sprout.core.domainhousehold.SavingsGoal
 import dev.kpetriv.sprout.core.domainledger.Currency
 import dev.kpetriv.sprout.core.model.MAX_TITLE_LENGTH
-import dev.kpetriv.sprout.core.ui.contentWidth
 import dev.kpetriv.sprout.core.ui.rememberMoneyFormatter
 
 @Composable
@@ -59,10 +52,8 @@ fun SavingsGoalsScreen(
         modifier = modifier,
         snackbarHostState = snackbar,
     ) { padding ->
-        Column(modifier = Modifier.padding(padding).fillMaxSize()) {
-            if (!loadStatus(state.isLoading, state.loadFailed)) {
-                GoalsContent(state, onEvent)
-            }
+        if (!loadStatus(state.isLoading, state.loadFailed, Modifier.padding(padding))) {
+            GoalsContent(state, onEvent, padding)
         }
     }
     MessageEffect(state.message, snackbar) { onEvent(SavingsGoalsEvent.MessageShown) }
@@ -70,44 +61,51 @@ fun SavingsGoalsScreen(
 }
 
 @Composable
-private fun GoalsContent(state: SavingsGoalsUiState, onEvent: (SavingsGoalsEvent) -> Unit) {
-    if (state.kids.isEmpty()) {
-        Text(stringResource(R.string.feature_settings_no_kids), modifier = Modifier.contentWidth().sectionPadding())
-        return
-    }
-    Column(modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).contentWidth()) {
+private fun GoalsContent(state: SavingsGoalsUiState, onEvent: (SavingsGoalsEvent) -> Unit, padding: PaddingValues) {
+    SettingsColumn(padding = padding, spacing = SproutSpacing.rowGap) {
+        if (state.kids.isEmpty()) {
+            Text(stringResource(R.string.feature_settings_no_kids), style = MaterialTheme.typography.bodyLarge)
+            return@SettingsColumn
+        }
         KidChips(
             kids = state.kids,
             selected = state.selectedKidId,
             onSelect = { onEvent(SavingsGoalsEvent.SelectKid(it)) },
-            modifier = Modifier.sectionPadding(),
+            modifier = Modifier.padding(bottom = SproutSpacing.sm),
         )
         if (state.goals.isEmpty()) {
-            Text(stringResource(R.string.feature_settings_goals_empty), modifier = Modifier.sectionPadding())
+            Text(stringResource(R.string.feature_settings_goals_empty), style = MaterialTheme.typography.bodyLarge)
         }
         val currency = state.currency
-        state.goals.forEachIndexed { index, goal ->
-            if (index > 0) HorizontalDivider()
+        state.goals.forEach { goal ->
             if (currency != null) GoalRow(goal, currency, onClick = { onEvent(SavingsGoalsEvent.EditGoal(goal.id)) })
         }
-        Button(onClick = { onEvent(SavingsGoalsEvent.AddGoal) }, modifier = Modifier.sectionPadding()) {
-            Text(stringResource(R.string.feature_settings_goals_add))
-        }
+        SproutButton(
+            text = stringResource(R.string.feature_settings_goals_add),
+            onClick = { onEvent(SavingsGoalsEvent.AddGoal) },
+            icon = SproutIcons.Add,
+            modifier = Modifier.padding(top = SproutSpacing.sm),
+        )
     }
 }
 
 @Composable
 private fun GoalRow(goal: SavingsGoal, currency: Currency, onClick: () -> Unit) {
     val formatter = rememberMoneyFormatter()
-    ListItem(
-        headlineContent = { Text(goal.title) },
-        supportingContent = {
-            Column {
-                Text(stringResource(R.string.feature_settings_goals_target, formatter.format(goal.target, currency)))
-                goal.achievedOn?.let { Text(stringResource(R.string.feature_settings_goals_achieved, formatDate(it))) }
+    SettingsRow(
+        title = goal.title,
+        summary = stringResource(R.string.feature_settings_goals_target, formatter.format(goal.target, currency)),
+        icon = SproutIcons.Savings,
+        onClick = onClick,
+        extra = goal.achievedOn?.let { date ->
+            {
+                Text(
+                    stringResource(R.string.feature_settings_goals_achieved, formatDate(date)),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.primary,
+                )
             }
         },
-        modifier = Modifier.fillMaxWidth().clickable(role = Role.Button, onClick = onClick),
     )
 }
 
@@ -115,15 +113,19 @@ private fun GoalRow(goal: SavingsGoal, currency: Currency, onClick: () -> Unit) 
 @Composable
 private fun GoalEditorSheet(editor: GoalEditorUi, onEvent: (SavingsGoalsEvent) -> Unit) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
-    ModalBottomSheet(onDismissRequest = { onEvent(SavingsGoalsEvent.Dismiss) }, sheetState = sheetState) {
-        GoalEditorForm(editor, onEvent, Modifier.padding(start = 24.dp, end = 24.dp, bottom = 24.dp))
+    ModalBottomSheet(
+        onDismissRequest = { onEvent(SavingsGoalsEvent.Dismiss) },
+        sheetState = sheetState,
+        containerColor = MaterialTheme.colorScheme.surfaceContainerLowest,
+    ) {
+        GoalEditorForm(editor, onEvent, Modifier.sheetPadding())
     }
 }
 
 /** Title and target amount; delete for an existing goal. */
 @Composable
 internal fun GoalEditorForm(editor: GoalEditorUi, onEvent: (SavingsGoalsEvent) -> Unit, modifier: Modifier = Modifier) {
-    Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(12.dp)) {
+    Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(SproutSpacing.md)) {
         SectionHeading(
             stringResource(
                 if (editor.goalId == null) {
@@ -141,6 +143,8 @@ internal fun GoalEditorForm(editor: GoalEditorUi, onEvent: (SavingsGoalsEvent) -
             isError = titleError != null,
             supportingText = titleError?.let { { Text(it) } },
             singleLine = true,
+            shape = MaterialTheme.shapes.small,
+            colors = settingsFieldColors(),
             modifier = Modifier.fillMaxWidth(),
         )
         val targetError = amountErrorText(editor.targetError)
@@ -152,21 +156,26 @@ internal fun GoalEditorForm(editor: GoalEditorUi, onEvent: (SavingsGoalsEvent) -
             supportingText = targetError?.let { { Text(it) } },
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
             singleLine = true,
+            shape = MaterialTheme.shapes.small,
+            colors = settingsFieldColors(),
             modifier = Modifier.fillMaxWidth(),
         )
-        if (editor.saveFailed) {
-            Text(stringResource(R.string.feature_settings_save_failed), color = MaterialTheme.colorScheme.error)
-        }
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        if (editor.saveFailed) ErrorText(stringResource(R.string.feature_settings_save_failed))
+        ButtonRow(alignment = Alignment.Start) {
             SaveButton(editor.isSaving, enabled = true, onClick = { onEvent(SavingsGoalsEvent.Save) })
-            TextButton(onClick = { onEvent(SavingsGoalsEvent.Dismiss) }) {
-                Text(stringResource(R.string.feature_settings_cancel))
-            }
+            QuietButton(
+                text = stringResource(R.string.feature_settings_cancel),
+                onClick = { onEvent(SavingsGoalsEvent.Dismiss) },
+            )
         }
         if (editor.goalId != null) {
-            TextButton(onClick = { onEvent(SavingsGoalsEvent.Delete) }, enabled = !editor.isSaving) {
-                Text(stringResource(R.string.feature_settings_goals_delete), color = MaterialTheme.colorScheme.error)
-            }
+            DestructiveButton(
+                text = stringResource(R.string.feature_settings_goals_delete),
+                onClick = { onEvent(SavingsGoalsEvent.Delete) },
+                enabled = !editor.isSaving,
+                style = DestructiveStyle.Outlined,
+                icon = SproutIcons.Delete,
+            )
         }
     }
 }

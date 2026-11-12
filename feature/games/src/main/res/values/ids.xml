@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+  <!-- Window tag: how many PlayFields are composed in the window (their system-bar icon effect is shared). -->
+  <item name="feature_games_play_field_owners" type="id" />
+</resources>

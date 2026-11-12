@@ -8,6 +8,7 @@ import dev.kpetriv.sprout.core.games.GameCredit
 import dev.kpetriv.sprout.core.games.GameId
 import dev.kpetriv.sprout.core.games.GameKind
 import dev.kpetriv.sprout.core.games.Score
+import dev.kpetriv.sprout.core.games.TablesSetup
 import dev.kpetriv.sprout.core.model.KidId
 import dev.kpetriv.sprout.core.model.KidUiTier
 import kotlinx.coroutines.CoroutineScope
@@ -17,6 +18,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.test.TestDispatcher
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.resetMain
@@ -95,4 +97,33 @@ class FakeCapSource(initial: Money = Money(23)) : GameCapSource {
     } else {
         remaining
     }
+}
+
+/** A [TablesSetupStore] in memory: per kid, observed live; [saved] records every save. */
+class FakeTablesSetupStore(initial: Map<KidId, TablesSetup> = emptyMap()) : TablesSetupStore {
+    val setups = MutableStateFlow(initial)
+    val saved = mutableListOf<Pair<KidId, TablesSetup>>()
+    var fail = false
+
+    override fun observe(kidId: KidId): Flow<TablesSetup?> = if (fail) {
+        flow { error("store unavailable") }
+    } else {
+        setups.map { it[kidId] }
+    }
+
+    override suspend fun save(kidId: KidId, setup: TablesSetup) {
+        saved += kidId to setup
+        setups.value = setups.value + (kidId to setup)
+    }
+}
+
+/** A [GameHistorySource] the test fills: [recent] plays and [best] this week, per kind. */
+class FakeHistorySource : GameHistorySource {
+    val recent = MutableStateFlow<List<GamePlaySummary>>(emptyList())
+    val best = MutableStateFlow<Int?>(null)
+
+    override fun observeRecent(kidId: KidId, kind: GameKind, limit: Int): Flow<List<GamePlaySummary>> =
+        recent.map { plays -> plays.filter { it.gameId.kind == kind }.take(limit) }
+
+    override fun observeBestScoreThisWeek(kidId: KidId, kind: GameKind): Flow<Int?> = best
 }

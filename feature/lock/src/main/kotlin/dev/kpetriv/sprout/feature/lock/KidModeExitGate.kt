@@ -2,11 +2,9 @@ package dev.kpetriv.sprout.feature.lock
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -25,6 +23,10 @@ import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.window.SecureFlagPolicy
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import dev.kpetriv.sprout.core.designsystem.components.SproutButton
+import dev.kpetriv.sprout.core.designsystem.components.SproutButtonStyle
+import dev.kpetriv.sprout.core.designsystem.components.SproutCard
+import dev.kpetriv.sprout.core.designsystem.theme.SproutSpacing
 
 /**
  * A small dialog asking for the parent PIN (or fingerprint) before leaving kid mode. Show it when the kid-mode
@@ -60,17 +62,23 @@ fun KidModeExitGate(onDismiss: () -> Unit, onExitConfirmed: () -> Unit) {
     }
 }
 
-/** The gate's card: [content] (PIN setup, or the title and PIN entry) above Cancel. Stateless, for goldens. */
+/**
+ * The gate's card, a white `SproutCard` (M9): [content] (PIN setup, or the title and PIN entry) above Cancel.
+ * Stateless, for goldens.
+ */
 @Composable
 internal fun KidModeExitGateCard(onDismiss: () -> Unit, content: @Composable () -> Unit) {
-    Surface(shape = MaterialTheme.shapes.extraLarge, tonalElevation = 6.dp) {
+    SproutCard(contentPadding = PaddingValues(SproutSpacing.lg)) {
         Column(
-            modifier = Modifier.padding(24.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(16.dp),
+            verticalArrangement = Arrangement.spacedBy(SproutSpacing.md),
         ) {
             content()
-            TextButton(onClick = onDismiss) { Text(stringResource(R.string.feature_lock_cancel)) }
+            SproutButton(
+                text = stringResource(R.string.feature_lock_cancel),
+                onClick = onDismiss,
+                style = SproutButtonStyle.Tertiary,
+            )
         }
     }
 }
@@ -84,7 +92,7 @@ internal fun KidModeExitPinContent(
 ) {
     Text(
         text = stringResource(R.string.feature_lock_exit_kid_mode_title),
-        style = MaterialTheme.typography.titleLarge,
+        style = MaterialTheme.typography.headlineSmall,
         textAlign = TextAlign.Center,
         modifier = Modifier.semantics { heading() },
     )

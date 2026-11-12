@@ -1,14 +1,10 @@
 package dev.kpetriv.sprout.feature.settings
 
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.Card
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.SnackbarHostState
@@ -19,11 +15,10 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.KeyboardType
-import androidx.compose.ui.unit.dp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import dev.kpetriv.sprout.core.designsystem.theme.SproutSpacing
 import dev.kpetriv.sprout.core.model.MAX_SCHEDULE_DAY_OF_MONTH
-import dev.kpetriv.sprout.core.ui.contentWidth
 import dev.kpetriv.sprout.core.ui.rememberMoneyFormatter
 
 @Composable
@@ -48,66 +43,79 @@ fun InterestSettingsScreen(
         modifier = modifier,
         snackbarHostState = snackbar,
     ) { padding ->
-        Column(modifier = Modifier.padding(padding).fillMaxSize()) {
-            if (!loadStatus(state.isLoading, state.loadFailed)) InterestForm(state, onEvent)
+        if (!loadStatus(state.isLoading, state.loadFailed, Modifier.padding(padding))) {
+            InterestForm(state, onEvent, padding)
         }
     }
     MessageEffect(state.message, snackbar) { onEvent(InterestSettingsEvent.MessageShown) }
 }
 
 @Composable
-private fun InterestForm(state: InterestSettingsUiState, onEvent: (InterestSettingsEvent) -> Unit) {
-    Column(
-        modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).contentWidth().sectionPadding(),
-        verticalArrangement = Arrangement.spacedBy(16.dp),
-    ) {
-        Text(
-            stringResource(R.string.feature_settings_interest_explanation),
-            style = MaterialTheme.typography.bodyMedium,
-        )
-        val rateError = rateErrorText(state.rateError)
-        OutlinedTextField(
-            value = state.rateText,
-            onValueChange = { onEvent(InterestSettingsEvent.RateChanged(it)) },
-            label = { Text(stringResource(R.string.feature_settings_interest_rate)) },
-            isError = rateError != null,
-            supportingText = { Text(rateError ?: stringResource(R.string.feature_settings_interest_rate_hint)) },
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth(),
-        )
-        ChoiceDropdown(
-            label = stringResource(R.string.feature_settings_interest_accrual_day),
-            options = (1..MAX_SCHEDULE_DAY_OF_MONTH).toList(),
-            selected = state.accrualDay,
-            optionLabel = { it.toString() },
-            onSelect = { onEvent(InterestSettingsEvent.AccrualDayChanged(it)) },
-        )
-        InterestPreviewCard(state)
-        SaveButton(state.isSaving, enabled = state.canSave, onClick = { onEvent(InterestSettingsEvent.Save) })
+private fun InterestForm(
+    state: InterestSettingsUiState,
+    onEvent: (InterestSettingsEvent) -> Unit,
+    padding: PaddingValues,
+) {
+    SettingsColumn(padding = padding) {
+        SettingsCard {
+            Text(
+                stringResource(R.string.feature_settings_interest_explanation),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            val rateError = rateErrorText(state.rateError)
+            OutlinedTextField(
+                value = state.rateText,
+                onValueChange = { onEvent(InterestSettingsEvent.RateChanged(it)) },
+                label = { Text(stringResource(R.string.feature_settings_interest_rate)) },
+                isError = rateError != null,
+                supportingText = { Text(rateError ?: stringResource(R.string.feature_settings_interest_rate_hint)) },
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                singleLine = true,
+                shape = MaterialTheme.shapes.small,
+                colors = settingsFieldColors(),
+                modifier = Modifier.fillMaxWidth(),
+            )
+            ChoiceDropdown(
+                label = stringResource(R.string.feature_settings_interest_accrual_day),
+                options = (1..MAX_SCHEDULE_DAY_OF_MONTH).toList(),
+                selected = state.accrualDay,
+                optionLabel = { it.toString() },
+                onSelect = { onEvent(InterestSettingsEvent.AccrualDayChanged(it)) },
+            )
+            InterestPreview(state)
+            SaveButton(
+                state.isSaving,
+                enabled = state.canSave,
+                onClick = { onEvent(InterestSettingsEvent.Save) },
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
     }
 }
 
+/** What the rate earns on a round amount in a month, on a Linen tile. */
 @Composable
-private fun InterestPreviewCard(state: InterestSettingsUiState) {
+private fun InterestPreview(state: InterestSettingsUiState) {
     val preview = state.preview ?: return
     val currency = state.currency ?: return
     val formatter = rememberMoneyFormatter()
-    Card(modifier = Modifier.fillMaxWidth()) {
-        Text(
-            text = if (state.rateBasisPoints == 0) {
-                stringResource(R.string.feature_settings_interest_off)
-            } else {
-                stringResource(
-                    R.string.feature_settings_interest_preview,
-                    formatter.format(preview.principal, currency),
-                    formatter.format(preview.earned, currency),
-                )
-            },
-            style = MaterialTheme.typography.bodyLarge,
-            modifier = Modifier.padding(16.dp),
-        )
-    }
+    Text(
+        text = if (state.rateBasisPoints == 0) {
+            stringResource(R.string.feature_settings_interest_off)
+        } else {
+            stringResource(
+                R.string.feature_settings_interest_preview,
+                formatter.format(preview.principal, currency),
+                formatter.format(preview.earned, currency),
+            )
+        },
+        style = MaterialTheme.typography.bodyLarge,
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(MaterialTheme.colorScheme.surfaceContainerLow, MaterialTheme.shapes.medium)
+            .padding(SproutSpacing.md),
+    )
 }
 
 @Composable

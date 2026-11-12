@@ -151,13 +151,16 @@ class ParentHomeViewModel @Inject constructor(
         ledger.observeBalances(kid.id),
         ledger.observeAnomalies(kid.id).map { it.size },
     ) { accountList, balances, anomalies ->
-        val after = calendar.today().plusDays(-1)
+        val today = calendar.today()
+        val after = today.plusDays(-1)
         KidSummaryUi(
             kid = kid,
             money = accountList.mainFiat()?.let { balanceOf(it, balances) },
             minutes = accountList.mainMinutes()?.let { balanceOf(it, balances) }?.amount,
             nextAllowance = schedules.mapNotNull { AllowancePlanner.nextDueDate(it, after) }.minOrNull(),
             anomalies = anomalies,
+            // A phone clock set before the birth month must not show a negative age.
+            age = kid.ageOn(today.yearMonth).takeIf { it >= 0 },
         )
     }
 

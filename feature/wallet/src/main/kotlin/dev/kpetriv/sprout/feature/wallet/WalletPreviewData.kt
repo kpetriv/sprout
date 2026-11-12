@@ -17,7 +17,7 @@ import java.util.Locale
 import kotlin.time.Instant
 
 /** Realistic fake wallet states for previews and UI tests. */
-internal object WalletPreviewData {
+object WalletPreviewData {
     private val gbp = Currency.Fiat("GBP")
     private val formatter = MoneyFormatter(Locale.UK)
     private const val DAY_MILLIS = 86_400_000L
@@ -33,6 +33,7 @@ internal object WalletPreviewData {
     private const val LATE_INDEX = 10
     private const val LATE_MINOR = 15L
     private const val NOT_COUNTED = 2
+    private const val PERCENT = 100L
     private val now = Instant.fromEpochMilliseconds(1_793_000_000_000L)
 
     private val names = mapOf(
@@ -119,9 +120,10 @@ internal object WalletPreviewData {
             savingsGoal = SavingsGoalUi(
                 savedText = formatter.formatForTier(Money(SAVINGS_MINOR), gbp, tier),
                 targetText = formatter.formatForTier(Money(GOAL_MINOR), gbp, tier),
-                progress = SAVINGS_MINOR.toFloat() / GOAL_MINOR,
                 title = GOAL_TITLE,
                 stars = SavingsStarsDefaults.filledStars(SAVINGS_MINOR, GOAL_MINOR),
+                percent = (SAVINGS_MINOR * PERCENT / GOAL_MINOR).toInt(),
+                remainingText = formatter.formatForTier(Money(GOAL_MINOR - SAVINGS_MINOR), gbp, tier),
             ),
             events = if (filter == null) tierEvents else tierEvents.filter { it.category == filter },
             filter = filter,
@@ -141,10 +143,10 @@ internal object WalletPreviewData {
             savingsGoal = SavingsGoalUi(
                 savedText = formatter.formatForTier(Money(GOAL_MINOR), gbp, tier),
                 targetText = formatter.formatForTier(Money(GOAL_MINOR), gbp, tier),
-                progress = 1f,
                 title = GOAL_TITLE,
                 stars = SavingsStarsDefaults.STAR_COUNT,
                 isComplete = true,
+                percent = PERCENT.toInt(),
             ),
         )
     }

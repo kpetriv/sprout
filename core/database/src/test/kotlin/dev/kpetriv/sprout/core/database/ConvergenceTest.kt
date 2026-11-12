@@ -9,8 +9,13 @@ import dev.kpetriv.sprout.core.domainhousehold.Reward
 import dev.kpetriv.sprout.core.domainledger.AllowancePaid
 import dev.kpetriv.sprout.core.domainledger.Currency
 import dev.kpetriv.sprout.core.domainledger.DeviceStatus
+import dev.kpetriv.sprout.core.domainledger.GameCreditResult
 import dev.kpetriv.sprout.core.domainledger.Money
 import dev.kpetriv.sprout.core.domainledger.QuarantineReason
+import dev.kpetriv.sprout.core.games.Difficulty
+import dev.kpetriv.sprout.core.games.GameId
+import dev.kpetriv.sprout.core.games.GameKind
+import dev.kpetriv.sprout.core.games.Score
 import dev.kpetriv.sprout.core.model.AccountId
 import dev.kpetriv.sprout.core.model.CalendarDate
 import dev.kpetriv.sprout.core.model.ChoreId
@@ -67,6 +72,12 @@ class ConvergenceTest {
 
     private suspend fun balances(device: TestHousehold): Map<AccountId, Money> =
         device.ledger.observeBalances(KID_X).first().associate { it.accountId to it.amount }
+
+    /** The verified game rows a device stores, by id and hash. */
+    private suspend fun storedGames(device: TestHousehold) = device.database.ledgerEventDao().all()
+        .filter { it.type == "game_played" && !it.quarantined }
+        .map { it.eventId to it.hash }
+        .toSet()
 
     /**
      * The household as the backend's functions would leave it: both devices ACTIVE in the registry, the kid with
@@ -273,5 +284,37 @@ class ConvergenceTest {
                 DocumentPayloads.decodeOrNull(Reward.serializer(), it)?.cost
             },
         )
+    }
+
+    @Test
+    fun timesTablesPlaysWithScoresUpToTwentyConvergeOnBothDevices() = runTest {
+        household()
+        val sprout = GameId(GameKind.TABLES, Difficulty.SPROUT)
+        val sapling = GameId(GameKind.TABLES, Difficulty.SAPLING)
+        fun tables(correct: Int) = Score(correct, 20, perfect = correct == 20, timedBonus = correct == 20)
+        // 15 + 15 + 15 of the cap of 50, then 9 right clamped to the 5 left.
+        for ((gameId, correct) in listOf(sprout to 20, sapling to 20, sprout to 17, sapling to 9)) {
+            assertIs<GameCreditResult.Credited>(kid.playGame(KID_X, gameId, tables(correct)))
+        }
+
+        kidEngine.synced()
+        assertEquals(4, parentEngine.synced().pulled.events.applied)
+        // The author pulls its own events back with the backend's stamps.
+        kidEngine.synced()
+
+        val money = with(kid) { kid.accounts.accountsFor(KID_X).first().money() }
+        assertEquals(Money(50), balances(kid)[money.id])
+        assertEquals(balances(kid), balances(parent))
+        assertEquals(emptyList(), parent.ledger.observeAnomalies(KID_X).first())
+        assertEquals(kid.ledger.observeAnomalies(KID_X).first(), parent.ledger.observeAnomalies(KID_X).first())
+        assertEquals(storedGames(kid), storedGames(parent))
+        val history = parent.gameHistory.observeRecent(KID_X, GameKind.TABLES, limit = 4).first()
+        assertEquals(
+            listOf(sapling to 9, sprout to 17, sapling to 20, sprout to 20),
+            history.map { it.gameId to it.score },
+        )
+        assertEquals(listOf(Money(5), Money(15), Money(15), Money(15)), history.map { it.amount })
+        assertEquals(history, kid.gameHistory.observeRecent(KID_X, GameKind.TABLES, limit = 4).first())
+        assertEquals(20, parent.gameHistory.observeBestScoreThisWeek(KID_X, GameKind.TABLES).first())
     }
 }

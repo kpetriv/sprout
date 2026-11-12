@@ -17,13 +17,27 @@ import java.io.File
  *   belong to the device identity ([DEVICE_IDENTITY_SECRETS]): the sign-out of a parent session keeps them, every
  *   other removal deletes them (D-REL-6, D-REL-28).
  * @property blobDirectory the encrypted chat and chore photo blob cache (`noBackupFilesDir/blobs`, M4 §2).
+ * @property tablesSetupFile the Times tables setup of each kid on this device (M9-games §6.3, D-M9-G7): the app's
+ *   Preferences DataStore `noBackupFilesDir/datastore/games_tables_setup.preferences_pb`, a local preference that is
+ *   never synced. It names kid ids, so the wipe deletes it with the household's data.
  */
 class LocalDataFiles(
     val databaseFile: File,
     val photoDirectory: File,
     val secretsDirectory: File,
     val blobDirectory: File = File(photoDirectory.parentFile, BlobCache.DIRECTORY_NAME),
+    val tablesSetupFile: File = File(
+        File(photoDirectory.absoluteFile.parentFile, DATASTORE_DIRECTORY_NAME),
+        TABLES_SETUP_FILE_NAME,
+    ),
 ) {
+    /**
+     * The local preference files the wipe deletes: [tablesSetupFile] and the `.tmp` sibling DataStore writes before
+     * it renames it into place.
+     */
+    val preferenceFiles: List<File>
+        get() = listOf(tablesSetupFile, File("${tablesSetupFile.path}.tmp"))
+
     /** The database file and every sibling SQLite may have created next to it. */
     val databaseFiles: List<File>
         get() = listOf("", "-wal", "-shm", "-journal").map { File(databaseFile.path + it) }
@@ -36,6 +50,12 @@ class LocalDataFiles(
         listOf("", ".new", ".bak").map { File(secretsDirectory, "$name$SECRET_FILE_EXTENSION$it") }
 
     companion object {
+        /** Where the app keeps its wiped Preferences DataStore files, under `noBackupFilesDir`. */
+        const val DATASTORE_DIRECTORY_NAME: String = "datastore"
+
+        /** The Times tables setup DataStore (`DataStoreTablesSetupStore` in the app). */
+        const val TABLES_SETUP_FILE_NAME: String = "games_tables_setup.preferences_pb"
+
         /** `FilesDirBlobStorage`'s directory under `noBackupFilesDir`. */
         const val SECRETS_DIRECTORY_NAME: String = "sprout_secrets"
 

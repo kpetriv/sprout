@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Material Symbols Outlined "auto_awesome", weight 500, outlined, 24 px. Apache 2.0, Google. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+  android:width="24dp"
+  android:height="24dp"
+  android:viewportWidth="960"
+  android:viewportHeight="960">
+  <group android:translateY="960">
+    <path
+      android:fillColor="@android:color/black"
+      android:pathData="m760.48-593.07-52.39-114.78L593.3-760l114.79-52.15 52.39-114.78 52.15 114.78L927.41-760l-114.78 52.15-52.15 114.78Zm0 560-52.39-114.78L593.3-200l114.79-52.15 52.39-114.78 52.15 114.78L927.41-200l-114.78 52.15-52.15 114.78ZM361.43-151.15 258.57-377.13 32.59-480l225.98-102.87 102.86-225.98L464.3-582.87 690.28-480 464.3-377.13 361.43-151.15Zm0-202.85 40-86 86-40-86-40-40-86-40 86-86 40 86 40 40 86Zm0-126Z" />
+  </group>
+</vector>

@@ -2,41 +2,33 @@ package dev.kpetriv.sprout.feature.chores
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.material3.Button
-import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.KeyboardType
-import androidx.compose.ui.unit.dp
-import dev.kpetriv.sprout.core.designsystem.theme.SproutTheme
+import dev.kpetriv.sprout.core.designsystem.components.SproutButton
+import dev.kpetriv.sprout.core.designsystem.components.SproutButtonStyle
+import dev.kpetriv.sprout.core.designsystem.icon.SproutIcons
+import dev.kpetriv.sprout.core.designsystem.theme.SproutSpacing
 import dev.kpetriv.sprout.core.domainledger.Currency
-import dev.kpetriv.sprout.core.model.KidUiTier
 import dev.kpetriv.sprout.core.model.MAX_NOTE_LENGTH
-import dev.kpetriv.sprout.core.ui.TierTextRole
-import dev.kpetriv.sprout.core.ui.tierTextStyle
 
 /** The Sprout / Sapling submission sheet: an optional note, an optional photo, and Send. */
 @Composable
 internal fun SubmitForm(
     sheet: SubmitSheetUi,
-    tier: KidUiTier,
     onEvent: (KidTodayEvent) -> Unit,
     onAddPhoto: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val touch = SproutTheme.tierTokens.minTouchTarget
-    Column(modifier = modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(16.dp)) {
-        SectionHeading(text = sheet.title, style = tierTextStyle(TierTextRole.Title, tier))
+    Column(modifier = modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(SproutSpacing.md)) {
+        SectionHeading(text = sheet.title, style = MaterialTheme.typography.headlineSmall)
         OutlinedTextField(
             value = sheet.note,
             onValueChange = { onEvent(KidTodayEvent.NoteChanged(it)) },
@@ -46,33 +38,49 @@ internal fun SubmitForm(
             },
             minLines = 2,
             enabled = !sheet.isSubmitting,
+            shape = MaterialTheme.shapes.small,
             modifier = Modifier.fillMaxWidth(),
         )
         if (sheet.hasPhoto) {
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text(
-                    text = "📷 " + stringResource(R.string.feature_chores_photo_added),
-                    style = MaterialTheme.typography.bodyLarge,
-                    modifier = Modifier.weight(1f),
-                )
-                TextButton(
-                    onClick = { onEvent(KidTodayEvent.RemovePhoto) },
-                    enabled = !sheet.isSubmitting,
-                    modifier = Modifier.heightIn(min = touch),
-                ) { Text(stringResource(R.string.feature_chores_remove_photo)) }
-            }
+            PhotoAdded(enabled = !sheet.isSubmitting, onRemove = { onEvent(KidTodayEvent.RemovePhoto) })
         } else {
-            FilledTonalButton(
+            SproutButton(
+                text = stringResource(R.string.feature_chores_add_photo),
                 onClick = onAddPhoto,
                 enabled = !sheet.isSubmitting,
-                modifier = Modifier.fillMaxWidth().heightIn(min = touch),
-            ) { Text(stringResource(R.string.feature_chores_add_photo)) }
+                style = SproutButtonStyle.Tertiary,
+                icon = SproutIcons.Add,
+                modifier = Modifier.fillMaxWidth(),
+            )
         }
-        Button(
+        SproutButton(
+            text = stringResource(R.string.feature_chores_send),
             onClick = { onEvent(KidTodayEvent.ConfirmSubmit) },
             enabled = !sheet.isSubmitting,
-            modifier = Modifier.fillMaxWidth().heightIn(min = touch),
-        ) { Text(stringResource(R.string.feature_chores_send)) }
+            icon = SproutIcons.Send,
+            modifier = Modifier.fillMaxWidth(),
+        )
+    }
+}
+
+/** "Photo added" with a check on Leaf tint, and "Remove photo" under it. */
+@Composable
+private fun PhotoAdded(enabled: Boolean, onRemove: () -> Unit) {
+    Column(verticalArrangement = Arrangement.spacedBy(SproutSpacing.sm)) {
+        StatusPill(
+            text = stringResource(R.string.feature_chores_photo_added),
+            tone = StatusTone.Done,
+            style = MaterialTheme.typography.labelLarge,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        SproutButton(
+            text = stringResource(R.string.feature_chores_remove_photo),
+            onClick = onRemove,
+            enabled = enabled,
+            style = SproutButtonStyle.Tertiary,
+            icon = SproutIcons.Close,
+            modifier = Modifier.fillMaxWidth(),
+        )
     }
 }
 
@@ -85,12 +93,16 @@ internal fun ProposeForm(
     modifier: Modifier = Modifier,
 ) {
     val errors = form.errors
-    Column(modifier = modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+    Column(modifier = modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(SproutSpacing.sm)) {
         SectionHeading(
             text = stringResource(R.string.feature_chores_propose_title),
-            style = MaterialTheme.typography.titleLarge,
+            style = MaterialTheme.typography.headlineSmall,
         )
-        Text(stringResource(R.string.feature_chores_propose_hint), style = MaterialTheme.typography.bodyMedium)
+        Text(
+            text = stringResource(R.string.feature_chores_propose_hint),
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
         OutlinedTextField(
             value = form.title,
             onValueChange = { onEvent(KidTodayEvent.ProposeTitleChanged(it)) },
@@ -98,6 +110,7 @@ internal fun ProposeForm(
             singleLine = true,
             isError = EditorError.TITLE_BLANK in errors || EditorError.TITLE_TOO_LONG in errors,
             supportingText = errorText(errors, EditorError.TITLE_BLANK, EditorError.TITLE_TOO_LONG),
+            shape = MaterialTheme.shapes.small,
             modifier = Modifier.fillMaxWidth(),
         )
         OutlinedTextField(
@@ -108,6 +121,7 @@ internal fun ProposeForm(
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
             isError = EditorError.MONEY_INVALID in errors,
             supportingText = errorText(errors, EditorError.MONEY_INVALID),
+            shape = MaterialTheme.shapes.small,
             modifier = Modifier.fillMaxWidth(),
         )
         OutlinedTextField(
@@ -118,13 +132,16 @@ internal fun ProposeForm(
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
             isError = EditorError.MINUTES_INVALID in errors,
             supportingText = errorText(errors, EditorError.MINUTES_INVALID),
+            shape = MaterialTheme.shapes.small,
             modifier = Modifier.fillMaxWidth(),
         )
         ErrorLine(errors, EditorError.NO_REWARD, EditorError.REWARD_NOT_POSITIVE)
-        Button(
+        SproutButton(
+            text = stringResource(R.string.feature_chores_propose_send),
             onClick = { onEvent(KidTodayEvent.ConfirmPropose) },
             enabled = !form.isSubmitting,
-            modifier = Modifier.fillMaxWidth().heightIn(min = SproutTheme.tierTokens.minTouchTarget),
-        ) { Text(stringResource(R.string.feature_chores_propose_send)) }
+            icon = SproutIcons.Send,
+            modifier = Modifier.fillMaxWidth().padding(top = SproutSpacing.sm),
+        )
     }
 }

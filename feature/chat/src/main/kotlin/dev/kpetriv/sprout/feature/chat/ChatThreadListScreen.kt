@@ -1,20 +1,20 @@
 package dev.kpetriv.sprout.feature.chat
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.material3.Badge
-import androidx.compose.material3.HorizontalDivider
-import androidx.compose.material3.ListItem
-import androidx.compose.material3.ListItemDefaults
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
@@ -22,7 +22,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.clearAndSetSemantics
@@ -33,8 +32,13 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.lifecycle.viewmodel.compose.rememberHiltViewModelFactory
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import dev.kpetriv.sprout.core.designsystem.components.InitialAvatar
+import dev.kpetriv.sprout.core.designsystem.components.SproutCard
+import dev.kpetriv.sprout.core.designsystem.icon.SproutIcons
+import dev.kpetriv.sprout.core.designsystem.theme.SproutSpacing
 import dev.kpetriv.sprout.core.model.KidId
 import dev.kpetriv.sprout.core.ui.ContentWidth
+import dev.kpetriv.sprout.core.ui.withGutters
 
 /**
  * Navigation entry for the parent's chat inbox. Behind the parent gate; the app wraps it in `SecureWindow`
@@ -44,30 +48,33 @@ import dev.kpetriv.sprout.core.ui.ContentWidth
  * [ParentChatRoute] as the detail pane (Navigation 3 `ListDetailSceneStrategy`: this entry's metadata is
  * `listPane(detailPlaceholder = { ChatThreadPlaceholder() })`, the thread's is `detailPane()`). Pass the open
  * thread's id as [selectedThreadId] so its row is marked selected while both panes show.
+ *
+ * @param onBack null when the inbox is the Chat tab's root (no back arrow, M9 §5.2).
  */
 @Composable
 fun ChatThreadListRoute(
     onOpenThread: (KidId) -> Unit,
-    onBack: () -> Unit,
     modifier: Modifier = Modifier,
+    onBack: (() -> Unit)? = null,
     selectedThreadId: KidId? = null,
 ) {
     val viewModel: ChatThreadListViewModel = viewModel(factory = rememberHiltViewModelFactory())
     val state by viewModel.state.collectAsStateWithLifecycle()
-    ChatThreadListScreen(state, viewModel::onEvent, onOpenThread, onBack, modifier, selectedThreadId)
+    ChatThreadListScreen(state, viewModel::onEvent, onOpenThread, modifier, onBack, selectedThreadId)
 }
 
 /**
- * One row per kid: initial, name, unread count and when the last message came. [selectedThreadId] marks the thread
- * open in the detail pane (list-detail on an Expanded window).
+ * One card per kid, in the household's order: the kid's avatar (tinted by that order, as on the dashboard), name,
+ * the unread count or when the last message came. [selectedThreadId] marks the thread open in the detail pane
+ * (list-detail on an Expanded window) with a Botanical outline, announced as selected.
  */
 @Composable
 fun ChatThreadListScreen(
     state: ChatThreadListUiState,
     onEvent: (ChatThreadListEvent) -> Unit,
     onOpenThread: (KidId) -> Unit,
-    onBack: () -> Unit,
     modifier: Modifier = Modifier,
+    onBack: (() -> Unit)? = null,
     selectedThreadId: KidId? = null,
 ) {
     Scaffold(
@@ -84,23 +91,24 @@ fun ChatThreadListScreen(
                 )
 
                 is ChatThreadListUiState.Ready -> if (state.threads.isEmpty()) {
-                    Text(
-                        text = stringResource(R.string.feature_chat_threads_empty),
-                        style = MaterialTheme.typography.bodyLarge,
-                        textAlign = TextAlign.Center,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.align(Alignment.Center).padding(24.dp),
-                    )
+                    EmptyInbox(modifier = Modifier.align(Alignment.Center))
                 } else {
                     ContentWidth(modifier = Modifier.fillMaxSize()) { gutters ->
-                        LazyColumn(modifier = Modifier.fillMaxSize(), contentPadding = gutters) {
-                            items(state.threads, key = { it.threadId.value }) { row ->
+                        LazyColumn(
+                            modifier = Modifier.fillMaxSize(),
+                            contentPadding = PaddingValues(
+                                horizontal = SproutSpacing.gutter,
+                                vertical = SproutSpacing.md,
+                            ).withGutters(gutters),
+                            verticalArrangement = Arrangement.spacedBy(SproutSpacing.rowGap),
+                        ) {
+                            itemsIndexed(state.threads, key = { _, row -> row.threadId.value }) { index, row ->
                                 ThreadRow(
                                     row = row,
+                                    tintIndex = index,
                                     selected = row.threadId == selectedThreadId,
                                     onClick = { onOpenThread(row.threadId) },
                                 )
-                                HorizontalDivider()
                             }
                         }
                     }
@@ -110,7 +118,31 @@ fun ChatThreadListScreen(
     }
 }
 
-private val AvatarSize = 48.dp
+@Composable
+private fun EmptyInbox(modifier: Modifier = Modifier) {
+    Column(
+        modifier = modifier.padding(SproutSpacing.lg),
+        verticalArrangement = Arrangement.spacedBy(SproutSpacing.md),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Icon(
+            imageVector = SproutIcons.ChatBubble,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.size(PlaceholderIconSize),
+        )
+        Text(
+            text = stringResource(R.string.feature_chat_threads_empty),
+            style = MaterialTheme.typography.bodyLarge,
+            textAlign = TextAlign.Center,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
+private val PlaceholderIconSize = 48.dp
+private val CountCircleSize = 32.dp
+private val SelectedOutline = 2.dp
 
 /**
  * The detail pane before a thread is picked (list-detail on an Expanded window): the app passes it as the list
@@ -118,7 +150,23 @@ private val AvatarSize = 48.dp
  */
 @Composable
 fun ChatThreadPlaceholder(modifier: Modifier = Modifier) {
-    Box(modifier = modifier.fillMaxSize().padding(24.dp), contentAlignment = Alignment.Center) {
+    Column(
+        modifier = modifier.fillMaxSize().padding(SproutSpacing.lg),
+        verticalArrangement = Arrangement.spacedBy(SproutSpacing.md, Alignment.CenterVertically),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Box(
+            modifier = Modifier
+                .size(PlaceholderIconSize + SproutSpacing.lg)
+                .background(MaterialTheme.colorScheme.primaryContainer, CircleShape),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                imageVector = SproutIcons.ChatBubble,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onPrimaryContainer,
+            )
+        }
         Text(
             text = stringResource(R.string.feature_chat_thread_placeholder),
             style = MaterialTheme.typography.bodyLarge,
@@ -129,7 +177,7 @@ fun ChatThreadPlaceholder(modifier: Modifier = Modifier) {
 }
 
 @Composable
-private fun ThreadRow(row: ThreadRowUi, selected: Boolean, onClick: () -> Unit) {
+private fun ThreadRow(row: ThreadRowUi, tintIndex: Int, selected: Boolean, onClick: () -> Unit) {
     val supporting = when {
         row.unreadCount > 0 ->
             pluralStringResource(R.plurals.feature_chat_thread_unread, row.unreadCount, row.unreadCount)
@@ -138,42 +186,63 @@ private fun ThreadRow(row: ThreadRowUi, selected: Boolean, onClick: () -> Unit) 
 
         else -> stringResource(R.string.feature_chat_thread_no_messages)
     }
-    ListItem(
-        // The thread open beside the list is announced as selected and shown in the secondary container colour.
+    val outline = if (selected) {
+        Modifier.border(SelectedOutline, MaterialTheme.colorScheme.primary, MaterialTheme.shapes.medium)
+    } else {
+        Modifier
+    }
+    SproutCard(
+        onClick = onClick,
+        contentPadding = PaddingValues(SproutSpacing.md),
+        // The thread open beside the list has a Botanical outline and is announced as selected.
         modifier = Modifier
-            .clickable(onClick = onClick)
+            .fillMaxWidth()
+            .then(outline)
             .then(if (selected) Modifier.semantics { this.selected = true } else Modifier),
-        colors = if (selected) {
-            ListItemDefaults.colors(containerColor = MaterialTheme.colorScheme.secondaryContainer)
-        } else {
-            ListItemDefaults.colors()
-        },
-        leadingContent = {
-            Box(
-                modifier = Modifier
-                    .size(AvatarSize)
-                    .clip(CircleShape)
-                    .background(MaterialTheme.colorScheme.primaryContainer)
-                    .clearAndSetSemantics { },
-                contentAlignment = Alignment.Center,
-            ) {
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(SproutSpacing.md),
+        ) {
+            InitialAvatar(
+                initial = row.kidName.take(1).uppercase(),
+                tintIndex = tintIndex,
+                modifier = Modifier.clearAndSetSemantics { },
+            )
+            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(SproutSpacing.xs)) {
+                Text(row.kidName, style = MaterialTheme.typography.titleMedium)
                 Text(
-                    text = row.kidName.take(1).uppercase(),
-                    style = MaterialTheme.typography.titleLarge,
-                    color = MaterialTheme.colorScheme.onPrimaryContainer,
+                    text = supporting,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = if (row.unreadCount > 0) {
+                        MaterialTheme.colorScheme.onSurface
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    },
                 )
             }
-        },
-        headlineContent = { Text(row.kidName, style = MaterialTheme.typography.titleMedium) },
-        supportingContent = { Text(supporting) },
-        trailingContent = if (row.unreadCount > 0) {
-            {
-                Column(verticalArrangement = Arrangement.Center, modifier = Modifier.clearAndSetSemantics { }) {
-                    Badge { Text(row.unreadCount.toString()) }
+            if (row.unreadCount > 0) {
+                // The count is in the line beside it; the circle repeats it for a glance and is not read out.
+                Box(
+                    modifier = Modifier
+                        .size(CountCircleSize)
+                        .background(MaterialTheme.colorScheme.primary, CircleShape)
+                        .clearAndSetSemantics { },
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        text = row.unreadCount.toString(),
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.onPrimary,
+                    )
                 }
+            } else {
+                Icon(
+                    imageVector = SproutIcons.ChevronRight,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
-        } else {
-            null
-        },
-    )
+        }
+    }
 }

@@ -11,6 +11,11 @@ Writes, under play/listing/<locale>/:
 and checks what Play checks: PNG without alpha, at most 8 MB each, the longest side at most twice the shortest, at
 most 8 screenshots per device type; plus the repository's budget of 3 MB for all images.
 
+Phone shots show each golden's whole first screen (D-M9-20, so the app's bottom bar is in the picture): a golden is cut
+to one Pixel 7 screenful (1078 x 2399 px; goldens recorded with a taller window keep their top), then scaled down to
+the card's height, aspect kept and centred; the three-tier shot scales each screen to its column, top-aligned under
+the labels, and closes the cards at the screen's foot. Tablet goldens (1280 x 800) are still pasted 1:1. Scaling uses bicubic resampling.
+
 The icon is drawn from the path data of app/src/main/res/drawable/ic_launcher_foreground.xml on the colour of
 @color/ic_launcher_background (a small path rasteriser below: M/L/H/V/C/Z, absolute and relative), rendered at 4x and
 downsampled, so no SVG tool or Gradle export is needed. The visible part of an adaptive icon (the middle 72 of its
@@ -47,6 +52,9 @@ COLOURS = ROOT / "app" / "src" / "main" / "res" / "values" / "colors.xml"
 ANDROID = "{http://schemas.android.com/apk/res/android}"
 
 PHONE = (1080, 1920)
+# The phone goldens' screen: ScreenshotDevice.PIXEL_7, 411 x 914 dp at 420 dpi, is 1078 x 2399 px. A golden taller than
+# that (a test that adds `+h1500dp`) is cut to its first screenful before it is fitted into a phone card (D-M9-20).
+PHONE_SCREEN_ASPECT = 2399 / 1078
 TABLET = (1920, 1080)
 ICON = (512, 512)
 FEATURE = (1024, 500)
@@ -281,7 +289,9 @@ def card(image: Image.Image, screen: Image.Image, box: Tuple[int, int, int, int]
     source_height = min(screen.size[1], round(height / scale))
     part = screen.crop((0, 0, screen.size[0], source_height))
     if part.size[0] != width:  # 1:1 where the layout allows: sharper text and smaller files
-        part = part.resize((width, round(source_height * scale)), Image.LANCZOS)
+        # Bicubic, not Lanczos: a little softer, but about 11 % smaller files, which keeps the scaled phone shots
+        # (D-M9-20) inside the 3 MB budget (Lanczos made 3.08 MB).
+        part = part.resize((width, round(source_height * scale)), Image.BICUBIC)
     fill = screen.getpixel((2, screen.size[1] - 2))
     panel = Image.new("RGB", (width, height), fill)
     panel.paste(part, (0, 0))
@@ -309,16 +319,31 @@ def phone_image(entry: dict, theme: str, colours) -> Image.Image:
         gap, margin = 24, 48
         width = (PHONE[0] - 2 * margin - gap * (len(tiers) - 1)) // len(tiers)
         label = font("bold", 34)
-        for index, tier in enumerate(tiers):
+        # Each tier's whole screen at the column width (D-M9-20), top-aligned under its label; when the screens are
+        # shorter than the space under the labels, the cards close at the screen's foot.
+        screens = [fit_screen(golden(tier["image"])) for tier in tiers]
+        space = PHONE[1] - 400
+        card_height = min(space, max(round(screen.size[1] * width / screen.size[0]) for screen in screens))
+        closed = card_height < space
+        for index, (tier, screen) in enumerate(zip(tiers, screens)):
             left = margin + index * (width + gap)
             text = tier["label"]
             draw.text((left + (width - label.getlength(text)) / 2, 330), text, font=label, fill=colours["caption_light"])
-            card(image, golden(tier["image"]), (left, 400, left + width, PHONE[1]), 28, outline)
+            card(image, screen, (left, 400, left + width, 400 + card_height), 28, outline, closed=closed)
         return image
-    source = golden(entry["dark"] if dark else entry["light"])
-    left = (PHONE[0] - source.size[0]) // 2  # the goldens are 1078 px wide: pasted 1:1, not scaled
-    card(image, source, (left, 320, left + source.size[0], PHONE[1]), 44, outline)
+    source = fit_screen(golden(entry["dark"] if dark else entry["light"]))
+    height = PHONE[1] - 320
+    # The whole screen, scaled down to the card's height (aspect kept, centred), so the bottom bar shows (D-M9-20).
+    width = min(source.size[0], round(source.size[0] * height / source.size[1]))
+    left = (PHONE[0] - width) // 2
+    card(image, source, (left, 320, left + width, PHONE[1]), 44, outline)
     return image
+
+
+def fit_screen(screen: Image.Image) -> Image.Image:
+    """[screen] cut to one phone screenful (PHONE_SCREEN_ASPECT) from the top; shorter goldens are kept whole."""
+    screenful = min(screen.size[1], round(screen.size[0] * PHONE_SCREEN_ASPECT))
+    return screen if screenful == screen.size[1] else screen.crop((0, 0, screen.size[0], screenful))
 
 
 def tablet_image(entry: dict, colours) -> Image.Image:

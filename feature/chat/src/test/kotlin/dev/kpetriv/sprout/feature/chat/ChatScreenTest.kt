@@ -2,8 +2,12 @@ package dev.kpetriv.sprout.feature.chat
 
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsNotEnabled
+import androidx.compose.ui.test.assertIsNotSelected
+import androidx.compose.ui.test.assertIsSelected
+import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
@@ -38,12 +42,15 @@ class ChatScreenTest {
     private val spoken = mutableListOf<String>()
     private var attached = 0
 
-    private fun show(state: ChatUiState) {
+    private var backs = 0
+
+    private fun show(state: ChatUiState, onBack: (() -> Unit)? = null) {
         compose.setContent {
             SproutTheme {
                 ChatScreen(
                     state = state,
                     onEvent = { events += it },
+                    onBack = onBack,
                     onAttachPhoto = { attached++ },
                     readAloud = ReadAloud { spoken += it },
                 )
@@ -59,7 +66,7 @@ class ChatScreenTest {
         val size = tile.fetchSemanticsNode().size
         assertTrue(with(compose.density) { minOf(size.width, size.height).toDp().value } >= 72f)
         tile.performClick()
-        compose.onNodeWithText("✉️ Send").performClick()
+        compose.onNodeWithText("Send").performClick()
 
         assertEquals(listOf(ChatEvent.SelectPreset("love_you"), ChatEvent.SendSelection), events)
         assertEquals(listOf("I love you"), spoken)
@@ -186,7 +193,7 @@ class ChatScreenTest {
                 "parent phone? Contact us: the address is in the privacy policy (Settings → About).",
         ).assertIsDisplayed()
         compose.onNodeWithText("Ask a parent", substring = true).assertDoesNotExist()
-        compose.onNodeWithText("Send").assertIsNotEnabled()
+        compose.onNodeWithContentDescription("Send").assertIsNotEnabled()
     }
 
     @Test
@@ -225,7 +232,6 @@ class ChatScreenTest {
                     ChatPreviewData.threads(),
                     onEvent = {},
                     onOpenThread = { opened += it },
-                    onBack = {},
                 )
             }
         }
@@ -234,5 +240,39 @@ class ChatScreenTest {
         compose.onNodeWithText("Mia").performClick()
 
         assertEquals(listOf(KidId("kid-mia")), opened)
+    }
+
+    @Test
+    fun `a pushed thread has a back arrow`() {
+        show(ChatPreviewData.parentThread(), onBack = { backs++ })
+
+        compose.onNodeWithContentDescription("Back").performClick()
+
+        assertEquals(1, backs)
+    }
+
+    @Test
+    fun `a thread that is a tab root has no back arrow`() {
+        show(ChatPreviewData.kidMessages(KidUiTier.SPROUT))
+
+        compose.onNodeWithContentDescription("Back").assertDoesNotExist()
+    }
+
+    @Test
+    fun `the parent inbox is a tab root without a back arrow`() {
+        compose.setContent {
+            SproutTheme { ChatThreadListScreen(ChatPreviewData.threads(), onEvent = {}, onOpenThread = {}) }
+        }
+
+        compose.onNodeWithContentDescription("Back").assertDoesNotExist()
+        compose.onNodeWithText("Leo").assertIsDisplayed()
+    }
+
+    @Test
+    fun `seedling presets are buttons that announce which one is picked`() {
+        show(ChatPreviewData.kidEmpty(KidUiTier.SEEDLING).copy(selectedPreset = "hello"))
+
+        compose.onNodeWithContentDescription("Hello!").assertIsSelected().assert(hasClickAction())
+        compose.onNodeWithContentDescription("I love you").assertIsNotSelected()
     }
 }

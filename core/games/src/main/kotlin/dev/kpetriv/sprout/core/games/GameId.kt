@@ -2,7 +2,7 @@ package dev.kpetriv.sprout.core.games
 
 /**
  * A playable game: a [kind] at a [difficulty]. Only combinations offered by [GameCatalogue.forDifficulty] exist,
- * so `words.seedling` can be neither constructed nor parsed.
+ * so `words.seedling` and `tables.seedling` can be neither constructed nor parsed.
  *
  * The wire form `"<kind>.<difficulty>"` (for example `arithmetic.sprout`) is what a `GamePlayed` ledger event carries.
  */

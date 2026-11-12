@@ -1,7 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
   <string name="feature_chores_title">Chores</string>
-  <string name="feature_chores_back">Back</string>
   <string name="feature_chores_loading">Loading chores</string>
   <string name="feature_chores_error_load_failed">Something went wrong while loading chores.</string>
   <string name="feature_chores_retry">Try again</string>
@@ -27,7 +26,6 @@
   <string name="feature_chores_new_chore">New chore</string>
   <string name="feature_chores_approvals_count">Approvals (%1$d)</string>
   <string name="feature_chores_show_archived">Show archived</string>
-  <string name="feature_chores_hide_archived">Hide archived</string>
   <string name="feature_chores_state_active">Active</string>
   <string name="feature_chores_state_proposed">Proposed</string>
   <string name="feature_chores_state_archived">Archived</string>
@@ -135,7 +133,6 @@
   <string name="feature_chores_upcoming">Next 7 days</string>
   <string name="feature_chores_no_chores_today">No chores today!</string>
   <string name="feature_chores_nothing_upcoming">Nothing coming up this week.</string>
-  <string name="feature_chores_done_button">Done!</string>
   <string name="feature_chores_did_it">I did it</string>
   <string name="feature_chores_did_it_described">I did %1$s</string>
   <string name="feature_chores_waiting">Waiting for a parent</string>

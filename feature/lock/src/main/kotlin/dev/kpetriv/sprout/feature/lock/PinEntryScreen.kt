@@ -1,23 +1,29 @@
 package dev.kpetriv.sprout.feature.lock
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.res.vectorResource
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.liveRegion
@@ -28,6 +34,10 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import dev.kpetriv.sprout.core.designsystem.components.SproutButton
+import dev.kpetriv.sprout.core.designsystem.components.SproutButtonStyle
+import dev.kpetriv.sprout.core.designsystem.icon.SproutIcons
+import dev.kpetriv.sprout.core.designsystem.theme.SproutSpacing
 import dev.kpetriv.sprout.core.designsystem.theme.SproutTheme
 import dev.kpetriv.sprout.core.ui.PinDots
 import dev.kpetriv.sprout.core.ui.PinPad
@@ -67,13 +77,14 @@ fun PinEntryScreen(
                 .safeDrawingPadding()
                 .verticalScroll(rememberScrollState())
                 .contentWidth()
-                .padding(horizontal = 24.dp, vertical = 32.dp),
+                .padding(horizontal = SproutSpacing.gutter, vertical = SproutSpacing.xl),
             horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(24.dp),
+            verticalArrangement = Arrangement.spacedBy(SproutSpacing.lg),
         ) {
+            SproutMark()
             Text(
                 text = stringResource(R.string.feature_lock_entry_title),
-                style = MaterialTheme.typography.headlineSmall,
+                style = MaterialTheme.typography.headlineMedium,
                 textAlign = TextAlign.Center,
                 modifier = Modifier.semantics { heading() },
             )
@@ -110,14 +121,21 @@ internal fun PinEntryBody(
             keySize = keySize,
         )
         if (showBiometric) {
-            TextButton(onClick = { onUseBiometric?.invoke() }, enabled = !state.isVerifying) {
-                Text(stringResource(R.string.feature_lock_use_fingerprint))
-            }
+            SproutButton(
+                text = stringResource(R.string.feature_lock_use_fingerprint),
+                onClick = { onUseBiometric?.invoke() },
+                enabled = !state.isVerifying,
+                style = SproutButtonStyle.Tertiary,
+                icon = ImageVector.vectorResource(R.drawable.feature_lock_ic_fingerprint),
+            )
         }
         if (allowRenewal && state.renewalOffered && !state.renewOnUnlock) {
-            TextButton(onClick = { onEvent(PinEntryEvent.RenewSigningKey) }, enabled = !state.isVerifying) {
-                Text(stringResource(R.string.feature_lock_renew_key))
-            }
+            SproutButton(
+                text = stringResource(R.string.feature_lock_renew_key),
+                onClick = { onEvent(PinEntryEvent.RenewSigningKey) },
+                enabled = !state.isVerifying,
+                style = SproutButtonStyle.Tertiary,
+            )
         }
     }
 }
@@ -154,6 +172,28 @@ private fun PinEntryStatus(state: PinEntryUiState) {
             .semantics { liveRegion = LiveRegionMode.Polite },
     )
 }
+
+/**
+ * The sprout mark (M9 §8: Botanical on Leaf tint) above the lock screens' titles. Decorative: the title names the
+ * screen.
+ */
+@Composable
+internal fun SproutMark(modifier: Modifier = Modifier) {
+    Box(
+        modifier = modifier.size(MarkSize).background(MaterialTheme.colorScheme.primaryContainer, CircleShape),
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(
+            imageVector = SproutIcons.Eco,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.size(MarkIconSize),
+        )
+    }
+}
+
+private val MarkSize = 56.dp
+private val MarkIconSize = 32.dp
 
 private fun PinEntryError.messageRes(): Int = when (this) {
     PinEntryError.WRONG_PIN -> R.string.feature_lock_error_wrong_pin

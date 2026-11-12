@@ -110,17 +110,18 @@ internal class WalletStateMapper(private val formatter: MoneyFormatter) {
         balances.firstOrNull { it.kind == AccountKind.SAVINGS }?.let { savings ->
             val savedText = formatter.formatForTier(savings.amount, savings.currency, tier)
             if (goal == null) {
-                SavingsGoalUi(savedText = savedText, targetText = null, progress = 0f)
+                SavingsGoalUi(savedText = savedText, targetText = null)
             } else {
                 val progress = SavingsProgress.of(goal, savings.amount)
                 SavingsGoalUi(
                     savedText = savedText,
                     targetText = formatter.formatForTier(goal.target, savings.currency, tier),
-                    // Drawing only: the exact fraction stays in SavingsProgress.
-                    progress = progress.numerator.toFloat() / progress.denominator,
                     title = goal.title,
                     stars = SavingsStarsDefaults.filledStars(progress.numerator, progress.denominator),
                     isComplete = progress.isComplete,
+                    percent = (progress.numerator * PERCENT / progress.denominator).toInt(),
+                    remainingText = progress.remaining.takeUnless { progress.isComplete }
+                        ?.let { formatter.formatForTier(it, savings.currency, tier) },
                 )
             }
         }
@@ -142,6 +143,7 @@ internal class WalletStateMapper(private val formatter: MoneyFormatter) {
         private const val SPROUT_HISTORY = 10
         private const val SAPLING_HISTORY = 100
         private const val PARENT_SEEDLING_HISTORY = 10
+        private const val PERCENT = 100L
 
         /**
          * How many events each tier lists. A Seedling kid sees no history; a parent looking at a Seedling wallet

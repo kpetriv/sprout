@@ -17,6 +17,8 @@ import dev.kpetriv.sprout.core.games.GameKind
 import dev.kpetriv.sprout.core.games.GameSession
 import dev.kpetriv.sprout.core.games.MemoryRound
 import dev.kpetriv.sprout.core.games.Score
+import dev.kpetriv.sprout.core.games.TablesLevel
+import dev.kpetriv.sprout.core.games.TablesSetup
 import dev.kpetriv.sprout.core.games.WordRound
 import dev.kpetriv.sprout.core.model.CalendarDate
 import dev.kpetriv.sprout.core.model.KidUiTier
@@ -32,12 +34,15 @@ import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertTrue
 
+@Suppress("LargeClass") // One play's whole lifecycle: start card, every game, credit and restore.
 class GameViewModelTest {
     @get:Rule
     val main = MainDispatcherRule()
 
     private val submitter = FakeCreditSubmitter()
     private val timer = FakeGameTimer()
+    private val setups = FakeTablesSetupStore()
+    private val history = FakeHistorySource()
 
     private fun viewModel(
         tier: KidUiTier = KidUiTier.SPROUT,
@@ -46,6 +51,7 @@ class GameViewModelTest {
         seeds: GameSeedSource = FixedSeeds(SEED, OTHER_SEED),
         submitter: GameCreditSubmitter = this.submitter,
         timer: GameTimer = this.timer,
+        setups: TablesSetupStore = this.setups,
     ) = GameViewModel(
         handle = handle,
         submitter = submitter,
@@ -53,14 +59,33 @@ class GameViewModelTest {
         currency = { TestData.gbp },
         timer = timer,
         creditScope = creditScope(main.dispatcher),
+        setups = setups,
+        history = history,
     )
 
-    private fun session(tier: KidUiTier, kind: GameKind, seed: Long = SEED, timed: Boolean = false) =
-        GameSession.create(GameId(kind, Difficulty.forTier(tier)), seed, timed)
+    private fun session(
+        tier: KidUiTier,
+        kind: GameKind,
+        seed: Long = SEED,
+        timed: Boolean = false,
+        setup: TablesSetup? = if (kind == GameKind.TABLES) TablesSetup.defaultFor(Difficulty.forTier(tier)) else null,
+    ) = GameSession.create(GameId(kind, Difficulty.forTier(tier)), seed, timed, setup)
 
     private fun GameViewModel.playing() = assertIs<GamePlayUiState.Playing>(state.value)
 
     private fun GameViewModel.arithmetic() = playing().round as RoundUi.Arithmetic
+
+    private fun GameViewModel.tables() = playing().round as RoundUi.Tables
+
+    private fun GameViewModel.start() = assertIs<GamePlayUiState.Start>(state.value)
+
+    /** Answers the current Times tables question on the number pad, right or wrong, then "Go". */
+    private fun GameViewModel.answerTables(correct: Boolean) {
+        val round = tables().round
+        val value = if (correct) round.answer else round.answer + 1
+        value.toString().forEach { onEvent(GamePlayEvent.Digit(it.digitToInt())) }
+        onEvent(GamePlayEvent.SubmitAnswer)
+    }
 
     /** Answers the current arithmetic round, right or wrong, by choice or by typing. */
     private fun GameViewModel.answer(correct: Boolean) {
@@ -176,6 +201,247 @@ class GameViewModelTest {
         vm.onEvent(GamePlayEvent.SubmitAnswer)
         assertEquals(2, vm.playing().roundNumber)
         assertEquals("", vm.arithmetic().typed)
+    }
+
+    @Test
+    fun `times tables start from the default setup, the level decides the timing, not the switch`() {
+        for (tier in listOf(KidUiTier.SPROUT, KidUiTier.SAPLING)) {
+            val vm = viewModel(tier, GameKind.TABLES)
+            val start = vm.start()
+            assertEquals(20, start.rounds)
+            assertEquals(TablesSetup.defaultFor(Difficulty.forTier(tier)), start.setup, "$tier")
+            assertTrue(start.timedAvailable, "timing is available, decided by the level")
+            assertFalse(start.timed)
+            vm.onEvent(GamePlayEvent.TimedChanged(true))
+            assertFalse(vm.start().timed, "the Timed switch does nothing for Times tables")
+        }
+        assertEquals(null, viewModel(KidUiTier.SPROUT).start().setup, "other games have no setup")
+    }
+
+    @Test
+    fun `times tables take the stored setup, save the chosen one on start and play twenty typed questions`() {
+        setups.setups.value = mapOf(TestData.kid to TablesSetup(setOf(3, 4, 6), TablesLevel.STEADY))
+        val vm = viewModel(KidUiTier.SPROUT, GameKind.TABLES)
+        assertEquals(TablesSetup(setOf(3, 4, 6), TablesLevel.STEADY), vm.start().setup)
+
+        vm.onEvent(GamePlayEvent.TablesChanged(setOf(3, 4)))
+        vm.onEvent(GamePlayEvent.LevelChanged(TablesLevel.GENTLE))
+        vm.onEvent(GamePlayEvent.TablesChanged(emptySet()))
+        vm.onEvent(GamePlayEvent.TablesChanged(setOf(1, 3)))
+        val chosen = TablesSetup(setOf(3, 4), TablesLevel.GENTLE)
+        assertEquals(chosen, vm.start().setup, "no table, or one outside 2 to 12, is ignored")
+        assertTrue(setups.saved.isEmpty(), "nothing is saved before Start")
+
+        vm.onEvent(GamePlayEvent.Start)
+        assertEquals(listOf(TestData.kid to chosen), setups.saved)
+        val expected = session(KidUiTier.SPROUT, GameKind.TABLES, setup = chosen).rounds
+        val playing = vm.playing()
+        assertEquals(chosen, playing.setup)
+        assertFalse(playing.timed, "Gentle is not timed")
+        assertEquals(20_000L, playing.timeLimitMs)
+
+        expected.forEachIndexed { index, round ->
+            assertEquals(round, vm.tables().round)
+            vm.answerTables(correct = index != 5)
+        }
+
+        val score = assertIs<GamePlayUiState.Result>(vm.state.value).score
+        assertEquals(Score(correct = 19, total = 20, perfect = false, timedBonus = false), score)
+        assertEquals(GameId(GameKind.TABLES, Difficulty.SPROUT), submitter.calls.single().gameId)
+    }
+
+    @Test
+    fun `every table picked by hand, then one deselected, leaves ten`() {
+        val vm = viewModel(KidUiTier.SAPLING, GameKind.TABLES)
+        TablesSetup.TABLES.forEach { table ->
+            val current = checkNotNull(vm.start().setup).tables
+            if (table !in current) vm.onEvent(GamePlayEvent.TablesChanged(TablesChoice.toggle(current, table)))
+        }
+        assertTrue(checkNotNull(vm.start().setup).isMix, "all eleven by hand is Mix")
+
+        vm.onEvent(GamePlayEvent.TablesChanged(TablesChoice.toggle(checkNotNull(vm.start().setup).tables, 7)))
+
+        assertEquals(TablesSetup.TABLES.toSet() - 7, checkNotNull(vm.start().setup).tables)
+        assertEquals(setOf(4), TablesChoice.toggle(setOf(4), 4), "the last table stays")
+    }
+
+    @Test
+    fun `a broken streak stays broken after process death`() {
+        val handle = TestData.handle(KidUiTier.SAPLING, GameKind.TABLES)
+        val first = viewModel(KidUiTier.SAPLING, GameKind.TABLES, handle = handle)
+        first.onEvent(GamePlayEvent.Start)
+        repeat(3) { first.answerTables(correct = true) }
+        first.answerTables(correct = false)
+        first.answerTables(correct = true)
+
+        val restored = viewModel(KidUiTier.SAPLING, GameKind.TABLES, handle = handle.restored())
+
+        assertEquals(6, restored.playing().roundNumber)
+        assertEquals(4 to 1, restored.playing().let { it.right to it.streak })
+    }
+
+    @Test
+    fun `right and streak count this play's answers`() {
+        val vm = viewModel(KidUiTier.SAPLING, GameKind.TABLES)
+        vm.onEvent(GamePlayEvent.Start)
+        assertEquals(0 to 0, vm.playing().let { it.right to it.streak })
+
+        repeat(4) { vm.answerTables(correct = true) }
+        assertEquals(4 to 4, vm.playing().let { it.right to it.streak })
+        vm.answerTables(correct = false)
+        assertEquals(4 to 0, vm.playing().let { it.right to it.streak })
+        repeat(2) { vm.answerTables(correct = true) }
+        assertEquals(6 to 2, vm.playing().let { it.right to it.streak })
+    }
+
+    @Test
+    fun `the number pad types digits, deletes them and checks the answer`() {
+        val vm = viewModel(KidUiTier.SPROUT, GameKind.TABLES)
+        vm.onEvent(GamePlayEvent.Start)
+
+        vm.onEvent(GamePlayEvent.SubmitAnswer)
+        assertEquals(1, vm.playing().roundNumber, "nothing typed, nothing to check")
+        vm.onEvent(GamePlayEvent.Digit(4))
+        vm.onEvent(GamePlayEvent.Digit(2))
+        vm.onEvent(GamePlayEvent.Digit(10))
+        assertEquals("42", vm.tables().typed)
+        vm.onEvent(GamePlayEvent.Backspace)
+        assertEquals("4", vm.tables().typed)
+        vm.onEvent(GamePlayEvent.ToggleMinus)
+        vm.onEvent(GamePlayEvent.AnswerChanged("-12a"))
+        assertEquals("12", vm.tables().typed, "a times-table answer is never negative")
+        repeat(6) { vm.onEvent(GamePlayEvent.Digit(9)) }
+        assertEquals("12999", vm.tables().typed, "at most five digits")
+
+        vm.onEvent(GamePlayEvent.SubmitAnswer)
+        assertEquals(2, vm.playing().roundNumber)
+        assertEquals("", vm.tables().typed)
+        assertEquals(0, vm.playing().right)
+    }
+
+    @Test
+    fun `sapling arithmetic types on the number pad too`() {
+        val vm = viewModel(KidUiTier.SAPLING)
+        vm.onEvent(GamePlayEvent.Start)
+        val answer = vm.arithmetic().round.answer
+
+        vm.onEvent(GamePlayEvent.ToggleMinus)
+        vm.onEvent(GamePlayEvent.Digit(7))
+        assertEquals("-7", vm.arithmetic().typed)
+        vm.onEvent(GamePlayEvent.Backspace)
+        vm.onEvent(GamePlayEvent.Backspace)
+        assertEquals("", vm.arithmetic().typed)
+        if (answer < 0) vm.onEvent(GamePlayEvent.ToggleMinus)
+        kotlin.math.abs(answer).toString().forEach { vm.onEvent(GamePlayEvent.Digit(it.digitToInt())) }
+        vm.onEvent(GamePlayEvent.SubmitAnswer)
+
+        assertEquals(2, vm.playing().roundNumber)
+        assertEquals(1 to 1, vm.playing().let { it.right to it.streak })
+    }
+
+    @Test
+    fun `sprout's number choices ignore the pad`() {
+        val vm = viewModel()
+        vm.onEvent(GamePlayEvent.Start)
+        vm.onEvent(GamePlayEvent.Digit(3))
+        vm.onEvent(GamePlayEvent.SubmitAnswer)
+        assertEquals("", vm.arithmetic().typed)
+        assertEquals(1, vm.playing().roundNumber)
+    }
+
+    @Test
+    fun `rotation and process death keep the setup and resume the same twenty questions`() {
+        val handle = TestData.handle(KidUiTier.SPROUT, GameKind.TABLES)
+        val first = viewModel(KidUiTier.SPROUT, GameKind.TABLES, handle = handle)
+        first.onEvent(GamePlayEvent.TablesChanged(setOf(7, 8)))
+        first.onEvent(GamePlayEvent.LevelChanged(TablesLevel.STEADY))
+        val chosen = TablesSetup(setOf(7, 8), TablesLevel.STEADY)
+
+        // On the start card: the handle's choice wins over the store's (the store still has the old one).
+        setups.setups.value = mapOf(TestData.kid to TablesSetup(setOf(2), TablesLevel.GENTLE))
+        val onStart = tablesViewModel(handle.restored())
+        assertEquals(chosen, onStart.start().setup)
+
+        first.onEvent(GamePlayEvent.Start)
+        repeat(3) { first.answerTables(correct = true) }
+        val restored = tablesViewModel(handle.restored())
+
+        val expected = session(KidUiTier.SPROUT, GameKind.TABLES, setup = chosen).rounds
+        assertEquals(4, restored.playing().roundNumber)
+        assertEquals(expected[3], restored.tables().round)
+        assertEquals(chosen, restored.playing().setup)
+        assertEquals(3 to 3, restored.playing().let { it.right to it.streak })
+    }
+
+    @Test
+    fun `rock star is timed and earns the timed bonus, gentle never does`() {
+        val rockStar = viewModel(KidUiTier.SAPLING, GameKind.TABLES)
+        rockStar.onEvent(GamePlayEvent.LevelChanged(TablesLevel.ROCK_STAR))
+        assertTrue(rockStar.start().timed)
+        rockStar.onEvent(GamePlayEvent.Start)
+        assertTrue(rockStar.playing().timed)
+        assertEquals(5_000L, rockStar.playing().timeLimitMs)
+        repeat(20) {
+            timer.advanceBy(5_000)
+            rockStar.answerTables(correct = true)
+        }
+        val fast = assertIs<GamePlayUiState.Result>(rockStar.state.value).score
+        assertEquals(Score(correct = 20, total = 20, perfect = true, timedBonus = true), fast)
+
+        val gentle = viewModel(KidUiTier.SAPLING, GameKind.TABLES)
+        gentle.onEvent(GamePlayEvent.LevelChanged(TablesLevel.GENTLE))
+        gentle.onEvent(GamePlayEvent.Start)
+        assertFalse(gentle.playing().timed)
+        repeat(20) {
+            timer.advanceBy(1_000)
+            gentle.answerTables(correct = true)
+        }
+        val untimed = assertIs<GamePlayUiState.Result>(gentle.state.value).score
+        assertEquals(Score(correct = 20, total = 20, perfect = true, timedBonus = false), untimed)
+        val credit = assertIs<CreditUi.Credited>(assertIs<GamePlayUiState.Result>(gentle.state.value).credit)
+        assertEquals(15L, credit.amount.minorUnits, "20 right and perfect is capped at 15 at every level")
+    }
+
+    @Test
+    fun `the start cards show the history, sapling's last plays, the times tables best this week`() {
+        val numbers = GameId(GameKind.ARITHMETIC, Difficulty.SAPLING)
+        val plays = listOf(
+            GamePlaySummary(CalendarDate(2026, 11, 12), numbers, 9, Money(11)),
+            GamePlaySummary(CalendarDate(2026, 11, 11), numbers, 10, Money(15)),
+        )
+        history.recent.value = plays
+        history.best.value = 18
+
+        val sapling = viewModel(KidUiTier.SAPLING)
+        assertEquals(plays, sapling.start().history)
+        assertEquals(TestData.gbp, sapling.start().currency)
+        assertEquals(emptyList(), viewModel(KidUiTier.SPROUT).start().history, "Sprout's card has no history")
+
+        val tables = viewModel(KidUiTier.SPROUT, GameKind.TABLES)
+        assertEquals(18, tables.start().bestThisWeek)
+        history.best.value = 19
+        assertEquals(19, tables.start().bestThisWeek)
+        history.best.value = null
+        assertEquals(null, tables.start().bestThisWeek)
+    }
+
+    @Test
+    fun `an unreadable setup store starts from the default`() {
+        setups.fail = true
+        val vm = viewModel(KidUiTier.SAPLING, GameKind.TABLES)
+        assertEquals(TablesSetup.defaultFor(Difficulty.SAPLING), vm.start().setup)
+    }
+
+    @Test
+    fun `play again keeps the times tables setup`() {
+        val vm = viewModel(KidUiTier.SPROUT, GameKind.TABLES)
+        vm.onEvent(GamePlayEvent.TablesChanged(setOf(9)))
+        vm.onEvent(GamePlayEvent.Start)
+        repeat(20) { vm.answerTables(correct = true) }
+
+        vm.onEvent(GamePlayEvent.PlayAgain)
+
+        assertEquals(TablesSetup(setOf(9), TablesLevel.GENTLE), vm.start().setup)
     }
 
     @Test
@@ -547,6 +813,10 @@ class GameViewModelTest {
     }
 
     private fun restore(handle: SavedStateHandle) = viewModel(handle = handle.restored())
+
+    /** A Sprout Times tables play restored from [handle], with a seed source that must not be asked. */
+    private fun tablesViewModel(handle: SavedStateHandle) =
+        viewModel(KidUiTier.SPROUT, GameKind.TABLES, handle = handle, seeds = FixedSeeds(OTHER_SEED))
 
     /** Plays a Sprout arithmetic game, every answer right. */
     private fun playThrough(vm: GameViewModel = viewModel()): GamePlayUiState.Result {

@@ -7,7 +7,7 @@ import kotlin.time.Instant
 
 /** Fixed chat states for previews, screen tests and screenshot goldens. No real people or messages. */
 @Suppress("MagicNumber", "TooManyFunctions") // Fixed preview minutes; one function per previewed state.
-internal object ChatPreviewData {
+object ChatPreviewData {
     private val start = Instant.parse("2026-11-04T16:00:00Z")
     private const val VOICE_MS = 12_000L
     private const val RECORDING_MS = 8_000L

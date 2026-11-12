@@ -5,6 +5,7 @@ import androidx.compose.runtime.ReadOnlyComposable
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
+import dev.kpetriv.sprout.core.designsystem.components.Pictogram
 import dev.kpetriv.sprout.core.domainhousehold.ChoreReward
 import dev.kpetriv.sprout.core.domainledger.Currency
 import dev.kpetriv.sprout.core.domainledger.Money
@@ -85,31 +86,31 @@ internal fun relativeDueLabel(dueOn: CalendarDate, today: CalendarDate): String 
 private const val WEEK_DAYS = 7L
 
 /**
- * A picture for a chore on Seedling cards, from keywords in its title (English; anything else gets the sparkle).
- * Only emoji up to Unicode 11, so they render with the fonts of every supported Android version.
- * Decorative: the title is always shown and read out next to it.
+ * A picture for a chore, from keywords in its title (English; anything else gets [DEFAULT], the sparkle): the
+ * keyword map of 1.0 with each emoji replaced by its flat [Pictogram] (M9 §2.7, D-M9-5). Decorative: the title is
+ * always shown and read out next to it.
  */
-internal object ChoreEmoji {
-    private val rules: List<Pair<List<String>, String>> = listOf(
-        listOf("bed") to "🛏️",
-        listOf("teeth", "tooth", "brush") to "🦷",
-        listOf("dish", "plate", "cup", "kitchen") to "🍽️",
-        listOf("table") to "🍴",
-        listOf("toy", "lego") to "🧸",
-        listOf("room", "tidy", "clean") to "🧹",
-        listOf("laundry", "clothes", "sock") to "🧺",
-        listOf("plant", "water", "garden", "flower") to "🌱",
-        listOf("dog", "cat", "pet", "fish", "feed") to "🐾",
-        listOf("trash", "rubbish", "bin", "recycl") to "🗑️",
-        listOf("read", "book") to "📚",
-        listOf("homework", "school", "study") to "✏️",
-        listOf("shoe") to "👟",
-        listOf("bath", "shower", "wash") to "🛁",
-        listOf("car") to "🚗",
+internal object ChorePictogram {
+    private val rules: List<Pair<List<String>, Pictogram>> = listOf(
+        listOf("bed") to Pictogram.BED,
+        listOf("teeth", "tooth", "brush") to Pictogram.TOOTH,
+        listOf("dish", "plate", "cup", "kitchen") to Pictogram.DISHES,
+        listOf("table") to Pictogram.CUTLERY,
+        listOf("toy", "lego") to Pictogram.TEDDY,
+        listOf("room", "tidy", "clean") to Pictogram.BROOM,
+        listOf("laundry", "clothes", "sock") to Pictogram.LAUNDRY,
+        listOf("plant", "water", "garden", "flower") to Pictogram.SEEDLING,
+        listOf("dog", "cat", "pet", "fish", "feed") to Pictogram.PAW,
+        listOf("trash", "rubbish", "bin", "recycl") to Pictogram.BIN,
+        listOf("read", "book") to Pictogram.BOOK,
+        listOf("homework", "school", "study") to Pictogram.PENCIL,
+        listOf("shoe") to Pictogram.SHOE,
+        listOf("bath", "shower", "wash") to Pictogram.BATH,
+        listOf("car") to Pictogram.CAR,
     )
-    const val DEFAULT: String = "✨"
+    val DEFAULT: Pictogram = Pictogram.SPARKLE
 
-    fun forTitle(title: String): String {
+    fun forTitle(title: String): Pictogram {
         val lower = title.lowercase(Locale.ROOT)
         return rules.firstOrNull { (keywords, _) -> keywords.any { it in lower } }?.second ?: DEFAULT
     }

@@ -129,6 +129,17 @@ class ParentHomeViewModelTest {
         assertEquals(MoneyUi(Money.ZERO, GBP), zoeCard.money)
         assertEquals(Money.ZERO, zoeCard.minutes)
         assertNull(zoeCard.nextAllowance)
+        // Born June 2017 and September 2013, in November 2026: "Leo, 9" and "Zoe, 13".
+        assertEquals(9, leoCard.age)
+        assertEquals(13, zoeCard.age)
+    }
+
+    @Test
+    fun `a phone clock before the kid's birth month shows no age, never a negative one`() = test {
+        // Today is November 2026 on this phone; a birth month after it would give -1.
+        kids.kids.value = listOf(leo.copy(birthYearMonth = YearMonth(2027, 2)))
+
+        assertNull(viewModel().ready().kids.single().age)
     }
 
     @Test

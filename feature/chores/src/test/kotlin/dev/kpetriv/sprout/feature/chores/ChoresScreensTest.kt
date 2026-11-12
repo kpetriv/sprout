@@ -45,15 +45,16 @@ class ChoresScreensTest {
     }
 
     @Test
-    fun `seedling shows three picture cards with done buttons and read aloud`() {
+    fun `seedling shows three picture cards with I did it buttons and read aloud`() {
         showToday(ChoresPreviewData.today(KidUiTier.SEEDLING))
 
         compose.onNodeWithText("Hi Mia!").assertIsDisplayed()
-        assertEquals(3, compose.onAllNodesWithText("Done!").fetchSemanticsNodes().size)
+        assertEquals(3, compose.onAllNodesWithText("I did it").fetchSemanticsNodes().size)
         compose.onNodeWithText("Tidy toys").assertDoesNotExist()
         compose.onNodeWithText("Next 7 days").assertDoesNotExist()
 
-        compose.onAllNodesWithText("Done!")[0].performClick()
+        compose.onNodeWithContentDescription("I did Brush teeth").assertIsDisplayed()
+        compose.onAllNodesWithText("I did it")[0].performClick()
         assertEquals(KidTodayEvent.Done(ChoreId("bed")), kidEvents.last())
 
         compose.onNodeWithContentDescription("Read Make your bed to me").performClick()
@@ -99,7 +100,6 @@ class ChoresScreensTest {
             SproutTheme {
                 SubmitForm(
                     sheet = SubmitSheetUi(ChoreId("bed"), "Make bed"),
-                    tier = KidUiTier.SPROUT,
                     onEvent = { kidEvents += it },
                     onAddPhoto = { photoRequests++ },
                 )

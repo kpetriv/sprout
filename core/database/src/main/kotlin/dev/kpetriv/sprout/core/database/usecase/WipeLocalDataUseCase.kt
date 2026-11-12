@@ -6,6 +6,8 @@ import dev.kpetriv.sprout.core.common.Dispatcher
 import dev.kpetriv.sprout.core.common.SproutDispatchers
 import dev.kpetriv.sprout.core.database.ChatIdentityKeeper
 import dev.kpetriv.sprout.core.database.LocalDataFiles
+import dev.kpetriv.sprout.core.database.LocalPreferenceStore
+import dev.kpetriv.sprout.core.database.LocalPreferenceStores
 import dev.kpetriv.sprout.core.database.SessionStore
 import dev.kpetriv.sprout.core.database.SproutDatabase
 import kotlinx.coroutines.CancellationException
@@ -18,11 +20,13 @@ import javax.inject.Inject
  * Erases this device's household data when the household is gone (`SyncError.HouseholdGone`, deletion, or this
  * device was revoked, or this phone signed out; M3 §6): clears the session and every pull cursor, closes the database,
  * deletes the database files (and their WAL siblings; with them every chat message, thread key and read mark), the
- * encrypted photo directory, the encrypted blob cache (M4) and every wrapped `SecretStore` blob
+ * encrypted photo directory, the encrypted blob cache (M4), every wrapped `SecretStore` blob
  * ([LocalDataFiles.SECRET_NAMES]: database key, photo and blob cache keys, the chat X25519 private key
- * `chat.x25519.v1`, PIN lockout state), and everything in the app's `cacheDir` (audit A2-M2: temporary voice note
- * recordings and captures; nothing there is needed again). The Keystore keys stay: the device signing key keeps this
- * device's identity, and the wrapping key is useless without the blobs.
+ * `chat.x25519.v1`, PIN lockout state), the kids' local Times tables setup ([LocalDataFiles.preferenceFiles],
+ * M9-games §6.3, cleared through its [LocalPreferenceStore] before the files are deleted), and everything in the
+ * app's `cacheDir` (audit A2-M2: temporary voice note recordings and captures; nothing there is needed again). The
+ * Keystore keys stay: the device signing key keeps this device's identity, and the wrapping key is useless without
+ * the blobs.
  *
  * With `keepDeviceIdentity` (the sign-out of a PARENT session on this phone, D-REL-6, D-REL-28) the chat X25519
  * private key stays as well, with its record ([LocalDataFiles.DEVICE_IDENTITY_SECRETS], [ChatIdentityKeeper]): the
@@ -51,6 +55,7 @@ class WipeLocalDataUseCase internal constructor(
     private val identity: ChatIdentityKeeper,
     private val dispatcher: CoroutineDispatcher,
     private val cacheDirectory: File? = null,
+    private val preferences: LocalPreferenceStores = LocalPreferenceStores.None,
 ) {
     @Inject
     @Suppress("LongParameterList")
@@ -61,7 +66,8 @@ class WipeLocalDataUseCase internal constructor(
         identity: ChatIdentityKeeper,
         @Dispatcher(SproutDispatchers.IO) dispatcher: CoroutineDispatcher,
         @ApplicationContext context: Context,
-    ) : this(database, sessions, files, identity, dispatcher, context.cacheDir)
+        preferences: LocalPreferenceStores,
+    ) : this(database, sessions, files, identity, dispatcher, context.cacheDir, preferences)
 
     /**
      * Erases everything listed above; true when it is all gone. [keepDeviceIdentity] (the sign-out of a parent
@@ -83,15 +89,20 @@ class WipeLocalDataUseCase internal constructor(
         // A database that cannot be read, or is already closed, is deleted below anyway.
         bestEffort { database.close() }
         val kept = if (keep) identityFiles() else emptyList()
+        // Through each store's own writer first, so a save already queued lands before the clear, never after the
+        // files below are deleted (where the live store would write it back).
+        preferences.clearAll()
         return withContext(dispatcher) {
             files.databaseFiles.forEach { it.delete() }
             files.photoDirectory.deleteRecursively()
             files.blobDirectory.deleteRecursively()
+            files.preferenceFiles.forEach { it.delete() }
             files.secretsDirectory.listFiles()?.filterNot { it in kept }?.forEach { it.deleteRecursively() }
             cacheDirectory?.listFiles()?.forEach { it.deleteRecursively() }
             files.databaseFiles.none { it.exists() } &&
                 !files.photoDirectory.exists() &&
                 !files.blobDirectory.exists() &&
+                files.preferenceFiles.none { it.exists() } &&
                 files.secretsDirectory.listFiles().orEmpty().all { it in kept }
         }
     }

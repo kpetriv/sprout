@@ -16,6 +16,7 @@ import androidx.compose.ui.geometry.RoundRect
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.clipPath
@@ -29,6 +30,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import dev.kpetriv.sprout.core.designsystem.theme.SproutTheme
 import dev.kpetriv.sprout.core.model.KidUiTier
 import kotlin.math.roundToInt
 
@@ -49,11 +51,14 @@ fun BalanceJar(
     val animated by animateFloatAsState(targetValue = target, label = "jarLevel")
     val percent = (target * PERCENT).roundToInt()
     val stateText = pluralStringResource(R.plurals.core_ui_jar_state, percent, percent)
+    val scheme = MaterialTheme.colorScheme
     val colors = JarColors(
-        outline = MaterialTheme.colorScheme.outline,
-        fill = MaterialTheme.colorScheme.secondaryContainer,
-        coin = MaterialTheme.colorScheme.secondary,
-        lid = MaterialTheme.colorScheme.primary,
+        outline = scheme.onSurface,
+        glass = scheme.surfaceContainerLowest,
+        shine = scheme.outlineVariant,
+        fill = scheme.secondaryContainer,
+        coin = scheme.secondary,
+        lid = SproutTheme.colors.honeyBorder,
     )
     Column(
         modifier = modifier.clearAndSetSemantics {
@@ -99,7 +104,15 @@ object BalanceJarDefaults {
     }
 }
 
-private class JarColors(val outline: Color, val fill: Color, val coin: Color, val lid: Color)
+/** Morning garden jar (M9 §2.7): white glass with an Ink outline, Honey coins on a Honey-tint fill, a linen lid. */
+private class JarColors(
+    val outline: Color,
+    val glass: Color,
+    val shine: Color,
+    val fill: Color,
+    val coin: Color,
+    val lid: Color,
+)
 
 private const val PERCENT = 100
 private const val JAR_ASPECT = 0.8f
@@ -111,9 +124,13 @@ private const val COIN_COLUMNS = 4
 private const val COIN_FILL_THRESHOLD = 0.3f
 private const val COIN_SIZE = 0.9f
 private const val COIN_ROW_STEP = 1.6f
+private const val COIN_RING = 0.55f
+private const val SHINE_X = 0.14f
+private const val SHINE_TOP = 0.32f
+private const val SHINE_BOTTOM = 0.7f
 
 private fun DrawScope.drawJar(level: Float, colors: JarColors) {
-    val stroke = 3.dp.toPx()
+    val stroke = 2.5.dp.toPx()
     val bodyTop = size.height * BODY_TOP
     val bodyHeight = size.height - bodyTop - stroke / 2
     val corner = CornerRadius(size.width * BODY_CORNER)
@@ -122,25 +139,39 @@ private fun DrawScope.drawJar(level: Float, colors: JarColors) {
     }
     val fillTop = bodyTop + bodyHeight * (1f - level)
 
+    drawPath(body, colors.glass)
+    drawLine(
+        color = colors.shine,
+        start = Offset(size.width * SHINE_X, size.height * SHINE_TOP),
+        end = Offset(size.width * SHINE_X, size.height * SHINE_BOTTOM),
+        strokeWidth = stroke * 2,
+        cap = StrokeCap.Round,
+    )
     clipPath(body) {
         drawRect(colors.fill, topLeft = Offset(0f, fillTop), size = Size(size.width, size.height - fillTop))
-        drawCoins(fillTop, bodyTop + bodyHeight, colors.coin)
+        drawCoins(fillTop, bodyTop + bodyHeight, colors)
     }
     drawPath(body, colors.outline, style = Stroke(width = stroke))
 
     val neckLeft = size.width * NECK_INSET
     val neckSize = Size(size.width - 2 * neckLeft, bodyTop - size.height * NECK_TOP)
+    drawRect(colors.glass, Offset(neckLeft, size.height * NECK_TOP), neckSize)
     drawRect(colors.outline, Offset(neckLeft, size.height * NECK_TOP), neckSize, style = Stroke(width = stroke))
+    val lidTopLeft = Offset(neckLeft - stroke, stroke / 2)
+    val lidSize = Size(neckSize.width + 2 * stroke, size.height * NECK_TOP)
+    drawRoundRect(color = colors.lid, topLeft = lidTopLeft, size = lidSize, cornerRadius = CornerRadius(stroke))
     drawRoundRect(
-        color = colors.lid,
-        topLeft = Offset(neckLeft - stroke, 0f),
-        size = Size(neckSize.width + 2 * stroke, size.height * NECK_TOP),
+        color = colors.outline,
+        topLeft = lidTopLeft,
+        size = lidSize,
         cornerRadius = CornerRadius(stroke),
+        style = Stroke(width = stroke),
     )
 }
 
-/** Rows of coins from the bottom of the jar up to the fill line. */
-private fun DrawScope.drawCoins(fillTop: Float, bottom: Float, color: Color) {
+/** Rows of Honey coins with Ink rims from the bottom of the jar up to the fill line. */
+private fun DrawScope.drawCoins(fillTop: Float, bottom: Float, colors: JarColors) {
+    val rim = Stroke(width = 1.5.dp.toPx())
     val radius = size.width / (COIN_COLUMNS * 2 + 1)
     var row = 0
     var centerY = bottom - radius
@@ -148,7 +179,10 @@ private fun DrawScope.drawCoins(fillTop: Float, bottom: Float, color: Color) {
         val offset = if (row % 2 == 0) radius else radius * 2
         var centerX = offset
         while (centerX + radius <= size.width) {
-            drawCircle(color, radius * COIN_SIZE, Offset(centerX, centerY))
+            val center = Offset(centerX, centerY)
+            drawCircle(colors.coin, radius * COIN_SIZE, center)
+            drawCircle(colors.outline, radius * COIN_SIZE, center, style = rim)
+            drawCircle(colors.outline, radius * COIN_RING, center, style = rim)
             centerX += radius * 2
         }
         centerY -= radius * COIN_ROW_STEP

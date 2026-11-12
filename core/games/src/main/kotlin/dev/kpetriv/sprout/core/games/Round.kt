@@ -59,3 +59,34 @@ data class WordRound(val word: String, val scrambled: String, val hint: String?)
         return candidate.toList().sorted() == word.toList().sorted() && WordList.all.any { it.word == candidate }
     }
 }
+
+/**
+ * One Times tables question, `a × b`, always answered by typing (no choices).
+ *
+ * @property a the table (2–12), always on the left.
+ * @property b the multiplier (1–12).
+ * @property answer `a * b`.
+ * @property prompt what is shown, for example `"7 × 8"` (`×` is U+00D7, as in [ArithmeticRound.prompt]).
+ * @property spokenPrompt the same in words for TalkBack, for example `"7 times 8"`.
+ */
+data class TablesRound(val a: Int, val b: Int, val answer: Int, val prompt: String, val spokenPrompt: String) : Round {
+    override val kind: GameKind get() = GameKind.TABLES
+
+    init {
+        require(answer == a * b) { "A times-table answer must be the product" }
+    }
+
+    /** Whether the typed number [typed] is right. */
+    fun accepts(typed: Int): Boolean = typed == answer
+
+    /**
+     * Whether [typed] (digits as entered on the number pad, surrounding spaces ignored) is right. Compared as an
+     * integer, so `"056"` is 56; anything that is not a whole number is wrong.
+     */
+    fun accepts(typed: String): Boolean = typed.trim().toIntOrNull()?.let(::accepts) ?: false
+
+    companion object {
+        /** The question `a × b` with its answer and prompts. */
+        fun of(a: Int, b: Int): TablesRound = TablesRound(a, b, a * b, "$a × $b", "$a times $b")
+    }
+}

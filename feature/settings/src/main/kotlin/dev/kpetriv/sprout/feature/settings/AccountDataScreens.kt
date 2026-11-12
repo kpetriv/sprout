@@ -4,22 +4,14 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.HorizontalDivider
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -28,18 +20,16 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.semantics.LiveRegionMode
-import androidx.compose.ui.semantics.liveRegion
-import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.res.vectorResource
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
-import androidx.compose.ui.unit.dp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import dev.kpetriv.sprout.core.ui.contentWidth
+import dev.kpetriv.sprout.core.designsystem.theme.SproutSpacing
 
 @Composable
 internal fun AccountRoute(onBack: () -> Unit, modifier: Modifier = Modifier) {
@@ -60,43 +50,46 @@ fun AccountScreen(
         title = stringResource(R.string.feature_settings_section_account),
         onBack = onBack,
         modifier = modifier,
-    ) {
-        Column(
-            modifier = Modifier.padding(it).contentWidth().sectionPadding(),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            Text(
-                state.email?.let { email -> stringResource(R.string.feature_settings_account_signed_in_as, email) }
-                    ?: stringResource(R.string.feature_settings_account_signed_in),
-                style = MaterialTheme.typography.titleMedium,
-            )
-            state.householdId?.let { id ->
-                Text(
-                    stringResource(R.string.feature_settings_account_household, id.value),
-                    style = MaterialTheme.typography.bodyMedium,
-                    fontFamily = FontFamily.Monospace,
+    ) { padding ->
+        SettingsColumn(padding = padding) {
+            SettingsCard {
+                SectionHeading(
+                    state.email?.let { email -> stringResource(R.string.feature_settings_account_signed_in_as, email) }
+                        ?: stringResource(R.string.feature_settings_account_signed_in),
+                    icon = ImageVector.vectorResource(R.drawable.feature_settings_ic_account_circle),
+                    iconTint = MaterialTheme.colorScheme.primary,
                 )
+                state.householdId?.let { id ->
+                    Text(
+                        stringResource(R.string.feature_settings_account_household, id.value),
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontFamily = FontFamily.Monospace,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                // Signing out erases this phone's copy of the household (D-M3-47): a destructive action.
+                DestructiveButton(
+                    text = stringResource(R.string.feature_settings_account_sign_out),
+                    onClick = { onEvent(AccountEvent.AskSignOut) },
+                    enabled = !state.signingOut,
+                    style = DestructiveStyle.Outlined,
+                    icon = ImageVector.vectorResource(R.drawable.feature_settings_ic_logout),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                if (state.signingOut) LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
             }
-            OutlinedButton(onClick = { onEvent(AccountEvent.AskSignOut) }, enabled = !state.signingOut) {
-                Text(stringResource(R.string.feature_settings_account_sign_out))
-            }
-            if (state.signingOut) LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
         }
     }
     if (state.confirmingSignOut) {
-        AlertDialog(
-            onDismissRequest = { onEvent(AccountEvent.DismissSignOut) },
-            title = { Text(stringResource(R.string.feature_settings_account_sign_out_title)) },
-            text = { Text(stringResource(R.string.feature_settings_account_sign_out_text)) },
-            confirmButton = {
-                TextButton(onClick = { onEvent(AccountEvent.ConfirmSignOut) }) {
-                    Text(stringResource(R.string.feature_settings_account_sign_out))
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { onEvent(AccountEvent.DismissSignOut) }) {
-                    Text(stringResource(R.string.feature_settings_cancel))
-                }
+        ConfirmDialog(
+            title = stringResource(R.string.feature_settings_account_sign_out_title),
+            text = stringResource(R.string.feature_settings_account_sign_out_text),
+            onDismiss = { onEvent(AccountEvent.DismissSignOut) },
+            confirm = {
+                DestructiveButton(
+                    text = stringResource(R.string.feature_settings_account_sign_out),
+                    onClick = { onEvent(AccountEvent.ConfirmSignOut) },
+                )
             },
         )
     }
@@ -126,23 +119,11 @@ fun DataScreen(state: DataUiState, onEvent: (DataEvent) -> Unit, onBack: () -> U
         onBack = onBack,
         modifier = modifier,
         snackbarHostState = snackbar,
-    ) {
-        Column(
-            modifier = Modifier.padding(it).verticalScroll(rememberScrollState()).contentWidth().sectionPadding(),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            ChatDataSection(state, onEvent)
-            HorizontalDivider()
-            ExportSection(state, onEvent)
-            HorizontalDivider()
-            SectionHeading(stringResource(R.string.feature_settings_data_delete_title))
-            Text(
-                stringResource(R.string.feature_settings_data_delete_text),
-                style = MaterialTheme.typography.bodyMedium,
-            )
-            OutlinedButton(onClick = { onEvent(DataEvent.AskDelete) }, enabled = state.householdId != null) {
-                Text(stringResource(R.string.feature_settings_data_delete), color = MaterialTheme.colorScheme.error)
-            }
+    ) { padding ->
+        SettingsColumn(padding = padding) {
+            SettingsCard { ChatDataSection(state, onEvent) }
+            SettingsCard { ExportSection(state, onEvent) }
+            SettingsCard { DeleteHouseholdSection(state, onEvent) }
         }
     }
     DataMessageEffect(state.message, snackbar) { onEvent(DataEvent.MessageShown) }
@@ -150,24 +131,42 @@ fun DataScreen(state: DataUiState, onEvent: (DataEvent) -> Unit, onBack: () -> U
     state.retention?.let { row -> row.pending?.let { RetentionConfirmDialog(it, row.saving, onEvent) } }
     if (state.chatDeleteTyped != null) DeleteChatDialog(state, onEvent)
     if (state.deleteTyped != null) {
-        AlertDialog(
-            onDismissRequest = { onEvent(DataEvent.DismissDelete) },
-            title = { Text(stringResource(R.string.feature_settings_data_delete_dialog_title)) },
-            text = { DeleteHouseholdContent(state, onEvent) },
-            confirmButton = {
-                Button(
+        ConfirmDialog(
+            title = stringResource(R.string.feature_settings_data_delete_dialog_title),
+            onDismiss = { onEvent(DataEvent.DismissDelete) },
+            cancelEnabled = !state.deleting,
+            confirm = {
+                DestructiveButton(
+                    text = stringResource(R.string.feature_settings_data_delete_confirm),
                     onClick = { onEvent(DataEvent.ConfirmDelete) },
                     enabled = state.canConfirmDelete,
-                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
-                ) { Text(stringResource(R.string.feature_settings_data_delete_confirm)) }
+                )
             },
-            dismissButton = {
-                TextButton(onClick = { onEvent(DataEvent.DismissDelete) }, enabled = !state.deleting) {
-                    Text(stringResource(R.string.feature_settings_cancel))
-                }
-            },
+            extra = { DeleteHouseholdContent(state, onEvent) },
         )
     }
+}
+
+/** "Delete household" (MG-08): the warning heading, what it deletes, and the filled `error` pill. */
+@Composable
+private fun DeleteHouseholdSection(state: DataUiState, onEvent: (DataEvent) -> Unit) {
+    SectionHeading(
+        stringResource(R.string.feature_settings_data_delete_title),
+        icon = ImageVector.vectorResource(R.drawable.feature_settings_ic_warning),
+        iconTint = MaterialTheme.colorScheme.error,
+    )
+    Text(
+        stringResource(R.string.feature_settings_data_delete_text),
+        style = MaterialTheme.typography.bodyMedium,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+    DestructiveButton(
+        text = stringResource(R.string.feature_settings_data_delete),
+        onClick = { onEvent(DataEvent.AskDelete) },
+        enabled = state.householdId != null,
+        icon = ImageVector.vectorResource(R.drawable.feature_settings_ic_delete_forever),
+        modifier = Modifier.fillMaxWidth(),
+    )
 }
 
 /** "Sign in again to confirm": the server wants a recent sign-in before it deletes the household (D-M3-34). */
@@ -185,28 +184,28 @@ internal fun ReauthCard(reauth: ReauthUi, onEvent: (DataEvent) -> Unit, modifier
         title = stringResource(R.string.feature_settings_data_reauth_title),
         modifier = modifier,
         buttons = {
-            TextButton(onClick = { onEvent(DataEvent.DismissReauth) }, enabled = !reauth.busy) {
-                Text(stringResource(R.string.feature_settings_cancel))
-            }
-            Button(
+            QuietButton(
+                text = stringResource(R.string.feature_settings_cancel),
+                onClick = { onEvent(DataEvent.DismissReauth) },
+                enabled = !reauth.busy,
+            )
+            // Signing in here goes straight on to deleting the household: the destructive colours.
+            DestructiveButton(
+                text = stringResource(
+                    if (reauth.usesPassword) {
+                        R.string.feature_settings_data_reauth_sign_in
+                    } else {
+                        R.string.feature_settings_data_reauth_google
+                    },
+                ),
                 onClick = { onEvent(DataEvent.SignInAgain(context, password.takeIf { reauth.usesPassword })) },
                 enabled = !reauth.busy && (!reauth.usesPassword || password.isNotEmpty()),
-            ) {
-                Text(
-                    stringResource(
-                        if (reauth.usesPassword) {
-                            R.string.feature_settings_data_reauth_sign_in
-                        } else {
-                            R.string.feature_settings_data_reauth_google
-                        },
-                    ),
-                )
-            }
+            )
         },
     ) {
         Text(stringResource(R.string.feature_settings_data_reauth_text), style = MaterialTheme.typography.bodyMedium)
         reauth.problem?.let { problem ->
-            Text(
+            ErrorText(
                 stringResource(
                     when (problem) {
                         ReauthProblem.WRONG_ACCOUNT -> R.string.feature_settings_data_reauth_wrong_account
@@ -214,8 +213,6 @@ internal fun ReauthCard(reauth: ReauthUi, onEvent: (DataEvent) -> Unit, modifier
                         ReauthProblem.NETWORK -> R.string.feature_settings_data_message_network
                     },
                 ),
-                color = MaterialTheme.colorScheme.error,
-                style = MaterialTheme.typography.bodyMedium,
             )
         }
         if (reauth.usesPassword) {
@@ -226,6 +223,9 @@ internal fun ReauthCard(reauth: ReauthUi, onEvent: (DataEvent) -> Unit, modifier
                 singleLine = true,
                 enabled = !reauth.busy,
                 visualTransformation = PasswordVisualTransformation(),
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                shape = MaterialTheme.shapes.small,
+                colors = settingsFieldColors(),
                 modifier = Modifier.fillMaxWidth(),
             )
         }
@@ -236,15 +236,20 @@ internal fun ReauthCard(reauth: ReauthUi, onEvent: (DataEvent) -> Unit, modifier
 /** The delete dialog's body: what to type, the field, progress. */
 @Composable
 internal fun DeleteHouseholdContent(state: DataUiState, onEvent: (DataEvent) -> Unit, modifier: Modifier = Modifier) {
-    Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Text(stringResource(R.string.feature_settings_data_delete_text))
-        Text(stringResource(R.string.feature_settings_data_delete_dialog_text, state.deleteConfirmation))
+    Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(SproutSpacing.md - SproutSpacing.xs)) {
+        Text(stringResource(R.string.feature_settings_data_delete_text), style = MaterialTheme.typography.bodyMedium)
+        Text(
+            stringResource(R.string.feature_settings_data_delete_dialog_text, state.deleteConfirmation),
+            style = MaterialTheme.typography.bodyMedium,
+        )
         OutlinedTextField(
             value = state.deleteTyped.orEmpty(),
             onValueChange = { onEvent(DataEvent.DeleteTyped(it)) },
             label = { Text(stringResource(R.string.feature_settings_data_delete_field)) },
             singleLine = true,
             enabled = !state.deleting,
+            shape = MaterialTheme.shapes.small,
+            colors = settingsFieldColors(),
             modifier = Modifier.fillMaxWidth(),
         )
         if (state.deleting) LinearProgressIndicator(modifier = Modifier.fillMaxWidth())

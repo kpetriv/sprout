@@ -1,45 +1,40 @@
 package dev.kpetriv.sprout.feature.settings
 
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.HorizontalDivider
-import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.SegmentedButton
-import androidx.compose.material3.SegmentedButtonDefaults
-import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.res.vectorResource
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.unit.dp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import dev.kpetriv.sprout.core.designsystem.components.InitialAvatar
+import dev.kpetriv.sprout.core.designsystem.components.SproutButton
+import dev.kpetriv.sprout.core.designsystem.icon.SproutIcons
+import dev.kpetriv.sprout.core.designsystem.theme.SproutSpacing
 import dev.kpetriv.sprout.core.model.KidId
 import dev.kpetriv.sprout.core.model.KidUiTier
 import dev.kpetriv.sprout.core.model.MAX_FIRST_NAME_LENGTH
-import dev.kpetriv.sprout.core.ui.contentWidth
 import java.text.DateFormatSymbols
 
 @Composable
@@ -78,26 +73,23 @@ fun KidsSettingsScreen(
         modifier = modifier,
         snackbarHostState = snackbar,
     ) { padding ->
-        Column(modifier = Modifier.padding(padding).fillMaxSize()) {
-            if (!loadStatus(state.isLoading, state.loadFailed)) {
-                Column(modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).contentWidth()) {
-                    if (state.kids.isEmpty()) {
-                        Text(
-                            stringResource(R.string.feature_settings_kids_empty),
-                            modifier = Modifier.sectionPadding(),
-                        )
-                    }
-                    state.kids.forEachIndexed { index, row ->
-                        if (index > 0) HorizontalDivider()
-                        KidRow(row, onClick = { onEvent(KidsSettingsEvent.EditKid(row.kid.id)) })
-                    }
-                    Button(
-                        onClick = { onEvent(KidsSettingsEvent.AddKid) },
-                        modifier = Modifier.sectionPadding(),
-                    ) {
-                        Text(stringResource(R.string.feature_settings_kids_add))
-                    }
+        if (!loadStatus(state.isLoading, state.loadFailed, Modifier.padding(padding))) {
+            SettingsColumn(padding = padding, spacing = SproutSpacing.rowGap) {
+                if (state.kids.isEmpty()) {
+                    Text(
+                        stringResource(R.string.feature_settings_kids_empty),
+                        style = MaterialTheme.typography.bodyLarge,
+                    )
                 }
+                state.kids.forEachIndexed { index, row ->
+                    KidRow(row, index, onClick = { onEvent(KidsSettingsEvent.EditKid(row.kid.id)) })
+                }
+                SproutButton(
+                    text = stringResource(R.string.feature_settings_kids_add),
+                    onClick = { onEvent(KidsSettingsEvent.AddKid) },
+                    icon = SproutIcons.Add,
+                    modifier = Modifier.padding(top = SproutSpacing.sm),
+                )
             }
         }
     }
@@ -117,17 +109,25 @@ fun KidsSettingsScreen(
 }
 
 @Composable
-private fun KidRow(row: KidRowUi, onClick: () -> Unit) {
+private fun KidRow(row: KidRowUi, index: Int, onClick: () -> Unit) {
     val tier = tierName(row.kid.uiTier)
     val tierText = if (row.isTierOverridden) {
         stringResource(R.string.feature_settings_kids_row_overridden, tier, tierName(row.suggestedTier))
     } else {
         tier
     }
-    ListItem(
-        headlineContent = { Text(row.kid.firstName) },
-        supportingContent = { Text(stringResource(R.string.feature_settings_kids_row_detail, row.ageYears, tierText)) },
-        modifier = Modifier.fillMaxWidth().clickable(role = Role.Button, onClick = onClick),
+    SettingsRow(
+        title = row.kid.firstName,
+        summary = stringResource(R.string.feature_settings_kids_row_detail, row.ageYears, tierText),
+        onClick = onClick,
+        leading = {
+            InitialAvatar(
+                initial = row.kid.firstName.take(1).uppercase(),
+                tintIndex = index,
+                size = 40.dp,
+                modifier = Modifier.clearAndSetSemantics {},
+            )
+        },
     )
 }
 
@@ -135,13 +135,12 @@ private fun KidRow(row: KidRowUi, onClick: () -> Unit) {
 @Composable
 private fun KidEditorSheet(editor: KidEditorUi, onEvent: (KidsSettingsEvent) -> Unit, onLinkDevice: (() -> Unit)?) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
-    ModalBottomSheet(onDismissRequest = { onEvent(KidsSettingsEvent.DismissEditor) }, sheetState = sheetState) {
-        KidEditorForm(
-            editor,
-            onEvent,
-            Modifier.padding(start = 24.dp, end = 24.dp, bottom = 24.dp),
-            onLinkDevice = onLinkDevice,
-        )
+    ModalBottomSheet(
+        onDismissRequest = { onEvent(KidsSettingsEvent.DismissEditor) },
+        sheetState = sheetState,
+        containerColor = MaterialTheme.colorScheme.surfaceContainerLowest,
+    ) {
+        KidEditorForm(editor, onEvent, Modifier.sheetPadding(), onLinkDevice = onLinkDevice)
     }
 }
 
@@ -157,7 +156,7 @@ internal fun KidEditorForm(
     var confirmArchive by remember { mutableStateOf(false) }
     Column(
         modifier = modifier.verticalScroll(rememberScrollState()),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
+        verticalArrangement = Arrangement.spacedBy(SproutSpacing.md),
     ) {
         SectionHeading(
             if (editor.isNew) {
@@ -174,10 +173,12 @@ internal fun KidEditorForm(
             isError = nameError != null,
             supportingText = nameError?.let { { Text(it) } },
             singleLine = true,
+            shape = MaterialTheme.shapes.small,
+            colors = settingsFieldColors(),
             modifier = Modifier.fillMaxWidth(),
         )
         val months = remember { DateFormatSymbols.getInstance().months.take(MONTHS) }
-        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+        Row(horizontalArrangement = Arrangement.spacedBy(SproutSpacing.md - SproutSpacing.xs)) {
             ChoiceDropdown(
                 label = stringResource(R.string.feature_settings_kids_birth_month),
                 options = (1..MONTHS).toList(),
@@ -210,65 +211,58 @@ internal fun KidEditorForm(
                 MaterialTheme.colorScheme.onSurfaceVariant
             },
         )
-        Text(stringResource(R.string.feature_settings_kids_tier), style = MaterialTheme.typography.labelMedium)
-        SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
-            KidUiTier.entries.forEachIndexed { index, tier ->
-                SegmentedButton(
-                    selected = editor.tier == tier,
-                    onClick = { onEvent(KidsSettingsEvent.TierChosen(tier)) },
-                    shape = SegmentedButtonDefaults.itemShape(index, KidUiTier.entries.size),
-                ) {
-                    Text(tierName(tier))
-                }
-            }
-        }
+        Text(stringResource(R.string.feature_settings_kids_tier), style = MaterialTheme.typography.labelLarge)
+        RadioChips(
+            options = KidUiTier.entries,
+            selected = editor.tier,
+            optionLabel = { tierName(it) },
+            onSelect = { onEvent(KidsSettingsEvent.TierChosen(it)) },
+        )
         editor.suggestedTier?.let { suggested ->
             Text(
                 stringResource(R.string.feature_settings_kids_tier_suggested, tierName(suggested)),
                 style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
-        if (editor.saveFailed) {
-            Text(
-                stringResource(R.string.feature_settings_save_failed),
-                color = MaterialTheme.colorScheme.error,
-                style = MaterialTheme.typography.bodyMedium,
-            )
-        }
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        if (editor.saveFailed) ErrorText(stringResource(R.string.feature_settings_save_failed))
+        ButtonRow(alignment = Alignment.Start) {
             SaveButton(editor.isSaving, enabled = true, onClick = { onEvent(KidsSettingsEvent.Save) })
-            TextButton(onClick = { onEvent(KidsSettingsEvent.DismissEditor) }) {
-                Text(stringResource(R.string.feature_settings_cancel))
-            }
+            QuietButton(
+                text = stringResource(R.string.feature_settings_cancel),
+                onClick = { onEvent(KidsSettingsEvent.DismissEditor) },
+            )
         }
         if (!editor.isNew && onLinkDevice != null) {
-            OutlinedButton(onClick = onLinkDevice, enabled = !editor.isSaving) {
-                Text(stringResource(R.string.feature_settings_kids_link))
-            }
+            QuietButton(
+                text = stringResource(R.string.feature_settings_kids_link),
+                onClick = onLinkDevice,
+                enabled = !editor.isSaving,
+                icon = ImageVector.vectorResource(R.drawable.feature_settings_ic_link),
+            )
         }
         if (!editor.isNew) {
-            TextButton(onClick = { confirmArchive = true }, enabled = !editor.isSaving) {
-                Text(stringResource(R.string.feature_settings_kids_archive), color = MaterialTheme.colorScheme.error)
-            }
+            DestructiveButton(
+                text = stringResource(R.string.feature_settings_kids_archive),
+                onClick = { confirmArchive = true },
+                enabled = !editor.isSaving,
+                style = DestructiveStyle.Outlined,
+            )
         }
     }
     if (confirmArchive) {
-        AlertDialog(
-            onDismissRequest = { confirmArchive = false },
-            title = { Text(stringResource(R.string.feature_settings_kids_archive_confirm_title, editor.firstName)) },
-            text = { Text(stringResource(R.string.feature_settings_kids_archive_confirm_text)) },
-            confirmButton = {
-                TextButton(
+        ConfirmDialog(
+            title = stringResource(R.string.feature_settings_kids_archive_confirm_title, editor.firstName),
+            text = stringResource(R.string.feature_settings_kids_archive_confirm_text),
+            onDismiss = { confirmArchive = false },
+            confirm = {
+                DestructiveButton(
+                    text = stringResource(R.string.feature_settings_kids_archive_confirm),
                     onClick = {
                         confirmArchive = false
                         onEvent(KidsSettingsEvent.Archive)
                     },
-                ) { Text(stringResource(R.string.feature_settings_kids_archive_confirm)) }
-            },
-            dismissButton = {
-                TextButton(onClick = { confirmArchive = false }) {
-                    Text(stringResource(R.string.feature_settings_cancel))
-                }
+                )
             },
         )
     }

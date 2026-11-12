@@ -12,6 +12,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.semantics.clearAndSetSemantics
@@ -21,6 +22,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import dev.kpetriv.sprout.core.designsystem.theme.SproutTheme
 import dev.kpetriv.sprout.core.model.KidUiTier
 import kotlin.math.PI
 import kotlin.math.cos
@@ -42,8 +44,19 @@ fun SavingsStars(
     val count = SavingsStarsDefaults.STAR_COUNT
     val lit = filled.coerceIn(0, count)
     val state = pluralStringResource(R.plurals.core_ui_savings_stars, count, lit, count)
-    val litColor = MaterialTheme.colorScheme.secondary
-    val emptyColor = MaterialTheme.colorScheme.outline
+    val scheme = MaterialTheme.colorScheme
+    val litStyle = StarStyle(
+        star = scheme.secondary,
+        disc = scheme.secondaryContainer,
+        rim = SproutTheme.colors.honeyBorder,
+        outline = scheme.onSurface,
+    )
+    val emptyStyle = StarStyle(
+        star = null,
+        disc = scheme.surfaceContainerLowest,
+        rim = scheme.outlineVariant,
+        outline = scheme.outline,
+    )
     Column(
         modifier = modifier.clearAndSetSemantics {
             contentDescription = title
@@ -55,25 +68,33 @@ fun SavingsStars(
         TierScaledText(text = title, role = TierTextRole.Title, tier = tier, textAlign = TextAlign.Center)
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             repeat(count) { index ->
-                Star(filled = index < lit, litColor = litColor, emptyColor = emptyColor, size = starSize)
+                Star(style = if (index < lit) litStyle else emptyStyle, size = starSize)
             }
         }
     }
 }
 
+/**
+ * One Morning garden star (M9 §2.7): a disc with a rim, and a star drawn in [outline] and filled with [star] when lit
+ * (Honey with an Ink rim on a Honey-tint disc); an empty star has no fill.
+ */
+private class StarStyle(val star: Color?, val disc: Color, val rim: Color, val outline: Color)
+
 @Composable
-private fun Star(filled: Boolean, litColor: Color, emptyColor: Color, size: Dp) {
+private fun Star(style: StarStyle, size: Dp) {
     Canvas(modifier = Modifier.size(size)) {
-        val path = starPath(
-            center = Offset(this.size.width / 2, this.size.height / 2),
-            outer =
-                this.size.minDimension / 2,
+        val center = Offset(this.size.width / 2, this.size.height / 2)
+        val disc = this.size.minDimension / 2
+        val rim = Stroke(width = 1.dp.toPx())
+        drawCircle(style.disc, disc, center)
+        drawCircle(style.rim, disc - rim.width / 2, center, style = rim)
+        val path = starPath(center = center, outer = disc * STAR_IN_DISC)
+        style.star?.let { drawPath(path, it) }
+        drawPath(
+            path,
+            style.outline,
+            style = Stroke(width = this.size.minDimension * STROKE_FRACTION, join = StrokeJoin.Round),
         )
-        if (filled) {
-            drawPath(path, litColor)
-        } else {
-            drawPath(path, emptyColor, style = Stroke(width = this.size.minDimension * STROKE_FRACTION))
-        }
     }
 }
 
@@ -95,7 +116,7 @@ object SavingsStarsDefaults {
     /** Stars in the row. */
     const val STAR_COUNT: Int = 5
 
-    val StarSize: Dp = 40.dp
+    val StarSize: Dp = 48.dp
 
     /**
      * Stars to fill for [saved] of [target] (minor units, integers only): whole fifths, rounded down, so the last
@@ -116,7 +137,8 @@ object SavingsStarsDefaults {
 private const val STAR_POINTS = 5
 private const val INNER_RADIUS = 0.42f
 private const val OUTER_INSET = 0.94f
-private const val STROKE_FRACTION = 0.06f
+private const val STROKE_FRACTION = 0.05f
+private const val STAR_IN_DISC = 0.68f
 
 @Preview(name = "Seedling", showBackground = true)
 @Composable

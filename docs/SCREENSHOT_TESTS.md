@@ -34,6 +34,7 @@ class WalletScreenshotTest : ScreenshotTest() {
 - `captureLightDark(name) { ... }` writes `<name>_light.png` and `<name>_dark.png`.
 - `capture(name) { ... }` writes `<name>.png`.
 - `captureWidthClasses(name) { widthClass -> ... }` renders in a phone window (the test's device) and a tablet window (`ScreenshotDevice.TABLET`, 1280 x 800 dp at density 1) and writes `<name>_phone.png` and `<name>_tablet.png`; `captureWidthClassTiers(name) { widthClass, tier -> ... }` does the same per tier (`<name>_tablet_<tier>.png`). Pass `windows = listOf(ScreenshotWindow.TABLET)` when the phone image already exists. Each window is a fresh activity launched with that device's qualifiers, and `LocalWindowWidthClass` is provided (Compact, Expanded).
+- `ScreenshotWindow.TABLET_PORTRAIT` (`ScreenshotDevice.TABLET_PORTRAIT`, 800 x 1280 dp at density 1, a Medium width class, suffix `tablet_portrait`) is opt-in: pass it in `windows` (e.g. `windows = listOf(ScreenshotWindow.TABLET, ScreenshotWindow.TABLET_PORTRAIT)`) for `<name>_tablet_portrait_<tier>.png`; the default stays phone and landscape tablet (`ScreenshotWindow.DEFAULT`). The games play and result screens use it (M9-games §5).
 - `captureFontScale(name)` and `captureFontScaleTiers(name)` render at font scale 2.0 (`<name>_font200.png`, `<name>_font200_<tier>.png`).
 - `screen = true` on `capture`, `captureLightDark` and `captureTiers` captures the whole window, dialogs and bottom sheets included (they are separate windows that a capture of the Compose root does not see).
 - `ScreenshotTest(checkAccessibility = true)` runs the accessibility rule (`docs/ACCESSIBILITY.md`) on every variant right after it is captured, against the variant's minimum touch target (the tier's, or 48 dp). Every screen test sets it.
@@ -45,10 +46,15 @@ Content is drawn on a `Surface` with the theme's background colour. The image is
 
 ## Screenshot matrix
 
-The single source for what is covered. Rule: **parent screens light and dark; kid screens every tier in the light theme, plus one dark golden per kid screen family.** Tablet and font-scale 2.0 goldens cover the subset M7 §5 and §8 name. "Tiers" means `_seedling`, `_sprout`, `_sapling`; "L/D" means `_light`, `_dark`. Sheets and dialogs that are separate windows are captured with `screen = true`.
+The single source for what is covered. Rule: **parent screens light and dark; kid screens every tier in the light theme, plus one dark golden per kid screen family.** Tablet and font-scale 2.0 goldens cover the subset M7 §5 and §8 and M9 name. **Games (M9-games §5, D-M9-G9): every play screen and the result also get a landscape tablet and a portrait tablet golden for each tier that plays it** (`_tablet_<tier>`, `_tablet_portrait_<tier>`); the Playground field is the same in the light and dark theme, so the games have no dark goldens. Design-system components (`core/designsystem`) get a golden per tier, parent light and dark, and font scale 2.0 where text can wrap. "Tiers" means `_seedling`, `_sprout`, `_sapling`; "L/D" means `_light`, `_dark`. Sheets and dialogs that are separate windows are captured with `screen = true`.
+
+547 goldens at the end of M9 (375 at v1.0.0, 378 on `main` at M9's merge base): `app` 35, `core/designsystem` 66, `feature/chat` 45, `feature/chores` 37, `feature/games` 129, `feature/lock` 20, `feature/onboarding` 20, `feature/parent-home` 22, `feature/settings` 77, `feature/timebank` 21, `feature/wallet` 69, `widget` 6.
 
 | Module | Screen | States | Variants |
 |---|---|---|---|
+| core/designsystem | Components (`component_<name>`) | card, button, stat tile, ledger row, goal bar, chip, avatar, top bar, navigation bar, navigation rail | tiers; parent L/D (`_parent_light`, `_parent_dark`) |
+| core/designsystem | Components at font scale 2.0 | navigation bar, top bar (tiers and parent), goal bar, avatar (tiers) | `_font200_<tier>`, `_parent_font200` |
+| core/designsystem | Pictogram set | all 36 pictograms | L/D |
 | parent-home | Dashboard | empty, busy, signing in progress, payments needing attention, trial banner, new device + rejected events, signing key not registered, fingerprint signing off, sync blocked | L/D |
 | parent-home | Dashboard | busy | tablet (two columns), font 2.0 |
 | parent-home | Weekly summary card | ready | L/D |
@@ -56,7 +62,7 @@ The single source for what is covered. Rule: **parent screens light and dark; ki
 | chat | Kid thread | messages | tiers, dark |
 | chat | Kid thread | kindness nudge, kindness check running | Sprout, Sapling |
 | chat | Kid thread | chat key replaced | Sprout |
-| chat | Parent thread | thread, empty, locked, send states, photos loading/unavailable | L/D |
+| chat | Parent thread | thread, empty, locked, send states, photos loading/unavailable, chat key replaced | L/D |
 | chat | Parent thread | thread | font 2.0 |
 | chat | Inbox | threads, empty | L/D |
 | chat | Inbox + thread / + placeholder | list-detail panes | tablet |
@@ -73,12 +79,16 @@ The single source for what is covered. Rule: **parent screens light and dark; ki
 | wallet | Wallet, parent view | loading, error | L/D |
 | wallet | Adjustment form | empty, prefilled from a receipt, rejected, signatures off | L/D |
 | wallet | Shop | can afford, cannot afford, loading, error, empty, confirm, not yet, bought, purchase failed, parent browsing | tiers |
-| games | Hub | ready, daily cap reached | tiers |
-| games | Hub | ready | tablet per tier |
-| games | Rounds | arithmetic, memory showing, memory answering | tiers |
-| games | Rounds | word | Sprout, Sapling |
-| games | Rounds | timed start, timed arithmetic | Sapling |
-| games | Result | credited, capped, clamped, refused, unknown | tiers |
+| games | Hub (Morning garden, four tiles with Times tables) | ready, daily cap reached | tiers |
+| games | Hub | ready | tablet and tablet portrait per tier |
+| games | Rounds (Playground) | arithmetic, memory showing, memory answering | tiers; tablet and tablet portrait per tier |
+| games | Rounds (Playground) | word | Sprout, Sapling; tablet and tablet portrait for both |
+| games | Start cards (Playground) | timed start, start with "Your last plays", timed arithmetic | Sapling; tablet and tablet portrait |
+| games | Times tables (Playground) | setup, question | Sprout, Sapling; tablet and tablet portrait for both |
+| games | Times tables (Playground) | Rock star (timed) question | Sapling; tablet and tablet portrait |
+| games | Result (Playground) | credited | tiers; tablet and tablet portrait per tier |
+| games | Result (Playground) | capped, clamped, refused, unknown | tiers |
+| games | Playground components | play field, tiles, segment progress, countdown ring, sequence panel (also font 2.0), shape and picture glyphs, reward card, rosette, streak pill, number pad, read-aloud tile | tiers |
 | timebank | Time bank | idle, running, empty, time up, loading, error | tiers |
 | timebank | Time bank | running | tiers, dark |
 | lock | PIN entry | entry, wait, fingerprint required, fingerprint changed | L/D |
@@ -87,18 +97,29 @@ The single source for what is covered. Rule: **parent screens light and dark; ki
 | lock | Signature policy banner | shown | L/D |
 | onboarding | Onboarding | welcome, sign-in (debug), household, kid phone code (empty, half typed, refused), waiting for approval, trial data purge | L/D |
 | onboarding | Signing setup | PIN, wrong PIN | L/D |
-| settings | Settings (slice B1) | see `SettingsScreenshotTest`, `HouseholdScreenshotTest` | L/D, tablet hub |
+| settings | Hub | sections, trial household | L/D |
+| settings | Hub | sections, nothing selected | phone and tablet (list-detail); tablet |
+| settings | Kids and tiers | list, add, edit, archive | L/D |
+| settings | Allowance, game cap, goals, interest | allowance (+ date picker, sheet), daily game cap, goals (+ sheet), interest (+ too high) | L/D |
+| settings | Security, devices | signing on, unavailable, key not shared, key changed; devices, approve, remove (`screen = true`) | L/D |
+| settings | Household data | ready (MG-08 layout), exporting, retention dialog (`screen = true`), delete chat, delete household, re-authenticate | L/D |
+| settings | Link a kid phone | loading, code, expired, rate limited | L/D |
+| settings | Account, AI, About | account (+ sign-out dialog, `screen = true`), on-device AI (+ unavailable), about (+ licences) | L/D |
 | app | Kid picker | three kids (`screen = true`) | L/D |
 | app | Kid picker | no kids | light |
 | app | Sign in again | checking, Google sign-in | L/D |
 | app | Sign in again | unreachable, wrong account | light |
 | app | Erase this phone's copy | dialog over the gate, phone without a parent PIN (`screen = true`; a PIN field in a dialog window never idles, D-M7-27) | L/D |
+| app | Erase this phone's copy | a parent's erase that keeps the chat key (D-REL-28) | light |
 | app | Removed | wiping | L/D |
 | app | Removed | wiped, failed | light |
 | app | Startup error | database | L/D |
-| app | Kid shortcut bar | Chat, Screen time, Games | phone and tablet per tier |
-| app | Parent shortcut bar | Chat | L/D |
+| app | Kid shortcut bar | Seedling's giant Chat, Games and Screen time pills (Tertiary, two over one, no emoji) (Sprout and Sapling have none since M9 slice B: the wallet's screen-time badge opens the time bank, and the bar carries Games and Chat) | Seedling, phone and tablet |
+| app | Shell, parent (M9 §5) | Home, Chores, Chat, Settings tabs with the real screens and the bottom bar (`app_shell_parent_<tab>`) | L/D; Home on a tablet with the rail (`app_shell_parent_home_tablet`) |
+| app | Shell, kid (M9 §5) | wallet tab with the bar (Seedling: three items and the giant buttons; Sprout and Sapling: five items) | tiers; tablet per tier with the rail (`app_shell_kid_tablet_<tier>`) |
 | widget | Home screen widget | kid 2×2, kid 4×2, "Open Sprout" (Glance `RemoteViews` in a Compose host) | light |
+| widget | Home screen widget | kid 4×2 | dark |
+| widget | Widget picker preview | the preview layout | L/D |
 
 ## Commands
 
@@ -139,11 +160,11 @@ Goldens must come out byte-identical on every run. `ScreenshotTest` and `Screens
 
 - **Robolectric SDK 35**, set in `ScreenshotTest`'s `@Config(sdk = ...)`, so a Robolectric upgrade cannot quietly change the default SDK. Modules may also pin `sdk=35` in `src/test/resources/robolectric.properties` for their other Robolectric tests. SDK 36 sandboxes need Java 21, and the build runs on 17.
 - **Native graphics** (`@GraphicsMode(NATIVE)`): Robolectric draws with the real Android rendering stack.
-- **Two devices**: `ScreenshotDevice.PIXEL_7` (411 x 914 dp at 420 dpi, portrait, `en-rGB`) for every test, and `ScreenshotDevice.TABLET` (1280 x 800 dp at mdpi, landscape, `en-rGB`) for the width-class captures only. Tests may only add overrides such as a taller window (`@Config(qualifiers = "+h1500dp")`).
+- **Devices**: `ScreenshotDevice.PIXEL_7` (411 x 914 dp at 420 dpi, portrait, `en-rGB`) for every test, `ScreenshotDevice.TABLET` (1280 x 800 dp at mdpi, landscape, `en-rGB`) and `ScreenshotDevice.TABLET_PORTRAIT` (800 x 1280 dp at mdpi, portrait, `en-rGB`) for the width-class captures only. Tests may only add overrides such as a taller window (`@Config(qualifiers = "+h1500dp")`).
 - **Fixed JVM locale and time zone**: `FixedLocaleTimeZoneRule` (en-GB, UTC) wraps every test, so dates, numbers and currency format the same on every machine. Android resources follow the `en-rGB` qualifier.
 - **Fixed data**: use preview data with fixed instants and ids (`WalletPreviewData`), never `Clock.System`, random values or real user data.
 - **Animations**: Compose's test clock auto-advances until the UI is idle before each capture, so finite animations have finished. Infinite animations, such as an indeterminate progress indicator, are cancelled by the Compose test framework and draw their first frame. Do not capture in the middle of a finite animation.
-- **Fonts**: Robolectric's bundled Android fonts (Roboto and Noto Color Emoji from the SDK 35 image). No downloadable or system fonts.
+- **Fonts**: the app's own faces, Outfit and Plus Jakarta Sans, bundled as `res/font` in `core/designsystem` (D-M9-4), plus Robolectric's bundled Android fonts (Roboto and Noto Color Emoji from the SDK 35 image) for what the bundled faces lack (Cyrillic, D-M9-13; the chat presets' emoji). No downloadable or system fonts.
 - **No state between variants**: each variant gets a fresh composition (`key(name)`), so `remember`ed state, scroll position or text input never leaks from one image into the next.
 - **Size budget**: keep each golden under 300 KB. A full-screen Pixel 7 capture is about 20 to 250 KB. If a screen goes past the budget, crop the capture to the component, or set `roborazzi.record.resizeScale`.
 
@@ -154,3 +175,5 @@ The committed goldens have been recorded on Linux x86_64 through the `Record scr
 To get Linux goldens, run the **`Record screenshots`** workflow (`workflow_dispatch`, from the Actions tab or `gh workflow run "Record screenshots" --ref <branch>`). It runs `recordRoborazziDebug` on a Linux x86_64 runner and uploads the full set as an artifact. Download it, check in the PR diff that the differences from the macOS set are only edge noise, and commit it. The CI job's `screenshots-linux` artifact (recorded on the runner when the unit and screenshot test step fails; a lint or Detekt failure does not trigger it) is the same set and can be used the same way.
 
 **Policy: once goldens have been recorded on Linux, Linux goldens are the source of truth.** From then on, record only with the `Record screenshots` workflow or on another Linux x86_64 machine, never on macOS. Goldens recorded on macOS after that point are rejected in review.
+
+The one sanctioned exception was the M9 redesign, which changed every golden: each implementation slice re-recorded its modules' goldens on macOS so the reviewer could see the new look, and slice F replaced the whole set with a Linux re-record from the `Record screenshots` workflow before the branch merged (D-M9-7). Nothing recorded on macOS reached `main`.

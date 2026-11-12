@@ -72,10 +72,19 @@
   <string name="gate_erase_locked_out">Too many wrong PINs. Try again later.</string>
   <string name="gate_erase_unavailable">The PIN can’t be checked on this phone right now.</string>
 
-  <!-- Home shortcuts (M4, M5). A no-break space keeps each emoji on the line of its first word when a label wraps. -->
-  <string name="home_chat">💬\u00A0Chat</string>
-  <string name="home_screen_time">⏳\u00A0Screen time</string>
-  <string name="home_games">🧩\u00A0Games</string>
+  <!-- Seedling's home shortcuts under the wallet (M4, M5; M9: plain labels beside an icon, no emoji, D-M9-5). -->
+  <string name="home_chat">Chat</string>
+  <string name="home_screen_time">Screen time</string>
+  <string name="home_games">Games</string>
+
+  <!-- Bottom bar and rail (M9 §5.1) -->
+  <string name="shell_tab_home">Home</string>
+  <string name="shell_tab_chores">Chores</string>
+  <string name="shell_tab_chat">Chat</string>
+  <string name="shell_tab_settings">Settings</string>
+  <string name="shell_tab_wallet">Wallet</string>
+  <string name="shell_tab_shop">Shop</string>
+  <string name="shell_tab_games">Games</string>
 
   <!-- Time bank notification (M4 §5.3) -->
   <string name="timebank_channel_name">Screen time</string>

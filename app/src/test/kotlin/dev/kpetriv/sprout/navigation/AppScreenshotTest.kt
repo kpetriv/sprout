@@ -25,8 +25,9 @@ import org.robolectric.annotation.Config
 
 /**
  * Goldens of the screens the app shell composes itself (M7 §7): the kid picker, "Sign in again" and its erase
- * dialog, the removed screen, the startup error and the home shortcut bars. Parent-facing screens light and dark;
- * the kid shortcut bar per tier, on a phone and a tablet. Every variant also passes the accessibility rule.
+ * dialog, the removed screen, the startup error and the kid's home shortcut bar. Parent-facing screens light and
+ * dark; the kid shortcut bar per tier, on a phone and a tablet. The shell itself: `ShellScreenshotTest`. Every
+ * variant also passes the accessibility rule.
  */
 @Config(application = Application::class) // Not the Hilt app: its startup opens the encrypted database.
 class AppScreenshotTest : ScreenshotTest(checkAccessibility = true) {
@@ -115,14 +116,16 @@ class AppScreenshotTest : ScreenshotTest(checkAccessibility = true) {
         StartupErrorScreen(StartupFailure.DATABASE, onRetry = {})
     }
 
+    // Seedling's giant Chat, Screen time and Games buttons (M9 §5.1); Sprout and Sapling have none since slice B (the
+    // wallet's screen-time badge opens the time bank).
     @Test
-    fun `kid shortcut bar`() = screenshot.captureWidthClassTiers("app_kid_shortcuts") { _, _ ->
-        WithShortcuts(kidShortcuts(chat = true, onChat = {}, onScreenTime = {}, onGames = {})) { HomePlaceholder() }
-    }
-
-    @Test
-    fun `parent shortcut bar`() = screenshot.captureLightDark("app_parent_shortcuts") {
-        WithShortcuts(parentShortcuts(chat = true, onChat = {})) { HomePlaceholder() }
+    fun `kid shortcut bar`() = screenshot.captureWidthClassTiers(
+        "app_kid_shortcuts",
+        tiers = listOf(KidUiTier.SEEDLING),
+    ) { _, tier ->
+        WithShortcuts(kidShortcuts(tier, chat = true, onChat = {}, onScreenTime = {}, onGames = {})) {
+            HomePlaceholder()
+        }
     }
 }
 

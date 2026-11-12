@@ -1,5 +1,7 @@
 plugins {
     alias(libs.plugins.sprout.android.library.compose)
+    // Component goldens (M9 §3). :core:testing depends on this module's main code; that is fine at the task level.
+    alias(libs.plugins.sprout.android.screenshot)
 }
 
 android {

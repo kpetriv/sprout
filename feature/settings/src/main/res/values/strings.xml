@@ -1,7 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
   <string name="feature_settings_title">Settings</string>
-  <string name="feature_settings_back">Back</string>
   <string name="feature_settings_retry">Try again</string>
   <string name="feature_settings_load_failed">Settings couldn\'t be loaded.</string>
   <string name="feature_settings_save">Save</string>
@@ -192,6 +191,9 @@
   <string name="feature_settings_devices_row_detail">%1$s · %2$s · %3$s</string>
   <string name="feature_settings_devices_approve">Approve</string>
   <string name="feature_settings_devices_revoke">Remove</string>
+  <!-- Spoken labels of the per-row buttons, so each one names its phone: "Remove Leo’s phone, c0ff ee00 d00d feed". -->
+  <string name="feature_settings_devices_approve_for">Approve %1$s, %2$s</string>
+  <string name="feature_settings_devices_revoke_for">Remove %1$s, %2$s</string>
   <string name="feature_settings_devices_review_title">Approve this phone?</string>
   <string name="feature_settings_devices_review_text">Check that the new phone shows exactly this code. Approve only a phone you are holding or can see.</string>
   <string name="feature_settings_devices_review_unverified">This phone’s key could not be verified by its hardware (for example an emulator).</string>

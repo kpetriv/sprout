@@ -538,13 +538,15 @@ class WalletViewModelTest {
             assertEquals("New bike", savings.title)
             assertEquals("£12.50", savings.savedText)
             assertEquals("£40.00", savings.targetText)
-            assertEquals(1_250f / 4_000, savings.progress)
+            assertEquals(31, savings.percent)
+            assertEquals("£27.50", savings.remainingText)
             assertEquals(1, savings.stars)
             assertFalse(savings.isComplete)
 
             goals.goals.value = listOf(goal("goal-2", "New bike", 1_000))
             val reached = assertNotNull((awaitItem() as WalletUiState.Ready).savingsGoal)
-            assertEquals(1f, reached.progress)
+            assertEquals(100, reached.percent)
+            assertNull(reached.remainingText)
             assertEquals(5, reached.stars)
             assertTrue(reached.isComplete)
         }

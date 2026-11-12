@@ -1,34 +1,30 @@
 package dev.kpetriv.sprout.feature.settings
 
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.res.vectorResource
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import dev.kpetriv.sprout.core.designsystem.components.SproutButton
+import dev.kpetriv.sprout.core.designsystem.theme.SproutSpacing
 import dev.kpetriv.sprout.core.model.KidId
-import dev.kpetriv.sprout.core.ui.contentWidth
 
 @Composable
 internal fun LinkDeviceRoute(kidId: KidId, kidName: String, onBack: () -> Unit, modifier: Modifier = Modifier) {
@@ -51,59 +47,59 @@ fun LinkDeviceScreen(
         onBack = onBack,
         modifier = modifier,
     ) { padding ->
-        Column(
-            modifier = Modifier
-                .padding(padding)
-                .fillMaxSize()
-                .verticalScroll(rememberScrollState())
-                .contentWidth()
-                .padding(24.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-        ) {
-            Text(
-                stringResource(R.string.feature_settings_link_steps, state.kidName),
-                style = MaterialTheme.typography.bodyLarge,
-            )
-            val code = state.groupedCode
-            when {
-                state.loading -> CircularProgressIndicator()
+        SettingsColumn(padding = padding) {
+            SettingsCard {
+                SectionHeading(
+                    stringResource(R.string.feature_settings_kids_link),
+                    icon = ImageVector.vectorResource(R.drawable.feature_settings_ic_link),
+                )
+                Text(
+                    stringResource(R.string.feature_settings_link_steps, state.kidName),
+                    style = MaterialTheme.typography.bodyLarge,
+                )
+                val code = state.groupedCode
+                when {
+                    state.loading -> CircularProgressIndicator(modifier = Modifier.align(Alignment.CenterHorizontally))
 
-                code != null && !state.expired -> {
-                    Surface(
-                        color = MaterialTheme.colorScheme.primaryContainer,
-                        shape = MaterialTheme.shapes.large,
-                        modifier = Modifier.fillMaxWidth(),
-                    ) {
+                    code != null && !state.expired -> {
                         Text(
                             text = code,
+                            style = MaterialTheme.typography.displaySmall,
                             fontFamily = FontFamily.Monospace,
-                            fontSize = 40.sp,
                             letterSpacing = 4.sp,
                             textAlign = TextAlign.Center,
-                            modifier = Modifier.padding(vertical = 32.dp),
+                            color = MaterialTheme.colorScheme.onPrimaryContainer,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .background(MaterialTheme.colorScheme.primaryContainer, MaterialTheme.shapes.medium)
+                                .padding(vertical = SproutSpacing.xl),
+                        )
+                        Text(
+                            stringResource(R.string.feature_settings_link_expires, countdown(state.remainingSeconds)),
+                            style = MaterialTheme.typography.titleMedium,
+                            modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
                         )
                     }
-                    Text(
-                        stringResource(R.string.feature_settings_link_expires, countdown(state.remainingSeconds)),
-                        style = MaterialTheme.typography.titleMedium,
-                        modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
-                    )
-                }
 
-                else -> {
-                    val colors = MaterialTheme.colorScheme
-                    Text(
-                        text = stringResource(linkProblemRes(state)),
-                        color = if (state.expired) colors.onSurface else colors.error,
-                        style = MaterialTheme.typography.bodyLarge,
-                    )
-                    Button(onClick = { onEvent(LinkDeviceEvent.NewCode) }) {
-                        Text(stringResource(R.string.feature_settings_link_new))
+                    else -> {
+                        val text = stringResource(linkProblemRes(state))
+                        if (state.expired) {
+                            Text(text, style = MaterialTheme.typography.bodyLarge)
+                        } else {
+                            ErrorText(text)
+                        }
+                        SproutButton(
+                            text = stringResource(R.string.feature_settings_link_new),
+                            onClick = { onEvent(LinkDeviceEvent.NewCode) },
+                        )
                     }
                 }
+                Text(
+                    stringResource(R.string.feature_settings_link_single_use),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
-            Text(stringResource(R.string.feature_settings_link_single_use), style = MaterialTheme.typography.bodyMedium)
         }
     }
 }

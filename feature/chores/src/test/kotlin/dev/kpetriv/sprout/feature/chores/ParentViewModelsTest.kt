@@ -62,6 +62,8 @@ class ChoreListViewModelTest {
         assertEquals(listOf("Make bed", "Wash car"), state.groups[0].chores.map { it.title })
         assertEquals(listOf(ChoreState.ACTIVE, ChoreState.PROPOSED), state.groups[0].chores.map { it.state })
         assertEquals(listOf("Tidy toys"), state.groups[1].chores.map { it.title })
+        // Each kid's avatar tint is their place in the household, as on the dashboard and in approvals.
+        assertEquals(listOf(0, 1), state.groups.map { it.tintIndex })
     }
 
     @Test
@@ -473,6 +475,19 @@ class ApprovalsViewModelTest {
         policies.pulled(TestData.gbp)
 
         assertEquals(TestData.gbp, currency())
+    }
+
+    @Test
+    fun `avatar tints follow the household's kids order, not the inbox order`() = runTest {
+        val leo = kids.kids.value.single()
+        kids.kids.value = listOf(TestData.kid("kid-ava", "Ava"), TestData.kid("kid-mia", "Mia"), leo)
+        val idea = TestData.chore("idea", "kid-mia", "Walk the dog", state = ChoreState.PROPOSED)
+        chores.chores.value = listOf(bed, idea)
+        chores.submissions.value = listOf(TestData.submission(bed))
+        val state = assertIs<ApprovalsUiState.Ready>(subscribe(viewModel().state).value)
+
+        assertEquals(2, state.submissions.single().tintIndex)
+        assertEquals(1, state.proposals.single().tintIndex)
     }
 
     @Test

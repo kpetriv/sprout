@@ -15,6 +15,7 @@ import androidx.test.core.app.ApplicationProvider
 import dev.kpetriv.sprout.core.testing.screenshot.ScreenshotTest
 import kotlinx.coroutines.runBlocking
 import org.junit.Test
+import org.robolectric.annotation.Config
 
 /**
  * Goldens of the widget (M7 §7): Glance composes [SproutWidgetContent] into the same [RemoteViews] a launcher would
@@ -36,6 +37,11 @@ class SproutWidgetScreenshotTest : ScreenshotTest() {
     @Test
     fun `kid 4x2`() = capture("widget_kid_wide", kid, SproutWidget.WIDE.withHeight(140))
 
+    // Dark: the night card (SproutWidgetCard, #1F4A30) and the night text colours.
+    @Test
+    @Config(qualifiers = "+night")
+    fun `kid 4x2, dark`() = capture("widget_kid_wide_dark", kid, SproutWidget.WIDE.withHeight(140))
+
     @Test
     fun `open sprout 2x2`() = capture("widget_open_app", WidgetState.OpenApp, SproutWidget.SMALL.withHeight(140))
 
@@ -44,10 +50,17 @@ class SproutWidgetScreenshotTest : ScreenshotTest() {
      * class without `@RemoteView` (a plain `View` spacer made the picker say "Can't load widget" on the walk).
      */
     @Test
-    fun `picker preview`() {
+    fun `picker preview`() = capturePickerPreview("widget_picker_preview")
+
+    // Dark: the preview's res/values-night colours.
+    @Test
+    @Config(qualifiers = "+night")
+    fun `picker preview, dark`() = capturePickerPreview("widget_picker_preview_dark")
+
+    private fun capturePickerPreview(name: String) {
         val context = ApplicationProvider.getApplicationContext<android.content.Context>()
         val remoteViews = RemoteViews(context.packageName, R.layout.sprout_widget_preview)
-        screenshot.capture("widget_picker_preview") {
+        screenshot.capture(name) {
             Box(Modifier.padding(8.dp)) {
                 AndroidView(
                     factory = { remoteViews.apply(it, FrameLayout(it)) },

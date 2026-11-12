@@ -7,6 +7,7 @@ import dagger.Provides
 import dagger.hilt.InstallIn
 import dagger.hilt.android.qualifiers.ApplicationContext
 import dagger.hilt.components.SingletonComponent
+import dagger.multibindings.Multibinds
 import dev.kpetriv.sprout.core.common.Dispatcher
 import dev.kpetriv.sprout.core.common.SproutDispatchers
 import dev.kpetriv.sprout.core.crypto.Aead
@@ -25,6 +26,7 @@ import dev.kpetriv.sprout.core.database.HouseholdPolicyRepository
 import dev.kpetriv.sprout.core.database.InterestPolicyRepository
 import dev.kpetriv.sprout.core.database.KidRepository
 import dev.kpetriv.sprout.core.database.LocalDataFiles
+import dev.kpetriv.sprout.core.database.LocalPreferenceStore
 import dev.kpetriv.sprout.core.database.LocaleFiatCurrencyProvider
 import dev.kpetriv.sprout.core.database.MonotonicClock
 import dev.kpetriv.sprout.core.database.PendingActionDescriber
@@ -75,6 +77,10 @@ import javax.inject.Singleton
 @InstallIn(SingletonComponent::class)
 @Suppress("TooManyFunctions") // One binding per repository and one provider per DAO.
 internal abstract class DatabaseModule {
+    /** The local preference stores the wipe and the purge clear; the app contributes them (`@IntoSet`). */
+    @Multibinds
+    abstract fun localPreferenceStores(): Set<LocalPreferenceStore>
+
     @Binds
     abstract fun ledgerRepository(impl: RoomLedgerRepository): LedgerRepository
 
@@ -160,6 +166,10 @@ internal abstract class DatabaseModule {
             photoDirectory = File(context.noBackupFilesDir, EncryptedPhotoStore.DIRECTORY_NAME),
             secretsDirectory = File(context.noBackupFilesDir, LocalDataFiles.SECRETS_DIRECTORY_NAME),
             blobDirectory = File(context.noBackupFilesDir, BlobCache.DIRECTORY_NAME),
+            tablesSetupFile = File(
+                File(context.noBackupFilesDir, LocalDataFiles.DATASTORE_DIRECTORY_NAME),
+                LocalDataFiles.TABLES_SETUP_FILE_NAME,
+            ),
         )
 
         /** The encrypted blob cache in `noBackupFilesDir/blobs` (M4 §2), bounded at 50 MB. */

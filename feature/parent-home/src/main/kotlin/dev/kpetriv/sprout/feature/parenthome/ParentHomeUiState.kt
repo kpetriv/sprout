@@ -87,6 +87,7 @@ data class MoneyUi(val amount: Money, val currency: Currency)
  * @property minutes screen-time minutes; null when the kid has no minutes account.
  * @property nextAllowance the earliest next payment date of the kid's active allowances, on or after today.
  * @property anomalies ledger anomalies about this kid that need a look.
+ * @property age whole years this month ("Leo, 9"); null when unknown.
  */
 data class KidSummaryUi(
     val kid: Kid,
@@ -94,6 +95,7 @@ data class KidSummaryUi(
     val minutes: Money?,
     val nextAllowance: CalendarDate?,
     val anomalies: Int,
+    val age: Int? = null,
 )
 
 /** "[signed] of [total] signed" while "Sign now" runs. */

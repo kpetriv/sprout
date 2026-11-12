@@ -141,8 +141,10 @@ class ScreenshotRule(
     }
 
     /**
-     * Captures [content] on each of [windows] (a phone and a tablet by default) as `<name>_phone.png` and
-     * `<name>_tablet.png`, passing the window's [WindowWidthClass] (also provided as `LocalWindowWidthClass`).
+     * Captures [content] on each of [windows] (a phone and a landscape tablet by default,
+     * [ScreenshotWindow.DEFAULT]) as `<name>_phone.png` and `<name>_tablet.png`, passing the window's
+     * [WindowWidthClass] (also provided as `LocalWindowWidthClass`). Add [ScreenshotWindow.TABLET_PORTRAIT] to
+     * [windows] for `<name>_tablet_portrait.png`.
      *
      * Each window is a fresh activity launched with that device's qualifiers ([ScreenshotWindow.qualifiers]), so the
      * content really is laid out in a 1280 x 800 dp window on the tablet; the phone uses the test's own device
@@ -150,7 +152,7 @@ class ScreenshotRule(
      */
     fun captureWidthClasses(
         name: String,
-        windows: List<ScreenshotWindow> = ScreenshotWindow.entries,
+        windows: List<ScreenshotWindow> = ScreenshotWindow.DEFAULT,
         darkTheme: Boolean = false,
         content: @Composable (WindowWidthClass) -> Unit,
     ) {
@@ -164,7 +166,7 @@ class ScreenshotRule(
     /** [captureWidthClasses] once per tier: `<name>_phone_<tier>.png` and `<name>_tablet_<tier>.png`. */
     fun captureWidthClassTiers(
         name: String,
-        windows: List<ScreenshotWindow> = ScreenshotWindow.entries,
+        windows: List<ScreenshotWindow> = ScreenshotWindow.DEFAULT,
         tiers: List<KidUiTier> = KidUiTier.entries,
         darkTheme: Boolean = false,
         content: @Composable (WindowWidthClass, KidUiTier) -> Unit,
@@ -303,6 +305,22 @@ enum class ScreenshotWindow(
 
     /** [ScreenshotDevice.TABLET]: 1280 x 800 dp, Expanded. */
     TABLET(qualifiers = ScreenshotDevice.TABLET, widthClass = WindowWidthClass.Expanded, suffix = "tablet"),
+
+    /** [ScreenshotDevice.TABLET_PORTRAIT]: 800 x 1280 dp, Medium (M9-games §5). Opt-in: not in [DEFAULT]. */
+    TABLET_PORTRAIT(
+        qualifiers = ScreenshotDevice.TABLET_PORTRAIT,
+        widthClass = WindowWidthClass.Medium,
+        suffix = "tablet_portrait",
+    ),
+    ;
+
+    companion object {
+        /**
+         * The windows captured when a test names none: the phone and the landscape tablet. The portrait tablet is
+         * opt-in, so adding it did not add a golden to every existing width-class test.
+         */
+        val DEFAULT: List<ScreenshotWindow> = listOf(PHONE, TABLET)
+    }
 }
 
 @Composable

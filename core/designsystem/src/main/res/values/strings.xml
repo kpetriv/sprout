@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+  <!-- SproutTopBar's back arrow. -->
+  <string name="core_designsystem_back">Back</string>
+  <!-- GoalBar. %1$s is an already formatted amount ("£12.50"). -->
+  <string name="core_designsystem_goal_saved">%1$s saved</string>
+  <string name="core_designsystem_goal_target">Target %1$s</string>
+  <!-- GoalBar's chip: %1$d is a whole percentage ("31% saved"). -->
+  <string name="core_designsystem_goal_percent_saved">%1$d%% saved</string>
+</resources>

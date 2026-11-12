@@ -14,6 +14,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.DrawScope
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.semantics.ProgressBarRangeInfo
 import androidx.compose.ui.semantics.clearAndSetSemantics
@@ -55,6 +56,7 @@ fun MinutesSun(
     )
     val lit = MaterialTheme.colorScheme.secondary
     val unlit = MaterialTheme.colorScheme.outlineVariant
+    val outline = MaterialTheme.colorScheme.onSurface
     Column(
         modifier = modifier.clearAndSetSemantics {
             this.contentDescription = contentDescription
@@ -64,7 +66,7 @@ fun MinutesSun(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        Canvas(modifier = Modifier.size(sunSize)) { drawSun(animated, lit, unlit) }
+        Canvas(modifier = Modifier.size(sunSize)) { drawSun(animated, lit, unlit, outline) }
         TierScaledText(text = label, role = TierTextRole.Title, tier = tier, textAlign = TextAlign.Center)
     }
 }
@@ -81,11 +83,13 @@ private const val CORE_RADIUS = 0.28f
 private const val RAY_START = 0.36f
 private const val RAY_END = 0.48f
 
-private fun DrawScope.drawSun(fraction: Float, lit: Color, unlit: Color) {
+/** Morning garden sun (M9 §2.7): a Honey core with an Ink rim; lit rays Honey, the rest Hairline. */
+private fun DrawScope.drawSun(fraction: Float, lit: Color, unlit: Color, outline: Color) {
     val center = Offset(size.width / 2, size.height / 2)
     val radius = size.minDimension
     val litRays = fraction * RAYS
     drawCircle(if (fraction > 0f) lit else unlit, radius * CORE_RADIUS, center)
+    drawCircle(outline, radius * CORE_RADIUS, center, style = Stroke(width = 2.dp.toPx()))
     repeat(RAYS) { index ->
         // Start at 12 o'clock and go clockwise, like a clock hand.
         val angle = 2 * PI * index / RAYS - PI / 2

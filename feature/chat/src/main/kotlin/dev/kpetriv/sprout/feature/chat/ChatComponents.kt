@@ -1,8 +1,10 @@
 package dev.kpetriv.sprout.feature.chat
 
 import android.graphics.BitmapFactory
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -14,8 +16,11 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.FilledTonalIconButton
+import androidx.compose.material3.FilledIconButton
+import androidx.compose.material3.Icon
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -26,21 +31,36 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalResources
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.res.vectorResource
 import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.isTraversalGroup
 import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import dev.kpetriv.sprout.core.designsystem.components.CardMeaning
+import dev.kpetriv.sprout.core.designsystem.components.SproutButton
+import dev.kpetriv.sprout.core.designsystem.components.SproutButtonStyle
+import dev.kpetriv.sprout.core.designsystem.components.SproutCard
+import dev.kpetriv.sprout.core.designsystem.components.accentTint
+import dev.kpetriv.sprout.core.designsystem.icon.SproutIcons
+import dev.kpetriv.sprout.core.designsystem.theme.ColourLevel
+import dev.kpetriv.sprout.core.designsystem.theme.SproutSpacing
 import dev.kpetriv.sprout.core.designsystem.theme.SproutTheme
 import dev.kpetriv.sprout.core.ui.withGutters
 import java.time.ZoneId
@@ -50,21 +70,38 @@ import java.util.Locale
 import kotlin.time.Instant
 
 /**
- * The banner while this device has no usable thread key; sending is off until it goes. [keyState]
+ * The card while this device has no usable thread key; sending is off until it goes. [keyState]
  * [ThreadKeyState.KEY_CONFLICT] says the phone must be set up again instead of waiting (audit I2), in the words of
  * whoever reads it ([mode]): a kid asks a parent; a parent is told the steps (there may be no other parent to ask).
+ * A white card with a lock in a Honey-tint circle (a tinted block on Seedling); the text carries the state.
  */
 @Composable
 internal fun WaitingBanner(mode: ChatMode, keyState: ThreadKeyState, modifier: Modifier = Modifier) {
-    Surface(color = MaterialTheme.colorScheme.tertiaryContainer, modifier = modifier.fillMaxWidth()) {
+    SproutCard(
+        meaning = CardMeaning.Attention,
+        contentPadding = PaddingValues(SproutSpacing.md),
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(horizontal = SproutSpacing.gutter, vertical = SproutSpacing.sm),
+    ) {
         Row(
-            modifier = Modifier.padding(16.dp).semantics(mergeDescendants = true) {
-                liveRegion = LiveRegionMode.Polite
-            },
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            modifier = Modifier.semantics(mergeDescendants = true) { liveRegion = LiveRegionMode.Polite },
+            horizontalArrangement = Arrangement.spacedBy(SproutSpacing.md),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text(text = "🔒", style = MaterialTheme.typography.titleLarge, modifier = Modifier.clearAndSetSemantics { })
+            val tint = CardMeaning.Attention.accentTint()
+            // On FULL the card itself is Honey tint, so the circle turns white to stay visible (as GoalBar does).
+            val circle = if (SproutTheme.tierTokens.colourLevel == ColourLevel.FULL) {
+                MaterialTheme.colorScheme.surfaceContainerLowest
+            } else {
+                tint.container
+            }
+            Box(
+                modifier = Modifier.size(IconCircleSize).background(circle, CircleShape),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(imageVector = SproutIcons.Lock, contentDescription = null, tint = tint.content)
+            }
             Text(
                 text = stringResource(
                     when {
@@ -79,11 +116,12 @@ internal fun WaitingBanner(mode: ChatMode, keyState: ThreadKeyState, modifier: M
                     },
                 ),
                 style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onTertiaryContainer,
             )
         }
     }
 }
+
+private val IconCircleSize = 40.dp
 
 /**
  * The thread, newest at the bottom. [onSpeak], when set (Seedling with read-aloud), makes each bubble tappable to
@@ -99,7 +137,10 @@ internal fun MessageList(
     gutters: PaddingValues = PaddingValues(),
 ) {
     if (state.messages.isEmpty()) {
-        Box(modifier = modifier.fillMaxWidth().padding(gutters).padding(24.dp), contentAlignment = Alignment.Center) {
+        Box(
+            modifier = modifier.fillMaxWidth().padding(gutters).padding(SproutSpacing.lg),
+            contentAlignment = Alignment.Center,
+        ) {
             Text(
                 text = emptyText,
                 style = MaterialTheme.typography.bodyLarge,
@@ -112,8 +153,9 @@ internal fun MessageList(
     LazyColumn(
         modifier = modifier.fillMaxWidth(),
         reverseLayout = true,
-        verticalArrangement = Arrangement.spacedBy(8.dp),
-        contentPadding = PaddingValues(12.dp).withGutters(gutters),
+        verticalArrangement = Arrangement.spacedBy(SproutSpacing.md),
+        contentPadding = PaddingValues(horizontal = SproutSpacing.gutter, vertical = SproutSpacing.md)
+            .withGutters(gutters),
     ) {
         items(state.messages.asReversed(), key = { it.id }) { message ->
             MessageBubble(
@@ -126,9 +168,11 @@ internal fun MessageList(
         if (state.hasMore) {
             item(key = "older") {
                 Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
-                    TextButton(onClick = { onEvent(ChatEvent.LoadOlder) }) {
-                        Text(stringResource(R.string.feature_chat_load_older))
-                    }
+                    SproutButton(
+                        text = stringResource(R.string.feature_chat_load_older),
+                        onClick = { onEvent(ChatEvent.LoadOlder) },
+                        style = SproutButtonStyle.Tertiary,
+                    )
                 }
             }
         }
@@ -177,23 +221,29 @@ private fun MessageBubble(
         if (!mine && message.authorName != null) {
             Text(
                 text = message.authorName,
-                style = MaterialTheme.typography.labelMedium,
-                color = colors.onSurfaceVariant,
-                modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp).clearAndSetSemantics { },
+                style = MaterialTheme.typography.labelLarge,
+                color = colors.onSurface,
+                modifier = Modifier.padding(horizontal = SproutSpacing.sm, vertical = 2.dp).clearAndSetSemantics { },
             )
         }
-        val bubbleColor = if (mine) colors.primaryContainer else colors.surfaceVariant
-        val bubbleContentColor = if (mine) colors.onPrimaryContainer else colors.onSurfaceVariant
+        // Sent on Leaf tint, received on white with a hairline (M9 §4); the tier's card radius.
+        val bubbleColor = if (mine) colors.primaryContainer else colors.surfaceContainerLowest
+        val bubbleContentColor = if (mine) colors.onPrimaryContainer else colors.onSurface
+        val bubbleBorder = if (mine) null else BorderStroke(1.dp, colors.outlineVariant)
+        val bubbleShape = MaterialTheme.shapes.medium
         val bubble: @Composable () -> Unit = {
-            Box(modifier = Modifier.padding(12.dp)) { BubbleContent(message, playing, onEvent) }
+            Box(modifier = Modifier.padding(horizontal = SproutSpacing.md, vertical = BubblePaddingVertical)) {
+                BubbleContent(message, playing, onEvent)
+            }
         }
         if (speak != null && spoken != null) {
             Surface(
                 color = bubbleColor,
                 contentColor = bubbleContentColor,
-                shape = MaterialTheme.shapes.large,
+                shape = bubbleShape,
+                border = bubbleBorder,
                 onClick = { speak(spoken) },
-                modifier = Modifier.widthIn(max = MAX_BUBBLE_WIDTH_DP.dp),
+                modifier = Modifier.widthIn(max = MAX_BUBBLE_WIDTH_DP.dp).semantics { role = Role.Button },
                 content = bubble,
             )
         } else {
@@ -202,7 +252,8 @@ private fun MessageBubble(
             Surface(
                 color = bubbleColor,
                 contentColor = bubbleContentColor,
-                shape = MaterialTheme.shapes.large,
+                shape = bubbleShape,
+                border = bubbleBorder,
                 modifier = Modifier.widthIn(max = MAX_BUBBLE_WIDTH_DP.dp).minimumInteractiveComponentSize(),
                 content = bubble,
             )
@@ -210,17 +261,17 @@ private fun MessageBubble(
         if (message.fromParentPhone) {
             Text(
                 text = stringResource(R.string.feature_chat_from_parent_phone),
-                style = MaterialTheme.typography.labelSmall,
+                style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(horizontal = 8.dp),
+                modifier = Modifier.padding(horizontal = SproutSpacing.sm),
             )
         }
         if (message.late) {
             Text(
                 text = stringResource(R.string.feature_chat_arrived_late),
-                style = MaterialTheme.typography.labelSmall,
+                style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(horizontal = 8.dp),
+                modifier = Modifier.padding(horizontal = SproutSpacing.sm),
             )
         }
         BubbleFooter(message, onEvent)
@@ -238,8 +289,9 @@ private fun BubbleContent(message: MessageUi, playing: Boolean, onEvent: (ChatEv
     fun described(content: String): String =
         author?.let { resources.getString(R.string.feature_chat_message_from, it, content) } ?: content
     when {
-        message.locked -> Text(
-            text = "🔒 " + stringResource(R.string.feature_chat_locked),
+        message.locked -> IconText(
+            icon = SproutIcons.Lock,
+            text = stringResource(R.string.feature_chat_locked),
             style = MaterialTheme.typography.bodyMedium.copy(fontStyle = FontStyle.Italic),
         )
 
@@ -270,10 +322,15 @@ private fun PresetContent(message: MessageUi, described: (String) -> String) {
     val label = presetLabel(message.presetId)
     Row(
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        horizontalArrangement = Arrangement.spacedBy(SproutSpacing.sm),
         modifier = Modifier.clearAndSetSemantics { contentDescription = described(label) },
     ) {
-        Text(text = preset?.emoji ?: "💬", style = MaterialTheme.typography.headlineMedium)
+        // The preset's emoji is part of the message (content, D-M9-5); an unknown preset shows the chat icon instead.
+        if (preset != null) {
+            Text(text = preset.emoji, style = MaterialTheme.typography.headlineMedium)
+        } else {
+            Icon(imageVector = SproutIcons.ChatBubble, contentDescription = null)
+        }
         Text(text = label, style = MaterialTheme.typography.titleMedium)
         message.emoji?.let { Text(text = it, style = MaterialTheme.typography.headlineMedium) }
     }
@@ -283,12 +340,22 @@ private fun PresetContent(message: MessageUi, described: (String) -> String) {
 private fun VoiceContent(message: MessageUi, playing: Boolean, onEvent: (ChatEvent) -> Unit) {
     val duration = durationText(message.durationMs ?: 0)
     val action = stringResource(if (playing) R.string.feature_chat_stop_playing else R.string.feature_chat_play)
-    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        FilledTonalIconButton(
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(SproutSpacing.sm),
+    ) {
+        FilledIconButton(
             onClick = { onEvent(ChatEvent.PlayVoice(message.id)) },
             enabled = !message.pending || message.sendState != SendState.FAILED,
             modifier = Modifier.semantics { contentDescription = action },
-        ) { Text(text = if (playing) "■" else "▶", modifier = Modifier.clearAndSetSemantics { }) }
+        ) {
+            Icon(
+                painter = painterResource(
+                    if (playing) R.drawable.feature_chat_ic_stop else R.drawable.feature_chat_ic_play_arrow,
+                ),
+                contentDescription = null,
+            )
+        }
         Text(
             text = stringResource(R.string.feature_chat_voice_note, duration),
             style = MaterialTheme.typography.bodyLarge,
@@ -310,7 +377,7 @@ private const val MAX_PHOTO_PIXELS = 1_280
 
 @Composable
 private fun PhotoContent(message: MessageUi) {
-    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    Column(verticalArrangement = Arrangement.spacedBy(SproutSpacing.sm)) {
         val photoModifier = Modifier.size(PHOTO_SIZE_DP.dp).clip(MaterialTheme.shapes.medium)
         when (val photo = message.photo) {
             is PhotoUi.Loaded -> {
@@ -330,7 +397,7 @@ private fun PhotoContent(message: MessageUi) {
 
             PhotoUi.Loading, null -> {
                 val loading = stringResource(R.string.feature_chat_photo_loading)
-                Box(photoModifier.background(MaterialTheme.colorScheme.surfaceContainerHighest), Alignment.Center) {
+                Box(photoModifier.background(MaterialTheme.colorScheme.surfaceContainerLow), Alignment.Center) {
                     CircularProgressIndicator(modifier = Modifier.semantics { contentDescription = loading })
                 }
             }
@@ -344,8 +411,25 @@ private fun PhotoContent(message: MessageUi) {
 
 @Composable
 private fun PhotoPlaceholder(text: String, modifier: Modifier) {
-    Box(modifier.background(MaterialTheme.colorScheme.surfaceContainerHighest), contentAlignment = Alignment.Center) {
-        Text(text = "🖼️ $text", style = MaterialTheme.typography.bodyMedium, textAlign = TextAlign.Center)
+    Column(
+        modifier = modifier
+            .background(MaterialTheme.colorScheme.surfaceContainerLow)
+            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, MaterialTheme.shapes.medium)
+            .padding(SproutSpacing.md),
+        verticalArrangement = Arrangement.spacedBy(SproutSpacing.sm, Alignment.CenterVertically),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Icon(
+            painter = painterResource(R.drawable.feature_chat_ic_image),
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Text(
+            text = text,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurface,
+            textAlign = TextAlign.Center,
+        )
     }
 }
 
@@ -363,29 +447,33 @@ private fun decodePhoto(bytes: ByteArray): ImageBitmap? {
 @Composable
 private fun BubbleFooter(message: MessageUi, onEvent: (ChatEvent) -> Unit) {
     val time = timeText(message.createdAt)
+    val footer = Modifier.padding(horizontal = SproutSpacing.sm, vertical = 2.dp)
     when (message.sendState) {
         SendState.SENT -> Text(
             text = time,
-            style = MaterialTheme.typography.labelSmall,
+            style = MaterialTheme.typography.labelMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
+            modifier = footer,
         )
 
-        SendState.SENDING -> Text(
+        SendState.SENDING -> IconText(
+            icon = SproutIcons.Schedule,
             text = stringResource(R.string.feature_chat_sending),
-            style = MaterialTheme.typography.labelSmall,
+            style = MaterialTheme.typography.labelMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
+            modifier = footer,
         )
 
         SendState.BLOCKED -> Row(
             verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
         ) {
-            Text(
-                text = "⛔ " + stringResource(R.string.feature_chat_blocked),
+            IconText(
+                icon = ImageVector.vectorResource(R.drawable.feature_chat_ic_block),
+                text = stringResource(R.string.feature_chat_blocked),
                 style = MaterialTheme.typography.labelLarge,
                 color = MaterialTheme.colorScheme.error,
+                modifier = footer,
             )
             TextButton(onClick = { onEvent(ChatEvent.Discard(message.id)) }) {
                 Text(stringResource(R.string.feature_chat_discard))
@@ -396,10 +484,12 @@ private fun BubbleFooter(message: MessageUi, onEvent: (ChatEvent) -> Unit) {
             verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
         ) {
-            Text(
-                text = "⚠️ " + stringResource(R.string.feature_chat_failed),
+            IconText(
+                icon = ImageVector.vectorResource(R.drawable.feature_chat_ic_warning),
+                text = stringResource(R.string.feature_chat_failed),
                 style = MaterialTheme.typography.labelLarge,
                 color = MaterialTheme.colorScheme.error,
+                modifier = footer,
             )
             TextButton(onClick = { onEvent(ChatEvent.Retry(message.id)) }) {
                 Text(stringResource(R.string.feature_chat_retry_send))
@@ -412,6 +502,33 @@ private fun BubbleFooter(message: MessageUi, onEvent: (ChatEvent) -> Unit) {
         }
     }
 }
+
+/** A small decorative [icon] before [text]; the text says it all (state is never the icon or colour alone). */
+@Composable
+internal fun IconText(
+    icon: ImageVector,
+    text: String,
+    style: TextStyle,
+    modifier: Modifier = Modifier,
+    color: Color = Color.Unspecified,
+) {
+    Row(
+        modifier = modifier,
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(SproutSpacing.xs + 2.dp),
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = null,
+            tint = if (color == Color.Unspecified) LocalContentColor.current else color,
+            modifier = Modifier.size(SmallIconSize),
+        )
+        Text(text = text, style = style, color = color)
+    }
+}
+
+private val SmallIconSize = 18.dp
+private val BubblePaddingVertical = 12.dp
 
 /** The message time in the device's zone ("16:05"). */
 @Composable

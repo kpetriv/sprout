@@ -19,6 +19,9 @@ import dev.kpetriv.sprout.core.games.MemoryRound
 import dev.kpetriv.sprout.core.games.RoundOutcome
 import dev.kpetriv.sprout.core.games.Score
 import dev.kpetriv.sprout.core.games.Symbol
+import dev.kpetriv.sprout.core.games.TablesLevel
+import dev.kpetriv.sprout.core.games.TablesRound
+import dev.kpetriv.sprout.core.games.TablesSetup
 import dev.kpetriv.sprout.core.games.WordRound
 import dev.kpetriv.sprout.core.model.KidId
 import dev.kpetriv.sprout.core.model.KidUiTier
@@ -29,6 +32,8 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.catch
+import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import javax.inject.Inject
@@ -38,10 +43,15 @@ import javax.inject.Inject
  * [SavedStateHandle]: [KID_ID_KEY], [TIER_KEY] (a [KidUiTier] name) and [KIND_KEY] (a [GameKind] name); the game is
  * the kind at the tier's [Difficulty].
  *
- * The handle also holds the play itself: its [SEED_KEY] (from [GameSeedSource]), [TIMED_KEY], whether it
- * [STARTED_KEY], the [INDEX_KEY] of the current round and the outcomes so far ([CORRECT_KEY], [ELAPSED_KEY]). The
- * session is regenerated from the seed, so rotation and process death resume the same round, never a re-rolled one;
- * an answer in progress (taps, letters) starts over, and a memory round shows its sequence again.
+ * The handle also holds the play itself: its [SEED_KEY] (from [GameSeedSource]), [TIMED_KEY], the Times tables
+ * setup ([SETUP_TABLES_KEY], [SETUP_LEVEL_KEY]), whether it [STARTED_KEY], the [INDEX_KEY] of the current round and
+ * the outcomes so far ([CORRECT_KEY], [ELAPSED_KEY]). The session is regenerated from the seed and the setup, so
+ * rotation and process death resume the same round (the same 20 questions), never a re-rolled one; an answer in
+ * progress (taps, letters, digits) starts over, and a memory round shows its sequence again.
+ *
+ * Times tables start from the kid's last setup in [TablesSetupStore] (the difficulty's default until there is one);
+ * "Start" saves the chosen one there. The start cards read the kid's past plays from [GameHistorySource]: the last
+ * three on Sapling's start card, the best score this week on the Times tables one.
  *
  * When the last round is answered the score goes to [GameCreditSubmitter] once, on the [GameCreditScope]: leaving
  * the screen stops waiting for the credit but never cancels it (M5 review M1). Its result is saved in the handle; if
@@ -50,7 +60,10 @@ import javax.inject.Inject
  * bonus), never the wall clock (M5 audit I2).
  */
 @HiltViewModel
-@Suppress("TooManyFunctions") // One small handler per kind of answer keeps each rule readable.
+@Suppress(
+    "TooManyFunctions", // One small handler per kind of answer keeps each rule readable.
+    "LongParameterList", // Hilt's constructor: the ports the play needs, each a single seam for tests.
+)
 class GameViewModel @Inject constructor(
     private val handle: SavedStateHandle,
     private val submitter: GameCreditSubmitter,
@@ -58,6 +71,8 @@ class GameViewModel @Inject constructor(
     private val currency: GameCurrencySource,
     private val timer: GameTimer,
     private val creditScope: GameCreditScope,
+    private val setups: TablesSetupStore,
+    private val history: GameHistorySource,
 ) : ViewModel() {
     private val kidId = KidId(checkNotNull(handle.get<String>(KID_ID_KEY)) { "kidId argument missing" })
     private val tier = handle.get<String>(TIER_KEY)?.let(KidUiTier::valueOf) ?: KidUiTier.SEEDLING
@@ -65,7 +80,9 @@ class GameViewModel @Inject constructor(
     private val difficulty = Difficulty.forTier(tier)
     private val gameId: GameId? =
         if (kind in GameCatalogue.forDifficulty(difficulty)) GameId(kind, difficulty) else null
-    private val timedAvailable = GameCatalogue.supportsTimed(difficulty)
+
+    private val tables = kind == GameKind.TABLES
+    private val timedAvailable = gameId?.let(GameCatalogue::supportsTimed) == true
 
     private val mutableState = MutableStateFlow<GamePlayUiState>(GamePlayUiState.Unavailable(tier, kind))
     val state: StateFlow<GamePlayUiState> = mutableState.asStateFlow()
@@ -78,23 +95,39 @@ class GameViewModel @Inject constructor(
     /** The household policy's currency as last observed (D-REL-10). */
     private var fiat = currency.fiatCurrency()
 
+    /** The start cards' history as last observed: Sapling's last plays, the Times tables best this week. */
+    private var recentPlays: List<GamePlaySummary> = emptyList()
+    private var bestThisWeek: Int? = null
+
     init {
         restore()
+        if (gameId != null) observeStartCard()
         viewModelScope.launch {
             currency.observeFiatCurrency().collect { latest ->
                 fiat = latest
-                mutableState.update { state -> (state as? GamePlayUiState.Result)?.copy(currency = latest) ?: state }
+                mutableState.update { state ->
+                    when (state) {
+                        is GamePlayUiState.Result -> state.copy(currency = latest)
+                        is GamePlayUiState.Start -> state.copy(currency = latest)
+                        else -> state
+                    }
+                }
             }
         }
     }
 
+    @Suppress("CyclomaticComplexMethod") // One branch per event, each delegating to its handler.
     fun onEvent(event: GamePlayEvent) {
         when (event) {
             is GamePlayEvent.TimedChanged -> setTimed(event.timed)
             GamePlayEvent.Start -> start()
             is GamePlayEvent.Choose -> choose(event.value)
-            is GamePlayEvent.AnswerChanged -> updateArithmetic { it.copy(typed = sanitizeAnswer(event.text)) }
+            is GamePlayEvent.AnswerChanged -> updateTyped { _, negative -> sanitizeAnswer(event.text, negative) }
+            is GamePlayEvent.Digit -> typeDigit(event.digit)
+            GamePlayEvent.Backspace -> updateTyped { typed, _ -> typed.dropLast(1) }
             GamePlayEvent.ToggleMinus -> updateArithmetic { it.copy(typed = toggleMinus(it.typed)) }
+            is GamePlayEvent.TablesChanged -> changeSetup { it.withTables(event.tables) }
+            is GamePlayEvent.LevelChanged -> changeSetup { it.copy(level = event.level) }
             GamePlayEvent.SubmitAnswer -> submitTyped()
             is GamePlayEvent.TapSymbol -> tapSymbol(event.symbol)
             is GamePlayEvent.TapLetter -> tapLetter(event.index)
@@ -110,44 +143,120 @@ class GameViewModel @Inject constructor(
     private fun restore() {
         val id = gameId ?: return
         val seed = handle.get<Long>(SEED_KEY) ?: seeds.next().also { handle[SEED_KEY] = it }
-        val timed = timedAvailable && handle.get<Boolean>(TIMED_KEY) == true
-        val created = GameSession.create(id, seed, timed)
+        val setup = currentSetup()
+        val created = GameSession.create(id, seed, chosenTimed(), setup)
         session = created
         if (handle.get<Boolean>(STARTED_KEY) != true) {
-            showStart(timed)
+            showStart()
             return
         }
         val index = outcomes().size
         if (index >= created.rounds.size) restoreResult(created) else enterRound(created, index, resumed = true)
     }
 
-    private fun showStart(timed: Boolean) {
+    /** The Timed switch's choice; Times tables are timed by their level ([TablesLevel.timed]), never the switch. */
+    private fun chosenTimed(): Boolean = !tables && timedAvailable && handle.get<Boolean>(TIMED_KEY) == true
+
+    private fun showStart() {
         val id = gameId ?: return
+        val setup = currentSetup()
         mutableState.value = GamePlayUiState.Start(
             tier = tier,
             kind = kind,
             rounds = GameCatalogue.rounds(id),
             timedAvailable = timedAvailable,
-            timed = timed,
+            timed = setup?.level?.timed ?: chosenTimed(),
+            setup = setup,
+            history = recentPlays,
+            bestThisWeek = bestThisWeek,
+            currency = fiat,
         )
+    }
+
+    /**
+     * Keeps the start card's history current: the Times tables best this week, or Sapling's last plays; and, for
+     * Times tables, applies the kid's stored setup unless one was already chosen in this play (the handle has it).
+     * A source that fails leaves the card without that line.
+     */
+    private fun observeStartCard() {
+        if (tables) {
+            viewModelScope.launch {
+                val stored = setups.observe(kidId).catch { }.firstOrNull() ?: return@launch
+                if (!handle.contains(SETUP_TABLES_KEY) && mutableState.value is GamePlayUiState.Start) {
+                    saveSetup(stored)
+                    showStart()
+                }
+            }
+            viewModelScope.launch {
+                history.observeBestScoreThisWeek(kidId, kind).catch { }.collect { best ->
+                    bestThisWeek = best
+                    updateStart { it.copy(bestThisWeek = best) }
+                }
+            }
+        } else if (tier == KidUiTier.SAPLING) {
+            viewModelScope.launch {
+                history.observeRecent(kidId, kind).catch { }.collect { plays ->
+                    recentPlays = plays
+                    updateStart { it.copy(history = plays) }
+                }
+            }
+        }
+    }
+
+    private fun updateStart(transform: (GamePlayUiState.Start) -> GamePlayUiState.Start) {
+        mutableState.update { state -> (state as? GamePlayUiState.Start)?.let(transform) ?: state }
     }
 
     private fun setTimed(timed: Boolean) {
         val start = mutableState.value as? GamePlayUiState.Start ?: return
-        if (!start.timedAvailable) return
+        if (!start.timedAvailable || tables) return
         handle[TIMED_KEY] = timed
         mutableState.value = start.copy(timed = timed)
     }
 
+    /** A change to the Times tables setup on the start card; an invalid one (no table) is ignored. */
+    private fun changeSetup(transform: (TablesSetup) -> TablesSetup?) {
+        if (mutableState.value !is GamePlayUiState.Start) return
+        val setup = currentSetup()?.let(transform) ?: return
+        saveSetup(setup)
+        showStart()
+    }
+
     private fun start() {
         val id = gameId ?: return
-        val start = mutableState.value as? GamePlayUiState.Start ?: return
+        if (mutableState.value !is GamePlayUiState.Start) return
         val seed = checkNotNull(handle.get<Long>(SEED_KEY))
-        val created = GameSession.create(id, seed, start.timed)
+        val setup = currentSetup()
+        if (setup != null) {
+            // The setup is part of the play from here (process death resumes the same 20 questions), and the next
+            // play starts from it.
+            saveSetup(setup)
+            viewModelScope.launch { attempt { setups.save(kidId, setup) } }
+        }
+        val created = GameSession.create(id, seed, chosenTimed(), setup)
         session = created
         saveOutcomes(emptyList())
         handle[STARTED_KEY] = true
         enterRound(created, 0, resumed = false)
+    }
+
+    /** The Times tables setup of this play: the handle's, else the difficulty's default; null for other games. */
+    private fun currentSetup(): TablesSetup? {
+        if (!tables) return null
+        val chosen = handle.get<IntArray>(SETUP_TABLES_KEY)?.toSet()
+        val level = handle.get<String>(SETUP_LEVEL_KEY)?.let { name ->
+            TablesLevel.entries.firstOrNull { it.name == name }
+        }
+        return if (chosen != null && level != null) {
+            chosen.withLevel(level) ?: TablesSetup.defaultFor(difficulty)
+        } else {
+            TablesSetup.defaultFor(difficulty)
+        }
+    }
+
+    private fun saveSetup(setup: TablesSetup) {
+        handle[SETUP_TABLES_KEY] = setup.tables.sorted().toIntArray()
+        handle[SETUP_LEVEL_KEY] = setup.level.name
     }
 
     private fun enterRound(session: GameSession, index: Int, resumed: Boolean) {
@@ -158,7 +267,9 @@ class GameViewModel @Inject constructor(
             is ArithmeticRound -> RoundUi.Arithmetic(round)
             is MemoryRound -> RoundUi.Memory(round, showing = true, shownCount = 0)
             is WordRound -> RoundUi.Word(round)
+            is TablesRound -> RoundUi.Tables(round)
         }
+        val outcomes = outcomes().take(index)
         mutableState.value = GamePlayUiState.Playing(
             tier = tier,
             kind = kind,
@@ -168,6 +279,9 @@ class GameViewModel @Inject constructor(
             timeLimitMs = session.timeLimitMs(round),
             round = ui,
             roundKey = roundKey,
+            right = outcomes.count { it.correct },
+            streak = outcomes.takeLastWhile { it.correct }.size,
+            setup = session.setup,
         )
         if (round is MemoryRound) {
             // The clock starts when the sequence hides; a resumed memory round shows its sequence again.
@@ -285,12 +399,23 @@ class GameViewModel @Inject constructor(
         record(value == round.answer)
     }
 
-    @Suppress("ReturnCount") // Guard clauses: each early return is a precondition that is not met.
     private fun submitTyped() {
-        val ui = playing()?.round as? RoundUi.Arithmetic ?: return
-        if (ui.round.choices != null) return
-        val value = ui.typed.toIntOrNull() ?: return
-        record(value == ui.round.answer)
+        when (val ui = playing()?.round) {
+            is RoundUi.Arithmetic -> if (ui.round.choices == null) {
+                ui.typed.toIntOrNull()?.let { record(it == ui.round.answer) }
+            }
+
+            is RoundUi.Tables -> ui.typed.toIntOrNull()?.let { record(ui.round.accepts(it)) }
+
+            else -> Unit
+        }
+    }
+
+    private fun typeDigit(digit: Int) {
+        if (digit !in 0..MAX_DIGIT) return
+        updateTyped { typed, _ ->
+            if (typed.count { it.isDigit() } < MAX_ANSWER_DIGITS) "$typed$digit" else typed
+        }
     }
 
     private fun tapSymbol(symbol: Symbol) {
@@ -341,6 +466,24 @@ class GameViewModel @Inject constructor(
 
     private fun updateArithmetic(transform: (RoundUi.Arithmetic) -> RoundUi.Arithmetic) =
         updateRound { (it as? RoundUi.Arithmetic)?.takeIf { ui -> ui.round.choices == null }?.let(transform) }
+
+    /**
+     * Changes the typed answer of a typed round (Sapling arithmetic or Times tables); [transform] gets the answer so
+     * far and whether a minus is allowed (arithmetic answers can be negative, times tables never are).
+     */
+    private fun updateTyped(transform: (typed: String, negative: Boolean) -> String) = updateRound { round ->
+        when (round) {
+            is RoundUi.Arithmetic -> if (round.round.choices == null) {
+                round.copy(typed = transform(round.typed, true))
+            } else {
+                null
+            }
+
+            is RoundUi.Tables -> round.copy(typed = transform(round.typed, false))
+
+            else -> null
+        }
+    }
 
     private fun updateMemory(transform: (RoundUi.Memory) -> RoundUi.Memory) =
         updateRound { (it as? RoundUi.Memory)?.let(transform) }
@@ -415,6 +558,10 @@ class GameViewModel @Inject constructor(
         /** [SavedStateHandle] keys of the play: seed, timed mode, started, round index and outcomes so far. */
         const val SEED_KEY: String = "play.seed"
         const val TIMED_KEY: String = "play.timed"
+
+        /** The Times tables setup of the play: the tables (an `IntArray`) and the [TablesLevel] name. */
+        const val SETUP_TABLES_KEY: String = "play.setup.tables"
+        const val SETUP_LEVEL_KEY: String = "play.setup.level"
         const val STARTED_KEY: String = "play.started"
         const val INDEX_KEY: String = "play.roundIndex"
         const val CORRECT_KEY: String = "play.correct"
@@ -435,7 +582,7 @@ class GameViewModel @Inject constructor(
         /** How long each memory symbol is shown before the next one appears. */
         const val SYMBOL_SHOW_MILLIS: Long = 700L
 
-        /** Everything "Play again" forgets; the seed is replaced and the timed choice is kept. */
+        /** Everything "Play again" forgets; the seed is replaced and the timed choice and the setup are kept. */
         private val PLAY_KEYS = listOf(
             STARTED_KEY,
             INDEX_KEY,
@@ -457,19 +604,29 @@ class GameViewModel @Inject constructor(
         private const val RESULT_CHECK_DATE = "checkDate"
         private const val SUBMIT_FAILED = "submit failed"
         private const val MAX_ANSWER_DIGITS = 5
+        private const val MAX_DIGIT = 9
         private const val MINUS = '-'
 
         /** A round whose time is unknown (the device rebooted mid-round): over every limit, so no timed bonus. */
         private const val ELAPSED_UNKNOWN = Long.MAX_VALUE
 
-        /** Digits with an optional leading minus (also accepts U+2212), at most [MAX_ANSWER_DIGITS] digits. */
-        internal fun sanitizeAnswer(text: String): String {
-            val negative = text.trimStart().firstOrNull()?.let { it == MINUS || it == '−' } == true
+        /**
+         * Digits with, when [allowMinus], an optional leading minus (also accepts U+2212), at most
+         * [MAX_ANSWER_DIGITS] digits.
+         */
+        internal fun sanitizeAnswer(text: String, allowMinus: Boolean = true): String {
+            val negative = allowMinus && text.trimStart().firstOrNull()?.let { it == MINUS || it == '−' } == true
             val digits = text.filter { it.isDigit() }.take(MAX_ANSWER_DIGITS)
             return if (negative) "$MINUS$digits" else digits
         }
 
         internal fun toggleMinus(text: String): String = if (text.startsWith(MINUS)) text.drop(1) else "$MINUS$text"
+
+        /** These tables at [level], or null when they are not a valid choice (none, or one outside 2 to 12). */
+        internal fun Set<Int>.withLevel(level: TablesLevel): TablesSetup? =
+            takeIf { isNotEmpty() && all { it in TablesSetup.TABLES } }?.let { TablesSetup(it, level) }
+
+        private fun TablesSetup.withTables(tables: Set<Int>): TablesSetup? = tables.withLevel(level)
 
         /** The scrambled tiles [answer] uses, matched left to right to the first unused tile with that letter. */
         internal fun tilesFor(answer: String, scrambled: String): List<Int> {

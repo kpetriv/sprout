@@ -84,17 +84,19 @@ data class BalanceUi(
  * ([dev.kpetriv.sprout.core.domainhousehold.SavingsProgress]). Without a goal, [title] and [targetText] are null and
  * the card shows the savings balance alone.
  *
- * @property progress the goal's exact progress fraction converted for drawing (0..1); 0 without a goal.
  * @property stars filled stars out of [dev.kpetriv.sprout.core.ui.SavingsStarsDefaults.STAR_COUNT] on the Seedling
  *   star row; 0 without a goal.
+ * @property percent whole percent saved (rounded down, from the exact fraction), for the "31% saved" chip.
+ * @property remainingText what is left to save ("£27.50"); null without a goal or once it is reached.
  */
 data class SavingsGoalUi(
     val savedText: String,
     val targetText: String?,
-    val progress: Float,
     val title: String? = null,
     val stars: Int = 0,
     val isComplete: Boolean = false,
+    val percent: Int = 0,
+    val remainingText: String? = null,
 )
 
 /**

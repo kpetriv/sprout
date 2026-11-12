@@ -14,6 +14,7 @@ import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.swipe
 import androidx.compose.ui.unit.dp
+import dev.kpetriv.sprout.core.designsystem.theme.SproutSpacing
 import dev.kpetriv.sprout.core.designsystem.theme.SproutTheme
 import dev.kpetriv.sprout.core.model.ChoreId
 import org.junit.Rule
@@ -54,9 +55,12 @@ class ContentWidthGutterTest {
         val card = compose.onNodeWithText("Chore 1", useUnmergedTree = true).onParent().onParent()
         card.assert(SemanticsMatcher.expectValue(SemanticsProperties.IsTraversalGroup, true))
         val bounds = card.getBoundsInRoot()
-        // 1280 dp window: 320 dp gutters, then the list's own 16 dp padding on each side.
-        assertEquals(336f, bounds.left.value, 1f, "card starts at ${bounds.left}")
-        assertEquals(944f, bounds.right.value, 1f, "card ends at ${bounds.right}")
+        // 1280 dp window: 320 dp gutters, then the list's own gutter on each side (M9 §2.4).
+        val content = SproutSpacing.contentMaxWidth.value
+        val left = (WINDOW_WIDTH - content) / 2 + SproutSpacing.gutter.value
+        val right = (WINDOW_WIDTH + content) / 2 - SproutSpacing.gutter.value
+        assertEquals(left, bounds.left.value, 1f, "card starts at ${bounds.left}")
+        assertEquals(right, bounds.right.value, 1f, "card ends at ${bounds.right}")
     }
 
     @Test
@@ -78,5 +82,10 @@ class ContentWidthGutterTest {
             val top = with(compose.density) { after.boundsInRoot.top.toDp() }
             assertTrue(top < before - 100.dp, "Chore 1 moved from $before to $top")
         }
+    }
+
+    private companion object {
+        /** The window width of this test's qualifiers. */
+        const val WINDOW_WIDTH = 1_280f
     }
 }

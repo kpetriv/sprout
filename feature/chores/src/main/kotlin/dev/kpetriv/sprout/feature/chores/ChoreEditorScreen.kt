@@ -11,13 +11,11 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -30,8 +28,12 @@ import androidx.compose.ui.semantics.error
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.KeyboardType
-import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import dev.kpetriv.sprout.core.designsystem.components.SproutButton
+import dev.kpetriv.sprout.core.designsystem.components.SproutButtonStyle
+import dev.kpetriv.sprout.core.designsystem.components.SproutTopBar
+import dev.kpetriv.sprout.core.designsystem.icon.SproutIcons
+import dev.kpetriv.sprout.core.designsystem.theme.SproutSpacing
 import dev.kpetriv.sprout.core.model.ChoreId
 import dev.kpetriv.sprout.core.model.KidId
 import dev.kpetriv.sprout.core.ui.contentWidth
@@ -63,8 +65,9 @@ fun ChoreEditorRoute(
 }
 
 /**
- * The chore form: kid, title, description, reward (money and/or minutes) and schedule, with validation errors. A new
- * chore offers "Suggest chores" once its kid is picked (M6 §3.2).
+ * The chore form, a pushed screen (back arrow) on parent tokens: kid and schedule as chips, title, description,
+ * reward (money and/or minutes), with validation errors, and "Save" as the bar's Botanical pill. A new chore offers
+ * "Suggest chores" once its kid is picked (M6 §3.2).
  */
 @Composable
 fun ChoreEditorScreen(
@@ -77,18 +80,22 @@ fun ChoreEditorScreen(
     Scaffold(
         modifier = modifier,
         topBar = {
-            ChoresTopBar(
+            SproutTopBar(
                 title = stringResource(
                     if (state.isNew) R.string.feature_chores_editor_new else R.string.feature_chores_editor_edit,
                 ),
                 onBack = onBack,
-            ) {
-                if (!state.isLoading && !state.notFound) {
-                    TextButton(onClick = { onEvent(ChoreEditorEvent.Save) }, enabled = !state.isSaving) {
-                        Text(stringResource(R.string.feature_chores_save))
+                trailing = {
+                    if (!state.isLoading && !state.notFound) {
+                        SproutButton(
+                            text = stringResource(R.string.feature_chores_save),
+                            onClick = { onEvent(ChoreEditorEvent.Save) },
+                            enabled = !state.isSaving,
+                            modifier = Modifier.padding(end = SproutSpacing.sm),
+                        )
                     }
-                }
-            }
+                },
+            )
         },
         snackbarHost = { SnackbarHost(snackbar) },
     ) { padding ->
@@ -99,7 +106,7 @@ fun ChoreEditorScreen(
                 state.notFound -> Text(
                     text = stringResource(R.string.feature_chores_editor_not_found),
                     style = MaterialTheme.typography.bodyLarge,
-                    modifier = Modifier.padding(24.dp),
+                    modifier = Modifier.padding(SproutSpacing.lg),
                 )
 
                 else -> EditorForm(state, onEvent)
@@ -126,14 +133,18 @@ private fun EditorForm(state: ChoreEditorUiState, onEvent: (ChoreEditorEvent) ->
             .fillMaxSize()
             .verticalScroll(rememberScrollState())
             .contentWidth()
-            .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp),
+            .padding(horizontal = SproutSpacing.gutter, vertical = SproutSpacing.md),
+        verticalArrangement = Arrangement.spacedBy(SproutSpacing.md),
     ) {
         KidPicker(state, onEvent)
         if (state.isNew) {
-            OutlinedButton(onClick = { onEvent(ChoreEditorEvent.SuggestOpened) }, enabled = state.canSuggest) {
-                Text(stringResource(R.string.feature_chores_suggest))
-            }
+            SproutButton(
+                text = stringResource(R.string.feature_chores_suggest),
+                onClick = { onEvent(ChoreEditorEvent.SuggestOpened) },
+                enabled = state.canSuggest,
+                style = SproutButtonStyle.Tertiary,
+                icon = SproutIcons.AutoAwesome,
+            )
         }
         OutlinedTextField(
             value = state.title,
@@ -142,6 +153,7 @@ private fun EditorForm(state: ChoreEditorUiState, onEvent: (ChoreEditorEvent) ->
             singleLine = true,
             isError = EditorError.TITLE_BLANK in errors || EditorError.TITLE_TOO_LONG in errors,
             supportingText = errorText(errors, EditorError.TITLE_BLANK, EditorError.TITLE_TOO_LONG),
+            shape = MaterialTheme.shapes.small,
             modifier = Modifier.fillMaxWidth(),
         )
         OutlinedTextField(
@@ -151,6 +163,7 @@ private fun EditorForm(state: ChoreEditorUiState, onEvent: (ChoreEditorEvent) ->
             minLines = 2,
             isError = EditorError.DESCRIPTION_TOO_LONG in errors,
             supportingText = errorText(errors, EditorError.DESCRIPTION_TOO_LONG),
+            shape = MaterialTheme.shapes.small,
             modifier = Modifier.fillMaxWidth(),
         )
         RewardFields(state, onEvent)
@@ -162,7 +175,7 @@ private fun EditorForm(state: ChoreEditorUiState, onEvent: (ChoreEditorEvent) ->
 private fun RewardFields(state: ChoreEditorUiState, onEvent: (ChoreEditorEvent) -> Unit) {
     val errors = state.errors
     val rewardMissing = EditorError.NO_REWARD in errors || EditorError.REWARD_NOT_POSITIVE in errors
-    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    Column(verticalArrangement = Arrangement.spacedBy(SproutSpacing.sm)) {
         SectionHeading(stringResource(R.string.feature_chores_field_reward))
         OutlinedTextField(
             value = state.moneyText,
@@ -172,6 +185,7 @@ private fun RewardFields(state: ChoreEditorUiState, onEvent: (ChoreEditorEvent) 
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
             isError = EditorError.MONEY_INVALID in errors || rewardMissing,
             supportingText = errorText(errors, EditorError.MONEY_INVALID),
+            shape = MaterialTheme.shapes.small,
             modifier = Modifier.fillMaxWidth(),
         )
         OutlinedTextField(
@@ -182,6 +196,7 @@ private fun RewardFields(state: ChoreEditorUiState, onEvent: (ChoreEditorEvent) 
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
             isError = EditorError.MINUTES_INVALID in errors || rewardMissing,
             supportingText = errorText(errors, EditorError.MINUTES_INVALID),
+            shape = MaterialTheme.shapes.small,
             modifier = Modifier.fillMaxWidth(),
         )
         ErrorLine(errors, EditorError.NO_REWARD, EditorError.REWARD_NOT_POSITIVE)

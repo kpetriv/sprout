@@ -4,7 +4,7 @@ Sprout is an Android app for running a small "family economy". Kids earn credits
 
 It is one app with two roles. The parent area sits behind a PIN or biometric gate. Kid mode runs on the kid's own device with a UI that adapts to the kid's age. Devices sync through Firebase, chat and chore photos are end-to-end encrypted, and all AI features run on the device. The project is a portfolio piece built to the standard of a production app: multi-module, tested, threat-modelled, and aimed at a Play Store release.
 
-**Status:** v1 is feature-complete: milestones M0 to M8 are done (see [Roadmap](#roadmap)). What is left before the Play internal track is the owner's console, real-project and device work, step by step in the [release checklist](docs/RELEASE_CHECKLIST.md).
+**Status:** milestones M0 to M9 are done (see [Roadmap](#roadmap)). 1.0.0 is the feature-complete v1; 1.1.0 (M9) is a visual redesign with a bottom navigation bar and a fourth brain game, Times tables. What is left before the Play internal track is the owner's console, real-project and device work, step by step in the [release checklist](docs/RELEASE_CHECKLIST.md).
 
 ## Features
 
@@ -18,6 +18,11 @@ It is one app with two roles. The parent area sits behind a PIN or biometric gat
 - **Chat and audit:** one encrypted thread per kid; an audit view of every ledger event with author and device.
 - **Data controls:** keep chat messages forever or for 30, 90 or 365 days on every phone and the server, delete the chat history now, and export the household with the chat in readable form (each behind the parent's fingerprint or PIN).
 - **Tablets and foldables:** list and detail side by side for settings, chat and chores, two dashboard columns, and content capped to a readable width.
+- **Navigation:** a bottom bar with Home, Chores, Chat and Settings (a navigation rail on tablets); each tab keeps its own back stack, and approvals, the shop and a kid's wallet open inside their tab.
+
+### The look
+
+The "Morning garden" design (1.1.0, [M9](docs/milestones/M9.md)): cream pages, white cards with hairline borders, one botanical green with soft leaf, honey and sky tints, the Outfit display face for titles and amounts and Plus Jakarta Sans for text, both bundled. Icons are Material Symbols and chores, rewards and games use a set of flat pictograms instead of emoji. The colour follows the kid's age: Seedling gets the full garden, Sprout gets colour only where it means something, and Sapling is as calm as the parent side. The games have a character of their own, "Playground" ([M9 games](docs/milestones/M9-games.md)): a deep green play field with chunky tiles in four flat colours, quieter for Sapling.
 
 ### Kid mode
 
@@ -26,21 +31,24 @@ Every kid screen reads a `KidUiTier`. The tier is suggested from the kid's age a
 | | Seedling (~5–7) | Sprout (~8–11) | Sapling (~12+) |
 |---|---|---|---|
 | Balance | Coin jar, whole numbers, read-aloud | Real currency, goal progress, last 10 entries | Full ledger with filters, interest explained, CSV export |
-| Chores | Up to 3 picture cards, one-tap "Done!" | List with due dates, note and photo | Can propose a chore and rate for approval |
-| Shop | Picture tiles, green/grey "can I get it?" | Prices and "days until affordable" | Full catalogue, wishlist with savings plan |
+| Chores | Up to 3 picture cards, one-tap "I did it" | List with due dates, note and photo | Can propose a chore and rate for approval |
+| Navigation | Bottom bar with Wallet, Chores and Shop; giant Chat, Games and Screen time pills under the wallet | Bottom bar with Wallet, Chores, Shop, Games and Chat | Same as Sprout |
+| Shop | Picture tiles that say "You can buy this now" or "Keep saving" | Prices and "days until affordable" | Full catalogue, wishlist with savings plan |
 | Chat | Presets, emoji, voice notes | Free text with kindness check | Free text, kindness nudge only |
-| Games | Counting, simple sums, picture memory | Multiplication, patterns, word scramble | Harder arithmetic, logic, optional timed mode |
+| Games | Counting, simple sums, picture memory | Multiplication, patterns, word scramble, Times tables | Harder arithmetic, logic, optional timed mode, Times tables |
 
 On the kid's own phone a home screen widget shows their balance, screen time and the chores still to do today; on any other phone it only says "Open Sprout" (the home screen is not protected from screenshots, [ADR-0012](docs/adr/0012-widget-data-exposure.md)).
 
-Screen-time purchases go into a visible time bank the kid starts and stops. Enforcement is on the honour system in v1; the app requests no Accessibility, UsageStats, overlay, or device-admin permissions.
+**Times tables** (1.1.0) is the fourth game, modelled on Times Table Rock Stars: the kid picks the tables to practise (2 to 12, or Mix) and a level (Gentle, 20 seconds a question; Steady, 10 seconds; Rock star, 5 seconds with the timed bonus), then types the answers to 20 questions. The level changes the difficulty, not the pay: credit follows the same rules and daily cap as the other games ([ADR-0009](docs/adr/0009-games-scoring-and-credit.md#amendment-m9-110-2026-11-12)).
+
+Screen-time purchases go into a visible time bank the kid starts and stops, from the screen-time badge on the wallet. Enforcement is on the honour system in v1; the app requests no Accessibility, UsageStats, overlay, or device-admin permissions.
 
 ## Architecture
 
 Multi-module Gradle build with convention plugins, Compose-only UI, Hilt, Coroutines and Flow. Each ViewModel exposes one `StateFlow<UiState>` and takes events through one `onEvent` function. Feature modules depend only on `core/*`, never on each other. The ledger and shared models are pure Kotlin so they can move to Kotlin Multiplatform without rewrites. Writes land in Room and an outbox in one transaction; a sync engine drains the outbox through a `SyncTransport` interface, and Firebase is one implementation of it.
 
 ```
-app/                         — thin shell, Hilt entry, Navigation 3 back stack, role switch, lock screen
+app/                         — thin shell, Hilt entry, Navigation 3 with a bottom bar and one back stack per tab, role switch, lock screen
 build-logic/                 — convention plugins (android application/library/compose/feature/test, jvm library, hilt)
 core/
   domain-ledger/             — pure Kotlin: events, projections, Money, hash chain
@@ -50,7 +58,7 @@ core/
   sync/                      — JVM: SyncEngine, DocumentEnvelope, ConflictResolver, SyncTransport interface
   sync-firebase/             — Firestore/Auth/AppCheck transport, client for the Sprout server
   ai/                        — AiGateway interface + Gemini Nano impl + rules-based fallback
-  designsystem/              — theme, tier-scaled tokens, components, previews
+  designsystem/              — Morning garden theme, bundled fonts, tier-scaled tokens and colour dial, components (cards, buttons, bottom bar), pictograms, Playground game tokens
   ui/                        — shared composables (charts, balance jar/ring), window-size helpers (width classes, content width, adaptive grids)
   testing/                   — screenshot and accessibility test infra (fakes live in each module's testFixtures)
   time/                      — pure Kotlin: Clock over kotlin.time.Instant, FakeClock test fixture
@@ -61,7 +69,7 @@ feature/
   parent-home/               — dashboard, charts, AI summary
   chores/                    — parent CRUD, kid today (3 tiers), submission/approval
   wallet/                    — balances (3 tiers), savings goals, allowance, shop
-  games/                     — 3 games, tier difficulty, scoring → ledger events
+  games/                     — 4 games (Numbers, Memory, Word scramble, Times tables) on the Playground theme, tier difficulty, scoring → ledger events
   chat/                      — E2EE threads, kindness check, presets/voice for Seedling
   timebank/                  — kid time bank timer
   settings/                  — kids & tiers, devices, PIN, chat retention, readable data export, delete household
@@ -177,6 +185,7 @@ Each milestone ends with green CI and a tagged build.
 | M6 AI | Gemini Nano integration, fallbacks, kindness check, suggestions, weekly summary, receipt prefill ([spec and as built](docs/milestones/M6.md), [ADR-0010](docs/adr/0010-on-device-ai.md)) | Done |
 | M7 Showcase polish | Glance widget, adaptive layouts, Baseline Profiles, full screenshot coverage, accessibility, chat retention, readable export, structural `FLAG_SECURE` ([spec and as built](docs/milestones/M7.md)) | Done |
 | M8 Play release | Published privacy and disclosure policies, data-safety answers checked against the build, security review, release signing and workflow, store listing, operator script ([spec and as built](docs/milestones/M8.md), [release checklist](docs/RELEASE_CHECKLIST.md)) | Done |
+| M9 Visual redesign and Times tables | The Morning garden redesign of every screen with an age-tiered colour dial, a bottom navigation bar (rail on tablets), the Playground game screens with tablet layouts, the Times tables game, new goldens and store images; ships as 1.1.0 ([spec and as built](docs/milestones/M9.md), [games spec and as built](docs/milestones/M9-games.md)) | Done |
 
 ## Documentation
 
@@ -210,6 +219,7 @@ Each milestone ends with green CI and a tagged build.
 - [M6 milestone spec and as-built notes](docs/milestones/M6.md) and [ADR-0010: on-device AI](docs/adr/0010-on-device-ai.md)
 - [M7 milestone spec and as-built notes](docs/milestones/M7.md)
 - [M8 milestone spec and as-built notes](docs/milestones/M8.md)
+- [M9 milestone spec and as-built notes](docs/milestones/M9.md) and the [games addendum](docs/milestones/M9-games.md) (Playground and Times tables)
 
 ## Engineering practices
 

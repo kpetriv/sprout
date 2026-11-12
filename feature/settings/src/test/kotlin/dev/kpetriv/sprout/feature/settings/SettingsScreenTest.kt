@@ -53,7 +53,7 @@ class SettingsScreenTest {
     @Test
     fun `the hub lists every section and opens the one tapped`() {
         val opened = mutableListOf<SettingsSection>()
-        show { SettingsScreen(onOpen = { opened += it }, onBack = {}) }
+        show { SettingsScreen(onOpen = { opened += it }, onBack = null) }
 
         listOf("Kids", "Allowance", "Savings goals", "Interest", "Parent security", "On-device AI", "About").forEach {
             compose.onNodeWithText(it).assertIsDisplayed()
@@ -61,6 +61,24 @@ class SettingsScreenTest {
         compose.onNodeWithText("Interest").performClick()
 
         assertEquals(listOf(SettingsSection.INTEREST), opened)
+    }
+
+    @Test
+    fun `the hub as the Settings tab root has no back arrow (M9 §5-2)`() {
+        show { SettingsScreen(onOpen = {}, onBack = null) }
+
+        compose.onNodeWithText("Settings").assertIsDisplayed()
+        compose.onNodeWithContentDescription("Back").assertDoesNotExist()
+    }
+
+    @Test
+    fun `a section keeps its back arrow to the hub`() {
+        var backs = 0
+        show { InterestSettingsScreen(SettingsPreviewData.interest(), onEvent = {}, onBack = { backs++ }) }
+
+        compose.onNodeWithContentDescription("Back").performClick()
+
+        assertEquals(1, backs)
     }
 
     @Test

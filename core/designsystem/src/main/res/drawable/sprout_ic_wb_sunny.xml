@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Material Symbols Outlined "wb_sunny", weight 500, outlined, 24 px. Apache 2.0, Google. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+  android:width="24dp"
+  android:height="24dp"
+  android:viewportWidth="960"
+  android:viewportHeight="960">
+  <group android:translateY="960">
+    <path
+      android:fillColor="@android:color/black"
+      android:pathData="M434.5-796.41v-131h91v131h-91Zm0 763.82v-131h91v131h-91ZM796.41-434.5v-91h131v91h-131Zm-763.82 0v-91h131v91h-131ZM749.2-685.3l-63.9-63.9 77.9-79.65 65.65 65.65-79.65 77.9ZM196.8-131.15l-65.65-65.65 79.65-77.9 63.9 63.9-77.9 79.65Zm566.4 0-77.9-79.65 63.9-63.9 79.65 77.9-65.65 65.65ZM210.8-685.3l-79.65-77.9 65.65-65.65 77.9 79.65-63.9 63.9ZM310-310q-70-70-70-170t70-170q70-70 170-70t170 70q70 70 70 170t-70 170q-70 70-170 70t-170-70Zm275.73-64.32Q629-417.63 629-480.04q0-62.42-43.32-105.69Q542.37-629 479.96-629q-62.42 0-105.69 43.32Q331-542.37 331-479.96q0 62.42 43.32 105.69Q417.63-331 480.04-331q62.42 0 105.69-43.32ZM480-480Z" />
+  </group>
+</vector>

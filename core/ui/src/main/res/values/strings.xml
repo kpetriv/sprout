@@ -18,7 +18,7 @@
   <string name="core_ui_hours_short">%1$s h</string>
   <string name="core_ui_hours_minutes_short">%1$s h %2$s min</string>
 
-  <!-- Seedling wording for ledger rows: plain words, never a minus sign. %1$s is the amount. -->
+  <!-- Seedling wording for ledger amounts (ledgerAmountText): plain words, never a minus sign. %1$s is the amount. -->
   <string name="core_ui_event_got">You got %1$s</string>
   <string name="core_ui_event_spent">You used %1$s</string>
   <string name="core_ui_event_moved">You saved %1$s</string>
@@ -27,10 +27,6 @@
   <plurals name="core_ui_jar_state">
     <item quantity="one">%1$d percent full</item>
     <item quantity="other">%1$d percent full</item>
-  </plurals>
-  <plurals name="core_ui_savings_progress">
-    <item quantity="one">%1$d percent of your goal</item>
-    <item quantity="other">%1$d percent of your goal</item>
   </plurals>
   <!-- %1$d stars lit out of %2$d. -->
   <plurals name="core_ui_savings_stars">
@@ -42,8 +38,6 @@
     <item quantity="one">%1$d of %2$d minute</item>
     <item quantity="other">%1$d of %2$d minutes</item>
   </plurals>
-  <string name="core_ui_savings_no_target">No goal amount set yet</string>
-  <string name="core_ui_event_row_description">%1$s, %2$s</string>
 
   <!-- PIN pad (PinDots, PinPad). -->
   <plurals name="core_ui_pin_dots_description">

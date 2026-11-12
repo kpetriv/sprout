@@ -32,7 +32,7 @@ See the tree in `docs/PLAN.md`. Short version: `app/` is a thin shell; `core/*` 
 
 - The main session (Fable 5.1) is the coordinator: it plans, writes briefs, reviews, and commits. It does not write feature code itself beyond one-line fixes.
 - Implementation goes to the `implementer` agent (Opus, high effort), one implementer per module set at a time. Two writers never touch the same files.
-- Every implementer result goes through `reviewer`. Anything touching `core/crypto`, `core/sync`, `core/sync-firebase`, `firestore/`, `server/`, or `feature/lock` also goes through `security-auditor` before commit.
+- Every implementer result goes through `reviewer`. Anything touching `core/crypto`, `core/sync`, `core/sync-firebase`, `firestore/`, `server/`, `feature/lock`, `core/domain-ledger` (the ledger rules every device re-derives) or `core/games` (what those rules delegate to for game credit) also goes through `security-auditor` before commit, and so does any change to `core/database`'s wipe path (`WipeLocalDataUseCase`, `LocalDataFiles`, `LocalPreferenceStores`) or to the ledger ingest and quarantine code in `RoomLedgerRepository`.
 - `explorer` (Sonnet) answers read-only questions and locates patterns before a brief is written.
 - A brief names the module(s), the done condition, and the tests that must pass. Results come back as a diff summary plus test output, not file dumps.
 - Work lands in commits per milestone slice on a feature branch; the coordinator verifies the build before committing.

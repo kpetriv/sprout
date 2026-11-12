@@ -37,9 +37,23 @@ object ParentHomePreviewData {
         pendingApprovals = 4,
         pendingActions = PendingActionsUi(allowances = 2, interest = 1),
         kids = listOf(
-            KidSummaryUi(mia, MoneyUi(Money(735), gbp), Money(45), null, anomalies = 0),
-            KidSummaryUi(leo, MoneyUi(Money(1_250), gbp), Money(80), CalendarDate(2026, 11, 7), anomalies = 1),
-            KidSummaryUi(zoe, MoneyUi(Money(4_210), gbp), Money(120), CalendarDate(2026, 12, 1), anomalies = 0),
+            KidSummaryUi(mia, MoneyUi(Money(735), gbp), Money(45), null, anomalies = 0, age = 6),
+            KidSummaryUi(
+                leo,
+                MoneyUi(Money(1_250), gbp),
+                Money(80),
+                CalendarDate(2026, 11, 7),
+                anomalies = 1,
+                age = 9,
+            ),
+            KidSummaryUi(
+                zoe,
+                MoneyUi(Money(4_210), gbp),
+                Money(120),
+                CalendarDate(2026, 12, 1),
+                anomalies = 0,
+                age = 13,
+            ),
         ),
         signing = signing,
         summary = summary(),
@@ -119,8 +133,22 @@ object ParentHomePreviewData {
     /** A quiet household with one failed interest payment and one skipped allowance period. */
     fun needsAttention(): ParentHomeUiState.Ready = empty().copy(
         kids = listOf(
-            KidSummaryUi(leo, MoneyUi(Money(1_250), gbp), Money(80), CalendarDate(2026, 11, 7), anomalies = 0),
-            KidSummaryUi(zoe, MoneyUi(Money(4_210), gbp), Money(120), CalendarDate(2026, 12, 1), anomalies = 0),
+            KidSummaryUi(
+                leo,
+                MoneyUi(Money(1_250), gbp),
+                Money(80),
+                CalendarDate(2026, 11, 7),
+                anomalies = 0,
+                age = 9,
+            ),
+            KidSummaryUi(
+                zoe,
+                MoneyUi(Money(4_210), gbp),
+                Money(120),
+                CalendarDate(2026, 12, 1),
+                anomalies = 0,
+                age = 13,
+            ),
         ),
         attention = listOf(
             AttentionItemUi(

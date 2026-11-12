@@ -1,6 +1,7 @@
 package dev.kpetriv.sprout.feature.wallet
 
 import androidx.compose.foundation.layout.padding
+import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import dev.kpetriv.sprout.core.testing.screenshot.ScreenshotTest
@@ -17,23 +18,28 @@ class WalletScreenshotTest : ScreenshotTest(checkAccessibility = true) {
     @Test
     @Config(qualifiers = TALL)
     fun `ready, kid mode, every tier`() = screenshot.captureTiers("wallet_ready_kid") { tier ->
-        WalletScreen(state = WalletPreviewData.ready(tier, canAdjust = false), onEvent = {}, readAloud = speech)
+        KidWallet(WalletPreviewData.ready(tier, canAdjust = false))
     }
 
     @Test
     @Config(qualifiers = TALL)
     fun `ready, parent view, every tier`() = screenshot.captureTiers("wallet_ready_parent") { tier ->
-        WalletScreen(state = WalletPreviewData.ready(tier, anomaliesCount = 1), onEvent = {}, readAloud = speech)
+        WalletScreen(
+            state = WalletPreviewData.ready(tier, anomaliesCount = 1),
+            onEvent = {},
+            onBack = {},
+            readAloud = speech,
+        )
     }
 
     @Test
     fun loading() = screenshot.captureLightDark("wallet_loading") {
-        WalletScreen(state = WalletUiState.Loading, onEvent = {})
+        WalletScreen(state = WalletUiState.Loading, onEvent = {}, onBack = {})
     }
 
     @Test
     fun error() = screenshot.captureLightDark("wallet_error") {
-        WalletScreen(state = WalletUiState.Error(WalletError.LOAD_FAILED), onEvent = {})
+        WalletScreen(state = WalletUiState.Error(WalletError.LOAD_FAILED), onEvent = {}, onBack = {})
     }
 
     @Test
@@ -102,19 +108,19 @@ class WalletScreenshotTest : ScreenshotTest(checkAccessibility = true) {
     @Test
     @Config(qualifiers = TALL)
     fun `kid wallet, no history yet, every tier`() = screenshot.captureTiers("wallet_history_empty") { tier ->
-        WalletScreen(state = WalletPreviewData.noHistory(tier), onEvent = {}, readAloud = speech)
+        KidWallet(WalletPreviewData.noHistory(tier))
     }
 
     @Test
     @Config(qualifiers = TALL)
     fun `kid wallet, savings goal reached, every tier`() = screenshot.captureTiers("wallet_goal_reached") { tier ->
-        WalletScreen(state = WalletPreviewData.goalReached(tier), onEvent = {}, readAloud = speech)
+        KidWallet(WalletPreviewData.goalReached(tier))
     }
 
     @Test
     @Config(qualifiers = TALL)
     fun `parent view, game plays not counted, every tier`() = screenshot.captureTiers("wallet_not_counted") { tier ->
-        WalletScreen(state = WalletPreviewData.notCounted(tier), onEvent = {}, readAloud = speech)
+        WalletScreen(state = WalletPreviewData.notCounted(tier), onEvent = {}, onBack = {}, readAloud = speech)
     }
 
     @Test
@@ -122,13 +128,13 @@ class WalletScreenshotTest : ScreenshotTest(checkAccessibility = true) {
         name = "wallet_ready_kid",
         windows = listOf(ScreenshotWindow.TABLET),
     ) { _, tier ->
-        WalletScreen(state = WalletPreviewData.ready(tier, canAdjust = false), onEvent = {}, readAloud = speech)
+        KidWallet(WalletPreviewData.ready(tier, canAdjust = false))
     }
 
     @Test
     @Config(qualifiers = TALL)
     fun `kid wallet at font scale 2, every tier`() = screenshot.captureFontScaleTiers("wallet_ready_kid") { tier ->
-        WalletScreen(state = WalletPreviewData.ready(tier, canAdjust = false), onEvent = {}, readAloud = speech)
+        KidWallet(WalletPreviewData.ready(tier, canAdjust = false))
     }
 
     @Test
@@ -177,7 +183,11 @@ class WalletScreenshotTest : ScreenshotTest(checkAccessibility = true) {
     @Test
     @Config(qualifiers = TALL)
     fun `shop, parent browsing, every tier`() = screenshot.captureTiers("shop_parent") { tier ->
-        ShopScreen(state = ShopPreviewData.ready(tier, affordable = true, canPurchase = false), onEvent = {})
+        ShopScreen(
+            state = ShopPreviewData.ready(tier, affordable = true, canPurchase = false),
+            onEvent = {},
+            onBack = {},
+        )
     }
 
     private companion object {
@@ -186,4 +196,10 @@ class WalletScreenshotTest : ScreenshotTest(checkAccessibility = true) {
         // Shows Seedling's "Read to me" button, which is hidden without a speech implementation.
         val speech = ReadAloud { }
     }
+}
+
+/** The wallet as a kid sees it: "Read to me" shown, the screen-time badge a button to the time bank. */
+@Composable
+private fun KidWallet(state: WalletUiState) {
+    WalletScreen(state = state, onEvent = {}, readAloud = ReadAloud { }, onOpenTimeBank = {})
 }

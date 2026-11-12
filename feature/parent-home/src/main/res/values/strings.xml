@@ -3,6 +3,9 @@
   <string name="feature_parent_home_title">Family dashboard</string>
   <string name="feature_parent_home_load_failed">The dashboard couldn\'t be loaded.</string>
 
+  <!-- The attention card -->
+  <string name="feature_parent_home_needs_you">Needs you</string>
+
   <!-- Approvals -->
   <string name="feature_parent_home_approvals_title">Chores to approve</string>
   <string name="feature_parent_home_approvals_none">Nothing waiting. Nice.</string>
@@ -11,6 +14,7 @@
     <item quantity="other">%1$d chores are waiting for you</item>
   </plurals>
   <string name="feature_parent_home_approvals_review">Review</string>
+  <string name="feature_parent_home_approvals_review_described">Review chores to approve</string>
 
   <!-- Pending parent actions -->
   <string name="feature_parent_home_signing_title">Payments to sign</string>
@@ -74,10 +78,14 @@
   <string name="feature_parent_home_attention_failed">Couldn\'t be paid: it breaks a ledger rule</string>
   <string name="feature_parent_home_attention_skipped">Skipped: too far in the past to catch up</string>
   <string name="feature_parent_home_attention_dismiss">Dismiss</string>
+  <string name="feature_parent_home_attention_dismiss_allowance">Dismiss %1$s’s allowance for %2$s</string>
+  <string name="feature_parent_home_attention_dismiss_interest">Dismiss %1$s’s savings interest for %2$s</string>
 
   <!-- Kids -->
   <string name="feature_parent_home_kids_title">Kids</string>
   <string name="feature_parent_home_kids_none">No kids yet. Add one in Settings.</string>
+  <!-- A kid card's name and age in whole years: "Leo, 9". -->
+  <string name="feature_parent_home_kid_name_age">%1$s, %2$d</string>
   <string name="feature_parent_home_kid_money">Money</string>
   <string name="feature_parent_home_kid_minutes">Screen time</string>
   <string name="feature_parent_home_kid_next_allowance">Next allowance: %1$s</string>
@@ -98,6 +106,7 @@
     <item quantity="other">%1$d entries need a look (overdrafts, conflicts or rejected events)</item>
   </plurals>
   <string name="feature_parent_home_anomalies_review">Review</string>
+  <string name="feature_parent_home_anomalies_review_described">Review the ledger check</string>
 
   <!-- Weekly summary (M6) -->
   <string name="feature_parent_home_summary_title">Weekly summary</string>
@@ -108,12 +117,8 @@
   <string name="feature_parent_home_summary_unavailable">The summary is not available right now.</string>
   <string name="feature_parent_home_summary_download">Download the on-device model</string>
 
-  <!-- Quick links -->
-  <string name="feature_parent_home_links_title">Go to</string>
-  <string name="feature_parent_home_link_chores">Chores</string>
-  <string name="feature_parent_home_link_approvals">Approvals</string>
+  <!-- Shop and kid mode, at the end of the dashboard -->
   <string name="feature_parent_home_link_shop">Shop (parent view)</string>
-  <string name="feature_parent_home_link_settings">Settings</string>
   <string name="feature_parent_home_link_kid_mode">Switch to kid mode</string>
 
   <!-- Household and sync (M3) -->
@@ -141,6 +146,8 @@
   <string name="feature_parent_home_devices_title">New device waiting</string>
   <string name="feature_parent_home_devices_text">A parent’s phone wants to join the household. Compare the code with that phone before approving.</string>
   <string name="feature_parent_home_devices_review">Review</string>
+  <!-- Spoken label of a new device's Review; %1$s is the start of its code, such as "3fa9 c01d". -->
+  <string name="feature_parent_home_devices_review_described">Review device %1$s</string>
   <string name="feature_parent_home_rejected_title">Rejected events</string>
   <plurals name="feature_parent_home_rejected_count">
     <item quantity="one">%d entry from another phone was refused and not applied.</item>

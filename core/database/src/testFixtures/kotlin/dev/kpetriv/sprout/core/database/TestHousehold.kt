@@ -26,6 +26,7 @@ import dev.kpetriv.sprout.core.database.usecase.ApproveSubmissionUseCase
 import dev.kpetriv.sprout.core.database.usecase.DrainPendingParentActionsUseCase
 import dev.kpetriv.sprout.core.database.usecase.DrainResult
 import dev.kpetriv.sprout.core.database.usecase.GameCapReader
+import dev.kpetriv.sprout.core.database.usecase.GameHistoryReader
 import dev.kpetriv.sprout.core.database.usecase.PendingPhotoUploads
 import dev.kpetriv.sprout.core.database.usecase.PlanScheduledActionsUseCase
 import dev.kpetriv.sprout.core.database.usecase.PlayGameUseCase
@@ -202,6 +203,7 @@ class TestHousehold(
 
     val playGame = PlayGameUseCase(accounts, ledger, writer, calendar)
     val gameCap = GameCapReader(accounts, ledger, calendar)
+    val gameHistory = GameHistoryReader(ledger, calendar)
 
     val pruneChat = PruneChatUseCase(database, blobCache, clock)
     val purgeChat = PurgeChatUseCase(database, blobCache, sessions, clock)
