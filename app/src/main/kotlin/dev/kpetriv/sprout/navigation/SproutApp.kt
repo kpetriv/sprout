@@ -382,8 +382,8 @@ private fun EntryProviderScope<NavKey>.parentEntries(navigation: TopLevelBackSta
     }
     entry<ShopKey> { key -> ShopRoute(kidId = key.kidId, mode = key.mode, onBack = back) }
     entry<ApprovalsKey> { ApprovalsInboxRoute(onBack = back) }
-    // A top-level destination: its back arrow (until slice E drops it) returns to Home, as the system back does.
-    entry<SettingsKey> { SettingsRoute(onBack = back) }
+    // The Settings tab root: no back arrow (M9 §5.2); system back still leaves the tab.
+    entry<SettingsKey> { SettingsRoute(onBack = null) }
     entry<DevicesKey> { key ->
         SettingsRoute(
             onBack = back,

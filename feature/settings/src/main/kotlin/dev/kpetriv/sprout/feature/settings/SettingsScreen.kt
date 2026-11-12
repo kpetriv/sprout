@@ -1,22 +1,13 @@
 package dev.kpetriv.sprout.feature.settings
 
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
-import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
-import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.HorizontalDivider
-import androidx.compose.material3.ListItem
-import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.VerticalDivider
@@ -29,15 +20,14 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import dev.kpetriv.sprout.core.designsystem.theme.SproutSpacing
 import dev.kpetriv.sprout.core.model.DeviceId
 import dev.kpetriv.sprout.core.model.KidId
 import dev.kpetriv.sprout.core.ui.ProvideWindowWidthClass
 import dev.kpetriv.sprout.core.ui.WindowWidthClass
-import dev.kpetriv.sprout.core.ui.contentWidth
 import dev.kpetriv.sprout.core.ui.rememberWindowWidthClass
 
 /**
@@ -46,7 +36,9 @@ import dev.kpetriv.sprout.core.ui.rememberWindowWidthClass
  * [AiSettingsSource] and the household ports ([DeviceAdmin], [KidLinking], [AccountControl], [HouseholdData],
  * [ExportWriter]) and About's ([AppBuildInfo], [UrlOpener], [OpenSourceLicences]).
  *
- * @param onBack leaves settings from the hub (or from [initialSection] when settings opened straight on it).
+ * @param onBack leaves settings from the hub (or from [initialSection] when settings opened straight on it); null on
+ *   the Settings tab root (M9 §5.2), whose hub shows no back arrow. Sections opened from the hub keep their arrow
+ *   back to it either way.
  * @param initialSection open this section directly (the dashboard's "New device waiting" opens Devices, the summary
  *   card's "Download the on-device model" opens [SettingsSection.AI]).
  * @param reviewDeviceId with [SettingsSection.DEVICES]: open this PENDING device's approval sheet.
@@ -56,7 +48,7 @@ import dev.kpetriv.sprout.core.ui.rememberWindowWidthClass
  */
 @Composable
 fun SettingsRoute(
-    onBack: () -> Unit,
+    onBack: (() -> Unit)?,
     modifier: Modifier = Modifier,
     initialSection: SettingsSection? = null,
     reviewDeviceId: DeviceId? = null,
@@ -66,7 +58,7 @@ fun SettingsRoute(
     var section by rememberSaveable { mutableStateOf(initialSection) }
     var linkKidId by rememberSaveable { mutableStateOf<String?>(null) }
     var linkKidName by rememberSaveable { mutableStateOf("") }
-    val closeSection = { if (initialSection != null) onBack() else section = null }
+    val closeSection = { if (initialSection != null && onBack != null) onBack() else section = null }
     val closeLink = { linkKidId = null }
     SystemBackHandler(enabled = section != null && linkKidId == null, onBack = closeSection)
     SystemBackHandler(enabled = linkKidId != null, onBack = closeLink)
@@ -131,7 +123,7 @@ fun SettingsListDetail(
     sections: List<SettingsSection>,
     selected: SettingsSection?,
     onOpen: (SettingsSection) -> Unit,
-    onBack: () -> Unit,
+    onBack: (() -> Unit)?,
     modifier: Modifier = Modifier,
     detail: (@Composable (Modifier) -> Unit)?,
 ) {
@@ -144,7 +136,7 @@ fun SettingsListDetail(
             selected = selected,
             listPane = true,
         )
-        VerticalDivider()
+        VerticalDivider(color = MaterialTheme.colorScheme.outlineVariant)
         BoxWithConstraints(modifier = Modifier.weight(1f).fillMaxHeight()) {
             ProvideWindowWidthClass(WindowWidthClass.fromWidth(maxWidth)) {
                 if (detail != null) {
@@ -188,40 +180,30 @@ private fun SectionRoute(
 }
 
 /**
- * The settings hub: one row per [SettingsSection] in [sections]; [selected] is highlighted (the open detail pane).
- * As the [listPane] beside a detail pane, every row is selectable (announced selected or not), "Choose a section"
- * included.
+ * The settings hub on parent tokens (M9): one white card row per [SettingsSection] in [sections], each with its icon
+ * in a Leaf-tint circle, its summary and a chevron. [onBack] null (the Settings tab root, M9 §5.2) shows no back
+ * arrow. As the [listPane] beside a detail pane, every row is selectable (announced selected or not) and [selected]
+ * sits on Leaf tint, "Choose a section" included.
  */
 @Composable
 fun SettingsScreen(
     onOpen: (SettingsSection) -> Unit,
-    onBack: () -> Unit,
+    onBack: (() -> Unit)?,
     modifier: Modifier = Modifier,
     sections: List<SettingsSection> = SettingsSection.entries,
     selected: SettingsSection? = null,
     listPane: Boolean = selected != null,
 ) {
     SettingsScaffold(title = stringResource(R.string.feature_settings_title), onBack = onBack, modifier = modifier) {
-        Column(modifier = Modifier.padding(it).fillMaxSize().verticalScroll(rememberScrollState()).contentWidth()) {
-            sections.forEachIndexed { index, section ->
-                if (index > 0) HorizontalDivider()
-                val isSelected = section == selected
-                ListItem(
-                    headlineContent = { Text(stringResource(section.titleRes())) },
-                    supportingContent = { Text(stringResource(section.summaryRes())) },
-                    colors = if (isSelected) {
-                        ListItemDefaults.colors(containerColor = MaterialTheme.colorScheme.secondaryContainer)
-                    } else {
-                        ListItemDefaults.colors()
-                    },
+        SettingsColumn(padding = it, spacing = SproutSpacing.rowGap) {
+            sections.forEach { section ->
+                SettingsRow(
+                    title = stringResource(section.titleRes()),
+                    summary = stringResource(section.summaryRes()),
+                    icon = section.icon(),
+                    onClick = { onOpen(section) },
                     // Selection is announced only beside a detail pane, where a row is the open section or none is.
-                    modifier = Modifier.fillMaxWidth().then(
-                        if (!listPane) {
-                            Modifier.clickable(role = Role.Button) { onOpen(section) }
-                        } else {
-                            Modifier.selectable(selected = isSelected, role = Role.Button) { onOpen(section) }
-                        },
-                    ),
+                    selected = if (listPane) section == selected else null,
                 )
             }
         }

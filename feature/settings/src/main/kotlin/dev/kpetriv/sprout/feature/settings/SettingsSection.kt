@@ -1,5 +1,10 @@
 package dev.kpetriv.sprout.feature.settings
 
+import androidx.compose.runtime.Composable
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.res.vectorResource
+import dev.kpetriv.sprout.core.designsystem.icon.SproutIcons
+
 /** The settings sections, in hub order. */
 enum class SettingsSection {
     KIDS,
@@ -44,4 +49,19 @@ internal fun SettingsSection.summaryRes(): Int = when (this) {
     SettingsSection.DATA -> R.string.feature_settings_section_data_summary
     SettingsSection.AI -> R.string.feature_settings_section_ai_summary
     SettingsSection.ABOUT -> R.string.feature_settings_section_about_summary
+}
+
+/** The section's icon on the hub (Material Symbols Outlined, M9 §2.7). */
+@Composable
+internal fun SettingsSection.icon(): ImageVector = when (this) {
+    SettingsSection.KIDS -> ImageVector.vectorResource(R.drawable.feature_settings_ic_group)
+    SettingsSection.ALLOWANCE -> SproutIcons.Payments
+    SettingsSection.SAVINGS_GOALS -> SproutIcons.Savings
+    SettingsSection.INTEREST -> ImageVector.vectorResource(R.drawable.feature_settings_ic_percent)
+    SettingsSection.PARENT_SECURITY -> SproutIcons.Lock
+    SettingsSection.DEVICES -> ImageVector.vectorResource(R.drawable.feature_settings_ic_devices)
+    SettingsSection.ACCOUNT -> ImageVector.vectorResource(R.drawable.feature_settings_ic_account_circle)
+    SettingsSection.DATA -> ImageVector.vectorResource(R.drawable.feature_settings_ic_database)
+    SettingsSection.AI -> SproutIcons.AutoAwesome
+    SettingsSection.ABOUT -> ImageVector.vectorResource(R.drawable.feature_settings_ic_info)
 }

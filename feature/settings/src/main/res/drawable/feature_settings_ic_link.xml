@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Material Symbols Outlined "link", weight 500, outlined, 24 px. Apache 2.0, Google. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+  android:width="24dp"
+  android:height="24dp"
+  android:viewportWidth="960"
+  android:viewportHeight="960">
+  <group android:translateY="960">
+    <path
+      android:fillColor="@android:color/black"
+      android:pathData="M436.41-271.87H280q-86.37 0-147.25-60.87-60.88-60.87-60.88-147.24t60.88-147.26q60.88-60.89 147.25-60.89h156.41v91H280.1q-48.84 0-83.04 34.16-34.19 34.17-34.19 82.97t34.19 82.97q34.2 34.16 83.04 34.16h156.31v91ZM314.5-438.09v-83.82h331v83.82h-331Zm209.09 166.22v-91H679.9q48.84 0 83.04-34.16 34.19-34.17 34.19-82.97t-34.19-82.97q-34.2-34.16-83.04-34.16H523.59v-91H680q86.37 0 147.25 60.87 60.88 60.87 60.88 147.24t-60.88 147.26Q766.37-271.87 680-271.87H523.59Z" />
+  </group>
+</vector>

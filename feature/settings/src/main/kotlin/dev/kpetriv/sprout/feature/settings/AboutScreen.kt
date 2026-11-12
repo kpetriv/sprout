@@ -1,17 +1,12 @@
 package dev.kpetriv.sprout.feature.settings
 
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.HorizontalDivider
-import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
@@ -24,11 +19,15 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.semantics.Role
-import androidx.compose.ui.unit.dp
+import androidx.compose.ui.res.vectorResource
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.semantics
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import dev.kpetriv.sprout.core.designsystem.icon.SproutIcons
+import dev.kpetriv.sprout.core.designsystem.theme.SproutSpacing
 import dev.kpetriv.sprout.core.ui.ContentWidth
 import dev.kpetriv.sprout.core.ui.contentWidth
 
@@ -78,12 +77,13 @@ fun AboutScreen(
         onBack = onBack,
         modifier = modifier,
         snackbarHostState = snackbarHostState,
-    ) {
-        Column(modifier = Modifier.padding(it).fillMaxSize().verticalScroll(rememberScrollState()).contentWidth()) {
-            Column(modifier = Modifier.sectionPadding(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+    ) { padding ->
+        SettingsColumn(padding = padding, spacing = SproutSpacing.rowGap) {
+            SettingsCard(modifier = Modifier.padding(bottom = SproutSpacing.sm)) {
                 Text(
                     stringResource(R.string.feature_settings_about_app),
                     style = MaterialTheme.typography.headlineSmall,
+                    modifier = Modifier.semantics { heading() },
                 )
                 Text(
                     stringResource(R.string.feature_settings_about_tagline),
@@ -92,38 +92,39 @@ fun AboutScreen(
                 Text(
                     stringResource(R.string.feature_settings_about_privacy),
                     style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
             if (state.hasPrivacyPolicy) {
-                AboutRow(
+                SettingsRow(
                     title = stringResource(R.string.feature_settings_about_privacy_policy),
                     summary = stringResource(R.string.feature_settings_about_privacy_policy_summary),
+                    icon = SproutIcons.Lock,
                     onClick = { onEvent(AboutEvent.OpenPrivacyPolicy) },
                 )
-                HorizontalDivider()
             }
             if (state.hasSecurityPolicy) {
-                AboutRow(
+                SettingsRow(
                     title = stringResource(R.string.feature_settings_about_security),
                     summary = stringResource(R.string.feature_settings_about_security_summary),
+                    icon = ImageVector.vectorResource(R.drawable.feature_settings_ic_warning),
                     onClick = { onEvent(AboutEvent.OpenSecurityPolicy) },
                 )
-                HorizontalDivider()
             }
-            AboutRow(
+            SettingsRow(
                 title = stringResource(R.string.feature_settings_about_licences),
                 summary = stringResource(R.string.feature_settings_about_licences_summary),
+                icon = ImageVector.vectorResource(R.drawable.feature_settings_ic_info),
                 onClick = onOpenLicences,
             )
-            HorizontalDivider()
-            AboutRow(
+            SettingsRow(
                 title = stringResource(R.string.feature_settings_about_version),
                 summary = stringResource(
                     R.string.feature_settings_about_version_value,
                     state.versionName,
                     state.versionCode,
                 ),
-                onClick = null,
+                icon = SproutIcons.Eco,
             )
         }
     }
@@ -159,30 +160,24 @@ fun OpenSourceLicencesScreen(
             return@SettingsScaffold
         }
         ContentWidth(modifier = Modifier.padding(padding).fillMaxSize()) { gutters ->
-            LazyColumn(modifier = Modifier.fillMaxSize(), contentPadding = gutters) {
+            LazyColumn(
+                modifier = Modifier.fillMaxSize(),
+                contentPadding = gutters,
+                verticalArrangement = Arrangement.spacedBy(SproutSpacing.rowGap),
+            ) {
+                item { Spacer(Modifier.height(SproutSpacing.sm)) }
                 items(libraries, key = { it.module + ":" + it.version }) { library ->
                     val licences = library.licences.joinToString { it.name }
                         .ifEmpty { stringResource(R.string.feature_settings_licences_no_licence) }
-                    AboutRow(
+                    SettingsRow(
                         title = library.name,
                         summary = "${library.module} ${library.version}\n$licences",
                         onClick = library.link?.let { { onEvent(AboutEvent.OpenLibrary(library)) } },
+                        modifier = Modifier.padding(horizontal = SproutSpacing.gutter),
                     )
-                    HorizontalDivider()
                 }
+                item { Spacer(Modifier.height(SproutSpacing.sm)) }
             }
         }
     }
-}
-
-/** A row of About; [onClick] null makes it plain text (the version). */
-@Composable
-private fun AboutRow(title: String, summary: String, onClick: (() -> Unit)?) {
-    ListItem(
-        headlineContent = { Text(title) },
-        supportingContent = { Text(summary) },
-        modifier = Modifier.fillMaxWidth().then(
-            if (onClick != null) Modifier.clickable(role = Role.Button, onClick = onClick) else Modifier,
-        ),
-    )
 }

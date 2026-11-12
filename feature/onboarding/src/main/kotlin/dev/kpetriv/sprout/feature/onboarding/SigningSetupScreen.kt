@@ -13,7 +13,6 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -28,6 +27,9 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import dev.kpetriv.sprout.core.designsystem.components.SproutButton
+import dev.kpetriv.sprout.core.designsystem.components.SproutButtonStyle
+import dev.kpetriv.sprout.core.designsystem.theme.SproutSpacing
 import dev.kpetriv.sprout.core.ui.PinDots
 import dev.kpetriv.sprout.core.ui.PinPad
 import dev.kpetriv.sprout.core.ui.contentWidth
@@ -61,19 +63,20 @@ fun SigningSetupScreen(
                 .safeDrawingPadding()
                 .verticalScroll(rememberScrollState())
                 .contentWidth()
-                .padding(horizontal = 24.dp, vertical = 32.dp),
+                .padding(horizontal = SproutSpacing.gutter, vertical = SproutSpacing.xl),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(20.dp),
         ) {
             Text(
                 stringResource(R.string.feature_onboarding_signing_title),
-                style = MaterialTheme.typography.headlineSmall,
+                style = MaterialTheme.typography.headlineMedium,
                 textAlign = TextAlign.Center,
                 modifier = Modifier.semantics { heading() },
             )
             Text(
                 stringResource(R.string.feature_onboarding_signing_detail),
                 style = MaterialTheme.typography.bodyLarge,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
                 textAlign = TextAlign.Center,
             )
             PinDots(entered = state.enteredDigits, length = state.pinLength, shakeKey = state.rejections)
@@ -90,9 +93,12 @@ fun SigningSetupScreen(
                 onBackspace = { onEvent(SigningSetupEvent.Backspace) },
                 enabled = state.inputEnabled,
             )
-            TextButton(onClick = { onEvent(SigningSetupEvent.Skip) }, enabled = !state.busy) {
-                Text(stringResource(R.string.feature_onboarding_signing_later))
-            }
+            SproutButton(
+                text = stringResource(R.string.feature_onboarding_signing_later),
+                onClick = { onEvent(SigningSetupEvent.Skip) },
+                enabled = !state.busy,
+                style = SproutButtonStyle.Tertiary,
+            )
         }
     }
 }

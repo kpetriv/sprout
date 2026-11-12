@@ -2,6 +2,8 @@ package dev.kpetriv.sprout.feature.onboarding
 
 import androidx.annotation.StringRes
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -10,16 +12,17 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -30,12 +33,9 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedCard
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -44,9 +44,10 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.res.vectorResource
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
@@ -61,6 +62,11 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import dev.kpetriv.sprout.core.designsystem.components.SproutButton
+import dev.kpetriv.sprout.core.designsystem.components.SproutButtonStyle
+import dev.kpetriv.sprout.core.designsystem.components.SproutCard
+import dev.kpetriv.sprout.core.designsystem.icon.SproutIcons
+import dev.kpetriv.sprout.core.designsystem.theme.SproutSpacing
 import dev.kpetriv.sprout.core.domainledger.Currency
 import dev.kpetriv.sprout.core.ui.contentWidth
 
@@ -118,16 +124,18 @@ fun OnboardingScreen(
                 .safeDrawingPadding()
                 .verticalScroll(rememberScrollState())
                 .contentWidth()
-                .padding(horizontal = 24.dp, vertical = 16.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp),
+                .padding(horizontal = SproutSpacing.gutter, vertical = SproutSpacing.md),
+            verticalArrangement = Arrangement.spacedBy(SproutSpacing.md),
         ) {
             val step = state.step
             if (step != OnboardingStep.Welcome && step != OnboardingStep.FirstSync) {
-                IconButton(onClick = { onEvent(OnboardingEvent.Back) }, enabled = !state.busy) {
-                    Icon(
-                        painterResource(R.drawable.feature_onboarding_ic_arrow_back),
-                        contentDescription = stringResource(R.string.feature_onboarding_back),
-                    )
+                // The arrow's glyph sits on the 20 dp gutter, as SproutTopBar's does.
+                IconButton(
+                    onClick = { onEvent(OnboardingEvent.Back) },
+                    enabled = !state.busy,
+                    modifier = Modifier.offset(x = -ArrowInset),
+                ) {
+                    Icon(SproutIcons.ArrowBack, contentDescription = stringResource(R.string.feature_onboarding_back))
                 }
             }
             when (step) {
@@ -141,7 +149,10 @@ fun OnboardingScreen(
                 OnboardingStep.ParentLock -> Working(R.string.feature_onboarding_working)
             }
             if (state.busy && step != OnboardingStep.FirstSync) {
-                LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                LinearProgressIndicator(
+                    trackColor = MaterialTheme.colorScheme.surfaceContainer,
+                    modifier = Modifier.fillMaxWidth(),
+                )
             }
             state.failure?.let { failure ->
                 Text(
@@ -162,35 +173,56 @@ private fun Title(text: String) {
 
 @Composable
 private fun Welcome(onEvent: (OnboardingEvent) -> Unit, onNotNow: (() -> Unit)?) {
-    Spacer(Modifier.height(24.dp))
-    Title(stringResource(R.string.feature_onboarding_title))
+    Spacer(Modifier.height(SproutSpacing.lg))
+    SproutMark()
+    Text(
+        stringResource(R.string.feature_onboarding_title),
+        style = MaterialTheme.typography.headlineLarge,
+        modifier = Modifier.semantics { heading() },
+    )
     Text(stringResource(R.string.feature_onboarding_welcome_subtitle), style = MaterialTheme.typography.bodyLarge)
-    Spacer(Modifier.height(8.dp))
+    Spacer(Modifier.height(SproutSpacing.sm))
     Choice(
         title = stringResource(R.string.feature_onboarding_welcome_parent),
         detail = stringResource(R.string.feature_onboarding_welcome_parent_detail),
+        icon = ImageVector.vectorResource(R.drawable.feature_onboarding_ic_group),
         onClick = { onEvent(OnboardingEvent.ChooseParent) },
     )
     Choice(
         title = stringResource(R.string.feature_onboarding_welcome_kid),
         detail = stringResource(R.string.feature_onboarding_welcome_kid_detail),
+        icon = ImageVector.vectorResource(R.drawable.feature_onboarding_ic_smartphone),
         onClick = { onEvent(OnboardingEvent.ChooseKidDevice) },
     )
     if (onNotNow != null) {
-        TextButton(onClick = onNotNow) { Text(stringResource(R.string.feature_onboarding_welcome_not_now)) }
+        SproutButton(
+            text = stringResource(R.string.feature_onboarding_welcome_not_now),
+            onClick = onNotNow,
+            style = SproutButtonStyle.Tertiary,
+        )
     }
 }
 
+/** One way in, as a white card that is one button: an icon in a Leaf-tint circle, title, detail and a chevron. */
 @Composable
-private fun Choice(title: String, detail: String, onClick: () -> Unit) {
-    OutlinedCard(
-        onClick = onClick,
-        modifier = Modifier.fillMaxWidth(),
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
-    ) {
-        Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            Text(title, style = MaterialTheme.typography.titleLarge)
-            Text(detail, style = MaterialTheme.typography.bodyMedium)
+private fun Choice(title: String, detail: String, icon: ImageVector, onClick: () -> Unit) {
+    val scheme = MaterialTheme.colorScheme
+    SproutCard(onClick = onClick, modifier = Modifier.fillMaxWidth()) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(SproutSpacing.md),
+        ) {
+            Box(
+                modifier = Modifier.size(ChoiceIconSize).background(scheme.primaryContainer, CircleShape),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(icon, contentDescription = null, tint = scheme.onPrimaryContainer)
+            }
+            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(SproutSpacing.xs)) {
+                Text(title, style = MaterialTheme.typography.titleLarge)
+                Text(detail, style = MaterialTheme.typography.bodyMedium, color = scheme.onSurfaceVariant)
+            }
+            Icon(SproutIcons.ChevronRight, contentDescription = null, tint = scheme.onSurfaceVariant)
         }
     }
 }
@@ -210,6 +242,8 @@ private fun ParentSignIn(step: OnboardingStep.ParentSignIn, busy: Boolean, onEve
             singleLine = true,
             enabled = !busy,
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email, imeAction = ImeAction.Next),
+            shape = MaterialTheme.shapes.small,
+            colors = onboardingFieldColors(),
             modifier = Modifier.fillMaxWidth(),
         )
         OutlinedTextField(
@@ -221,24 +255,28 @@ private fun ParentSignIn(step: OnboardingStep.ParentSignIn, busy: Boolean, onEve
             visualTransformation = PasswordVisualTransformation(),
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password, imeAction = ImeAction.Done),
             keyboardActions = KeyboardActions(onDone = { onEvent(OnboardingEvent.SignInWithEmail) }),
+            shape = MaterialTheme.shapes.small,
+            colors = onboardingFieldColors(),
             modifier = Modifier.fillMaxWidth(),
         )
-        Button(
+        SproutButton(
+            text = stringResource(R.string.feature_onboarding_sign_in_submit),
             onClick = { onEvent(OnboardingEvent.SignInWithEmail) },
             enabled = !busy && step.canSubmit,
             modifier = Modifier.fillMaxWidth(),
-        ) { Text(stringResource(R.string.feature_onboarding_sign_in_submit)) }
+        )
     } else {
         Text(
             stringResource(R.string.feature_onboarding_sign_in_google_detail),
             style = MaterialTheme.typography.bodyLarge,
         )
         val context = LocalContext.current
-        Button(
+        SproutButton(
+            text = stringResource(R.string.feature_onboarding_sign_in_google),
             onClick = { onEvent(OnboardingEvent.SignInWithGoogle(context)) },
             enabled = !busy,
             modifier = Modifier.fillMaxWidth(),
-        ) { Text(stringResource(R.string.feature_onboarding_sign_in_google)) }
+        )
     }
 }
 
@@ -256,6 +294,8 @@ private fun CreateHousehold(step: OnboardingStep.CreateHousehold, busy: Boolean,
             enabled = !busy,
             label = { Text(stringResource(R.string.feature_onboarding_create_currency)) },
             trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
+            shape = MaterialTheme.shapes.small,
+            colors = onboardingFieldColors(),
             modifier = Modifier.fillMaxWidth().menuAnchor(ExposedDropdownMenuAnchorType.PrimaryNotEditable),
         )
         ExposedDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
@@ -270,11 +310,12 @@ private fun CreateHousehold(step: OnboardingStep.CreateHousehold, busy: Boolean,
             }
         }
     }
-    Button(
+    SproutButton(
+        text = stringResource(R.string.feature_onboarding_create_submit),
         onClick = { onEvent(OnboardingEvent.CreateHousehold) },
         enabled = !busy,
         modifier = Modifier.fillMaxWidth(),
-    ) { Text(stringResource(R.string.feature_onboarding_create_submit)) }
+    )
 }
 
 private fun currencyLabel(currency: Currency.Fiat): String {
@@ -295,43 +336,53 @@ private fun ConfirmPurge(step: OnboardingStep.ConfirmPurge, busy: Boolean, onEve
             },
         ),
         style = MaterialTheme.typography.bodyLarge,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
     )
-    Button(
+    // Continuing erases the trial household on this phone: the destructive colours (M9 §4).
+    DestructiveButton(
+        text = stringResource(R.string.feature_onboarding_purge_continue),
         onClick = { onEvent(OnboardingEvent.ConfirmPurge) },
         enabled = !busy,
         modifier = Modifier.fillMaxWidth(),
-    ) { Text(stringResource(R.string.feature_onboarding_purge_continue)) }
-    OutlinedButton(
+    )
+    SproutButton(
+        text = stringResource(R.string.feature_onboarding_purge_cancel),
         onClick = { onEvent(OnboardingEvent.Back) },
         enabled = !busy,
+        style = SproutButtonStyle.Tertiary,
         modifier = Modifier.fillMaxWidth(),
-    ) { Text(stringResource(R.string.feature_onboarding_purge_cancel)) }
+    )
 }
 
 @Composable
 private fun WaitingForApproval(step: OnboardingStep.WaitingForApproval, onEvent: (OnboardingEvent) -> Unit) {
     Title(stringResource(R.string.feature_onboarding_waiting_title))
     Text(stringResource(R.string.feature_onboarding_waiting_detail), style = MaterialTheme.typography.bodyLarge)
-    Surface(
-        color = MaterialTheme.colorScheme.secondaryContainer,
-        shape = MaterialTheme.shapes.large,
-        modifier = Modifier.fillMaxWidth(),
+    // The fingerprint to compare with the parent's phone, on a Linen tile (as the parent's approval sheet shows it).
+    Text(
+        text = step.fingerprint,
+        style = MaterialTheme.typography.headlineSmall,
+        fontFamily = FontFamily.Monospace,
+        textAlign = TextAlign.Center,
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(MaterialTheme.colorScheme.surfaceContainerLow, MaterialTheme.shapes.medium)
+            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, MaterialTheme.shapes.medium)
+            .padding(vertical = SproutSpacing.lg, horizontal = SproutSpacing.md),
+    )
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(SproutSpacing.md - SproutSpacing.xs),
     ) {
-        Text(
-            text = step.fingerprint,
-            style = MaterialTheme.typography.headlineSmall,
-            fontFamily = FontFamily.Monospace,
-            textAlign = TextAlign.Center,
-            modifier = Modifier.padding(vertical = 24.dp, horizontal = 16.dp),
-        )
-    }
-    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
         CircularProgressIndicator(modifier = Modifier.size(24.dp), strokeWidth = 3.dp)
         Text(stringResource(R.string.feature_onboarding_waiting_progress), style = MaterialTheme.typography.bodyLarge)
     }
-    OutlinedButton(onClick = { onEvent(OnboardingEvent.Back) }, modifier = Modifier.fillMaxWidth()) {
-        Text(stringResource(R.string.feature_onboarding_waiting_cancel))
-    }
+    SproutButton(
+        text = stringResource(R.string.feature_onboarding_waiting_cancel),
+        onClick = { onEvent(OnboardingEvent.Back) },
+        style = SproutButtonStyle.Tertiary,
+        modifier = Modifier.fillMaxWidth(),
+    )
 }
 
 @Composable
@@ -354,15 +405,23 @@ private fun KidCode(step: OnboardingStep.KidCode, busy: Boolean, error: Boolean,
         modifier = Modifier.fillMaxWidth().semantics { contentDescription = label },
         decorationBox = { CodeCells(step.code, error) },
     )
-    Text(stringResource(R.string.feature_onboarding_code_note), style = MaterialTheme.typography.bodyMedium)
-    Button(
+    Text(
+        stringResource(R.string.feature_onboarding_code_note),
+        style = MaterialTheme.typography.bodyMedium,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+    SproutButton(
+        text = stringResource(R.string.feature_onboarding_code_submit),
         onClick = { onEvent(OnboardingEvent.SubmitCode) },
         enabled = !busy && step.complete,
         modifier = Modifier.fillMaxWidth(),
-    ) { Text(stringResource(R.string.feature_onboarding_code_submit)) }
+    )
 }
 
-/** Eight boxes in two groups of four; the next box to fill is highlighted, so typing advances box by box. */
+/**
+ * Eight Linen boxes in two groups of four; the next box to fill has a Botanical border, so typing advances box by
+ * box. A refused code turns every border `error` (the failure line below says why).
+ */
 @Composable
 private fun CodeCells(code: String, error: Boolean) {
     Row(
@@ -380,6 +439,7 @@ private fun CodeCells(code: String, error: Boolean) {
             }
             Surface(
                 shape = MaterialTheme.shapes.small,
+                color = MaterialTheme.colorScheme.surfaceContainerLow,
                 border = BorderStroke(if (active) 2.dp else 1.dp, border),
                 modifier = Modifier.padding(horizontal = 3.dp).size(width = 36.dp, height = 48.dp),
             ) {
@@ -406,6 +466,11 @@ private fun Working(@StringRes text: Int) {
         Text(stringResource(text), style = MaterialTheme.typography.bodyLarge, textAlign = TextAlign.Center)
     }
 }
+
+private val ChoiceIconSize = 48.dp
+
+/** How far IconButton's 48 dp box sits outside its 24 dp glyph, so the glyph lands on the gutter. */
+private val ArrowInset = 12.dp
 
 @StringRes
 internal fun OnboardingFailure.messageRes(): Int = when (this) {

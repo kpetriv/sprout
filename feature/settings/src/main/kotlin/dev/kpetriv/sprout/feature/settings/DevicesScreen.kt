@@ -1,42 +1,40 @@
 package dev.kpetriv.sprout.feature.settings
 
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.HorizontalDivider
-import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.SnackbarHostState
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.res.vectorResource
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.kpetriv.sprout.core.database.entity.RegistrationStatus
+import dev.kpetriv.sprout.core.designsystem.components.SproutButton
+import dev.kpetriv.sprout.core.designsystem.icon.SproutIcons
+import dev.kpetriv.sprout.core.designsystem.theme.SproutSpacing
 import dev.kpetriv.sprout.core.model.DeviceId
 import dev.kpetriv.sprout.core.model.Role
-import dev.kpetriv.sprout.core.ui.contentWidth
 
 @Composable
 internal fun DevicesRoute(onBack: () -> Unit, reviewDeviceId: DeviceId?, modifier: Modifier = Modifier) {
@@ -62,88 +60,98 @@ fun DevicesScreen(
         modifier = modifier,
         snackbarHostState = snackbar,
     ) { padding ->
-        Column(modifier = Modifier.padding(padding).fillMaxSize()) {
-            if (!loadStatus(state.isLoading, state.loadFailed)) {
-                Column(modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).contentWidth()) {
-                    if (state.devices.isEmpty()) {
-                        Text(stringResource(R.string.feature_settings_devices_empty), Modifier.sectionPadding())
-                    }
-                    state.devices.forEachIndexed { index, row ->
-                        if (index > 0) HorizontalDivider()
-                        DeviceRow(row, state.busy, onEvent)
-                    }
+        if (!loadStatus(state.isLoading, state.loadFailed, Modifier.padding(padding))) {
+            SettingsColumn(padding = padding, spacing = SproutSpacing.rowGap) {
+                if (state.devices.isEmpty()) {
+                    Text(
+                        stringResource(R.string.feature_settings_devices_empty),
+                        style = MaterialTheme.typography.bodyLarge,
+                    )
                 }
+                state.devices.forEach { row -> DeviceRow(row, state.busy, onEvent) }
             }
         }
     }
     DevicesMessageEffect(state.message, snackbar) { onEvent(DevicesEvent.MessageShown) }
     state.reviewing?.let { row ->
         val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
-        ModalBottomSheet(onDismissRequest = { onEvent(DevicesEvent.DismissReview) }, sheetState = sheetState) {
-            ApproveDeviceContent(row, state.busy, onEvent, Modifier.padding(start = 24.dp, end = 24.dp, bottom = 24.dp))
+        ModalBottomSheet(
+            onDismissRequest = { onEvent(DevicesEvent.DismissReview) },
+            sheetState = sheetState,
+            containerColor = MaterialTheme.colorScheme.surfaceContainerLowest,
+        ) {
+            ApproveDeviceContent(row, state.busy, onEvent, Modifier.sheetPadding())
         }
     }
     state.revoking?.let { row ->
-        AlertDialog(
-            onDismissRequest = { onEvent(DevicesEvent.DismissRevoke) },
-            title = { Text(stringResource(R.string.feature_settings_devices_revoke_title)) },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text(deviceTitle(row))
-                    Text(stringResource(R.string.feature_settings_devices_revoke_text))
-                }
+        ConfirmDialog(
+            title = stringResource(R.string.feature_settings_devices_revoke_title),
+            onDismiss = { onEvent(DevicesEvent.DismissRevoke) },
+            confirm = {
+                DestructiveButton(
+                    text = stringResource(R.string.feature_settings_devices_revoke_confirm),
+                    onClick = { onEvent(DevicesEvent.ConfirmRevoke) },
+                    enabled = !state.busy,
+                )
             },
-            confirmButton = {
-                TextButton(onClick = { onEvent(DevicesEvent.ConfirmRevoke) }, enabled = !state.busy) {
-                    Text(
-                        stringResource(R.string.feature_settings_devices_revoke_confirm),
-                        color = MaterialTheme.colorScheme.error,
-                    )
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { onEvent(DevicesEvent.DismissRevoke) }) {
-                    Text(stringResource(R.string.feature_settings_cancel))
-                }
+            extra = {
+                Text(deviceTitle(row), style = MaterialTheme.typography.titleMedium)
+                Text(
+                    stringResource(R.string.feature_settings_devices_revoke_text),
+                    style = MaterialTheme.typography.bodyMedium,
+                )
             },
         )
     }
 }
 
+/** One phone as a white card: who it belongs to, its status, key storage and fingerprint, and its actions. */
 @Composable
 private fun DeviceRow(row: DeviceRowUi, busy: Boolean, onEvent: (DevicesEvent) -> Unit) {
-    ListItem(
-        headlineContent = { Text(deviceTitle(row)) },
-        supportingContent = {
-            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text(
-                    stringResource(
-                        R.string.feature_settings_devices_row_detail,
-                        statusText(row.status),
-                        attestationText(row.attestation),
-                        row.fingerprint,
-                    ),
-                )
-                if (row.canApprove || row.canRevoke) {
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        if (row.canApprove) {
-                            Button(onClick = { onEvent(DevicesEvent.Review(row.deviceId)) }, enabled = !busy) {
-                                Text(stringResource(R.string.feature_settings_devices_approve))
-                            }
-                        }
-                        if (row.canRevoke) {
-                            OutlinedButton(onClick = {
-                                onEvent(DevicesEvent.AskRevoke(row.deviceId))
-                            }, enabled = !busy) {
-                                Text(stringResource(R.string.feature_settings_devices_revoke))
-                            }
-                        }
-                    }
-                }
-            }
+    val title = deviceTitle(row)
+    SettingsRow(
+        title = title,
+        summary = stringResource(
+            R.string.feature_settings_devices_row_detail,
+            statusText(row.status),
+            attestationText(row.attestation),
+            row.fingerprint,
+        ),
+        icon = ImageVector.vectorResource(R.drawable.feature_settings_ic_smartphone),
+        extra = if (row.canApprove || row.canRevoke) {
+            { DeviceActions(row, title, busy, onEvent) }
+        } else {
+            null
         },
-        modifier = Modifier.fillMaxWidth(),
     )
+}
+
+/** Approve and remove, each spoken with the phone it acts on (the rows repeat the same two words). */
+@Composable
+private fun DeviceActions(row: DeviceRowUi, title: String, busy: Boolean, onEvent: (DevicesEvent) -> Unit) {
+    ButtonRow(modifier = Modifier.padding(top = SproutSpacing.sm), alignment = Alignment.Start) {
+        if (row.canApprove) {
+            val spoken = stringResource(R.string.feature_settings_devices_approve_for, title, row.fingerprint)
+            SproutButton(
+                text = stringResource(R.string.feature_settings_devices_approve),
+                onClick = { onEvent(DevicesEvent.Review(row.deviceId)) },
+                enabled = !busy,
+                icon = SproutIcons.Check,
+                modifier = Modifier.semantics { contentDescription = spoken },
+            )
+        }
+        if (row.canRevoke) {
+            val spoken = stringResource(R.string.feature_settings_devices_revoke_for, title, row.fingerprint)
+            DestructiveButton(
+                text = stringResource(R.string.feature_settings_devices_revoke),
+                onClick = { onEvent(DevicesEvent.AskRevoke(row.deviceId)) },
+                enabled = !busy,
+                style = DestructiveStyle.Outlined,
+                icon = SproutIcons.Delete,
+                modifier = Modifier.semantics { contentDescription = spoken },
+            )
+        }
+    }
 }
 
 /** The approval sheet's content: the fingerprint to compare, the attestation warning, approve, or remove it. */
@@ -154,22 +162,13 @@ internal fun ApproveDeviceContent(
     onEvent: (DevicesEvent) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(16.dp)) {
-        SectionHeading(stringResource(R.string.feature_settings_devices_review_title))
+    Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(SproutSpacing.md)) {
+        SectionHeading(
+            stringResource(R.string.feature_settings_devices_review_title),
+            icon = ImageVector.vectorResource(R.drawable.feature_settings_ic_smartphone),
+        )
         Text(stringResource(R.string.feature_settings_devices_review_text), style = MaterialTheme.typography.bodyLarge)
-        Surface(
-            color = MaterialTheme.colorScheme.secondaryContainer,
-            shape = MaterialTheme.shapes.large,
-            modifier = Modifier.fillMaxWidth(),
-        ) {
-            Text(
-                text = row.fingerprint,
-                style = MaterialTheme.typography.headlineSmall,
-                fontFamily = FontFamily.Monospace,
-                textAlign = TextAlign.Center,
-                modifier = Modifier.padding(vertical = 24.dp, horizontal = 16.dp),
-            )
-        }
+        FingerprintTile(row.fingerprint)
         if (row.attestation == AttestationLabel.UNVERIFIED) {
             Text(
                 stringResource(R.string.feature_settings_devices_review_unverified),
@@ -177,16 +176,39 @@ internal fun ApproveDeviceContent(
                 color = MaterialTheme.colorScheme.error,
             )
         }
-        Button(onClick = { onEvent(DevicesEvent.Approve) }, enabled = !busy, modifier = Modifier.fillMaxWidth()) {
-            Text(stringResource(R.string.feature_settings_devices_review_approve))
-        }
+        SproutButton(
+            text = stringResource(R.string.feature_settings_devices_review_approve),
+            onClick = { onEvent(DevicesEvent.Approve) },
+            enabled = !busy,
+            icon = SproutIcons.Check,
+            modifier = Modifier.fillMaxWidth(),
+        )
         // A phone that is not the one in hand (or a stale PENDING entry) is removed rather than left waiting (L8).
-        OutlinedButton(
+        DestructiveButton(
+            text = stringResource(R.string.feature_settings_devices_review_reject),
             onClick = { onEvent(DevicesEvent.RejectReview) },
             enabled = !busy,
+            style = DestructiveStyle.Outlined,
+            icon = SproutIcons.Close,
             modifier = Modifier.fillMaxWidth(),
-        ) { Text(stringResource(R.string.feature_settings_devices_review_reject)) }
+        )
     }
+}
+
+/** A device fingerprint to compare by eye: monospace, centred on a Linen tile. */
+@Composable
+internal fun FingerprintTile(fingerprint: String, modifier: Modifier = Modifier) {
+    Text(
+        text = fingerprint,
+        style = MaterialTheme.typography.headlineSmall,
+        fontFamily = FontFamily.Monospace,
+        textAlign = TextAlign.Center,
+        modifier = modifier
+            .fillMaxWidth()
+            .background(MaterialTheme.colorScheme.surfaceContainerLow, MaterialTheme.shapes.medium)
+            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, MaterialTheme.shapes.medium)
+            .padding(vertical = SproutSpacing.lg, horizontal = SproutSpacing.md),
+    )
 }
 
 @Composable

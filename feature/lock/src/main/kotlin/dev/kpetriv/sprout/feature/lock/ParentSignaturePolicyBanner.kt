@@ -1,15 +1,19 @@
 package dev.kpetriv.sprout.feature.lock
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.padding
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.heading
@@ -20,6 +24,11 @@ import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.kpetriv.sprout.core.crypto.ParentAuthAvailability
+import dev.kpetriv.sprout.core.designsystem.components.CardMeaning
+import dev.kpetriv.sprout.core.designsystem.components.SproutCard
+import dev.kpetriv.sprout.core.designsystem.components.accentTint
+import dev.kpetriv.sprout.core.designsystem.icon.SproutIcons
+import dev.kpetriv.sprout.core.designsystem.theme.SproutSpacing
 import dev.kpetriv.sprout.core.designsystem.theme.SproutTheme
 
 /** [ParentSignaturePolicyBanner] for this device, re-checked whenever the screen resumes. */
@@ -42,23 +51,33 @@ fun ParentSignaturePolicyBanner(modifier: Modifier = Modifier) {
 @Composable
 fun ParentSignaturePolicyBanner(availability: ParentAuthAvailability, modifier: Modifier = Modifier) {
     if (availability == ParentAuthAvailability.STRONG_BIOMETRIC_AVAILABLE) return
-    Card(
-        modifier = modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.errorContainer,
-            contentColor = MaterialTheme.colorScheme.onErrorContainer,
-        ),
-    ) {
-        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            Text(
-                text = stringResource(R.string.feature_lock_signature_banner_title),
-                style = MaterialTheme.typography.titleMedium,
-                modifier = Modifier.semantics { heading() },
-            )
-            Text(text = stringResource(availability.detailRes()), style = MaterialTheme.typography.bodyMedium)
+    // An attention card (M9 §3): the Honey-tint lock circle repeats what the title says, never alone.
+    SproutCard(modifier = modifier.fillMaxWidth(), meaning = CardMeaning.Attention) {
+        Row(horizontalArrangement = Arrangement.spacedBy(SproutSpacing.md)) {
+            val tint = CardMeaning.Attention.accentTint()
+            Box(
+                modifier = Modifier.size(LeadSize).background(tint.container, CircleShape),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(SproutIcons.Lock, contentDescription = null, tint = tint.content)
+            }
+            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(SproutSpacing.xs)) {
+                Text(
+                    text = stringResource(R.string.feature_lock_signature_banner_title),
+                    style = MaterialTheme.typography.titleMedium,
+                    modifier = Modifier.semantics { heading() },
+                )
+                Text(
+                    text = stringResource(availability.detailRes()),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
         }
     }
 }
+
+private val LeadSize = 40.dp
 
 private fun ParentAuthAvailability.detailRes(): Int = when (this) {
     ParentAuthAvailability.NOT_ENROLLED -> R.string.feature_lock_signature_banner_not_enrolled

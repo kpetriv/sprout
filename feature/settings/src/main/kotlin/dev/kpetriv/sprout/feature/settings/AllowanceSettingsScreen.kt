@@ -1,10 +1,8 @@
 package dev.kpetriv.sprout.feature.settings
 
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
@@ -12,16 +10,12 @@ import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.DatePicker
+import androidx.compose.material3.DatePickerDefaults
 import androidx.compose.material3.DatePickerDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.HorizontalDivider
-import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.SegmentedButton
-import androidx.compose.material3.SegmentedButtonDefaults
-import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
@@ -36,18 +30,23 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import dev.kpetriv.sprout.core.designsystem.components.InitialAvatar
+import dev.kpetriv.sprout.core.designsystem.icon.SproutIcons
+import dev.kpetriv.sprout.core.designsystem.theme.STACK_FONT_SCALE
+import dev.kpetriv.sprout.core.designsystem.theme.SproutSpacing
 import dev.kpetriv.sprout.core.domainledger.Money
 import dev.kpetriv.sprout.core.model.AllowanceCadence
 import dev.kpetriv.sprout.core.model.CalendarDate
 import dev.kpetriv.sprout.core.model.DayOfWeek
 import dev.kpetriv.sprout.core.model.MAX_SCHEDULE_DAY_OF_MONTH
-import dev.kpetriv.sprout.core.ui.contentWidth
 import dev.kpetriv.sprout.core.ui.rememberMoneyFormatter
 import java.time.format.TextStyle
 
@@ -73,38 +72,31 @@ fun AllowanceSettingsScreen(
         modifier = modifier,
         snackbarHostState = snackbar,
     ) { padding ->
-        Column(modifier = Modifier.padding(padding).fillMaxSize()) {
-            if (!loadStatus(state.isLoading, state.loadFailed)) {
-                Column(modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).contentWidth()) {
-                    if (state.rows.isEmpty()) {
-                        Text(stringResource(R.string.feature_settings_no_kids), modifier = Modifier.sectionPadding())
-                    }
-                    state.rows.forEachIndexed { index, row ->
-                        if (index > 0) HorizontalDivider()
-                        AllowanceRow(row, onClick = { onEvent(AllowanceSettingsEvent.Edit(row.kid.id)) })
-                    }
+        if (!loadStatus(state.isLoading, state.loadFailed, Modifier.padding(padding))) {
+            SettingsColumn(padding = padding, spacing = SproutSpacing.rowGap) {
+                if (state.rows.isEmpty()) {
+                    Text(stringResource(R.string.feature_settings_no_kids), style = MaterialTheme.typography.bodyLarge)
+                }
+                state.rows.forEachIndexed { index, row ->
+                    AllowanceRow(row, index, onClick = { onEvent(AllowanceSettingsEvent.Edit(row.kid.id)) })
+                }
+                Text(
+                    stringResource(R.string.feature_settings_allowance_signing_note),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(bottom = SproutSpacing.md),
+                )
+                SectionHeading(stringResource(R.string.feature_settings_allowance_games_title))
+                val cap = state.gameCap
+                if (cap != null) {
+                    GameCapRow(cap, onClick = { onEvent(AllowanceSettingsEvent.EditGameCap) })
+                } else {
+                    // No household policy on this phone yet: it never writes one of its own (D-M7-57).
                     Text(
-                        stringResource(R.string.feature_settings_allowance_signing_note),
-                        style = MaterialTheme.typography.bodySmall,
-                        modifier = Modifier.sectionPadding(),
+                        stringResource(R.string.feature_settings_policy_waiting),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
-                    HorizontalDivider()
-                    SectionHeading(
-                        stringResource(R.string.feature_settings_allowance_games_title),
-                        modifier = Modifier.sectionPadding(),
-                    )
-                    val cap = state.gameCap
-                    if (cap != null) {
-                        GameCapRow(cap, onClick = { onEvent(AllowanceSettingsEvent.EditGameCap) })
-                    } else {
-                        // No household policy on this phone yet: it never writes one of its own (D-M7-57).
-                        Text(
-                            stringResource(R.string.feature_settings_policy_waiting),
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.sectionPadding(),
-                        )
-                    }
                 }
             }
         }
@@ -118,21 +110,19 @@ fun AllowanceSettingsScreen(
 @Composable
 internal fun GameCapRow(cap: GameCapUi, onClick: () -> Unit, modifier: Modifier = Modifier) {
     val amount = formatSmallAmount(cap.capMinor, cap.currency)
-    ListItem(
-        headlineContent = { Text(stringResource(R.string.feature_settings_game_cap_title)) },
-        supportingContent = {
-            Text(
-                stringResource(
-                    if (cap.isDefault) {
-                        R.string.feature_settings_game_cap_summary_default
-                    } else {
-                        R.string.feature_settings_game_cap_summary
-                    },
-                    amount,
-                ),
-            )
-        },
-        modifier = modifier.fillMaxWidth().clickable(role = Role.Button, onClick = onClick),
+    SettingsRow(
+        title = stringResource(R.string.feature_settings_game_cap_title),
+        summary = stringResource(
+            if (cap.isDefault) {
+                R.string.feature_settings_game_cap_summary_default
+            } else {
+                R.string.feature_settings_game_cap_summary
+            },
+            amount,
+        ),
+        icon = SproutIcons.SportsEsports,
+        onClick = onClick,
+        modifier = modifier,
     )
 }
 
@@ -156,9 +146,11 @@ internal fun GameCapDialogCard(
         title = stringResource(R.string.feature_settings_game_cap_title),
         modifier = modifier,
         buttons = {
-            TextButton(onClick = { onEvent(AllowanceSettingsEvent.DismissGameCap) }, enabled = !editor.isSaving) {
-                Text(stringResource(R.string.feature_settings_cancel))
-            }
+            QuietButton(
+                text = stringResource(R.string.feature_settings_cancel),
+                onClick = { onEvent(AllowanceSettingsEvent.DismissGameCap) },
+                enabled = !editor.isSaving,
+            )
             SaveButton(editor.isSaving, enabled = true, onClick = { onEvent(AllowanceSettingsEvent.SaveGameCap) })
         },
     ) {
@@ -178,20 +170,22 @@ internal fun GameCapDialogCard(
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
             singleLine = true,
             enabled = !editor.isSaving,
+            shape = MaterialTheme.shapes.small,
+            colors = settingsFieldColors(),
             modifier = Modifier.fillMaxWidth(),
         )
         val default = formatSmallAmount(HouseholdRulesState.DEFAULT_DAILY_GAME_CAP_MINOR, editor.currency)
-        TextButton(onClick = { onEvent(AllowanceSettingsEvent.ResetGameCap) }, enabled = !editor.isSaving) {
-            Text(stringResource(R.string.feature_settings_game_cap_reset, default))
-        }
-        if (editor.saveFailed) {
-            Text(stringResource(R.string.feature_settings_save_failed), color = MaterialTheme.colorScheme.error)
-        }
+        QuietButton(
+            text = stringResource(R.string.feature_settings_game_cap_reset, default),
+            onClick = { onEvent(AllowanceSettingsEvent.ResetGameCap) },
+            enabled = !editor.isSaving,
+        )
+        if (editor.saveFailed) ErrorText(stringResource(R.string.feature_settings_save_failed))
     }
 }
 
 @Composable
-private fun AllowanceRow(row: AllowanceRowUi, onClick: () -> Unit) {
+private fun AllowanceRow(row: AllowanceRowUi, index: Int, onClick: () -> Unit) {
     val schedule = row.schedule
     val formatter = rememberMoneyFormatter()
     val summary = when {
@@ -204,15 +198,27 @@ private fun AllowanceRow(row: AllowanceRowUi, onClick: () -> Unit) {
         row.nextDue != null -> stringResource(R.string.feature_settings_allowance_next, formatDate(row.nextDue))
         else -> null
     }
-    ListItem(
-        headlineContent = { Text(row.kid.firstName) },
-        supportingContent = {
-            Column {
-                Text(summary)
-                detail?.let { Text(it) }
+    SettingsRow(
+        title = row.kid.firstName,
+        summary = summary,
+        onClick = onClick,
+        leading = {
+            InitialAvatar(
+                initial = row.kid.firstName.take(1).uppercase(),
+                tintIndex = index,
+                size = 40.dp,
+                modifier = Modifier.clearAndSetSemantics {},
+            )
+        },
+        extra = detail?.let {
+            {
+                Text(
+                    it,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
         },
-        modifier = Modifier.fillMaxWidth().clickable(role = Role.Button, onClick = onClick),
     )
 }
 
@@ -235,8 +241,12 @@ private fun dayName(day: DayOfWeek): String {
 @Composable
 private fun AllowanceEditorSheet(editor: AllowanceEditorUi, onEvent: (AllowanceSettingsEvent) -> Unit) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
-    ModalBottomSheet(onDismissRequest = { onEvent(AllowanceSettingsEvent.Dismiss) }, sheetState = sheetState) {
-        AllowanceEditorForm(editor, onEvent, Modifier.padding(start = 24.dp, end = 24.dp, bottom = 24.dp))
+    ModalBottomSheet(
+        onDismissRequest = { onEvent(AllowanceSettingsEvent.Dismiss) },
+        sheetState = sheetState,
+        containerColor = MaterialTheme.colorScheme.surfaceContainerLowest,
+    ) {
+        AllowanceEditorForm(editor, onEvent, Modifier.sheetPadding())
     }
 }
 
@@ -251,7 +261,7 @@ internal fun AllowanceEditorForm(
     var pickingDate by remember { mutableStateOf(false) }
     Column(
         modifier = modifier.verticalScroll(rememberScrollState()),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
+        verticalArrangement = Arrangement.spacedBy(SproutSpacing.md),
     ) {
         SectionHeading(stringResource(R.string.feature_settings_allowance_edit_title, editor.kidName))
         val amountError = amountErrorText(editor.amountError)
@@ -263,26 +273,23 @@ internal fun AllowanceEditorForm(
             supportingText = amountError?.let { { Text(it) } },
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
             singleLine = true,
+            shape = MaterialTheme.shapes.small,
+            colors = settingsFieldColors(),
             modifier = Modifier.fillMaxWidth(),
         )
-        SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
-            CadenceKind.entries.forEachIndexed { index, kind ->
-                SegmentedButton(
-                    selected = editor.cadence == kind,
-                    onClick = { onEvent(AllowanceSettingsEvent.CadenceChanged(kind)) },
-                    shape = SegmentedButtonDefaults.itemShape(index, CadenceKind.entries.size),
-                ) {
-                    Text(
-                        stringResource(
-                            when (kind) {
-                                CadenceKind.WEEKLY -> R.string.feature_settings_allowance_cadence_weekly
-                                CadenceKind.MONTHLY -> R.string.feature_settings_allowance_cadence_monthly
-                            },
-                        ),
-                    )
-                }
-            }
-        }
+        RadioChips(
+            options = CadenceKind.entries,
+            selected = editor.cadence,
+            optionLabel = { kind ->
+                stringResource(
+                    when (kind) {
+                        CadenceKind.WEEKLY -> R.string.feature_settings_allowance_cadence_weekly
+                        CadenceKind.MONTHLY -> R.string.feature_settings_allowance_cadence_monthly
+                    },
+                )
+            },
+            onSelect = { onEvent(AllowanceSettingsEvent.CadenceChanged(it)) },
+        )
         when (editor.cadence) {
             CadenceKind.WEEKLY -> ChoiceDropdown(
                 label = stringResource(R.string.feature_settings_allowance_day_of_week),
@@ -300,15 +307,7 @@ internal fun AllowanceEditorForm(
                 onSelect = { onEvent(AllowanceSettingsEvent.DayOfMonthChanged(it)) },
             )
         }
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(
-                stringResource(R.string.feature_settings_allowance_starts_on, formatDate(editor.startsOn)),
-                modifier = Modifier.weight(1f),
-            )
-            TextButton(onClick = { pickingDate = true }) {
-                Text(stringResource(R.string.feature_settings_allowance_change_date))
-            }
-        }
+        StartsOnRow(editor.startsOn, onChange = { pickingDate = true })
         Row(
             modifier = Modifier.fillMaxWidth().toggleable(
                 value = editor.active,
@@ -317,7 +316,11 @@ internal fun AllowanceEditorForm(
             ),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text(stringResource(R.string.feature_settings_allowance_active), modifier = Modifier.weight(1f))
+            Text(
+                stringResource(R.string.feature_settings_allowance_active),
+                style = MaterialTheme.typography.bodyLarge,
+                modifier = Modifier.weight(1f),
+            )
             Switch(checked = editor.active, onCheckedChange = null)
         }
         editor.nextDue?.let {
@@ -326,14 +329,13 @@ internal fun AllowanceEditorForm(
                 style = MaterialTheme.typography.bodyMedium,
             )
         }
-        if (editor.saveFailed) {
-            Text(stringResource(R.string.feature_settings_save_failed), color = MaterialTheme.colorScheme.error)
-        }
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        if (editor.saveFailed) ErrorText(stringResource(R.string.feature_settings_save_failed))
+        ButtonRow(alignment = Alignment.Start) {
             SaveButton(editor.isSaving, enabled = true, onClick = { onEvent(AllowanceSettingsEvent.Save) })
-            TextButton(onClick = { onEvent(AllowanceSettingsEvent.Dismiss) }) {
-                Text(stringResource(R.string.feature_settings_cancel))
-            }
+            QuietButton(
+                text = stringResource(R.string.feature_settings_cancel),
+                onClick = { onEvent(AllowanceSettingsEvent.Dismiss) },
+            )
         }
     }
     if (pickingDate) {
@@ -348,12 +350,38 @@ internal fun AllowanceEditorForm(
     }
 }
 
+/** "Starts on 7 Nov 2026" with its "Change" pill; stacked at large font sizes. */
+@Composable
+private fun StartsOnRow(startsOn: CalendarDate, onChange: () -> Unit) {
+    val text = stringResource(R.string.feature_settings_allowance_starts_on, formatDate(startsOn))
+    val change = @Composable {
+        QuietButton(
+            text = stringResource(R.string.feature_settings_allowance_change_date),
+            onClick = onChange,
+            icon = SproutIcons.Schedule,
+        )
+    }
+    if (LocalDensity.current.fontScale >= STACK_FONT_SCALE) {
+        Column(verticalArrangement = Arrangement.spacedBy(SproutSpacing.sm)) {
+            Text(text, style = MaterialTheme.typography.bodyLarge)
+            change()
+        }
+    } else {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(text, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
+            change()
+        }
+    }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun StartDatePicker(initial: CalendarDate, onPicked: (CalendarDate) -> Unit, onDismiss: () -> Unit) {
     val pickerState = rememberDatePickerState(initialSelectedDateMillis = initial.toEpochDay() * MILLIS_PER_DAY)
+    val colors = DatePickerDefaults.colors(containerColor = MaterialTheme.colorScheme.surfaceContainerLowest)
     DatePickerDialog(
         onDismissRequest = onDismiss,
+        colors = colors,
         confirmButton = {
             TextButton(
                 onClick = {
@@ -367,7 +395,7 @@ private fun StartDatePicker(initial: CalendarDate, onPicked: (CalendarDate) -> U
             TextButton(onClick = onDismiss) { Text(stringResource(R.string.feature_settings_cancel)) }
         },
     ) {
-        DatePicker(state = pickerState)
+        DatePicker(state = pickerState, colors = colors)
     }
 }
 

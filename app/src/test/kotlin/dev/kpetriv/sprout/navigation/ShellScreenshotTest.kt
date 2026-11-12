@@ -46,7 +46,7 @@ class ShellScreenshotTest : ScreenshotTest(checkAccessibility = true) {
 
     @Test
     fun `parent shell, settings`() = screenshot.captureLightDark("app_shell_parent_settings") {
-        ParentShell(selected = 3) { SettingsScreen(onOpen = {}, onBack = {}) }
+        ParentShell(selected = 3) { SettingsScreen(onOpen = {}, onBack = null) }
     }
 
     @Test

@@ -19,13 +19,17 @@ import org.robolectric.annotation.Config
 class SettingsScreenshotTest : ScreenshotTest(checkAccessibility = true) {
     @Test
     fun hub() = screenshot.captureLightDark("settings_hub") {
-        SettingsScreen(onOpen = {}, onBack = {})
+        SettingsScreen(onOpen = {}, onBack = null)
     }
 
     @Test
     fun `hub of the trial household, without the synced sections`() =
         screenshot.captureLightDark("settings_hub_trial") {
-            SettingsScreen(onOpen = {}, onBack = {}, sections = SettingsSection.entries.filterNot { it.needsHousehold })
+            SettingsScreen(
+                onOpen = {},
+                onBack = null,
+                sections = SettingsSection.entries.filterNot { it.needsHousehold },
+            )
         }
 
     @Test
@@ -35,20 +39,20 @@ class SettingsScreenshotTest : ScreenshotTest(checkAccessibility = true) {
                 sections = SettingsSection.entries,
                 selected = SettingsSection.ALLOWANCE,
                 onOpen = {},
-                onBack = {},
+                onBack = null,
                 detail = { modifier ->
                     AllowanceSettingsScreen(SettingsPreviewData.allowance(), onEvent = {}, onBack = {}, modifier)
                 },
             )
         } else {
-            SettingsScreen(onOpen = {}, onBack = {})
+            SettingsScreen(onOpen = {}, onBack = null)
         }
     }
 
     @Test
     fun `hub on a tablet with no section open`() =
         screenshot.captureWidthClasses("settings_hub_none", windows = listOf(ScreenshotWindow.TABLET)) {
-            SettingsListDetail(SettingsSection.entries, selected = null, onOpen = {}, onBack = {}, detail = null)
+            SettingsListDetail(SettingsSection.entries, selected = null, onOpen = {}, onBack = null, detail = null)
         }
 
     @Test
