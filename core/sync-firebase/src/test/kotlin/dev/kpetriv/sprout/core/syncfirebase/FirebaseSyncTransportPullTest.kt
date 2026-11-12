@@ -347,7 +347,7 @@ class FirebaseSyncTransportPullTest {
         hid = null
         val parent = TestData.DEVICE
         firestore.seed("households/h2/devices/$parent", device("p-uid", "PARENT", "ACTIVE"))
-        // A row whose key is not its id's (audit H1) reads as no row.
+        // A row whose key is not its id's (audit H1) does not parse: a failure, never "no row".
         firestore.seed("households/h2/devices/${"f".repeat(64)}", device("p-uid", "PARENT", "ACTIVE"))
 
         val row = transport().registeredDevice(HouseholdId("h2"), DeviceId(parent))
@@ -356,7 +356,12 @@ class FirebaseSyncTransportPullTest {
         assertEquals(Role.PARENT, row?.role)
         assertEquals(DeviceStatus.Active, row?.status)
         assertNull(transport().registeredDevice(HID, DeviceId(parent)))
-        assertNull(transport().registeredDevice(HouseholdId("h2"), DeviceId("f".repeat(64))))
+        assertEquals(
+            SyncError.Permanent(FirebaseSyncTransport.MALFORMED),
+            assertFailsWith<SyncException> {
+                transport().registeredDevice(HouseholdId("h2"), DeviceId("f".repeat(64)))
+            }.error,
+        )
 
         firestore.readFailures["households/h2/devices/$parent"] = FirestoreCode.UNAVAILABLE
         val failure = assertFailsWith<SyncException> {

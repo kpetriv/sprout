@@ -235,10 +235,13 @@ class RoomOnboardingHousehold @Inject constructor(
             val linked = preferences.linkedAccount()
             // Rows of another account or household must never mix with this one's (D-M3-47).
             if (linked != null && linked != digest) localRows.clear()
+            // A restored device goes on from its own chat counters, not from what the pull rebuilds (D-REL-25). Seeded
+            // before the session is saved, so no session ever runs without them; the record goes only once the session
+            // is saved, and a start that finds both seeds again (D-REL-33).
+            chatIdentity.seed(session)
             sessions.save(session)
             preferences.setLinkedAccount(digest)
-            // A restored device goes on from its own chat counters, not from what the pull rebuilds (D-REL-25).
-            chatIdentity.seed(session)
+            chatIdentity.discardRecord()
         } else {
             sessions.save(session)
         }

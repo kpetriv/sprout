@@ -10,6 +10,8 @@ import dev.kpetriv.sprout.core.model.DeviceId
 import dev.kpetriv.sprout.core.model.HouseholdId
 import dev.kpetriv.sprout.core.model.Role
 import dev.kpetriv.sprout.core.model.ThreadId
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
@@ -26,7 +28,8 @@ import javax.inject.Inject
  * This device's own chat counters in one thread when it signed out (D-REL-25): the `seq` its next message there takes
  * and the lamport of its last one. Receivers expect the `seq` to go on and the lamport to rise, so a restored phone
  * must never reuse values it already sent, even when the server no longer has those messages (deleted chat history,
- * a retention prune) and the pull cannot rebuild them.
+ * a retention prune) and the pull cannot rebuild them. [lastLamport] is a floor for the device clock next to
+ * [KeptChatIdentity.deviceLamport] ([ChatIdentityKeeper.seed] takes the higher of them).
  */
 data class OwnThreadMark(val threadId: ThreadId, val nextSeq: Long, val lastLamport: Long)
 
@@ -113,24 +116,42 @@ data class KeptChatIdentity(
 
 /**
  * The lifecycle of this phone's chat X25519 key across a sign-out (ADR-0008 §1, D-REL-6, D-REL-7, D-REL-24 to
- * D-REL-28), every step through the wrapped [SecretStore] and under its lock:
+ * D-REL-28, D-REL-30 to D-REL-33), every step through the wrapped [SecretStore]:
  * - [keepForSignOut]: a sign-out wipe of a PARENT session writes [RECORD] (household, device id, Lamport clock and
  *   this device's [OwnThreadMark]s) before the database goes; the wipe then leaves the key and the record in place.
- * - [seed]: once the same parent restores the same device id, the record's counters are put back into the new
- *   database (the device clock, and a per-thread `seq` floor that [MessageWrites] honours), and the record goes.
- * - [stash]: before this phone registers as a new device, the live key is moved to [STASH_KEY] with [STASH_RECORD],
- *   tagged with the device id it belongs to. Under its stash name the key does not open (its wrapping stays bound to
- *   `chat.x25519.v1`), so no new registration ever starts while the old key is live and nothing else can use it.
+ * - [seed]: before the same parent's session for the same device id is saved, the record's counters are put into the
+ *   new database (the device clock, and a per-thread `seq` floor that [MessageWrites] honours); [discardRecord] deletes
+ *   the record once the session is saved, and [resumeSeed] does both again at a start that finds a session and a record
+ *   of its own device (a process death in between).
+ * - [stash]: before this phone registers as a new device, the live key is moved to [STASH_KEY], tagged
+ *   ([STASH_RECORD]) with the device id it belongs to. Under its stash name the key does not open (its wrapping stays
+ *   bound to `chat.x25519.v1`), so no new registration ever starts while the old key is live and nothing else can use
+ *   it.
  * - [dropStash]: a registration the server accepted (the new key was promoted) deletes the stash for good.
  * - [unstash]: restoring the stash's own device id moves the stash back over whatever key a failed registration made.
- * - [forget]: a kept key whose device is gone from the household (D-REL-28) is deleted with its record.
+ * - [forget], [forgetIf], [dropStashIf]: a kept key or stash whose device is gone from the household (D-REL-28) is
+ *   deleted, the `If` forms only while it is still the one that was checked.
+ *
+ * Every step that changes these names holds one lock for the whole process ([LOCK]; the keeper itself is not a
+ * singleton), so a slow start-up check never deletes a key that onboarding moved or made meanwhile (D-REL-30).
+ *
+ * Crash safety (D-REL-31): the stash exists exactly when [STASH_KEY] is stored. Its tag is written first (a fresh
+ * record bound to [STASH_RECORD]), then the key moves, then [RECORD] goes; [unstash] writes [RECORD] from the tag
+ * first, then moves the key back (the move replaces any live key), then deletes the tag. A tag without its key is
+ * no stash and is deleted wherever it is found; a stashed key without a readable tag can never be identified, so it
+ * is never restored and is deleted too. A process death between any two steps therefore leaves either the live key or a
+ * complete stash, and running the same step again finishes it.
  */
+@Suppress("TooManyFunctions") // One function per step of the key's lifecycle, each under the same lock.
 class ChatIdentityKeeper @Inject constructor(private val database: SproutDatabase, private val secrets: SecretStore) {
     /** The record a sign-out kept, or null (none, or unreadable). */
-    suspend fun kept(): KeptChatIdentity? = read(RECORD, RECORD)
+    suspend fun kept(): KeptChatIdentity? = read(RECORD)
 
-    /** The stash's tag, or null when there is no readable stash. */
-    suspend fun stashed(): KeptChatIdentity? = read(STASH_RECORD, RECORD)
+    /** The stash's tag, or null when there is no stash or its tag cannot be read ([hasStash] tells them apart). */
+    suspend fun stashed(): KeptChatIdentity? = if (secrets.contains(STASH_KEY)) read(STASH_RECORD) else null
+
+    /** True when a stashed key is stored, tagged or not. */
+    suspend fun hasStash(): Boolean = secrets.contains(STASH_KEY)
 
     /** True when a chat key is stored under its live name. */
     suspend fun hasKey(): Boolean = secrets.contains(KEY)
@@ -158,88 +179,139 @@ class ChatIdentityKeeper @Inject constructor(private val database: SproutDatabas
             }
             KeptChatIdentity(session.householdId, session.deviceId, DeviceClock.of(database).current(), marks)
         }
-        secrets.writeRecord(RECORD, identity.encode())
+        LOCK.withLock { secrets.writeRecord(RECORD, identity.encode()) }
         return true
     }
 
     /**
-     * Puts the kept counters back for [session], the same device of the same household restored by its parent: the
-     * device clock moves up to the kept one and each thread gets a `seq` floor ([ownSeqFloor]). The record is
-     * deleted afterwards whatever it held (a real session now owns this phone). No record, nothing to do.
+     * Puts the kept counters into this database for [session] when the record is a sign-out's of the same device of
+     * the same household and [session] is that parent's: the device clock moves up to the kept one (and to every
+     * thread's last lamport), and each thread gets a `seq` floor ([ownSeqFloor]). Idempotent; the record stays
+     * ([discardRecord] deletes it once the session is saved). True when it seeded; anything else is refused.
      */
-    suspend fun seed(session: Session) {
-        if (session.isLocalTrial) return
-        val identity = kept()
-        val sameDevice = identity?.let { it.deviceId == session.deviceId && it.householdId == session.householdId }
-        if (identity != null && sameDevice == true && session.role == Role.PARENT) {
-            DeviceClock.of(database).withLock {
-                database.withTransaction {
-                    database.advanceDeviceLamport(session.deviceId, identity.deviceLamport)
-                    database.syncCursorDao().upsert(
-                        identity.marks.map {
-                            SyncCursorEntity(session.householdId, floorKey(it.threadId), "${it.nextSeq}")
-                        },
-                    )
-                }
-            }
-        }
-        secrets.delete(RECORD)
+    suspend fun seed(session: Session): Boolean = LOCK.withLock { seedLocked(session) }
+
+    /** Deletes [RECORD] (the session that now owns this phone is saved; a record of another device has no use). */
+    suspend fun discardRecord() {
+        LOCK.withLock { secrets.delete(RECORD) }
+    }
+
+    /**
+     * At a start with [session]: a record of its own device means a process death between saving the session and
+     * deleting the record, so [seed] runs again and the record goes; true when it did. Any other record is left alone.
+     */
+    suspend fun resumeSeed(session: Session): Boolean = LOCK.withLock {
+        seedLocked(session).also { seeded -> if (seeded) secrets.delete(RECORD) }
     }
 
     /**
      * Moves the live key away before this phone registers as a new device ([currentDeviceId] is the device the key
      * belongs to, the current signing key's). A stash of [currentDeviceId] already there is kept and the live key
-     * (one a failed registration made) deleted; a stash of another device is stale and goes. Throws [IOException]
-     * when a key is still stored under the live name afterwards: nothing may be registered then.
+     * (one a failed registration made) deleted; any other stash is stale or unidentifiable and goes. Throws
+     * [IOException] when a key is still stored under the live name afterwards: nothing may be registered then.
      */
     suspend fun stash(currentDeviceId: DeviceId) {
-        val stashed = stashed()
-        if (stashed != null && stashed.deviceId == currentDeviceId) {
-            secrets.delete(KEY)
+        LOCK.withLock {
+            val own = secrets.contains(STASH_KEY) && read(STASH_RECORD)?.deviceId == currentDeviceId
+            if (own) {
+                // A crash after the key moved (or an earlier attempt) left the stash complete: finish it.
+                secrets.delete(KEY)
+            } else {
+                dropStashLocked()
+                if (secrets.contains(KEY)) {
+                    val live = read(RECORD)?.takeIf { it.deviceId == currentDeviceId }
+                        ?: KeptChatIdentity(null, currentDeviceId)
+                    secrets.writeRecord(STASH_RECORD, live.encode())
+                    secrets.rename(KEY, STASH_KEY)
+                }
+            }
             secrets.delete(RECORD)
-        } else {
-            dropStash()
-            val live = kept()?.takeIf { it.deviceId == currentDeviceId } ?: KeptChatIdentity(null, currentDeviceId)
-            secrets.writeRecord(RECORD, live.encode())
-            if (secrets.rename(KEY, STASH_KEY)) secrets.rename(RECORD, STASH_RECORD) else secrets.delete(RECORD)
+            if (secrets.contains(KEY)) throw IOException("The chat key could not be moved away")
         }
-        if (secrets.contains(KEY)) throw IOException("The chat key could not be moved away")
     }
 
     /**
      * Moves the stash back when it belongs to [deviceId] (the device being restored), replacing any live key; true
-     * when it did. A stash of another device is stale and deleted.
+     * when it did. A stash of another device, or one without a readable tag, is deleted.
      */
-    suspend fun unstash(deviceId: DeviceId): Boolean {
-        val stashed = stashed()
-        val own = stashed != null && stashed.deviceId == deviceId
-        if (own) {
-            secrets.delete(KEY)
-            secrets.rename(STASH_KEY, KEY)
-            secrets.rename(STASH_RECORD, RECORD)
-            // A tag without a household was never a sign-out's record: it has nothing to seed.
-            if (stashed?.householdId == null) secrets.delete(RECORD)
-        } else if (stashed != null) {
-            dropStash()
+    suspend fun unstash(deviceId: DeviceId): Boolean = LOCK.withLock {
+        if (!secrets.contains(STASH_KEY)) {
+            // No stash; a tag left by a cut-short unstash is no use.
+            secrets.delete(STASH_RECORD)
+            return@withLock false
         }
-        return own
+        val tag = read(STASH_RECORD)
+        if (tag == null || tag.deviceId != deviceId) {
+            dropStashLocked()
+            return@withLock false
+        }
+        // A tag without a household was never a sign-out's record: it has nothing to seed.
+        if (tag.householdId != null) secrets.writeRecord(RECORD, tag.encode()) else secrets.delete(RECORD)
+        secrets.rename(STASH_KEY, KEY)
+        secrets.delete(STASH_RECORD)
+        true
     }
 
-    /** Deletes the stash (its key and its tag). */
+    /** Deletes the stash (its key, then its tag). */
     suspend fun dropStash() {
-        secrets.delete(STASH_KEY)
-        secrets.delete(STASH_RECORD)
+        LOCK.withLock { dropStashLocked() }
     }
 
     /** Deletes the live key and its record. */
     suspend fun forget() {
+        LOCK.withLock { forgetLocked() }
+    }
+
+    /**
+     * [forget], only while [RECORD] still holds [checked]: a key stashed, restored or replaced since it was checked is
+     * left alone (D-REL-30). True when it deleted.
+     */
+    suspend fun forgetIf(checked: KeptChatIdentity): Boolean = LOCK.withLock {
+        (read(RECORD) == checked).also { same -> if (same) forgetLocked() }
+    }
+
+    /**
+     * [dropStash], only while the stash is still the one checked: tagged [checked], or untagged when [checked] is null.
+     * True when it deleted.
+     */
+    suspend fun dropStashIf(checked: KeptChatIdentity?): Boolean = LOCK.withLock {
+        (secrets.contains(STASH_KEY) && read(STASH_RECORD) == checked).also { same -> if (same) dropStashLocked() }
+    }
+
+    private suspend fun seedLocked(session: Session): Boolean {
+        val identity = kept()?.takeIf { it.isSignOutOf(session) } ?: return false
+        val lamport = maxOf(identity.deviceLamport, identity.marks.maxOfOrNull { it.lastLamport } ?: 0)
+        DeviceClock.of(database).withLock {
+            database.withTransaction {
+                database.advanceDeviceLamport(session.deviceId, lamport)
+                database.syncCursorDao().upsert(
+                    identity.marks.map {
+                        SyncCursorEntity(session.householdId, floorKey(it.threadId), "${it.nextSeq}")
+                    },
+                )
+            }
+        }
+        return true
+    }
+
+    private fun KeptChatIdentity.isSignOutOf(session: Session): Boolean = !session.isLocalTrial &&
+        session.role == Role.PARENT &&
+        deviceId == session.deviceId &&
+        householdId == session.householdId
+
+    private suspend fun forgetLocked() {
         secrets.delete(KEY)
         secrets.delete(RECORD)
     }
 
+    private suspend fun dropStashLocked() {
+        secrets.delete(STASH_KEY)
+        secrets.delete(STASH_RECORD)
+    }
+
     @Suppress("SwallowedException") // An unreadable record is no record; it is replaced or deleted later.
-    private suspend fun read(name: String, boundTo: String): KeptChatIdentity? = try {
-        secrets.readRecord(name, boundTo)?.let(KeptChatIdentity::decodeOrNull)
+    private suspend fun read(name: String): KeptChatIdentity? = try {
+        secrets.readRecord(name)?.let(KeptChatIdentity::decodeOrNull)
     } catch (unreadable: SecretUnavailableException) {
         null
     }
@@ -254,11 +326,14 @@ class ChatIdentityKeeper @Inject constructor(private val database: SproutDatabas
         /** [KEY] moved away before a new registration, still wrapped for its own name. */
         const val STASH_KEY: String = "chat.x25519.v1.stash"
 
-        /** [RECORD] moved away with [STASH_KEY]: the device id the stash belongs to. */
+        /** The stash's tag: a [KeptChatIdentity] written fresh under this name, naming the device [STASH_KEY] is of. */
         const val STASH_RECORD: String = "chat.identity.v1.stash"
 
         /** Every `SecretStore` name of the chat key's lifecycle. */
         val NAMES: List<String> = listOf(KEY, RECORD, STASH_KEY, STASH_RECORD)
+
+        /** One lock for every keeper in the process: they all share the same names in the same store. */
+        private val LOCK = Mutex()
 
         /** The `sync_cursor` key of this device's `seq` floor in [threadId] (no collection starts with `#`). */
         internal fun floorKey(threadId: ThreadId): String = "$FLOOR_PREFIX${threadId.value}"

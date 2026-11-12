@@ -40,12 +40,15 @@ class SignInAgainViewModelTest {
         var unsynced = 3
         var hasPin = true
         var check = ErasePinCheck.CONFIRMED
+        var keeps = false
         val checkedPins = mutableListOf<String>()
         var lastPin: CharArray? = null
 
         override suspend fun unsyncedChanges(): Int = unsynced
 
         override suspend fun hasParentPin(): Boolean = hasPin
+
+        override suspend fun keepsChatKey(): Boolean = keeps
 
         override suspend fun checkPin(pin: CharArray): ErasePinCheck {
             checkedPins += String(pin)
@@ -153,6 +156,27 @@ class SignInAgainViewModelTest {
         status.complete(Result.success(GateDeviceStatus(DeviceStatusValue.ACTIVE, false)))
         viewModel.onEvent(SignInAgainEvent.EraseInstead)
         assertEquals(EraseConfirmState(unsyncedChanges = 3, needsPin = true), viewModel.state.value.erase)
+    }
+
+    @Test
+    fun `the confirmation keeps the chat key only after the registry answered, on a parent's phone`() = runTest {
+        confirmation.keeps = true
+        val answered = SignInAgainViewModel(gated(), confirmation)
+        answered.onEvent(SignInAgainEvent.EraseInstead)
+        assertEquals(true, answered.state.value.erase?.keepsChatKey, "a sign-out: the key stays (D-REL-23)")
+
+        status = CompletableDeferred(Result.failure(IllegalStateException("offline")))
+        val gate = gated()
+        assertEquals(GateState.Unreachable, gate.state.value)
+        val unreachable = SignInAgainViewModel(gate, confirmation)
+        unreachable.onEvent(SignInAgainEvent.EraseInstead)
+        assertEquals(false, unreachable.state.value.erase?.keepsChatKey, "unverified: chat is set up again")
+
+        confirmation.keeps = false
+        status = CompletableDeferred(Result.success(GateDeviceStatus(DeviceStatusValue.ACTIVE, false)))
+        val kid = SignInAgainViewModel(gated(), confirmation)
+        kid.onEvent(SignInAgainEvent.EraseInstead)
+        assertEquals(false, kid.state.value.erase?.keepsChatKey, "a phone whose erase keeps nothing")
     }
 
     @Test

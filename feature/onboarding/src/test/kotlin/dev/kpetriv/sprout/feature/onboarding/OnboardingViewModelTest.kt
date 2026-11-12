@@ -25,6 +25,7 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 @OptIn(ExperimentalCoroutinesApi::class)
+@Suppress("LargeClass") // One flow end to end; every case shares the same fakes and step helpers.
 class OnboardingViewModelTest {
     @get:Rule
     val main = MainDispatcherRule()
@@ -469,6 +470,52 @@ class OnboardingViewModelTest {
         assertEquals(OnboardingStep.Welcome, viewModel.state.value.step)
         assertEquals(OnboardingFailure.NOT_ALLOWED, viewModel.state.value.failure)
         assertFalse(viewModel.state.value.busy)
+        assertNull(sessions.session.value)
+    }
+
+    @Test
+    fun `another account's pending key on this phone is skipped and the current key is restored (D-REL-34)`() {
+        auth.claims[0] = parentClaims()
+        val current = currentDevice()
+        // An unfinished registration of a co-parent's account left its pending key on this phone.
+        val pending = kotlinx.coroutines.runBlocking { keys.regenerateForRegistration(byteArrayOf(7)) }
+            .publicKey.deviceId()
+        backend.statuses[RegistrationKey.PENDING] = RegistryStatus.PENDING
+        backend.statuses[RegistrationKey.CURRENT] = RegistryStatus.ACTIVE
+        household.ownerOf = { device ->
+            if (device ==
+                pending
+            ) {
+                RegisteredOwner(UserId("co-parent"), Role.PARENT)
+            } else {
+                RegisteredOwner(PARENT_UID, Role.PARENT)
+            }
+        }
+        household.onSync = { household.activeDevice = current }
+        val viewModel = viewModel()
+        viewModel.signIn()
+
+        assertEquals(listOf(pending, current), household.ownerReads.map { it.first })
+        assertNull(viewModel.state.value.failure)
+        assertEquals(current, sessions.session.value?.deviceId)
+        assertEquals(RegistrationStatus.ACTIVE, sessions.session.value?.deviceStatus)
+        assertEquals(OnboardingStep.ParentLock, viewModel.state.value.step)
+        assertFalse("signOut" in log.calls)
+    }
+
+    @Test
+    fun `another account's pending key and current key refuse on the current key`() {
+        auth.claims[0] = parentClaims()
+        kotlinx.coroutines.runBlocking { keys.regenerateForRegistration(byteArrayOf(7)) }
+        backend.statuses[RegistrationKey.PENDING] = RegistryStatus.PENDING
+        backend.statuses[RegistrationKey.CURRENT] = RegistryStatus.ACTIVE
+        household.ownerOf = { RegisteredOwner(UserId("co-parent"), Role.PARENT) }
+        val viewModel = viewModel()
+        viewModel.signIn()
+
+        assertEquals(2, household.ownerReads.size, "the pending key is skipped, the current one refuses")
+        assertEquals(OnboardingFailure.NOT_ALLOWED, viewModel.state.value.failure)
+        assertFalse(log.calls.any { it.startsWith("saveSession") })
         assertNull(sessions.session.value)
     }
 

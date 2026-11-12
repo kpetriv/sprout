@@ -324,6 +324,35 @@ describe('one encryption key per device row in a household (D-REL-27)', () => {
     expect(await register(h.parent, encryptionKeyArgs(h.device, h.hid, own))).toMatchObject({ created: false });
   });
 
+  it('a pending registerParentDevice retry adds a free key and refuses one another device row holds', async () => {
+    const h = await newHousehold();
+    const taken = newEncryptionKey();
+    await register(h.parent, encryptionKeyArgs(h.device, h.hid, taken));
+    const second = newDevice();
+    await call(fns.registerParentDevice, req(h.parent, { devicePublicKey: second.publicKey }));
+    expect(await deviceRow(h, second)).toMatchObject({ status: 'PENDING' });
+    expect((await deviceRow(h, second)).encryptionKey).toBeUndefined();
+
+    const retry = (key: Buffer) =>
+      call(
+        fns.registerParentDevice,
+        req(h.parent, {
+          devicePublicKey: second.publicKey,
+          encryptionKey: key.toString('base64'),
+          encryptionKeySignature: encryptionKeyBinding(second, h.hid, key),
+        }),
+      );
+    await expectCode(retry(taken), 'failed-precondition');
+    expect((await deviceRow(h, second)).encryptionKey).toBeUndefined();
+
+    const own = newEncryptionKey();
+    await retry(own);
+    expect(await deviceRow(h, second)).toMatchObject({ status: 'PENDING', encryptionKey: own.toString('base64') });
+    // Once the row has a key, a retry changes nothing, whatever key it sends.
+    await retry(newEncryptionKey());
+    expect((await deviceRow(h, second)).encryptionKey).toBe(own.toString('base64'));
+  });
+
   it('registerParentDevice and redeemLinkCode refuse a key a device row already holds and create nothing', async () => {
     const h = await newHousehold();
     const key = newEncryptionKey();

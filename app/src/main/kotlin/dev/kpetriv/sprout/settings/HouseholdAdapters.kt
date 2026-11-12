@@ -2,6 +2,7 @@ package dev.kpetriv.sprout.settings
 
 import android.content.Context
 import android.net.Uri
+import dagger.Lazy
 import dagger.hilt.android.qualifiers.ApplicationContext
 import dev.kpetriv.sprout.core.common.Dispatcher
 import dev.kpetriv.sprout.core.common.SproutDispatchers
@@ -34,11 +35,13 @@ import dev.kpetriv.sprout.sync.HouseholdRemovals
 import dev.kpetriv.sprout.sync.RemovalReason
 import dev.kpetriv.sprout.sync.SyncController
 import dev.kpetriv.sprout.sync.SyncPause
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.JsonObject
 import java.io.IOException
 import javax.inject.Inject
@@ -97,12 +100,26 @@ class FunctionsKidLinking @Inject constructor(private val admin: HouseholdAdminF
  *
  * Signing out is a removal ([RemovalReason.SIGNED_OUT], D-M3-47): stored at once, then [HouseholdRemovals]' owner
  * stops sync, erases this phone's copy and signs out of Firebase; the shell shows the erase screen and restarts.
+ * Before that, one sync is tried for at most [FLUSH_TIMEOUT_MS] (the dialog shows that it is signing out): changes
+ * still in the outbox are lost by the erase, and a chat message among them would leave a gap in this device's `seq`
+ * that the kept counters jump over after a restore (D-REL-25, D-REL-35). Offline, it fails fast or times out; the
+ * sign-out goes on either way.
  */
-class SessionAccountControl @Inject constructor(
+class SessionAccountControl internal constructor(
     private val sessions: SessionStore,
     private val removals: HouseholdRemovals,
     private val accounts: AccountInfoReader,
+    private val flushOutbox: suspend () -> Unit = {},
+    private val flushTimeoutMs: Long = FLUSH_TIMEOUT_MS,
 ) : AccountControl {
+    @Inject
+    constructor(
+        sessions: SessionStore,
+        removals: HouseholdRemovals,
+        accounts: AccountInfoReader,
+        sync: Lazy<SyncController>,
+    ) : this(sessions, removals, accounts, flushOutbox = { sync.get().syncNow() })
+
     override fun observe(): Flow<AccountInfo> = sessions.observe().map { session ->
         val parent = session?.takeIf { !it.isLocalTrial && it.role == Role.PARENT }
         AccountInfo(
@@ -115,7 +132,24 @@ class SessionAccountControl @Inject constructor(
     override suspend fun signOut() {
         val session = sessions.get()
         if (session == null || session.isLocalTrial) return
+        flushBestEffort()
         removals.remove(RemovalReason.SIGNED_OUT)
+    }
+
+    @Suppress("TooGenericExceptionCaught", "SwallowedException") // Dropped unlogged: the sign-out goes on.
+    private suspend fun flushBestEffort() {
+        try {
+            withTimeoutOrNull(flushTimeoutMs) { flushOutbox() }
+        } catch (cancellation: CancellationException) {
+            throw cancellation
+        } catch (failure: Exception) {
+            // Nothing to show or log.
+        }
+    }
+
+    companion object {
+        /** How long a sign-out waits for its last sync. */
+        const val FLUSH_TIMEOUT_MS: Long = 5_000
     }
 }
 

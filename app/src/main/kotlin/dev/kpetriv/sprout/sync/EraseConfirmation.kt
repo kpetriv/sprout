@@ -1,5 +1,6 @@
 package dev.kpetriv.sprout.sync
 
+import dev.kpetriv.sprout.core.database.SessionStore
 import dev.kpetriv.sprout.core.database.SproutDatabase
 import dev.kpetriv.sprout.feature.lock.ParentPinStore
 import dev.kpetriv.sprout.feature.lock.ParentSession
@@ -27,6 +28,12 @@ interface EraseConfirmation {
 
     /** Checks [pin] with `feature/lock`'s PIN check (its lockout included). Zeroes [pin]. */
     suspend fun checkPin(pin: CharArray): ErasePinCheck
+
+    /**
+     * True when an erase after the registry answered keeps this phone's chat key: the session is a parent's (ACTIVE or
+     * PENDING), the same test the removal makes ([keepsDeviceIdentity], D-REL-23).
+     */
+    suspend fun keepsChatKey(): Boolean
 }
 
 /**
@@ -38,8 +45,11 @@ class LocalEraseConfirmation @Inject constructor(
     private val database: SproutDatabase,
     private val pins: ParentPinStore,
     private val parentSession: ParentSession,
+    private val sessions: SessionStore,
 ) : EraseConfirmation {
     override suspend fun unsyncedChanges(): Int = database.outboxDao().count()
+
+    override suspend fun keepsChatKey(): Boolean = keepsDeviceIdentity(sessions.get())
 
     @Suppress("SwallowedException") // Unreadable storage reads as "a PIN exists"; nothing to log.
     override suspend fun hasParentPin(): Boolean = try {

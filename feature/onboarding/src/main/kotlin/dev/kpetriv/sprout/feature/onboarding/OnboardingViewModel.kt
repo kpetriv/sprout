@@ -257,7 +257,8 @@ class OnboardingViewModel @Inject constructor(
      *
      * `deviceStatus` proves the key, not the account, so before anything is saved or synced the device's registry row
      * must name [uid] as a PARENT ([isOwner], D-REL-22): another account's device on this phone (a co-parent
-     * signing in on the owner's signed-out phone) restores nothing, syncs nothing and keeps the owner's chat key.
+     * signing in on the owner's signed-out phone) restores nothing, syncs nothing and keeps the owner's chat key. A
+     * PENDING key whose row names another account is skipped rather than refused (D-REL-34).
      * Restoring the current key puts back a chat key that a failed registration moved away from it
      * ([OnboardingHousehold.restoreChatKey], D-REL-24).
      */
@@ -269,8 +270,7 @@ class OnboardingViewModel @Inject constructor(
             return true
         }
         for (key in listOf(RegistrationKey.PENDING, RegistrationKey.CURRENT)) {
-            val (status, candidate) = registered(householdId, key) ?: continue
-            if (!isOwner(householdId, candidate, uid, Role.PARENT, kidId = null)) refuseAnotherAccount()
+            val (status, candidate) = ownRegistered(householdId, key, uid) ?: continue
             val deviceId = if (key == RegistrationKey.PENDING) {
                 promotePending()
             } else {
@@ -303,6 +303,24 @@ class OnboardingViewModel @Inject constructor(
             return null
         }
         return deviceOf(key)?.let { status to it }
+    }
+
+    /**
+     * [registered], when [key]'s registry row names [uid] as a PARENT ([isOwner]). Another account's unfinished
+     * registration on this phone (the PENDING key) is not this account's device: it is skipped (null) and the current
+     * key decides; a new registration replaces it. Only the CURRENT key refuses ([refuseAnotherAccount], D-REL-34).
+     */
+    private suspend fun ownRegistered(
+        householdId: HouseholdId,
+        key: RegistrationKey,
+        uid: UserId,
+    ): Pair<RegistryStatus, DeviceId>? {
+        val registered = registered(householdId, key) ?: return null
+        return when {
+            isOwner(householdId, registered.second, uid, Role.PARENT, kidId = null) -> registered
+            key == RegistrationKey.PENDING -> null
+            else -> refuseAnotherAccount()
+        }
     }
 
     /** The device id of [key]: the current signing key's, or the pending registration key's (null when none). */

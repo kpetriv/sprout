@@ -67,11 +67,15 @@ class WipeLocalDataUseCase internal constructor(
      * Erases everything listed above; true when it is all gone. [keepDeviceIdentity] (the sign-out of a parent
      * session, decided by the caller, D-REL-23) keeps [LocalDataFiles.DEVICE_IDENTITY_SECRETS], but only once their
      * record is written ([ChatIdentityKeeper.keepForSignOut], before anything is erased) or was written by an earlier
-     * attempt of the same wipe: a key without its record (household, device id, counters) is erased like any other.
+     * attempt of the same wipe, which is known by the session being gone already: a key without its record (household,
+     * device id, counters) is erased like any other, and so is one whose only record predates a session that is still
+     * here (a restore whose record was not deleted yet, D-REL-33: its counters are stale).
      */
     suspend operator fun invoke(keepDeviceIdentity: Boolean = false): Boolean {
-        val keep = keepDeviceIdentity &&
-            (attempt { identity.keepForSignOut() } == true || attempt { identity.kept() } != null)
+        val keep = keepDeviceIdentity && (
+            attempt { identity.keepForSignOut() } == true ||
+                (attempt { sessions.get() == null } == true && attempt { identity.kept() } != null)
+            )
         bestEffort {
             sessions.clear()
             database.syncCursorDao().deleteAll()

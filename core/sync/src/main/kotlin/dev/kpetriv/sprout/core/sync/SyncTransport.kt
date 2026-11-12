@@ -74,9 +74,10 @@ interface SyncTransport {
 
     /**
      * The registry row of [deviceId] in [householdId] as the server holds it, read with the signed-in account's
-     * credentials (a member of [householdId]) whether or not a session is stored yet; null when there is no such row,
-     * or it does not parse. Onboarding reads it before it restores a device (D-REL-22): a device the registry knows is
-     * restored only for the account and role that registered it. Any failure is a [SyncException] (never "no row").
+     * credentials (a member of [householdId]) whether or not a session is stored yet; null when there is no such row.
+     * Onboarding reads it before it restores a device (D-REL-22): a device the registry knows is restored only for the
+     * account and role that registered it. Any failure is a [SyncException] (never "no row"): a row the rules refuse
+     * (not a member), and a row that is there but does not parse.
      */
     suspend fun registeredDevice(householdId: HouseholdId, deviceId: DeviceId): RegisteredDevice? =
         throw SyncException(SyncError.Transient())

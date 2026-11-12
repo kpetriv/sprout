@@ -545,14 +545,17 @@ internal constructor(
         }
     }
 
-    // SyncException carries the code only, never the SDK failure (codes only, no free text).
+    // SyncException carries the code only, never the SDK failure (codes only, no free text). A row that is there but
+    // does not parse (or is not this device's) is a failure too, never "no row" (D-REL-22).
     @Suppress("SwallowedException")
-    override suspend fun registeredDevice(householdId: HouseholdId, deviceId: DeviceId): RegisteredDevice? = try {
-        call { get(FirestoreLayout.document(householdId, FirestoreLayout.DEVICES, deviceId.value)) }
-            ?.takeIf { it.id == deviceId.value }
-            ?.let { StoredShapes.deviceOf(it, householdId) }
-    } catch (failure: FirestoreFailure) {
-        throw SyncException(syncErrorOf(failure.code))
+    override suspend fun registeredDevice(householdId: HouseholdId, deviceId: DeviceId): RegisteredDevice? {
+        val document = try {
+            call { get(FirestoreLayout.document(householdId, FirestoreLayout.DEVICES, deviceId.value)) }
+        } catch (failure: FirestoreFailure) {
+            throw SyncException(syncErrorOf(failure.code))
+        } ?: return null
+        return document.takeIf { it.id == deviceId.value }?.let { StoredShapes.deviceOf(it, householdId) }
+            ?: throw SyncException(SyncError.Permanent(MALFORMED))
     }
 
     private suspend fun pullPage(hid: HouseholdId, cursor: SyncCursor): PullPage {

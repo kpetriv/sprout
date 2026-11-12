@@ -21,9 +21,15 @@ import javax.inject.Inject
  * only until Sprout is set up again on it, it is removed from the household, or it is uninstalled. At a start with no
  * session, a kept key (its record names the household and the device, [ChatIdentityKeeper]) is checked with the
  * token-less, device-signed `deviceStatus`: REVOKED, UNKNOWN (the proof fails or there is no such device) or a
- * household that is gone deletes it. A record of another device than this phone's current one can never be restored
- * and goes too. The same applies to a stash of the current device. Bounded ([TIMEOUT_MS]) and best effort: no answer
- * (offline, server trouble) keeps the key, and the next start asks again. Nothing is logged.
+ * household that is gone deletes it, and a stash of the same device with it, so none of the four names is left. A
+ * record of another device than this phone's current one can never be restored and goes at once. A stash is checked
+ * the same way; one whose tag names no household (a key no sign-out kept: a registration that did not finish) or that
+ * has no readable tag can never be checked or restored, and goes too (D-REL-32).
+ *
+ * The answers are bounded ([TIMEOUT_MS]) and best effort: no answer (offline, server trouble) keeps the key, and the
+ * next start asks again. Onboarding may stash, restore or replace the key while the check waits (D-REL-30): every
+ * deletion goes through [ChatIdentityKeeper.forgetIf] or [ChatIdentityKeeper.dropStashIf], which delete only while the
+ * record or the stash is still the one that was checked, under the keeper's lock. Nothing is logged.
  */
 class KeptChatKeyCheck internal constructor(
     private val identity: ChatIdentityKeeper,
@@ -42,24 +48,31 @@ class KeptChatKeyCheck internal constructor(
     )
 
     /** Runs the check once; returns what it deleted, for tests. */
-    suspend operator fun invoke(): Outcome = withTimeoutOrNull(timeoutMs) {
+    suspend operator fun invoke(): Outcome {
         val device = currentDevice()
-        Outcome(
-            liveForgotten = check(identity.kept(), device) { identity.forget() },
-            stashDropped = check(identity.stashed(), device) { identity.dropStash() },
+        val record = identity.kept()
+        val stashed = identity.hasStash()
+        val tag = if (stashed) identity.stashed() else null
+        // Only this device's households can be asked about: deviceStatus is signed with the current key.
+        val households = listOfNotNull(record, tag).filter { it.deviceId == device }.mapNotNull { it.householdId }
+        val gone = mutableMapOf<HouseholdId, Boolean>()
+        withTimeoutOrNull(timeoutMs) {
+            households.distinct().forEach { gone[it] = isGone(it, device) }
+        }
+        val recordGone = record != null && record.isGone(device, gone)
+        val stashGone = stashed && (tag == null || tag.isGone(device, gone))
+        return Outcome(
+            liveForgotten = recordGone && record != null && identity.forgetIf(record),
+            stashDropped = stashGone && identity.dropStashIf(tag),
         )
-    } ?: Outcome(liveForgotten = false, stashDropped = false)
+    }
 
     /** What one check deleted. */
     data class Outcome(val liveForgotten: Boolean, val stashDropped: Boolean)
 
-    /** True when [kept] was deleted with [delete]. */
-    private suspend fun check(kept: KeptChatIdentity?, device: DeviceId, delete: suspend () -> Unit): Boolean {
-        val householdId = kept?.householdId ?: return false
-        val gone = kept.deviceId != device || isGone(householdId, device)
-        if (gone) delete()
-        return gone
-    }
+    /** Another device's, without a household (nothing to ask), or answered gone; no answer is not gone. */
+    private fun KeptChatIdentity.isGone(device: DeviceId, answers: Map<HouseholdId, Boolean>): Boolean =
+        deviceId != device || householdId == null || answers[householdId] == true
 
     @Suppress("TooGenericExceptionCaught") // No answer is not an answer; nothing is logged.
     private suspend fun isGone(householdId: HouseholdId, device: DeviceId): Boolean {
@@ -79,7 +92,7 @@ class KeptChatKeyCheck internal constructor(
     }
 
     companion object {
-        /** How long one check may take before the key is kept until the next start. */
+        /** How long the answers may take before the key is kept until the next start. */
         const val TIMEOUT_MS: Long = 20_000
     }
 }

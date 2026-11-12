@@ -263,7 +263,9 @@ class ChatConvergenceTest {
             secretStore = parent.secretStore,
         )
         assertEquals(parent.deviceId, restored.deviceId)
-        restored.chatIdentity.seed(restored.session)
+        // What saving the restored session does: seed, save, then delete the record (D-REL-33).
+        assertTrue(restored.chatIdentity.seed(restored.session))
+        restored.chatIdentity.discardRecord()
         assertNull(restored.chatIdentity.kept(), "the record is used once")
         val engine = SyncEngine(
             FakeSyncTransport(backend, restored.deviceId, restored.session.uid, Role.PARENT),

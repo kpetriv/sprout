@@ -21,8 +21,11 @@ import dev.kpetriv.sprout.core.syncfirebase.DeviceStatusValue
 import dev.kpetriv.sprout.core.syncfirebase.FunctionsError
 import dev.kpetriv.sprout.core.syncfirebase.FunctionsException
 import dev.kpetriv.sprout.core.time.FakeClock
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.After
 import org.junit.Test
@@ -112,6 +115,69 @@ class KeptChatKeyCheckTest {
             assertFalse(identity.hasKey())
             assertNull(identity.kept())
         }
+    }
+
+    @Test
+    fun `a record of another device than this phone's goes at once, without asking`() = runTest {
+        keptBySignOut()
+        val outcome = KeptChatKeyCheck(identity, currentDevice = { DeviceId("e".repeat(64)) }, status = { _, _ ->
+            error("not asked")
+        })()
+
+        assertEquals(KeptChatKeyCheck.Outcome(liveForgotten = true, stashDropped = false), outcome)
+        assertFalse(identity.hasKey())
+        assertNull(identity.kept())
+    }
+
+    @Test
+    fun `a removed device loses all four names, an untagged stash key included`() = runTest {
+        keptBySignOut()
+        // A stash whose tag cannot be read, next to the live key and its record.
+        val live = identity.kept()!!
+        store.writeRecord(ChatIdentityKeeper.STASH_RECORD, byteArrayOf(1))
+        store.rename(ChatIdentityKeeper.KEY, ChatIdentityKeeper.STASH_KEY)
+        SecretStoreEncryptionKeyStore(store, JceX25519KeyAgreement(SecureRandom())).publicKey()
+        assertTrue(identity.hasStash())
+        assertNull(identity.stashed())
+        assertEquals(live, identity.kept())
+
+        answer = Result.success(DeviceStatusAnswer(DeviceStatusValue.REVOKED, false))
+        assertEquals(KeptChatKeyCheck.Outcome(liveForgotten = true, stashDropped = true), check()())
+        ChatIdentityKeeper.NAMES.forEach { assertFalse(store.contains(it), it) }
+    }
+
+    @Test
+    fun `a stash whose tag names no household cannot be checked and goes without asking`() = runTest {
+        // A key no sign-out kept (a registration that did not finish) stashed before another registration.
+        SecretStoreEncryptionKeyStore(store, JceX25519KeyAgreement(SecureRandom())).publicKey()
+        identity.stash(device)
+        assertNull(identity.stashed()?.householdId)
+
+        assertEquals(KeptChatKeyCheck.Outcome(liveForgotten = false, stashDropped = true), check()())
+        assertTrue(asked.isEmpty())
+        assertFalse(identity.hasStash())
+    }
+
+    @Test
+    fun `a late answer never deletes the key a registration made meanwhile`() = runTest {
+        keptBySignOut()
+        val keys = SecretStoreEncryptionKeyStore(store, JceX25519KeyAgreement(SecureRandom()))
+        val gate = CompletableDeferred<Unit>()
+        answer = Result.success(DeviceStatusAnswer(DeviceStatusValue.REVOKED, false))
+        val running = async { check { gate.await() }() }
+        runCurrent()
+        assertEquals(listOf(home to device), asked, "the check is waiting for its answer")
+
+        // Meanwhile the parent signs in to another household: the old key is stashed, the new device gets a fresh
+        // key with its registration, and the server accepts it (the stash goes).
+        identity.stash(device)
+        val fresh = keys.publicKey()
+        identity.dropStash()
+
+        gate.complete(Unit)
+        assertEquals(KeptChatKeyCheck.Outcome(liveForgotten = false, stashDropped = false), running.await())
+        assertTrue(identity.hasKey())
+        assertEquals(fresh, keys.keyPair(createIfMissing = false).use { it.publicKey }, "the new device keeps its key")
     }
 
     @Test

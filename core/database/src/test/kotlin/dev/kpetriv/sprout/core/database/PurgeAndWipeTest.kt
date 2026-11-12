@@ -363,6 +363,45 @@ class PurgeAndWipeTest {
         }
     }
 
+    // A resumed wipe whose first attempt wrote the record and cleared the session keeps it; a record found while a
+    // session is still here predates that session (a restore that had not deleted it yet) and keeps nothing (D-REL-33).
+    @Test
+    fun aRecordAloneKeepsTheKeyOnlyWhenNoSessionIsLeft() = runTest {
+        RealSecrets("wipe-resumed").use { real ->
+            real.keys().publicKey()
+            real.store().writeRecord(ChatIdentityKeeper.RECORD, KeptChatIdentity(home, household.deviceId).encode())
+            val database = real.database()
+            val sessions = RoomSessionStore(database, household.clock)
+            // A session whose sign-out keeps nothing of its own (a kid's), next to an older record.
+            sessions.save(parentSession(Role.KID))
+
+            assertTrue(
+                WipeLocalDataUseCase(
+                    database,
+                    sessions,
+                    real.files,
+                    ChatIdentityKeeper(database, real.store()),
+                    Dispatchers.Unconfined,
+                )(keepDeviceIdentity = true),
+            )
+            assertTrue(real.names().isEmpty(), "a stale record keeps nothing")
+
+            real.keys().publicKey()
+            real.store().writeRecord(ChatIdentityKeeper.RECORD, KeptChatIdentity(home, household.deviceId).encode())
+            val resumed = real.database()
+            assertTrue(
+                WipeLocalDataUseCase(
+                    resumed,
+                    RoomSessionStore(resumed, household.clock),
+                    real.files,
+                    ChatIdentityKeeper(resumed, real.store()),
+                    Dispatchers.Unconfined,
+                )(keepDeviceIdentity = true),
+            )
+            assertEquals(setOf("chat.x25519.v1.bin", "chat.identity.v1.bin"), real.names(), "the first attempt's")
+        }
+    }
+
     // A new device id (a new household, a second parent phone, a kid link) never inherits the kept key, and a failed
     // registration does not destroy it either (D-REL-7, D-REL-24).
     @Test

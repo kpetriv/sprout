@@ -84,13 +84,16 @@ sealed interface SignInAgainEvent {
 
 /**
  * The erase confirmation (audit L5): what erasing loses ([unsyncedChanges], null when it could not be counted) and,
- * when this phone has a parent PIN, the PIN ([needsPin]), checked by `feature/lock`.
+ * when this phone has a parent PIN, the PIN ([needsPin]), checked by `feature/lock`. [keepsChatKey]: the registry
+ * answered and this is a parent's phone, so the erase is a sign-out that keeps the chat key (D-REL-23); otherwise the
+ * key goes too and chat is set up again on this phone (D-REL-36).
  */
 data class EraseConfirmState(
     val unsyncedChanges: Int?,
     val needsPin: Boolean,
     val busy: Boolean = false,
     val pinFailure: ErasePinCheck? = null,
+    val keepsChatKey: Boolean = false,
 )
 
 /** The gate screen's own state; the gate itself is the [AppMode.SignInAgain] the shell already has. */
@@ -126,8 +129,13 @@ class SignInAgainViewModel @Inject constructor(
         viewModelScope.launch {
             val unsynced = attempt { confirmation.unsyncedChanges() }
             val needsPin = attempt { confirmation.hasParentPin() } ?: true
+            // The same test as the erase itself: unverified (Unreachable) never keeps the key, a kid's phone neither.
+            val keepsChatKey = gate.state.value is GateState.SignInRequired &&
+                attempt { confirmation.keepsChatKey() } == true
             if (gate.canEraseInstead()) {
-                mutableState.update { it.copy(erase = it.erase ?: EraseConfirmState(unsynced, needsPin)) }
+                mutableState.update {
+                    it.copy(erase = it.erase ?: EraseConfirmState(unsynced, needsPin, keepsChatKey = keepsChatKey))
+                }
             }
         }
     }
@@ -254,7 +262,11 @@ internal fun EraseConfirmDialog(state: EraseConfirmState, onEvent: (SignInAgainE
         title = { Text(stringResource(R.string.gate_erase_title)) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                Text(stringResource(R.string.gate_erase_text))
+                Text(
+                    stringResource(
+                        if (state.keepsChatKey) R.string.gate_erase_text else R.string.gate_erase_text_unverified,
+                    ),
+                )
                 Text(
                     when (val count = state.unsyncedChanges) {
                         null -> stringResource(R.string.gate_erase_unsynced_unknown)
