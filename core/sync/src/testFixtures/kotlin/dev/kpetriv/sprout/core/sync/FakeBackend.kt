@@ -68,7 +68,8 @@ import kotlin.time.Instant
  *   `"<threadId>.<epoch>.<createdByDeviceId>"`; `createdByDeviceId` is the author device; `lamport` at most
  *   [MAX_THREAD_KEY_LAMPORT]; an update only from the same author device (one creator per document, D-M4-3).
  * - **Household policy** (`household_policy`, PARENT only): the closed payload key set of policy v2, with
- *   `chatRetentionDays` 1 to 3650 and `dailyGameCapMinor` 0 to 10,000 when set (M7 §1).
+ *   `chatRetentionDays` 1 to 3650 and `dailyGameCapMinor` 0 to 10,000 when set (M7 §1); `requireParentSignature`
+ *   never goes from true to false over a stored copy (D-REL-23).
  * - **Read scoping**: a PARENT member pulls every message; a KID member only those of its own thread, and fetches
  *   only blobs of its own kid ([PERMISSION_DENIED] otherwise). Blobs are never pulled, only fetched by id.
  * - **Encryption keys** (M4 §1.1): [registerEncryptionKey] mirrors the `registerEncryptionKey` callable (binding
@@ -387,6 +388,30 @@ class FakeBackend(val householdId: HouseholdId, private val pageSize: Int = DEFA
         return Result.success(PruneCounts(doomed.size, chunks.size))
     }
 
+    /**
+     * The currency `createHousehold` stored on the household root document (server `households/{hid}.fiatCurrency`);
+     * null for a root without one. Read by [householdRoot] (D-REL-14).
+     */
+    @Volatile
+    var fiatCurrency: String? = null
+
+    /**
+     * False models a household root document that does not exist (`households/{hid}` missing): [householdRoot] then
+     * fails [SyncError.Transient], as `FirebaseSyncTransport` reports it, never an answer without a currency.
+     */
+    @Volatile
+    var householdRootStored: Boolean = true
+
+    /**
+     * A read of [householdRoot] the rules refuse on one path ([RootPath]): it fails [PERMISSION_DENIED] permanently,
+     * as `FirebaseSyncTransport` reports a denial for a member whose household is still readable.
+     */
+    @Volatile
+    var householdRootDenied: RootPath? = null
+
+    /** The two reads behind [SyncTransport.householdRoot]: the root document and the `householdPolicy` document. */
+    enum class RootPath { ROOT, POLICY }
+
     // ---- what transports call ----
 
     /**
@@ -401,6 +426,19 @@ class FakeBackend(val householdId: HouseholdId, private val pageSize: Int = DEFA
             throw SyncException(SyncError.Permanent(PERMISSION_DENIED))
         }
         return devices[deviceId]?.value
+    }
+
+    /**
+     * The server's household root as [SyncTransport.householdRoot] reads it: the root document first (missing:
+     * [householdRootStored]), then the policy document; either read may be denied ([householdRootDenied]).
+     */
+    @Synchronized
+    internal fun householdRoot(caller: Caller): HouseholdRoot {
+        checkReachable(caller.deviceId)
+        if (householdRootDenied == RootPath.ROOT) throw SyncException(SyncError.Permanent(PERMISSION_DENIED))
+        if (!householdRootStored) throw SyncException(SyncError.Transient())
+        if (householdRootDenied == RootPath.POLICY) throw SyncException(SyncError.Permanent(PERMISSION_DENIED))
+        return HouseholdRoot(fiatCurrency, document(DocTypes.HOUSEHOLD_POLICY, householdId.value) != null)
     }
 
     @Synchronized
@@ -592,7 +630,7 @@ class FakeBackend(val householdId: HouseholdId, private val pageSize: Int = DEFA
             isActiveDeviceOf(document.authorDeviceId, caller.uid) &&
             roleMayWrite &&
             (document.docType != DocTypes.THREAD_KEY || threadKeyAllowed(document, stored)) &&
-            (document.docType != DocTypes.HOUSEHOLD_POLICY || householdPolicyAllowed(document.payload)) &&
+            (document.docType != DocTypes.HOUSEHOLD_POLICY || householdPolicyAllowed(document.payload, stored)) &&
             (stored == null || updateAllowed(stored, document))
     }
 
@@ -614,9 +652,13 @@ class FakeBackend(val householdId: HouseholdId, private val pageSize: Int = DEFA
 
     /**
      * The `householdPolicy` payload rule (policy v2, M7 §1): the closed key set, and `chatRetentionDays` (1 to 3650)
-     * and `dailyGameCapMinor` (0 to 10,000) absent, null or an integer within bounds.
+     * and `dailyGameCapMinor` (0 to 10,000) absent, null or an integer within bounds. `requireParentSignature` is
+     * one-way (D-REL-23): no write turns it off over a [stored] policy that has it on.
      */
-    private fun householdPolicyAllowed(payload: JsonObject): Boolean {
+    private fun householdPolicyAllowed(payload: JsonObject, stored: DocumentEnvelope?): Boolean {
+        fun requiresSignature(of: JsonObject): Boolean =
+            (of[REQUIRE_PARENT_SIGNATURE] as? JsonPrimitive)?.takeUnless { it.isString }?.content == "true"
+        if (stored != null && requiresSignature(stored.payload) && !requiresSignature(payload)) return false
         fun bounded(key: String, range: LongRange): Boolean {
             val value = payload[key]
             return value == null || value is JsonNull ||
@@ -879,11 +921,12 @@ class FakeBackend(val householdId: HouseholdId, private val pageSize: Int = DEFA
         const val PRUNE_BLOB_GRACE_MS: Long = 10 * 60 * 1000
 
         private const val CHAT_RETENTION_DAYS = "chatRetentionDays"
+        private const val REQUIRE_PARENT_SIGNATURE = "requireParentSignature"
         private const val DAILY_GAME_CAP_MINOR = "dailyGameCapMinor"
 
         /** The closed key set of a `household_policy` payload (core/database `DocumentPayloads`, policy v2). */
         private val POLICY_KEYS =
-            setOf("fiatCurrency", "requireParentSignature", CHAT_RETENTION_DAYS, DAILY_GAME_CAP_MINOR)
+            setOf("fiatCurrency", REQUIRE_PARENT_SIGNATURE, CHAT_RETENTION_DAYS, DAILY_GAME_CAP_MINOR)
         private val POLICY_RETENTION_DAYS = 1L..3650L
         private val POLICY_GAME_CAP_MINOR = 0L..10_000L
 

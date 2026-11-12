@@ -10,9 +10,9 @@ import dev.kpetriv.sprout.core.crypto.EncryptionKeyStore
 import dev.kpetriv.sprout.core.crypto.JceEcdsaSigner
 import dev.kpetriv.sprout.core.crypto.chat.EncryptionKeyBinding
 import dev.kpetriv.sprout.core.database.ChatIdentityKeeper
-import dev.kpetriv.sprout.core.database.FiatCurrencyProvider
 import dev.kpetriv.sprout.core.database.HouseholdPolicyRepository
 import dev.kpetriv.sprout.core.database.LocalTrial
+import dev.kpetriv.sprout.core.database.LocaleFiatCurrencyProvider
 import dev.kpetriv.sprout.core.database.Session
 import dev.kpetriv.sprout.core.database.SessionStore
 import dev.kpetriv.sprout.core.database.SproutDatabase
@@ -26,6 +26,7 @@ import dev.kpetriv.sprout.core.model.DeviceId
 import dev.kpetriv.sprout.core.model.HouseholdId
 import dev.kpetriv.sprout.core.model.UserId
 import dev.kpetriv.sprout.core.sync.SyncException
+import dev.kpetriv.sprout.core.sync.SyncReport
 import dev.kpetriv.sprout.core.sync.SyncTransport
 import dev.kpetriv.sprout.core.syncfirebase.AuthError
 import dev.kpetriv.sprout.core.syncfirebase.AuthException
@@ -60,6 +61,8 @@ import dev.kpetriv.sprout.feature.onboarding.RegistrationKey
 import dev.kpetriv.sprout.feature.onboarding.RegistryStatus
 import dev.kpetriv.sprout.feature.onboarding.SigningSetupResult
 import dev.kpetriv.sprout.household.HouseholdAdminFunctions
+import dev.kpetriv.sprout.household.HouseholdPolicyRecovery
+import dev.kpetriv.sprout.household.PolicyReadiness
 import dev.kpetriv.sprout.sync.HouseholdRemovals
 import dev.kpetriv.sprout.sync.LocalHouseholdRows
 import dev.kpetriv.sprout.sync.ParentSetupTracker
@@ -195,7 +198,7 @@ class RoomOnboardingHousehold @Inject constructor(
     private val sessions: SessionStore,
     private val purge: PurgeLocalHouseholdUseCase,
     private val policies: HouseholdPolicyRepository,
-    private val currencies: FiatCurrencyProvider,
+    private val currencies: LocaleFiatCurrencyProvider,
     private val sync: SyncController,
     private val signer: DeviceSigner,
     private val preferences: ShellPreferences,
@@ -205,7 +208,9 @@ class RoomOnboardingHousehold @Inject constructor(
     private val chatKey: ForgetChatKeyUseCase,
     private val chatIdentity: ChatIdentityKeeper,
     private val transport: SyncTransport,
+    private val recovery: HouseholdPolicyRecovery,
 ) : OnboardingHousehold {
+    /** A new household's suggested currency: the locale's (the parent picks it; it is then the policy's). */
     override fun defaultCurrency(): Currency.Fiat = currencies.fiatCurrency()
 
     override suspend fun hasTrialData(): Boolean =
@@ -219,7 +224,11 @@ class RoomOnboardingHousehold @Inject constructor(
         policies.ensure(fiatCurrency)
     }
 
-    override suspend fun syncNow(): Boolean = sync.syncNow()?.error == null
+    /** [HouseholdPolicyRecovery]: Recoverable, then the policy with the server's currency, signatures off. */
+    override suspend fun recoverHouseholdPolicy(): Boolean =
+        recovery.readiness() is PolicyReadiness.Recoverable && recovery.restoreWithoutKey()
+
+    override suspend fun syncNow(): Boolean = sync.syncNow().completed()
 
     /** Only a mirror that belongs to [uid] in [householdId] answers (audit: the mirror has no household column). */
     override suspend fun activeDeviceOf(uid: UserId, householdId: HouseholdId): DeviceId? {
@@ -303,6 +312,8 @@ class LockParentSigningSetup @Inject constructor(
 
         ParentKeyChangeResult.Cancelled -> SigningSetupResult.CANCELLED
 
+        ParentKeyChangeResult.PolicyNotSynced -> SigningSetupResult.POLICY_NOT_SYNCED
+
         ParentKeyChangeResult.NotRegistered, ParentKeyChangeResult.NotAllowed, ParentKeyChangeResult.Failed ->
             SigningSetupResult.FAILED
     }
@@ -317,6 +328,12 @@ class FunctionsParentKeyRegistrar @Inject constructor(private val functions: Hou
     override suspend fun register(publicKey: ByteArray, attestationChain: List<ByteArray>): Result<Unit> =
         functions.registerParentKey(publicKey, attestationChain).map { }.mapFunctionsFailure()
 }
+
+/**
+ * True only for a sync that ran and completed without an error. Null (the sync could not run at all: stopped, paused,
+ * a store failure) is not a pull, so nothing that waits for one (the policy recovery, D-REL-14) may act on it.
+ */
+internal fun SyncReport?.completed(): Boolean = this != null && error == null
 
 private fun <T> Result<T>.mapAuthFailure(): Result<T> = recoverCatching { failure ->
     val error = (failure as? AuthException)?.error

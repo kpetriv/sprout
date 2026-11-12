@@ -51,6 +51,12 @@ sealed interface PinSetupEvent {
 
     /** Back to the first step, forgetting the first PIN. */
     data object StartOver : PinSetupEvent
+
+    /**
+     * Reads the strong-biometric availability again (the screen sends it whenever it resumes, as
+     * [ParentGateEvent.RefreshAvailability]): a fingerprint enrolled in system settings meanwhile hides the banner.
+     */
+    data object RefreshAvailability : PinSetupEvent
 }
 
 /**
@@ -60,7 +66,8 @@ sealed interface PinSetupEvent {
  * Fingerprint signing is on from the start when possible (audit M1): once the PIN is saved, a copy of it goes to
  * [ParentKeyEnrolment.enrolInBackground], which re-verifies it, creates and proves the parent key with one
  * fingerprint prompt and registers it, so the household requires parent signatures from the first money event.
- * Without a usable strong biometric it records the D-M2-1 state instead, and this screen shows the banner.
+ * Without a usable strong biometric it records the D-M2-1 state instead, and this screen shows the banner, re-checked
+ * on every [PinSetupEvent.RefreshAvailability].
  */
 @HiltViewModel
 class PinSetupViewModel @Inject constructor(
@@ -77,8 +84,14 @@ class PinSetupViewModel @Inject constructor(
     fun onEvent(event: PinSetupEvent) {
         when (event) {
             is PinSetupEvent.Digit -> addDigit(event.digit)
+
             PinSetupEvent.Backspace -> removeDigit()
+
             PinSetupEvent.StartOver -> startOver(error = null)
+
+            PinSetupEvent.RefreshAvailability -> mutableState.update {
+                it.copy(signingAvailability = session.biometricAvailability())
+            }
         }
     }
 

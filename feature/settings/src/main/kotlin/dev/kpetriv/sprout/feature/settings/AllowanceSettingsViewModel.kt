@@ -31,7 +31,6 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.onStart
 import kotlinx.coroutines.flow.stateIn
@@ -211,7 +210,7 @@ class AllowanceSettingsViewModel @Inject constructor(
     }
 
     private fun gameCap(): Flow<GameCapUi?> =
-        combine(rules.observe(), flow { emit(household.fiatCurrency()) }) { policy, currency ->
+        combine(rules.observe(), household.observeFiatCurrency()) { policy, currency ->
             GameCapUi(policy.effectiveDailyGameCapMinor, policy.dailyGameCapMinor == null, currency)
         }
             .map<GameCapUi, GameCapUi?> { it }
@@ -297,7 +296,7 @@ class AllowanceSettingsViewModel @Inject constructor(
             val row = state.value.rows.firstOrNull { it.kid.id == kidId } ?: return@launch
             val schedule = row.schedule
             val currency = (schedule?.currency as? Currency.Fiat) ?: mainAccount(kidId)?.currency as? Currency.Fiat
-                ?: household.fiatCurrency()
+                ?: household.observeFiatCurrency().first()
             val today = calendar.today()
             val cadence = schedule?.cadence
             val editor = AllowanceEditorUi(

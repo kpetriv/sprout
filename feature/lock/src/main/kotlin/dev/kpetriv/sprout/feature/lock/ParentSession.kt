@@ -193,6 +193,15 @@ class ParentSession @Inject constructor(
     }
 
     /**
+     * True while the parent area is unlocked. Reads the state only: no PIN is checked and no attempt is counted. A key
+     * change asks it before its network work (D-REL-15, audit L3), so a locked session is refused at once.
+     */
+    internal suspend fun isUnlocked(): Boolean = mutex.withLock {
+        ensureInitialized()
+        mutableState.value is ParentSessionState.Unlocked
+    }
+
+    /**
      * A fresh PIN verification for a parent-key change ([ParentKeyEnrolment], [ParentKeyRenewal]): only inside an
      * unlocked session, under the same [PinLockoutPolicy] as an unlock (a wrong PIN counts as a failed attempt).
      * The session state does not change. Zeroes [pin].

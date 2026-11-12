@@ -14,6 +14,12 @@ private val SunContainer = Color(0xFFFFE08A)
 private val SunContainerDark = Color(0xFF5C4300)
 private val Sky = Color(0xFF00658E)
 private val SkyDark = Color(0xFF8BCEFF)
+
+// Sky's tonal containers (tones 90/10 light, 30/90 dark). Without them Material's default (pink) tertiary containers
+// showed on the dashboard's household cards and the chores' "proposed" chips (D-REL-12).
+private val SkyContainer = Color(0xFFC7E7FF)
+private val OnSkyContainer = Color(0xFF001E2E)
+private val SkyContainerDark = Color(0xFF004C6C)
 private val Soil = Color(0xFF1A1C19)
 private val Paper = Color(0xFFF8FBF2)
 
@@ -28,6 +34,8 @@ internal val SproutLightColors = lightColorScheme(
     onSecondaryContainer = Color(0xFF261A00),
     tertiary = Sky,
     onTertiary = Color.White,
+    tertiaryContainer = SkyContainer,
+    onTertiaryContainer = OnSkyContainer,
     background = Paper,
     onBackground = Soil,
     surface = Paper,
@@ -45,6 +53,8 @@ internal val SproutDarkColors = darkColorScheme(
     onSecondaryContainer = SunContainer,
     tertiary = SkyDark,
     onTertiary = Color(0xFF00344C),
+    tertiaryContainer = SkyContainerDark,
+    onTertiaryContainer = SkyContainer,
     background = Soil,
     onBackground = Color(0xFFE2E3DD),
     surface = Soil,

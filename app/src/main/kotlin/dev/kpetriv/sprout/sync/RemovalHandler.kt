@@ -11,6 +11,7 @@ import dev.kpetriv.sprout.core.crypto.BlobStorage
 import dev.kpetriv.sprout.core.crypto.EncryptedLockoutStateStore
 import dev.kpetriv.sprout.core.crypto.FilesDirBlobStorage
 import dev.kpetriv.sprout.core.crypto.ParentAuthorizer
+import dev.kpetriv.sprout.core.database.HouseholdFiatCurrencyProvider
 import dev.kpetriv.sprout.core.database.LocalDataFiles
 import dev.kpetriv.sprout.core.database.Session
 import dev.kpetriv.sprout.core.database.SessionStore
@@ -236,6 +237,7 @@ class LocalHouseholdRows @Inject constructor(
     private val files: LocalDataFiles,
     private val parentSecrets: ParentSecrets,
     @param:Dispatcher(SproutDispatchers.IO) private val dispatcher: CoroutineDispatcher,
+    private val currencies: HouseholdFiatCurrencyProvider,
 ) {
     suspend fun clear() {
         withContext(dispatcher) {
@@ -243,6 +245,9 @@ class LocalHouseholdRows @Inject constructor(
             files.photoDirectory.listFiles()?.forEach { it.deleteRecursively() }
             files.blobDirectory.listFiles()?.forEach { it.deleteRecursively() }
         }
+        // The process goes on with the new account's rows: the previous household's currency must not (D-REL-20). A
+        // wipe needs no such step, since it always ends in a process restart ([AppRestarter], or the exit above).
+        currencies.forget()
         parentSecrets.clear()
     }
 }
@@ -302,6 +307,7 @@ class ParentSetupTracker @Inject constructor(private val preferences: ShellPrefe
     /** The digest of the household whose setup is pending ([ShellPreferences.digestOf]), or null. */
     val pending: StateFlow<String?> = mutablePending.asStateFlow()
 
+    /** The setup of [householdId] has started. */
     fun start(householdId: HouseholdId) = set(preferences.digestOf(householdId))
 
     fun finish() = set(null)

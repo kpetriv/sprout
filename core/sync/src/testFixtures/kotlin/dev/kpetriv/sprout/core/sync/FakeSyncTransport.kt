@@ -47,6 +47,8 @@ class FakeSyncTransport(private val backend: FakeBackend, val deviceId: DeviceId
     override suspend fun registeredDevice(householdId: HouseholdId, deviceId: DeviceId): RegisteredDevice? =
         backend.registeredDevice(caller, householdId, deviceId)
 
+    override suspend fun householdRoot(): HouseholdRoot = backend.householdRoot(caller)
+
     override fun changes(): Flow<RemoteChange> = backend.writes
         .filter { it.author != deviceId && it.collection != FakeBackend.BLOBS && !backend.isPartitioned(deviceId) }
         .map { RemoteChange(it.collection) }

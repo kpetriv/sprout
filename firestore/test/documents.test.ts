@@ -380,6 +380,26 @@ describe('documents: household policy v2 (M7 §1)', () => {
     }
   });
 
+  // D-REL-23 (audit L2): requireParentSignature is one-way.
+  it('requireParentSignature can be turned on but never off again', async () => {
+    const parent = asParent(env);
+    await assertSucceeds(put(parent, 'householdPolicy', policy({ requireParentSignature: false }, 10)));
+    await assertSucceeds(put(parent, 'householdPolicy', policy({ requireParentSignature: false, chatRetentionDays: 30 }, 11)));
+    await assertSucceeds(put(parent, 'householdPolicy', policy({ requireParentSignature: true }, 12)));
+
+    await assertFails(put(parent, 'householdPolicy', policy({ requireParentSignature: false }, 13)));
+    await assertFails(put(parent, 'householdPolicy', policy({ requireParentSignature: false }, 1_000_000)));
+    const absent = policy({}, 14);
+    delete (absent.payload as Record<string, unknown>).requireParentSignature;
+    await assertFails(put(parent, 'householdPolicy', absent));
+    await assertFails(
+      put(parent, 'householdPolicy', { ...policy({ requireParentSignature: false }, 15), deleted: true }),
+    );
+
+    // Other settings still change with signatures kept on.
+    await assertSucceeds(put(parent, 'householdPolicy', policy({ requireParentSignature: true, dailyGameCapMinor: 60 }, 16)));
+  });
+
   it('a kid cannot change either setting', async () => {
     await assertFails(
       put(

@@ -8,6 +8,7 @@ import dev.kpetriv.sprout.core.games.Score
 import dev.kpetriv.sprout.core.model.KidId
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.flowOf
 import kotlin.random.Random
 
 /*
@@ -68,7 +69,14 @@ fun interface GameSeedSource {
     }
 }
 
-/** The household's fiat currency, for showing credit amounts (`FiatCurrencyProvider`). */
+/**
+ * The household's fiat currency, for showing credit amounts (`FiatCurrencyProvider`): the household policy's, so it
+ * can change when a pull brings the policy (D-REL-10).
+ */
 fun interface GameCurrencySource {
+    /** The currency as last known. */
     fun fiatCurrency(): Currency.Fiat
+
+    /** The currency now and whenever it changes. */
+    fun observeFiatCurrency(): Flow<Currency.Fiat> = flowOf(fiatCurrency())
 }

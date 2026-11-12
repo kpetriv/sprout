@@ -11,11 +11,13 @@ import dev.kpetriv.sprout.core.database.ChoreRepository
 import dev.kpetriv.sprout.core.database.DecisionResult
 import dev.kpetriv.sprout.core.database.FiatCurrencyProvider
 import dev.kpetriv.sprout.core.database.KidRepository
+import dev.kpetriv.sprout.core.database.LocaleFiatCurrencyProvider
 import dev.kpetriv.sprout.core.database.PhotoStore
 import dev.kpetriv.sprout.core.database.SubmissionDecision
 import dev.kpetriv.sprout.core.database.SubmissionFilter
 import dev.kpetriv.sprout.core.database.usecase.ApprovalResult
 import dev.kpetriv.sprout.core.domainhousehold.Chore
+import dev.kpetriv.sprout.core.domainledger.Currency
 import dev.kpetriv.sprout.core.domainledger.ParentAuthorization
 import dev.kpetriv.sprout.core.domainledger.ParentAuthorizationRequester
 import dev.kpetriv.sprout.core.model.CalendarDate
@@ -220,8 +222,10 @@ class ApprovalsViewModel @Inject internal constructor(
             chores.observeSubmissions(SubmissionFilter.PendingForParent),
             chores.observeChores(includeArchived = true),
             kids.observeKids(),
-        ) { submissions, choreList, kidList ->
-            Snapshot(submissions, choreList.associateBy { it.id }, kidList.associateBy { it.id })
+            // The household policy's currency, again when a pull brings it (D-REL-10).
+            fiat.observeFiatCurrency(),
+        ) { submissions, choreList, kidList, currency ->
+            Snapshot(submissions, choreList.associateBy { it.id }, kidList.associateBy { it.id }, currency)
         }.onEach { loadPhotos(it.submissions) }
             .map<Snapshot, Loaded> { Loaded.Ready(it) }
             .catch { emit(Loaded.Failed) }
@@ -263,7 +267,7 @@ class ApprovalsViewModel @Inject internal constructor(
     }
 
     private fun ready(data: Snapshot, photoMap: Map<PhotoKey, PhotoUi>, localState: Local): ApprovalsUiState.Ready {
-        val currency = fiat.fiatCurrency()
+        val currency = data.currency
         val submissions = data.submissions.sortedByDescending { it.submittedAt }.mapNotNull { submission ->
             val chore = data.chores[submission.choreId] ?: return@mapNotNull null
             SubmissionUi(
@@ -502,11 +506,12 @@ class ApprovalsViewModel @Inject internal constructor(
         val submissions: List<ChoreSubmission>,
         val chores: Map<ChoreId, Chore>,
         val kids: Map<KidId, Kid>,
+        val currency: Currency.Fiat,
     ) {
         fun kidName(kid: Kid?): String = kid?.firstName ?: UNKNOWN_KID
 
         companion object {
-            val EMPTY = Snapshot(emptyList(), emptyMap(), emptyMap())
+            val EMPTY = Snapshot(emptyList(), emptyMap(), emptyMap(), LocaleFiatCurrencyProvider.FALLBACK)
         }
     }
 

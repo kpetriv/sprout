@@ -553,6 +553,61 @@ class FakeBackendRulesTest {
     }
 
     @Test
+    fun requiredParentSignaturesAreNeverTurnedOff() = runTest {
+        // D-REL-23 (audit L2), as firestore.rules: off to on is allowed, on to off never, whatever the lamport.
+        fun signatures(on: Boolean, lamport: Long) = policy(
+            buildJsonObject { put("requireParentSignature", on) },
+            lamport = lamport,
+        )
+        assertEquals(emptyList(), transport.push(emptyList(), listOf(signatures(on = false, lamport = 2))).rejected)
+        assertEquals(emptyList(), transport.push(emptyList(), listOf(signatures(on = true, lamport = 3))).rejected)
+
+        assertEquals(denied, codes(transport.push(emptyList(), listOf(signatures(on = false, lamport = 4)))))
+        val withoutFlag = policy(buildJsonObject {}, lamport = 5).let {
+            it.copy(payload = JsonObject(it.payload - "requireParentSignature"))
+        }
+        assertEquals(denied, codes(transport.push(emptyList(), listOf(withoutFlag))), "absent is off")
+        val stored = assertNotNull(backend.document(DocTypes.HOUSEHOLD_POLICY, HOUSEHOLD.value))
+        assertEquals(3L, stored.lamport)
+        // Other settings still change with signatures kept on.
+        assertEquals(
+            emptyList(),
+            transport.push(emptyList(), listOf(policy(buildJsonObject { put("chatRetentionDays", 30) }, 6))).rejected,
+        )
+    }
+
+    @Test
+    fun theHouseholdRootIsReadWithTheCurrencyAndWhetherAPolicyIsStored() = runTest {
+        backend.fiatCurrency = "CHF"
+        assertEquals(HouseholdRoot("CHF", policyStored = false), transport.householdRoot())
+        transport.push(emptyList(), listOf(policy(buildJsonObject {})))
+        assertEquals(HouseholdRoot("CHF", policyStored = true), transport.householdRoot())
+    }
+
+    @Test
+    fun aMissingHouseholdRootOrADeniedReadIsAFailureNeverAnAnswer() = runTest {
+        backend.fiatCurrency = "CHF"
+        backend.householdRootStored = false
+        assertEquals(
+            SyncError.Transient(),
+            assertFailsWith<SyncException> { transport.householdRoot() }.error,
+            "no root document",
+        )
+        backend.householdRootStored = true
+
+        for (path in FakeBackend.RootPath.entries) {
+            backend.householdRootDenied = path
+            assertEquals(
+                SyncError.Permanent(FakeBackend.PERMISSION_DENIED),
+                assertFailsWith<SyncException> { transport.householdRoot() }.error,
+                "denied on $path",
+            )
+        }
+        backend.householdRootDenied = null
+        assertEquals(HouseholdRoot("CHF", policyStored = false), transport.householdRoot())
+    }
+
+    @Test
     fun pruneMessagesDeletesWhatIsOlderThanTheCutAndOnlyForAParent() = runTest {
         val day = 86_400_000L
         val created = CREATED_AT.toEpochMilliseconds()

@@ -67,6 +67,7 @@ import kotlinx.coroutines.runBlocking
 import java.io.File
 import java.security.SecureRandom
 import java.time.ZoneOffset
+import java.util.Locale
 import java.util.UUID
 import kotlin.time.Instant
 
@@ -146,7 +147,17 @@ class TestHousehold(
     val allowances = RoomAllowanceRepository(database, authors, clock, signer)
     val goals = RoomSavingsGoalRepository(database, authors, clock, signer)
     val interest = RoomInterestPolicyRepository(database, authors, clock, signer)
-    val policies = RoomHouseholdPolicyRepository(database, authors, { gbp }, clock, signer, ledger)
+    val policies =
+        RoomHouseholdPolicyRepository(
+            database,
+            authors,
+            LocaleFiatCurrencyProvider {
+                Locale.UK
+            },
+            clock,
+            signer,
+            ledger,
+        )
     val pending = RoomPendingParentActionRepository(database, authors, clock)
 
     val parentAuthorizer = FakeParentAuthorizer()
@@ -214,9 +225,13 @@ class TestHousehold(
 
     /**
      * What `feature/lock`'s PIN-gated enrolment does once the PIN is verified: creates the parent key and registers
-     * it. Returns the policy with parent signatures required.
+     * it. Returns the policy with parent signatures required. Without a policy row it first creates one in GBP, as
+     * household creation (or the trial) would: registration alone never creates a real household's policy (D-REL-11).
      */
-    suspend fun registerParentKey(): HouseholdPolicy = registerKey.register(parentAuthorizer.createParentKey().encoded)
+    suspend fun registerParentKey(): HouseholdPolicy {
+        if (policies.get() == null) policies.ensure(gbp)
+        return registerKey.register(parentAuthorizer.createParentKey().encoded)
+    }
 
     /** One parent prompt: a fresh single-use authorisation from the parent key (create it first). */
     fun authorization(): ParentAuthorization = parentAuthorizations.from(parentAuthorizer.initSignature())

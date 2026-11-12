@@ -15,8 +15,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.catch
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flatMapLatest
-import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.onStart
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
@@ -61,15 +61,15 @@ class GamesHubViewModel @Inject constructor(
     private val retries = MutableStateFlow(0)
 
     val state: StateFlow<GamesHubUiState> = retries.flatMapLatest {
-        cap.observeRemaining(kidId)
-            .map<Money, GamesHubUiState> { remaining ->
-                GamesHubUiState.Ready(
-                    tier = tier,
-                    games = GameCatalogue.forTier(tier),
-                    remaining = remaining,
-                    currency = currency.fiatCurrency(),
-                )
-            }
+        // The household policy's currency, again when a pull brings it (D-REL-10).
+        combine(cap.observeRemaining(kidId), currency.observeFiatCurrency()) { remaining, fiat ->
+            GamesHubUiState.Ready(
+                tier = tier,
+                games = GameCatalogue.forTier(tier),
+                remaining = remaining,
+                currency = fiat,
+            ) as GamesHubUiState
+        }
             .onStart { emit(GamesHubUiState.Loading) }
             .catch { emit(GamesHubUiState.Error) }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MILLIS), GamesHubUiState.Loading)

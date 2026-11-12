@@ -33,6 +33,9 @@ import kotlin.time.Duration
  *   recorded it (D-M3-39), so other devices refuse its signatures; "Retry" renews the key.
  * @property signingPin the PIN entry for turning signing on or renewing the key, or null when closed.
  * @property changePin the change-PIN form.
+ * @property restoreNeeded this ACTIVE parent phone of a real household has no household policy: on a phone without a
+ *   strong biometric, "Restore household settings" recovers it with the PIN (D-REL-22).
+ * @property isRestoring the restore is checking, waiting for the confirmation or writing.
  */
 data class ParentSecurityUiState(
     val availability: ParentAuthAvailability = ParentAuthAvailability.UNAVAILABLE_OTHER,
@@ -47,6 +50,8 @@ data class ParentSecurityUiState(
     val isRegistering: Boolean = false,
     val registerError: RegisterError? = null,
     val message: SettingsMessage? = null,
+    val restoreNeeded: Boolean = false,
+    val isRestoring: Boolean = false,
 ) {
     /** What the fingerprint signing card shows. */
     val signing: SigningStatus
@@ -54,9 +59,13 @@ data class ParentSecurityUiState(
             availability != ParentAuthAvailability.STRONG_BIOMETRIC_AVAILABLE -> SigningStatus.UNAVAILABLE
             policy?.hasParentKey == true && keyNeedsRenewal -> SigningStatus.KEY_INVALIDATED
             policy?.hasParentKey == true && keyNotRegisteredWithHousehold -> SigningStatus.NOT_REGISTERED_WITH_HOUSEHOLD
+            policy?.hasParentKey == true && !policy.requireParentSignature -> SigningStatus.SIGNATURES_NOT_REQUIRED
             policy?.hasParentKey == true -> SigningStatus.ON
             else -> SigningStatus.NOT_SET_UP
         }
+
+    /** "Restore household settings" is offered: no strong biometric to recover the policy with (D-REL-22). */
+    val offerRestore: Boolean get() = restoreNeeded && signing == SigningStatus.UNAVAILABLE
 }
 
 /** The household policy as settings shows it (D-M2-1). */
@@ -81,6 +90,13 @@ enum class SigningStatus {
      * (new challenge, new key, fingerprint, server registration), since the old key's attestation cannot be reused.
      */
     NOT_REGISTERED_WITH_HOUSEHOLD,
+
+    /**
+     * This device's key is registered, but the household policy accepts unsigned parent changes (a policy written
+     * without signatures before they became one-way, D-REL-23): "Renew" asks for the PIN and renews the key, which
+     * turns required signatures on again.
+     */
+    SIGNATURES_NOT_REQUIRED,
 }
 
 /** Which signing-key action the PIN entry is for. */
@@ -141,6 +157,9 @@ sealed interface RegisterError {
     /** The fingerprint prompt was dismissed; nothing changed. */
     data object Cancelled : RegisterError
 
+    /** This phone has not synced the household policy yet (D-REL-15); no prompt was shown, nothing changed. */
+    data object PolicyNotSynced : RegisterError
+
     data object Failed : RegisterError
 }
 
@@ -167,21 +186,28 @@ sealed interface ParentSecurityEvent {
     data class LockWhenLeavingChanged(val enabled: Boolean) : ParentSecurityEvent
 
     data object MessageShown : ParentSecurityEvent
+
+    /** "Restore household settings" (D-REL-22): check, confirm with the PIN, then write the policy. */
+    data object RestoreHouseholdSettings : ParentSecurityEvent
 }
 
 /**
  * PIN change ([PinChanger]) on a three-step `PinPad` form, fingerprint signing status ([ParentAuthorizer.availability],
  * the household policy from [HouseholdPolicyRepository.observe], the server registration from
  * [HouseholdPolicyRepository.observeServerRegistrationPending] and [ParentKeyRegistrar.needsRenewal]) with PIN-gated
- * enrolment and renewal ([ParentKeyRegistrar]), and the "lock when leaving the app" preference ([LockPreferences]).
+ * enrolment and renewal ([ParentKeyRegistrar]), the "lock when leaving the app" preference ([LockPreferences]), and
+ * "Restore household settings" ([HouseholdSettingsRestorer] behind [ParentConfirmation], D-REL-22).
  */
 @HiltViewModel
+@Suppress("LongParameterList") // One port per part of the screen.
 class ParentSecurityViewModel @Inject constructor(
     private val pinChanger: PinChanger,
     private val registrar: ParentKeyRegistrar,
     private val lockPreferences: LockPreferences,
     private val authorizer: ParentAuthorizer,
     private val policies: HouseholdPolicyRepository,
+    private val restorer: HouseholdSettingsRestorer,
+    private val confirmation: ParentConfirmation,
 ) : ViewModel() {
     private val local = MutableStateFlow(ParentSecurityUiState(availability = authorizer.availability()))
 
@@ -199,14 +225,22 @@ class ParentSecurityViewModel @Inject constructor(
 
     private val serverPending = policies.observeServerRegistrationPending().catch { emit(false) }
 
-    val state: StateFlow<ParentSecurityUiState> =
-        combine(local, policy, serverPending, lockPreferences.lockWhenLeaving) { localState, loaded, pending, lock ->
-            localState.copy(
-                policy = (loaded as? Load.Ready)?.value,
-                keyNotRegisteredWithHousehold = pending,
-                lockWhenLeaving = lock,
-            )
-        }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MILLIS), local.value)
+    private val restoreNeeded = restorer.observeNeeded().catch { emit(false) }
+
+    val state: StateFlow<ParentSecurityUiState> = combine(
+        local,
+        policy,
+        serverPending,
+        lockPreferences.lockWhenLeaving,
+        restoreNeeded,
+    ) { localState, loaded, pending, lock, needed ->
+        localState.copy(
+            policy = (loaded as? Load.Ready)?.value,
+            keyNotRegisteredWithHousehold = pending,
+            lockWhenLeaving = lock,
+            restoreNeeded = needed,
+        )
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MILLIS), local.value)
 
     init {
         refresh()
@@ -235,6 +269,8 @@ class ParentSecurityViewModel @Inject constructor(
             is ParentSecurityEvent.LockWhenLeavingChanged -> lockPreferences.setLockWhenLeaving(event.enabled)
 
             ParentSecurityEvent.MessageShown -> local.update { it.copy(message = null) }
+
+            ParentSecurityEvent.RestoreHouseholdSettings -> restoreHouseholdSettings()
         }
     }
 
@@ -258,7 +294,11 @@ class ParentSecurityViewModel @Inject constructor(
         val current = state.value
         val purpose = when (current.signing) {
             SigningStatus.NOT_SET_UP -> SigningPinPurpose.ENROL
-            SigningStatus.KEY_INVALIDATED, SigningStatus.NOT_REGISTERED_WITH_HOUSEHOLD -> SigningPinPurpose.RENEW
+
+            SigningStatus.KEY_INVALIDATED, SigningStatus.NOT_REGISTERED_WITH_HOUSEHOLD,
+            SigningStatus.SIGNATURES_NOT_REQUIRED,
+            -> SigningPinPurpose.RENEW
+
             SigningStatus.ON, SigningStatus.UNAVAILABLE -> return
         }
         if (current.isRegistering) return
@@ -325,6 +365,46 @@ class ParentSecurityViewModel @Inject constructor(
         signingPin.clear()
         local.update { it.copy(signingPin = null, registerError = error) }
     }
+
+    // endregion
+
+    // region Restore household settings
+
+    /**
+     * D-REL-22: the check first (it may sync, bounded), so a restore bound to be refused never asks for the PIN; then
+     * [ParentConfirmation] (the PIN on a phone without a strong biometric), then the write. Nothing is written unless
+     * the check found the policy restorable and the parent confirmed.
+     */
+    private fun restoreHouseholdSettings() {
+        if (local.value.isRestoring || !state.value.offerRestore) return
+        local.update { it.copy(isRestoring = true) }
+        viewModelScope.launch {
+            val message = try {
+                when (restorer.check()) {
+                    RestoreCheck.PRESENT -> null
+                    RestoreCheck.NOT_SYNCED -> SettingsMessage.POLICY_NOT_SYNCED
+                    RestoreCheck.READY -> confirmAndRestore()
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (@Suppress("TooGenericExceptionCaught") _: Exception) {
+                SettingsMessage.SAVE_FAILED
+            } finally {
+                local.update { it.copy(isRestoring = false) }
+            }
+            if (message != null) local.update { it.copy(message = message) }
+        }
+    }
+
+    private suspend fun confirmAndRestore(): SettingsMessage? =
+        when (confirmation.confirm(ConfirmationPurpose.RESTORE_HOUSEHOLD_SETTINGS)) {
+            ConfirmationOutcome.CONFIRMED ->
+                if (restorer.restore()) SettingsMessage.SETTINGS_RESTORED else SettingsMessage.POLICY_NOT_SYNCED
+
+            ConfirmationOutcome.CANCELLED -> null
+
+            ConfirmationOutcome.FAILED -> SettingsMessage.NOT_CONFIRMED
+        }
 
     // endregion
 
@@ -447,6 +527,8 @@ internal fun SigningKeyOutcome.toRegisterError(): RegisterError? = when (this) {
     is SigningKeyOutcome.LockedOut -> decision.toRegisterError(wrongPin = false)
 
     SigningKeyOutcome.Cancelled -> RegisterError.Cancelled
+
+    SigningKeyOutcome.PolicyNotSynced -> RegisterError.PolicyNotSynced
 
     // The card's state was stale; the refresh after the call shows the right action.
     SigningKeyOutcome.AlreadyOn, SigningKeyOutcome.NotRegistered, SigningKeyOutcome.Failed -> RegisterError.Failed

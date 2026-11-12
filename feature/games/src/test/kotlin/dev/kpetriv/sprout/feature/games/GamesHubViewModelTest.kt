@@ -2,9 +2,12 @@ package dev.kpetriv.sprout.feature.games
 
 import androidx.lifecycle.SavedStateHandle
 import app.cash.turbine.test
+import dev.kpetriv.sprout.core.domainledger.Currency
 import dev.kpetriv.sprout.core.domainledger.Money
 import dev.kpetriv.sprout.core.games.GameKind
 import dev.kpetriv.sprout.core.model.KidUiTier
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.test.runTest
 import org.junit.Rule
 import org.junit.Test
@@ -19,13 +22,14 @@ class GamesHubViewModelTest {
 
     private val cap = FakeCapSource()
 
-    private fun viewModel(tier: KidUiTier) = GamesHubViewModel(
-        savedStateHandle = SavedStateHandle(
-            mapOf(GamesHubViewModel.KID_ID_KEY to TestData.kid.value, GamesHubViewModel.TIER_KEY to tier.name),
-        ),
-        cap = cap,
-        currency = { TestData.gbp },
-    )
+    private fun viewModel(tier: KidUiTier, currency: GameCurrencySource = GameCurrencySource { TestData.gbp }) =
+        GamesHubViewModel(
+            savedStateHandle = SavedStateHandle(
+                mapOf(GamesHubViewModel.KID_ID_KEY to TestData.kid.value, GamesHubViewModel.TIER_KEY to tier.name),
+            ),
+            cap = cap,
+            currency = currency,
+        )
 
     @Test
     fun `each tier sees its games and what it can still earn`() = runTest {
@@ -39,6 +43,22 @@ class GamesHubViewModelTest {
         viewModel(KidUiTier.SAPLING).state.test {
             val ready = assertIs<GamesHubUiState.Ready>(expectMostRecentItem())
             assertEquals(GameKind.entries, ready.games)
+        }
+    }
+
+    @Test
+    fun `amounts follow the household policy's currency when a pull brings it`() = runTest {
+        // A EUR-locale phone of a GBP household before its first pull (D-REL-10).
+        val household = MutableStateFlow(Currency.Fiat("EUR"))
+        val currency = object : GameCurrencySource {
+            override fun fiatCurrency(): Currency.Fiat = household.value
+
+            override fun observeFiatCurrency(): Flow<Currency.Fiat> = household
+        }
+        viewModel(KidUiTier.SPROUT, currency).state.test {
+            assertEquals(Currency.Fiat("EUR"), assertIs<GamesHubUiState.Ready>(expectMostRecentItem()).currency)
+            household.value = TestData.gbp
+            assertEquals(TestData.gbp, assertIs<GamesHubUiState.Ready>(awaitItem()).currency)
         }
     }
 

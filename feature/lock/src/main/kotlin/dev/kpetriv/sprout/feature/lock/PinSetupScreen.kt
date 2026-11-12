@@ -25,6 +25,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
+import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.kpetriv.sprout.core.crypto.ParentAuthAvailability
 import dev.kpetriv.sprout.core.designsystem.theme.SproutTheme
@@ -32,11 +33,15 @@ import dev.kpetriv.sprout.core.ui.PinDots
 import dev.kpetriv.sprout.core.ui.PinPad
 import dev.kpetriv.sprout.core.ui.contentWidth
 
-/** First-run PIN setup backed by a [PinSetupViewModel]. */
+/** First-run PIN setup backed by a [PinSetupViewModel]; the signing availability is re-checked on every resume. */
 @Composable
 fun PinSetupRoute(modifier: Modifier = Modifier) {
     val viewModel: PinSetupViewModel = hiltViewModel()
     val state by viewModel.state.collectAsStateWithLifecycle()
+    LifecycleResumeEffect(viewModel) {
+        viewModel.onEvent(PinSetupEvent.RefreshAvailability)
+        onPauseOrDispose {}
+    }
     PinSetupScreen(state = state, onEvent = viewModel::onEvent, modifier = modifier)
 }
 

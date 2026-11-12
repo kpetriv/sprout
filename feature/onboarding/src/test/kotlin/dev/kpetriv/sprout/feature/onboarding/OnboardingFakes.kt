@@ -160,6 +160,7 @@ class FakeOnboardingHousehold(
 
     override suspend fun ensureHouseholdPolicy(fiatCurrency: Currency.Fiat) {
         log += "ensurePolicy"
+        ensureFailure?.let { throw it }
         policyCurrency = fiatCurrency
     }
 
@@ -173,6 +174,36 @@ class FakeOnboardingHousehold(
     override suspend fun activeDeviceOf(uid: UserId, householdId: HouseholdId): DeviceId? = activeDevice
 
     override suspend fun saveSession(session: Session) = sessions.save(session)
+
+    /**
+     * The currency `createHousehold` stored on the server's household root, and whether the server holds a policy
+     * document: what the app's recovery reads (D-REL-14). Null: the household has no readable root.
+     */
+    var serverCurrency: Currency.Fiat? = null
+    var serverPolicyStored = false
+
+    /** True while a pulled policy is held for its author on this phone. */
+    var policyHeld = false
+
+    /** How many times [recoverHouseholdPolicy] was asked (the app's recovery syncs again, then reads the server). */
+    var recoveryChecks = 0
+
+    /** When set, [ensureHouseholdPolicy] throws it (a write that fails, or the process dying there). */
+    var ensureFailure: Exception? = null
+
+    /**
+     * The app's recovery: no row, nothing held, nothing on the server and a currency there; then the policy with the
+     * server's currency. Logged as "recoverPolicy" only when it writes.
+     */
+    override suspend fun recoverHouseholdPolicy(): Boolean {
+        recoveryChecks += 1
+        val currency = serverCurrency?.takeUnless { serverPolicyStored || policyHeld || policyCurrency != null }
+            ?: return false
+        log += "recoverPolicy"
+        ensureFailure?.let { throw it }
+        policyCurrency = currency
+        return true
+    }
 
     override suspend fun startParentSetup(householdId: HouseholdId) {
         log += "setupStarted"

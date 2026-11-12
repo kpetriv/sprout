@@ -9,6 +9,7 @@ import dev.kpetriv.sprout.core.model.KidId
 import dev.kpetriv.sprout.core.model.Role
 import dev.kpetriv.sprout.core.model.UserId
 import dev.kpetriv.sprout.core.sync.DocTypes
+import dev.kpetriv.sprout.core.sync.HouseholdRoot
 import dev.kpetriv.sprout.core.sync.RemoteChange
 import dev.kpetriv.sprout.core.sync.SyncCursor
 import dev.kpetriv.sprout.core.sync.SyncError
@@ -292,6 +293,37 @@ class FirebaseSyncTransportPullTest {
             assertFailsWith<SyncException> {
                 transport().pull(SyncCursor.START)
             }.error,
+        )
+    }
+
+    @Test
+    fun `the household root gives the server's currency and whether a policy document is stored`() = runTest {
+        firestore.seed("households/h1", mapOf("createdBy" to "x", "fiatCurrency" to "GBP"))
+        assertEquals(HouseholdRoot("GBP", policyStored = false), transport().householdRoot())
+
+        firestore.seed("households/h1/householdPolicy/h1", mapOf("docType" to DocTypes.HOUSEHOLD_POLICY))
+        assertEquals(HouseholdRoot("GBP", policyStored = true), transport().householdRoot())
+
+        firestore.seed("households/h1", mapOf("createdBy" to "x", "fiatCurrency" to 7L))
+        assertNull(transport().householdRoot().fiatCurrency, "a field that is not a string is no currency")
+    }
+
+    @Test
+    fun `a household root that cannot be read is a sync failure, never an answer`() = runTest {
+        assertEquals(
+            SyncError.Transient(),
+            assertFailsWith<SyncException> { transport().householdRoot() }.error,
+            "no root document",
+        )
+
+        firestore.seed("households/h1", mapOf("fiatCurrency" to "GBP"))
+        firestore.readFailures["households/h1/householdPolicy/h1"] = FirestoreCode.UNAVAILABLE
+        assertEquals(SyncError.Transient(), assertFailsWith<SyncException> { transport().householdRoot() }.error)
+
+        hid = null
+        assertEquals(
+            SyncError.Unauthenticated,
+            assertFailsWith<SyncException> { transport().householdRoot() }.error,
         )
     }
 

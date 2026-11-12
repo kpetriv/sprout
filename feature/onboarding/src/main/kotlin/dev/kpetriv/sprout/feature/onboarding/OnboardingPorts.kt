@@ -147,6 +147,15 @@ interface OnboardingHousehold {
     /** Creates the household policy document with [fiatCurrency] (a new household, after its session is saved). */
     suspend fun ensureHouseholdPolicy(fiatCurrency: Currency.Fiat)
 
+    /**
+     * Writes the household policy if it exists nowhere (D-REL-14, audit L1): only when this phone has no policy row,
+     * after one more pull that completed without an error, with no pulled policy held for its author and no policy
+     * document on the server, and then with the currency `createHousehold` stored on the household (never a currency
+     * kept on this phone); parent signatures off, as a new household's. The app routes it through the same recovery
+     * as Settings and the key registration. True when it wrote the policy.
+     */
+    suspend fun recoverHouseholdPolicy(): Boolean
+
     /** One sync now; false when it failed. */
     suspend fun syncNow(): Boolean
 
@@ -246,5 +255,8 @@ enum class SigningSetupResult {
     WRONG_PIN,
     LOCKED_OUT,
     CANCELLED,
+
+    /** Refused before the PIN check and the prompt: the household policy has not synced to this phone (D-REL-15). */
+    POLICY_NOT_SYNCED,
     FAILED,
 }

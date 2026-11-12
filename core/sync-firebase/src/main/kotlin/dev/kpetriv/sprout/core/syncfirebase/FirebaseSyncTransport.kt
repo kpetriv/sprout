@@ -10,6 +10,7 @@ import dev.kpetriv.sprout.core.sync.BlobIncompleteException
 import dev.kpetriv.sprout.core.sync.ConflictResolver
 import dev.kpetriv.sprout.core.sync.DocTypes
 import dev.kpetriv.sprout.core.sync.DocumentEnvelope
+import dev.kpetriv.sprout.core.sync.HouseholdRoot
 import dev.kpetriv.sprout.core.sync.OutboxItem
 import dev.kpetriv.sprout.core.sync.PullPage
 import dev.kpetriv.sprout.core.sync.PulledEvent
@@ -695,6 +696,26 @@ internal constructor(
             ?: call { get(FirestoreLayout.document(hid, FirestoreLayout.DEVICES, deviceId.value)) }
             ?: return null
         return StoredShapes.deviceOf(own, hid)
+    }
+
+    // ---- household root ----
+
+    /**
+     * Two reads (D-REL-14): `households/{hid}` for the `fiatCurrency` the server wrote at creation, and the
+     * `householdPolicy/{hid}` document for whether one is stored. A household root that cannot be read is a failure.
+     */
+    // SyncException carries the code only, never the SDK failure (codes only, no free text).
+    @Suppress("SwallowedException")
+    override suspend fun householdRoot(): HouseholdRoot {
+        val hid = requireHousehold()
+        return try {
+            val root = call { get(FirestoreLayout.household(hid)) } ?: throw SyncException(SyncError.Transient())
+            val collection = checkNotNull(FirestoreLayout.collectionOf(DocTypes.HOUSEHOLD_POLICY))
+            val policy = call { get(FirestoreLayout.document(hid, collection, hid.value)) }
+            HouseholdRoot(root.data[FirestoreLayout.FIAT_CURRENCY] as? String, policy != null)
+        } catch (failure: FirestoreFailure) {
+            throw SyncException(readErrorOf(hid, failure.code))
+        }
     }
 
     // ---- blobs ----

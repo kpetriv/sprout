@@ -434,9 +434,15 @@ class RoomRemoteApplier internal constructor(
                 reject(envelope, MALFORMED_PAYLOAD, now)
                 DocumentApplyReport(ignored = 1)
             }
+
+            Outcome.DOWNGRADE -> {
+                reject(envelope, POLICY_SIGNATURE_DOWNGRADE, now)
+                DocumentApplyReport(ignored = 1)
+            }
         }
 
-    private enum class Outcome { APPLIED, IGNORED, MALFORMED }
+    /** [DOWNGRADE]: a household policy that would turn required parent signatures off (D-REL-23); never applied. */
+    private enum class Outcome { APPLIED, IGNORED, MALFORMED, DOWNGRADE }
 
     /**
      * Resolves and writes one verified document. Parent keys are registered only by the server (`registerParentKey`,
@@ -544,34 +550,57 @@ class RoomRemoteApplier internal constructor(
         }
     }
 
+    /**
+     * The household policy. `requireParentSignature` is one-way (D-REL-23, audit L2), as the rules enforce: a pulled
+     * policy that would turn it off over a stored policy that has it on is refused ([Outcome.DOWNGRADE], audited
+     * `DOCUMENT_REJECTED` with [POLICY_SIGNATURE_DOWNGRADE]) whenever it would otherwise win; an older one is ignored
+     * as usual.
+     */
     private suspend fun applyHouseholdPolicy(envelope: DocumentEnvelope, fallback: DeviceId): Outcome {
-        if (envelope.deleted) return Outcome.IGNORED
-        return resolve(
-            envelope,
-            DocumentPayloads.decodeHouseholdPolicy(envelope.payload),
-            { envelope.docId == envelope.householdId.value },
-            database.householdPolicyDao().get(),
-            { storedOf(it.lamport, it.stamp, fallback) },
-            { decoded, row ->
-                row?.copy(
-                    fiatCurrency = decoded.fiatCurrency,
-                    requireParentSignature = decoded.requireParentSignature,
-                    chatRetentionDays = decoded.chatRetentionDays,
-                    dailyGameCapMinor = decoded.dailyGameCapMinor,
-                ) ?: HouseholdPolicyEntity(
-                    requireParentSignature = decoded.requireParentSignature,
-                    parentSignatureFromLamport = null,
-                    parentPublicKey = null,
-                    fiatCurrency = decoded.fiatCurrency,
-                    createdAtEpochMs = clock.now().toEpochMilliseconds(),
-                    chatRetentionDays = decoded.chatRetentionDays,
-                    dailyGameCapMinor = decoded.dailyGameCapMinor,
-                )
-            },
-            { row, lamport, stamp -> row.copy(lamport = lamport, stamp = stamp) },
-            { database.householdPolicyDao().upsert(it) },
-        )
+        val decoded = DocumentPayloads.decodeHouseholdPolicy(envelope.payload)
+        val stored = database.householdPolicyDao().get()
+        val downgrade = decoded != null && stored != null && stored.requireParentSignature &&
+            !decoded.requireParentSignature &&
+            ConflictResolver.resolve(storedOf(stored.lamport, stored.stamp, fallback), envelope) !=
+            ConflictResolver.Decision.Ignore
+        return when {
+            envelope.deleted -> Outcome.IGNORED
+            downgrade -> Outcome.DOWNGRADE
+            else -> resolvePolicy(envelope, decoded, stored, fallback)
+        }
     }
+
+    /** [applyHouseholdPolicy] once the policy is neither a tombstone nor a downgrade. */
+    private suspend fun resolvePolicy(
+        envelope: DocumentEnvelope,
+        decoded: DocumentPayloads.HouseholdPolicyPayload?,
+        stored: HouseholdPolicyEntity?,
+        fallback: DeviceId,
+    ): Outcome = resolve(
+        envelope,
+        decoded,
+        { envelope.docId == envelope.householdId.value },
+        stored,
+        { storedOf(it.lamport, it.stamp, fallback) },
+        { payload, row ->
+            row?.copy(
+                fiatCurrency = payload.fiatCurrency,
+                requireParentSignature = payload.requireParentSignature,
+                chatRetentionDays = payload.chatRetentionDays,
+                dailyGameCapMinor = payload.dailyGameCapMinor,
+            ) ?: HouseholdPolicyEntity(
+                requireParentSignature = payload.requireParentSignature,
+                parentSignatureFromLamport = null,
+                parentPublicKey = null,
+                fiatCurrency = payload.fiatCurrency,
+                createdAtEpochMs = clock.now().toEpochMilliseconds(),
+                chatRetentionDays = payload.chatRetentionDays,
+                dailyGameCapMinor = payload.dailyGameCapMinor,
+            )
+        },
+        { row, lamport, stamp -> row.copy(lamport = lamport, stamp = stamp) },
+        { database.householdPolicyDao().upsert(it) },
+    )
 
     private suspend fun applyChore(envelope: DocumentEnvelope, fallback: DeviceId): Outcome = resolve(
         envelope,
@@ -739,6 +768,12 @@ class RoomRemoteApplier internal constructor(
 
         /** Audit reason for a payload that does not decode or whose ids disagree with its envelope. */
         const val MALFORMED_PAYLOAD: String = "MALFORMED_PAYLOAD"
+
+        /**
+         * The audited reason for a pulled household policy that would turn `requireParentSignature` off over a stored
+         * policy that has it on (D-REL-23): the rules refuse that write, so only a forged or stale copy carries it.
+         */
+        const val POLICY_SIGNATURE_DOWNGRADE: String = "POLICY_SIGNATURE_DOWNGRADE"
 
         private val EMPTY = JsonObject(emptyMap())
 

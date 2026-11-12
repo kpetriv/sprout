@@ -38,6 +38,16 @@ interface ParentKeyRegistry {
     suspend fun replaceParentKey(publicKey: PublicKeyBytes, attestationChain: List<ByteArray>)
 
     /**
+     * True when the household policy that [registerParentKey] writes into is there, or can be recovered (D-REL-15):
+     * always for the trial household; in a real household when this device has its policy row, or after a pull that
+     * completed without an error the server holds no policy at all, so registration recovers it from the household's
+     * own currency (D-REL-14). [ParentKeyEnrolment] asks before the PIN check, the server challenge, key creation and
+     * the proof prompt, so a registration that is bound to be refused never shows a fingerprint prompt. May sync, so it
+     * can take a few seconds. Throws when storage cannot be read.
+     */
+    suspend fun householdPolicyReady(): Boolean
+
+    /**
      * Records the D-M2-1 state for a device without a usable strong biometric: the household policy exists with
      * parent signatures off. Never removes a registered key.
      */

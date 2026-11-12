@@ -82,6 +82,13 @@ interface SyncTransport {
     suspend fun registeredDevice(householdId: HouseholdId, deviceId: DeviceId): RegisteredDevice? =
         throw SyncException(SyncError.Transient())
 
+    /**
+     * One read of what the server holds about the household itself ([HouseholdRoot]): the currency `createHousehold`
+     * wrote on the household root document and whether a `household_policy` document is stored. Used only to recover
+     * a household whose policy was never pushed (D-REL-14). Failures are a [SyncException].
+     */
+    suspend fun householdRoot(): HouseholdRoot = throw SyncException(SyncError.Transient())
+
     /** Emits while connected whenever another device writes something this device should pull (messages included). */
     fun changes(): Flow<RemoteChange> = emptyFlow()
 
@@ -212,6 +219,15 @@ data class SyncCursor(val perCollection: Map<String, String> = emptyMap()) {
         val START: SyncCursor = SyncCursor()
     }
 }
+
+/**
+ * What the server holds about the household itself ([SyncTransport.householdRoot]).
+ *
+ * @property fiatCurrency the ISO 4217 code `createHousehold` stored on the household root document (server-written,
+ *   readable by members); null when the field is missing or not a string.
+ * @property policyStored a `household_policy` document is stored on the server (whatever its content).
+ */
+data class HouseholdRoot(val fiatCurrency: String?, val policyStored: Boolean)
 
 /** A hint that [collection] changed remotely; the engine reacts by pulling. */
 data class RemoteChange(val collection: String)
