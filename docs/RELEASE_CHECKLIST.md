@@ -209,6 +209,27 @@ Local signed `bundleRelease` proof (2026-11-10): signed AAB 18.7 MB by CN=kpetri
 
 Evidence to paste: "v1.0.0 (versionCode <n>) built by release.yml run <id> on <date> in the release environment; internal track rolled out; app signing SHA registered" → CONTROLS SE-6.
 
+#### 1.1.0 (M9: the redesign and Times tables)
+
+Nothing in the build changes for 1.1.0: the version name comes from the tag and the versionCode from the commit count, as above. After the M9 pull request has merged into `main` and CI on `main` is green:
+
+- [ ] **Precondition (D-M9-G10, [ADR-0009 amendment](adr/0009-games-scoring-and-credit.md#amendment-m9-110-2026-11-12)): update every phone and tablet of the household to 1.1.0 before any kid plays Times tables.** A device still on any build before 1.1.0 does not know the `tables.*` game ids: it quarantines the play, and every later event from the device that played it then waits on that receiver and is dropped after 500, even after the receiver is upgraded. Recovery for a device that got stuck: clear its data and link it again. Today only the owner's own phones run a build before 1.1.0, so this is a matter of installing 1.1.0 on all of them first.
+
+```
+git switch main && git pull && gh run list --workflow ci.yml --branch main --limit 1   # completed, success
+git tag -a v1.1.0 -m "Sprout 1.1.0" && git push origin v1.1.0
+gh workflow run release.yml --ref main -f tag=v1.1.0
+# approve the deployment when GitHub asks (the run page, or the e-mail), then:
+gh run watch --exit-status                         # tag on main, CI passed, static checks, bundleRelease, the checks
+gh run download --name sprout-v1.1.0               # the signed AAB and mapping.txt
+```
+
+- [ ] The versionCode rule is unchanged: it must be higher than that of every build Play already has (1.0.x), which it is when `v1.1.0` is on a later commit of `main` (a rebuild takes `-f version_code=<last + 1>`).
+- [ ] Release notes: paste `play/listing/en-GB/whatsnew.txt` into the release's "Release notes" under `<en-GB>` (at most 500 characters).
+- [ ] Store listing: upload the regenerated phone and tablet screenshots (`play/listing/en-GB/images`, the Morning garden look with the bottom bar) and the updated full description ([play/listing](../play/listing/README.md)).
+
+Evidence to paste: "v1.1.0 (versionCode <n>) built by release.yml run <id> on <date>; every household device on 1.1.0 before the first Times tables play" → CONTROLS SE-6.
+
 ### 10. Device verification
 
 Run [SECURITY_REVIEW.md](SECURITY_REVIEW.md#owner-procedures) P1 to P10 on the internal-track build: the network capture including a receipt scan (P1), the release build walk (P2), Play Integrity and App Check (P3; then enforce, item 6), Google sign-in (P4), key attestation (P5), voice notes (P6), time bank auto-stop (P7), process death (P8), Gemini Nano on a Pixel 9 or later (P9), TalkBack (P10).

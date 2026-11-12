@@ -1,33 +1,54 @@
 package dev.kpetriv.sprout.navigation
 
+import androidx.annotation.StringRes
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
-import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
-import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import dev.kpetriv.sprout.R
+import dev.kpetriv.sprout.core.designsystem.components.SproutButton
+import dev.kpetriv.sprout.core.designsystem.components.SproutButtonStyle
+import dev.kpetriv.sprout.core.designsystem.icon.SproutIcons
+import dev.kpetriv.sprout.core.designsystem.theme.ProvideKidTier
+import dev.kpetriv.sprout.core.designsystem.theme.STACK_FONT_SCALE
+import dev.kpetriv.sprout.core.designsystem.theme.SproutSpacing
 import dev.kpetriv.sprout.core.model.KidUiTier
 import dev.kpetriv.sprout.core.ui.contentWidth
 
+/** What a [Shortcut] opens: its [label] (plain text, never emoji, D-M9-5) and its [icon], left of the label. */
+internal enum class ShortcutKind(@param:StringRes val label: Int) {
+    CHAT(R.string.home_chat),
+    GAMES(R.string.home_games),
+    SCREEN_TIME(R.string.home_screen_time),
+    ;
+
+    val icon: ImageVector
+        @Composable get() = when (this) {
+            CHAT -> SproutIcons.ChatBubble
+            GAMES -> SproutIcons.SportsEsports
+            SCREEN_TIME -> SproutIcons.Timer
+        }
+}
+
 /** One button of a [WithShortcuts] bar. */
-internal data class Shortcut(val label: Int, val onClick: () -> Unit)
+internal data class Shortcut(val kind: ShortcutKind, val onClick: () -> Unit)
 
 /**
  * [content] (the kid's wallet) with a bar of [shortcuts] under it (M4: Chat and Screen time; M5: Games; M9: see
@@ -46,31 +67,42 @@ internal fun WithShortcuts(shortcuts: List<Shortcut>, modifier: Modifier = Modif
     }
 }
 
+/**
+ * Seedling's giant pills (M9 §2.6, §3): a white bar with a Hairline on top, like the bottom bar under it, holding
+ * Tertiary `SproutButton`s (Linen fill, Hairline border), so the wallet's Botanical Chores and Honey Shop pills stay
+ * the screen's one or two loud actions. Only Seedling has shortcuts ([kidShortcuts]) and the shell's content is not
+ * inside the kid's tier, so the bar provides Seedling's itself: 72 dp pills with Seedling's label size.
+ *
+ * Two pills share a row (three do not fit a phone at Seedling's size without breaking a word), so three are two over
+ * one, the last as wide as the bar; at [STACK_FONT_SCALE] and above they stack, one per row. Every pill keeps its
+ * label. On a tablet the bar keeps a phone's proportions, centred (M7 §5).
+ */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun ShortcutBar(shortcuts: List<Shortcut>) {
-    Surface(color = MaterialTheme.colorScheme.surfaceContainer, tonalElevation = 2.dp) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .navigationBarsPadding()
-                // On a tablet the buttons keep a phone's proportions, centred (M7 §5).
-                .contentWidth()
-                .padding(horizontal = 16.dp, vertical = 8.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            shortcuts.forEach { shortcut ->
-                // Three buttons share a phone's width (M5): a narrow inner padding and centred text, so a label that
-                // has to wrap ("Screen time") wraps evenly instead of pushing its emoji onto a line of its own.
-                FilledTonalButton(
-                    onClick = shortcut.onClick,
-                    modifier = Modifier.weight(1f).heightIn(min = 56.dp),
-                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp),
+    ProvideKidTier(KidUiTier.SEEDLING) {
+        val scheme = MaterialTheme.colorScheme
+        val perRow = if (LocalDensity.current.fontScale >= STACK_FONT_SCALE) 1 else 2
+        Surface(color = scheme.surfaceContainerLowest) {
+            Column(Modifier.fillMaxWidth().navigationBarsPadding()) {
+                HorizontalDivider(thickness = 1.dp, color = scheme.outlineVariant)
+                FlowRow(
+                    modifier = Modifier
+                        .contentWidth()
+                        .padding(horizontal = SproutSpacing.gutter, vertical = SproutSpacing.md),
+                    horizontalArrangement = Arrangement.spacedBy(SproutSpacing.md),
+                    verticalArrangement = Arrangement.spacedBy(SproutSpacing.sm),
+                    maxItemsInEachRow = perRow,
                 ) {
-                    Text(
-                        stringResource(shortcut.label),
-                        style = MaterialTheme.typography.titleMedium,
-                        textAlign = TextAlign.Center,
-                    )
+                    shortcuts.forEach { shortcut ->
+                        SproutButton(
+                            text = stringResource(shortcut.kind.label),
+                            onClick = shortcut.onClick,
+                            modifier = Modifier.weight(1f),
+                            style = SproutButtonStyle.Tertiary,
+                            icon = shortcut.kind.icon,
+                        )
+                    }
                 }
             }
         }
@@ -78,9 +110,10 @@ private fun ShortcutBar(shortcuts: List<Shortcut>) {
 }
 
 /**
- * The kid's home shortcuts under the wallet: only Seedling has any, its three giant buttons, Chat (real households
- * only), Screen time and Games (M9 §5.1: its bar has only Wallet, Chores and Shop). Sprout and Sapling have Chat and
- * Games in the bar and reach Screen time from the wallet's screen-time badge, so they get none.
+ * The kid's home shortcuts under the wallet: only Seedling has any, its giant buttons, Chat (real households only),
+ * Games and Screen time (M9 §5.1: its bar has only Wallet, Chores and Shop). Chat and Games come first so they share
+ * the top row; Screen time, the longest label, takes the row under them. Sprout and Sapling have Chat and Games in the
+ * bar and reach Screen time from the wallet's screen-time badge, so they get none.
  */
 internal fun kidShortcuts(
     tier: KidUiTier,
@@ -90,9 +123,9 @@ internal fun kidShortcuts(
     onGames: () -> Unit,
 ): List<Shortcut> = if (tier == KidUiTier.SEEDLING) {
     buildList {
-        if (chat) add(Shortcut(R.string.home_chat, onChat))
-        add(Shortcut(R.string.home_screen_time, onScreenTime))
-        add(Shortcut(R.string.home_games, onGames))
+        if (chat) add(Shortcut(ShortcutKind.CHAT, onChat))
+        add(Shortcut(ShortcutKind.GAMES, onGames))
+        add(Shortcut(ShortcutKind.SCREEN_TIME, onScreenTime))
     }
 } else {
     emptyList()

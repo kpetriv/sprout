@@ -68,3 +68,30 @@ The game rules are static, so a pulled play that breaks them is quarantined, and
 - **Signed game sessions (seed and answers in the event).** Receivers could replay the session and check every answer. But a rooted device can produce right answers as easily as a right score, so it adds bulk and privacy surface and proves nothing more.
 - **Quarantine out-of-window games in the verifier.** This blocks the author's chain on receivers (see §4).
 - **Judge the window against the receiving device's clock.** Devices that pull at different times would decide differently, and the ledgers would diverge.
+
+## Amendment (M9, 1.1.0, 2026-11-12)
+
+M9 adds a fourth game kind, Times tables ([M9-games](../milestones/M9-games.md) §6, D-M9-G4). The decision above stands; this section records what the new kind changes and what it does not.
+
+### What changes
+
+- **A fourth kind, `TABLES`** (wire `tables`), offered to Sprout and Sapling only (Seedling keeps two games, D-M5-6). `GameId.parse` now accepts ten playable ids: the eight of §1 plus `tables.sprout` and `tables.sapling`.
+- **20 rounds, score `0..20`.** `GameCatalogue.rounds(tables.*)` is 20, so `ScoreOutOfRange` allows a score up to 20 for those ids; the other kinds keep their round counts. A session is 20 typed questions drawn evenly across the chosen tables, seeded like every other session; with a single table the 12 pairs are asked once in seeded order and 8 more come from a second pass, never the same question twice in a row (D-M9-G11).
+- **`GameCredit` is unchanged in rule**: 1 per correct round, +3 for a perfect play, +2 timed bonus, at most 15 a play. Twenty correct answers already reach the cap, so a perfect play earns 15 at every level; `GameCreditTooHigh` bounds a `tables.*` play by the same table. `TimesTablesRulesTest` (`core/domain-ledger`) pins the score range and the cap; the property, encoder and hash-chain fixtures carry the new ids, and a two-device convergence test in `core/database` round-trips `tables.sprout` and `tables.sapling` plays with scores up to 20.
+
+### What does not change
+
+- **The setup is a local preference, not ledger data (D-M9-G7).** Which tables a kid practises and at which level is kept per kid in a local DataStore file (`TablesSetupStore`, in `noBackupFilesDir`, not synced, cleared by the local wipe, the trial purge and an account switch, D-M9-G17). It is not part of `GameId` or of the `GamePlayed` event, so `LedgerRules` and the `GamePlayed` schema are unchanged and receivers cannot (and need not) see it.
+- **The level is difficulty, not pay (D-M9-G8).** Gentle (20 s a question) and Steady (10 s) are untimed; Rock star (5 s) is the timed mode and earns the existing +2 bonus, which the cap absorbs on a perfect play. Because the event carries no timed flag, the bound assumes the bonus wherever it was possible (§2), as for Sapling arithmetic.
+- **History comes from the ledger.** "Best this week" and "Your last plays" read credited `GamePlayed` events through `GameHistoryReader` (D-M9-G6); no time per play and no extra local log are recorded (D-M9-G12).
+
+### Rollout consequence (D-M9-G10)
+
+This is a widening change in the sense of "Evolving the rules" above, and 1.1.0 ships the receivers and the new game in the **same** release, because `GameCatalogue` serves both what `GameId.parse` (and so `LedgerRules`) accepts and what the hub offers. The consequence: a household device still on any build before 1.1.0 that pulls a `tables.*` play quarantines it as `UnknownGame`. The quarantine takes the play out of its author's chain, so every later event from that author device waits in `ledger_inbox` on the old receiver and is dropped after 500; the block survives that receiver's upgrade, because `accept()` treats the quarantined copy as stored and invariant quarantines are never re-checked. The parent sees a false `GAME_RULE` rejection, and if the play came from a parent phone in kid mode, that phone's whole stream (approvals, allowance) is blocked on the old receiver.
+
+**Precondition for 1.1.0:** update every device of the household to 1.1.0 before the first Times tables play ([release checklist](../RELEASE_CHECKLIST.md), "1.1.0"). It holds in practice because no build before 1.1.0 has reached a household other than the owner's own phones. Recovery for a blocked device: clear its data and link it again. **Accepted for 1.1.0.**
+
+### Follow-ups
+
+- **Split what the ledger accepts from what the hub offers**, so that a later game can take the two-release path this ADR asks for: ship a build that accepts the new ids, then enable the game in a later release.
+- **Re-validate game quarantines after an upgrade**: re-check `UnknownGame`, `ScoreOutOfRange` and `GameCreditTooHigh` quarantines when the rules widen, so that a receiver upgraded after the fact unblocks the author's chain on its own. This is a `RoomLedgerRepository` change and needs its own security audit.
