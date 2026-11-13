@@ -26,7 +26,9 @@ import dev.kpetriv.sprout.feature.lock.ParentKeyProvisioner
 import dev.kpetriv.sprout.feature.lock.ParentKeyStatusCheck
 import dev.kpetriv.sprout.feature.lock.ParentPinStore
 import dev.kpetriv.sprout.feature.lock.ProcessLifecycleForegroundSource
+import dev.kpetriv.sprout.feature.lock.RecoveryPinFlag
 import dev.kpetriv.sprout.feature.lock.SharedPreferencesLockSettings
+import dev.kpetriv.sprout.feature.lock.SharedPreferencesRecoveryPinFlag
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -78,6 +80,14 @@ internal abstract class LockModule {
         @Provides
         @Singleton
         fun lockSettings(@ApplicationContext context: Context): LockSettings = SharedPreferencesLockSettings(context)
+
+        /** ADR-0013 §1: whether the server's recovery PIN check value matches this phone's PIN. */
+        @Provides
+        @Singleton
+        fun recoveryPinFlag(
+            @ApplicationContext context: Context,
+            @Dispatcher(SproutDispatchers.IO) dispatcher: CoroutineDispatcher,
+        ): RecoveryPinFlag = SharedPreferencesRecoveryPinFlag(context, dispatcher)
 
         /** Lives as long as the process, like the singleton session that uses it. */
         @Provides

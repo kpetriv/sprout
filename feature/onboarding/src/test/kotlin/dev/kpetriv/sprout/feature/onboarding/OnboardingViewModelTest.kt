@@ -43,7 +43,16 @@ class OnboardingViewModelTest {
         household.ownerOf = { auth.lastClaims?.let { RegisteredOwner(it.uid, it.role ?: Role.PARENT, it.kidId) } }
     }
 
-    private fun viewModel() = OnboardingViewModel(auth, backend, household, keys, sessions, clock)
+    private fun viewModel() = OnboardingViewModel(
+        auth,
+        backend,
+        household,
+        keys,
+        sessions,
+        clock,
+        FakeAccountRecovery(),
+        FakeRecoveredPinKeeper(log),
+    )
 
     private fun currentDevice(): DeviceId = keys.publicKey().deviceId()
 
@@ -103,6 +112,8 @@ class OnboardingViewModelTest {
                 keys,
                 sessions,
                 clock,
+                FakeAccountRecovery(),
+                FakeRecoveredPinKeeper(log),
             )
         viewModel.onEvent(OnboardingEvent.ChooseParent)
         assertEquals(OnboardingStep.ParentSignIn(emailPassword = false), viewModel.state.value.step)
@@ -328,8 +339,8 @@ class OnboardingViewModelTest {
             "a new device id: the kept chat key goes before the registration key is made (D-REL-7)",
         )
         assertEquals(
-            OnboardingStep.WaitingForApproval(displayFingerprint(currentDevice())),
-            viewModel.state.value.step,
+            displayFingerprint(currentDevice()),
+            (viewModel.state.value.step as OnboardingStep.WaitingForApproval).fingerprint,
             "computed from the key, not the server's answer",
         )
         assertEquals(RegistrationStatus.PENDING, sessions.session.value?.deviceStatus)
@@ -394,7 +405,8 @@ class OnboardingViewModelTest {
         sessions.session.value =
             Session(PARENT_UID, HOUSEHOLD, Role.PARENT, null, NEW_DEVICE, RegistrationStatus.PENDING, clock.now())
         val viewModel = viewModel()
-        assertEquals(OnboardingStep.WaitingForApproval("ab12 cd34 ef56 7890"), viewModel.state.value.step)
+        val waiting = viewModel.state.value.step as OnboardingStep.WaitingForApproval
+        assertEquals("ab12 cd34 ef56 7890", waiting.fingerprint)
         viewModel.onEvent(OnboardingEvent.Back)
         assertNull(sessions.session.value, "cancelling the wait drops the PENDING session")
         assertFalse("erase" in log.calls)
@@ -625,7 +637,10 @@ class OnboardingViewModelTest {
         val viewModel = viewModel()
         viewModel.signIn()
         assertFalse("begin" in log.calls)
-        assertEquals(OnboardingStep.WaitingForApproval(displayFingerprint(currentDevice())), viewModel.state.value.step)
+        assertEquals(
+            displayFingerprint(currentDevice()),
+            (viewModel.state.value.step as OnboardingStep.WaitingForApproval).fingerprint,
+        )
     }
 
     @Test

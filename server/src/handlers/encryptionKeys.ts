@@ -1,6 +1,7 @@
 import { HttpsError, type CallableRequest } from '../https.js';
 import { decodeBase64, parseEncryptionKey, registerEncryptionKeyPayload } from '../crypto.js';
 import { proofOf, verifyOwnDeviceProof } from '../deviceProof.js';
+import { finishMarkedRecovery } from '../recoverySessions.js';
 import { requireKeyNotBoundElsewhere, verifiedEncryptionKey } from '../encryptionKeys.js';
 import { db } from '../firebase.js';
 import { dataOf, member } from '../guards.js';
@@ -33,12 +34,15 @@ export async function registerEncryptionKey(
   const bindingSignature = decodeBase64(data.bindingSignature, 'bindingSignature', 256);
   const proof = proofOf(data, 'deviceId');
   const deviceRef = db.doc(`households/${caller.hid}/devices/${proof.deviceId}`);
+  const callerDevice = await deviceRef.get();
   const deviceKey = verifyOwnDeviceProof(
-    await deviceRef.get(),
+    callerDevice,
     caller,
     registerEncryptionKeyPayload(caller.hid, caller.idTokenHash, publicKey),
     proof.signature,
   );
+  // A phone restored in the app whose session revocation did not finish: finish it, answer `unauthenticated` (ADR-0013).
+  await finishMarkedRecovery(callerDevice, caller.hid, caller.uid);
   const fields = verifiedEncryptionKey(
     { key: publicKey, signature: bindingSignature },
     caller.hid,

@@ -144,7 +144,7 @@
   <string name="feature_parent_home_policy_missing_restore_text">Until they arrive, money changes from this phone are not signed and the household’s settings can’t be changed here. If the phone that set up the household is gone, restore them here with your PIN.</string>
   <string name="feature_parent_home_policy_missing_restore">Restore household settings</string>
   <string name="feature_parent_home_devices_title">New device waiting</string>
-  <string name="feature_parent_home_devices_text">A parent’s phone wants to join the household. Compare the code with that phone before approving.</string>
+  <string name="feature_parent_home_devices_text">A parent’s phone wants to join the household. Compare the code with that phone before approving. That phone can take over the account at once with the parent PIN. Without the PIN, it can take over 7 days after it asks to. If it isn’t yours, remove it.</string>
   <string name="feature_parent_home_devices_review">Review</string>
   <!-- Spoken label of a new device's Review; %1$s is the start of its code, such as "3fa9 c01d". -->
   <string name="feature_parent_home_devices_review_described">Review device %1$s</string>

@@ -39,9 +39,15 @@
 3. **Kid devices** need nothing: they keep syncing; they hold anything the lost phone writes after revocation as quarantined.
 4. **Re-adding a replacement phone:** sign in on it, then approve it from the remaining parent phone ("New device waiting", compare fingerprints).
 
-**The lost phone was the household's only parent device** (or every phone of the only parent is gone). There is no in-app recovery: a new phone registers PENDING, and only an ACTIVE parent device can approve it or revoke the old one. The operator script does what `revokeDevice` and `approveDevice` would (D-M3-42, D-M8-14, D-M8-43); never edit the registry by hand in the console.
+**The lost phone was the household's only parent device** (or every phone of the only parent is gone, or the app's data was cleared). Since 1.1.1 the app recovers by itself (ADR-0013): the parent signs in on the new phone (or the same phone after a reinstall), which registers PENDING, and on its "Waiting for approval" screen chooses
+- **Restore with your Sprout PIN**: at once, with the parent PIN used before (10 wrong PINs in total per PIN, counted across phones and restores, close this way until the PIN is changed on a working phone or a restore by waiting removes it), or
+- **Start the 7-day wait**, then **Restore this account** without the PIN 7 days after the phone asked for it (not after it was added); meanwhile a working phone of the account shows the waiting phone and can remove it. Households made before 1.1.1 have only this way until the parent has typed the PIN once on the new version.
 
-This path is also the one an attacker who took over the parent's Google account would use (threat model T41): they can sign in on their own phone and write to you that "the phone is lost". So the script never revokes a phone of the account that still works (ACTIVE) until the new phone has waited **7 days**; in that time the working phone shows "New device waiting" on the dashboard and lists the new phone in Settings → Devices as "Waiting for approval", where the real parent taps **Remove**. Never shorten the wait in production (`--waiting-period-days` exists for tests only).
+Either way the new phone becomes ACTIVE, every other phone of that parent account is revoked as above (with the same lamport and parent-key stamps), **every session of the account is revoked** as an in-app revocation does (refresh tokens and `tokensValidAfter`; the restoring phone signs in once more, the lost phones wipe themselves when next online), and `recoveries/{id}` records it with `method` `PIN` or `WAIT` and `ticket: null`. Server logs: `device.recovered` (`method`, `revokedDevices`), `device.recoveryWaitStarted`, `device.recoveryRefused` (`reason`). If the session step fails three times within the request the phone answers an error and keeps `sessionsRevocationPending: true` on its device row (log `device.recoverySessionsPending`); the app's repeated restore finishes it, so does the restored phone's next device-signed call (it then answers "sign in again"; log `device.recoverySessionsFinished`), and so does `recover-household --hid <hid> --new-parent-uid <uid>` (dry run, then `--apply --confirm <hid>`): with nothing PENDING it finishes the revocation and removes the mark. Otherwise nothing for the operator to do.
+
+**When the operator script is still needed** (D-M3-42, D-M8-14, D-M8-43): the parent's phone runs an app without the restore screen (before 1.1.1) and cannot be updated; the app's restore fails for a reason it cannot fix (an `internal` error from `recoveryStatus` or `recoverParentDevice`, e.g. a device row without `registeredAt`); every other phone of the account is already REVOKED and the parent, verified as below, cannot wait 7 days (the script admits at once when nothing ACTIVE is revoked); or an earlier revocation, in the app or by the script, stopped before revoking the sessions (step 5). The script does what `revokeDevice` and `approveDevice` would, with the same admit-and-revoke code as the app's restore, and like it revokes the parent's refresh tokens; never edit the registry by hand in the console. In the dry run's device list a phone restored in the app is marked `(restored in the app)`.
+
+This path is also the one an attacker who took over the parent's Google account would use (threat model T41): they can sign in on their own phone and write to you that "the phone is lost". So the script never revokes a phone of the account that still works (ACTIVE) until **7 days after the new phone asked for the wait in the app** ("Start the 7-day wait" on its "Waiting for approval" screen, `recoveryRequestedAt`), the same wait as the app's own restore without the PIN; in that time the working phone shows the waiting phone on the dashboard and in Settings → Devices as "Waiting for approval", where the real parent taps **Remove**. A phone that has not asked is refused: tell the requester to tap "Start the 7-day wait" and come back 7 days later. Only when the new phone cannot ask (an app before 1.1.1 that cannot be updated) and you verified the request out of band, `--count-from-registration` counts the 7 days from its registration instead; the output then says what it skipped, and the incident record says why. Never shorten the wait in production (`--waiting-period-days` exists for tests only).
 
 1. **The parent signs in on the new phone** with the same Google account. It registers PENDING and shows its fingerprint (four groups of four hex characters).
 2. **Find the ids** in the Firebase console: Authentication → search the account → *User UID*; Firestore → `userHouseholds/{uid}` → `hid`. Do not copy the e-mail address into notes; the incident record uses the uid and hid.
@@ -55,7 +61,7 @@ This path is also the one an attacker who took over the parent's Google account 
 
    Expected: `Target: PRODUCTION project sprout-3e1c7`, the household's parent devices (`<deviceId> user <uid> <status> registered <time>`), then `admit PENDING parent device <deviceId> of user <uid> as ACTIVE`, one `revoke parent device …` line per other phone of that parent (the lost ones) and `revoke the sessions of user <uid>`, and the exact `--apply --device <deviceId> --confirm <hid>` to use. Check:
    - the first 16 characters of `<deviceId>` are the fingerprint the new phone shows (if the parent registered more than one phone the script lists them and needs `--device <deviceId>`);
-   - **an ACTIVE phone in the revoke lines is a red flag**: it was working, so the "lost" phone may not be lost. Ask when it was last used, and whether the requester can still open it (then they approve the new phone there instead). The dry run then also says `--apply would be refused: … wait until <time>` while the new phone registered less than 7 days ago. Tell the requester to keep the new phone signed in and come back after that time; do not apply earlier. If the new phone disappears from the list (the working phone removed it), stop and treat the request as an attack: note it in the incident, tell the account's owner through the household's other contact if there is one;
+   - **an ACTIVE phone in the revoke lines is a red flag**: it was working, so the "lost" phone may not be lost. Ask when it was last used, and whether the requester can still open it (then they approve the new phone there instead). The dry run then also says `--apply would be refused: …`: either "has not asked for the wait" (the requester taps "Start the 7-day wait" on the new phone) or "asked for the wait less than 7 day(s) ago: wait until <time>". Tell the requester to keep the new phone signed in and come back after that time; do not apply earlier. If the new phone disappears from the list (the working phone removed it), stop and treat the request as an attack: note it in the incident, tell the account's owner through the household's other contact if there is one;
    - a phone `(admitted by the operator)` shows an earlier recovery.
 
    It refuses when another parent of the household still has an ACTIVE phone (that parent approves the new phone in the app instead), when the uid is not a parent of that household, or when nothing is PENDING.
@@ -118,7 +124,7 @@ npm run operator -- prune-expired --production            # counts per collectio
 npm run operator -- prune-expired --apply --production
 ```
 
-## 5. Link-code abuse
+## 5. Link-code abuse and the server's HMAC keys
 
 **Signs.** Bursts of `resource-exhausted` from `redeemLinkCode` or `createLinkCode` in the server logs (they log the callable and outcome, never the code or the IP).
 
@@ -132,6 +138,17 @@ npx vercel@64.7.0 env rm LINK_CODE_HMAC_KEY production
 openssl rand -base64 32 | tr -d '\n' | npx vercel@64.7.0 env add LINK_CODE_HMAC_KEY production --sensitive
 npx vercel@64.7.0 --prod
 ```
+
+**Recovery PIN key** (`RECOVERY_PIN_HMAC_KEY`, ADR-0013; a separate secret). Rotate it if it may have leaked. **If it may have leaked together with a copy of the database** (`recoveryPins`), treat every parent PIN as known: the key and the rows allow guessing a six-digit PIN offline, and the same PIN unlocks the parent area on the phone. Rotate the key, then tell every parent to change their PIN on a working phone (Settings → Security); that is the security step, the rotation alone does not undo the exposure:
+
+```
+cd server
+npx vercel@64.7.0 env rm RECOVERY_PIN_HMAC_KEY production
+openssl rand -base64 32 | tr -d '\n' | npx vercel@64.7.0 env add RECOVERY_PIN_HMAC_KEY production --sensitive
+npx vercel@64.7.0 --prod
+```
+
+After a rotation every stored check value counts as absent (it uses up no attempt): restoring with the PIN is unavailable, restoring by waiting still works. A phone cannot see the rotation; it registers its PIN again at the first correct PIN entry once its last registration is more than 30 days old, or at once when the PIN is changed. So, for availability, tell parents who may need to restore with the PIN sooner to change their PIN (Settings → Parent security) on a working phone (after a leak with the database they change it anyway, above). Never set it to the value of `LINK_CODE_HMAC_KEY`: production refuses that like a missing key. A missing variable in production makes only the PIN paths fail: `setRecoveryPin` and `recoverParentDevice` with the PIN answer `internal`, `recoveryStatus` answers that no PIN way is available (the waiting phone still offers the wait).
 
 If a kid device was linked through a leaked code, revoke it (§3). If a proxy is ever put in front of the server, the per-IP limit keys on that proxy's address until the hop count is configured (FIREBASE.md "Client address").
 

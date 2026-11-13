@@ -20,6 +20,9 @@ import java.io.File
  * @property tablesSetupFile the Times tables setup of each kid on this device (M9-games §6.3, D-M9-G7): the app's
  *   Preferences DataStore `noBackupFilesDir/datastore/games_tables_setup.preferences_pb`, a local preference that is
  *   never synced. It names kid ids, so the wipe deletes it with the household's data.
+ * @property recoveryPinFile the account recovery marks (ADR-0013 §1, `feature/lock`'s
+ *   `SharedPreferencesRecoveryPinFlag`): `shared_prefs/sprout_recovery_pin.xml`, cleared through its store and then
+ *   deleted with the household, so a clear that failed does not count as a complete wipe. Null where a test has none.
  */
 class LocalDataFiles(
     val databaseFile: File,
@@ -30,13 +33,15 @@ class LocalDataFiles(
         File(photoDirectory.absoluteFile.parentFile, DATASTORE_DIRECTORY_NAME),
         TABLES_SETUP_FILE_NAME,
     ),
+    val recoveryPinFile: File? = null,
 ) {
     /**
      * The local preference files the wipe deletes: [tablesSetupFile] and the `.tmp` sibling DataStore writes before
-     * it renames it into place.
+     * it renames it into place, and [recoveryPinFile] with the `.bak` sibling `SharedPreferences` keeps while writing.
      */
     val preferenceFiles: List<File>
-        get() = listOf(tablesSetupFile, File("${tablesSetupFile.path}.tmp"))
+        get() = listOf(tablesSetupFile, File("${tablesSetupFile.path}.tmp")) +
+            listOfNotNull(recoveryPinFile, recoveryPinFile?.let { File("${it.path}.bak") })
 
     /** The database file and every sibling SQLite may have created next to it. */
     val databaseFiles: List<File>
@@ -55,6 +60,9 @@ class LocalDataFiles(
 
         /** The Times tables setup DataStore (`DataStoreTablesSetupStore` in the app). */
         const val TABLES_SETUP_FILE_NAME: String = "games_tables_setup.preferences_pb"
+
+        /** The recovery marks' `SharedPreferences` file under the app's data directory (`shared_prefs`). */
+        const val RECOVERY_PIN_PREFERENCES: String = "shared_prefs/sprout_recovery_pin.xml"
 
         /** `FilesDirBlobStorage`'s directory under `noBackupFilesDir`. */
         const val SECRETS_DIRECTORY_NAME: String = "sprout_secrets"

@@ -80,12 +80,16 @@ export function req(who: Who | null, data: unknown = {}): TestRequest {
   return { who, data };
 }
 
-/** The error a failed call rejects with: the protocol status as its lower-case code, the message and HTTP status. */
+/**
+ * The error a failed call rejects with: the protocol status as its lower-case code, the message, the HTTP status and
+ * the error's `details`, if any.
+ */
 export class CallError extends Error {
   constructor(
     readonly code: FunctionsErrorCode,
     message: string,
     readonly httpStatus: number,
+    readonly details?: unknown,
   ) {
     super(`${code}: ${message}`);
   }
@@ -134,13 +138,16 @@ export async function call<T>(fn: CallableDefinition<T>, request: TestRequest): 
   if (who?.app !== false) headers['x-firebase-appcheck'] = TEST_APP_CHECK_TOKEN;
   const data = withSignatures(request.data, idTokenHash(token));
   const response = await post(`/${fn.name}`, JSON.stringify({ data }), headers, who?.ip);
-  const body = (await response.json()) as { result?: unknown; error?: { status: string; message: string } };
+  const body = (await response.json()) as {
+    result?: unknown;
+    error?: { status: string; message: string; details?: unknown };
+  };
   if (body.error !== undefined) {
     expect(Object.keys(body)).toEqual(['error']);
     const code = CODES_BY_STATUS.get(body.error.status);
     expect(code, `unknown status ${body.error.status}`).toBeDefined();
     expect(response.status).toBe(ERROR_CODES[code!].status);
-    throw new CallError(code!, body.error.message, response.status);
+    throw new CallError(code!, body.error.message, response.status, body.error.details);
   }
   expect(response.status).toBe(200);
   expect(Object.keys(body)).toEqual(['result']);

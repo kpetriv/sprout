@@ -6,6 +6,9 @@ import dev.kpetriv.sprout.core.database.Session
 import dev.kpetriv.sprout.core.database.SessionStore
 import dev.kpetriv.sprout.core.model.DeviceId
 import dev.kpetriv.sprout.core.model.KidId
+import dev.kpetriv.sprout.core.sync.RecoveredParentDevice
+import dev.kpetriv.sprout.core.sync.RecoveryStatus
+import dev.kpetriv.sprout.core.sync.StoredRecoveryPin
 import dev.kpetriv.sprout.core.syncfirebase.DeviceProof
 import dev.kpetriv.sprout.core.syncfirebase.DeviceStatusAnswer
 import dev.kpetriv.sprout.core.syncfirebase.FunctionsError
@@ -35,6 +38,7 @@ import kotlin.time.Instant
  * The token is refreshed just before signing, so the SDK sends that token; should something else refresh it in
  * between, the server refuses the proof with `permission-denied`, and the call is signed and sent once more.
  */
+@Suppress("TooManyFunctions") // One function per device-signed callable.
 class HouseholdAdminFunctions @Inject constructor(
     private val functions: HouseholdFunctions,
     private val signer: DeviceSigner,
@@ -152,6 +156,56 @@ class HouseholdAdminFunctions @Inject constructor(
     }
 
     /**
+     * Stores the account's recovery PIN check value from this ACTIVE parent device (ADR-0013 §1): [salt], [kdf] and
+     * [verifier] as `RecoveryPinVerifier` made them, [newPin] when the PIN was just chosen or changed. Answers the
+     * attempts left. Never log the arguments.
+     */
+    suspend fun setRecoveryPin(
+        salt: ByteArray,
+        kdf: String,
+        verifier: ByteArray,
+        newPin: Boolean,
+    ): Result<StoredRecoveryPin> = withProof { session, tokenHash ->
+        // The signed bytes hold the verifier: zeroed once signed.
+        val payload = DeviceProof.setRecoveryPinPayload(session.householdId, tokenHash, salt, kdf, verifier, newPin)
+        val signature = try {
+            signer.sign(payload)
+        } finally {
+            payload.fill(0)
+        }
+        functions.setRecoveryPin(salt, kdf, verifier, newPin, session.deviceId, signature)
+    }
+
+    /**
+     * The recovery options of this PENDING parent device (ADR-0013 §2), signed by its own key: the session's device is
+     * the PENDING one while it waits.
+     */
+    suspend fun recoveryStatus(): Result<RecoveryStatus> = withProof { session, tokenHash ->
+        val signature = signer.sign(DeviceProof.recoveryStatusPayload(session.householdId, tokenHash))
+        functions.recoveryStatus(session.deviceId, signature)
+    }
+
+    /**
+     * Recovers this PENDING parent device with the PIN's [verifier], or by waiting when it is null (ADR-0013 §2). A PIN
+     * attempt is sent once per call, never again here, not even after a bare `permission-denied`: one tap never spends
+     * two attempts. A wait call is retried after a bare `permission-denied` (a proof bound to a token refreshed
+     * meanwhile) as every proof is. An answer for another device than this one is a malformed answer.
+     */
+    suspend fun recoverParentDevice(verifier: ByteArray?): Result<RecoveredParentDevice> =
+        withProof(retryRefusedProof = verifier == null) { session, tokenHash ->
+            val payload = DeviceProof.recoverParentDevicePayload(session.householdId, tokenHash, verifier)
+            val signature = try {
+                signer.sign(payload)
+            } finally {
+                payload.fill(0)
+            }
+            functions.recoverParentDevice(verifier, session.deviceId, signature).mapCatching { recovered ->
+                if (recovered.deviceId != session.deviceId) throw FunctionsException(FunctionsError.MalformedResponse)
+                recovered
+            }
+        }
+
+    /**
      * A fresh attestation challenge for the parent key (`beginDeviceRegistration`; its only effect is replacing the
      * caller's `challenges/{uid}`, so no dedicated callable is needed). Null in the trial household, which has no
      * server: the key is then created without attestation.
@@ -172,13 +226,15 @@ class HouseholdAdminFunctions @Inject constructor(
      * server refuses the proof (`permission-denied` changes nothing on the server). One proof call at a time, so two
      * of them never refresh the token under each other.
      */
-    private suspend fun <T> withProof(block: suspend (Session, ByteArray) -> Result<T>): Result<T> =
-        withSession { session ->
-            proofCalls.withLock {
-                val first = signedAttempt(session, block)
-                if (first.isPermissionDenied()) signedAttempt(session, block) else first
-            }
+    private suspend fun <T> withProof(
+        retryRefusedProof: Boolean = true,
+        block: suspend (Session, ByteArray) -> Result<T>,
+    ): Result<T> = withSession { session ->
+        proofCalls.withLock {
+            val first = signedAttempt(session, block)
+            if (retryRefusedProof && first.isPermissionDenied()) signedAttempt(session, block) else first
         }
+    }
 
     private suspend fun <T> signedAttempt(
         session: Session,

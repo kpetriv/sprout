@@ -13,6 +13,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.res.vectorResource
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
@@ -62,6 +63,7 @@ fun ParentSecurityScreen(
             SettingsCard {
                 LockWhenLeavingRow(state.lockWhenLeaving) { onEvent(ParentSecurityEvent.LockWhenLeavingChanged(it)) }
             }
+            state.recovery?.let { row -> SettingsCard { AccountRecoveryRow(row, onEvent) } }
             SettingsCard { ChangePinForm(state, onEvent) }
         }
     }
@@ -233,6 +235,113 @@ private fun ParentSecurityUiState.signingDetailRes(): Int = when (signing) {
         ParentAuthAvailability.UNAVAILABLE_OTHER,
         -> R.string.feature_settings_security_signing_unavailable
     }
+}
+
+/**
+ * "Account recovery" (ADR-0013 §1): "Ready", or "Enter your PIN to finish setting up account recovery" with a
+ * [PinPad] that checks the PIN on this phone and then registers it.
+ */
+@Composable
+private fun AccountRecoveryRow(row: RecoveryRowUi, onEvent: (ParentSecurityEvent) -> Unit) {
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(SproutSpacing.md - SproutSpacing.xs),
+    ) {
+        SectionHeading(
+            text = stringResource(R.string.feature_settings_security_recovery_title),
+            icon = SproutIcons.Lock,
+            iconTint = MaterialTheme.colorScheme.primary,
+        )
+        val closed = row.attemptsLeft == 0 && (row.ready || row.keptOther)
+        if (closed) {
+            // Never "Ready" next to "closed": at no attempts left the closed line is the row's state.
+            ErrorText(stringResource(R.string.feature_settings_security_recovery_closed))
+        } else {
+            Text(
+                stringResource(
+                    when {
+                        row.keptOther -> R.string.feature_settings_security_recovery_kept_other
+                        row.ready -> R.string.feature_settings_security_recovery_ready
+                        else -> R.string.feature_settings_security_recovery_not_ready
+                    },
+                ),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            recoveryWarningText(row)?.let { ErrorText(it) }
+        }
+        recoveryErrorText(row.error)?.let { ErrorText(it) }
+        val entry = row.pin
+        when {
+            row.ready || row.keptOther -> Unit
+
+            entry != null -> Column(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(SproutSpacing.md - SproutSpacing.xs),
+            ) {
+                Text(
+                    stringResource(
+                        if (row.isRegistering) {
+                            R.string.feature_settings_security_signing_registering
+                        } else {
+                            R.string.feature_settings_security_recovery_pin
+                        },
+                    ),
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                PinDots(entered = entry.enteredDigits, length = PARENT_PIN_LENGTH, shakeKey = entry.rejections)
+                PinPad(
+                    onDigit = { onEvent(ParentSecurityEvent.RecoveryPinDigit(it)) },
+                    onBackspace = { onEvent(ParentSecurityEvent.RecoveryPinBackspace) },
+                    enabled = !row.isRegistering,
+                    keySize = PinPadDefaults.CompactKeySize,
+                )
+                QuietButton(
+                    text = stringResource(R.string.feature_settings_security_cancel),
+                    onClick = { onEvent(ParentSecurityEvent.CancelRecoverySetup) },
+                    enabled = !row.isRegistering,
+                )
+            }
+
+            else -> SproutButton(
+                text = stringResource(R.string.feature_settings_security_recovery_finish),
+                onClick = { onEvent(ParentSecurityEvent.StartRecoverySetup) },
+                enabled = !row.isRegistering,
+            )
+        }
+    }
+}
+
+/** Wrong PINs tried in a restore of this account (ADR-0013 §3): change the PIN; at none left, the PIN way is closed. */
+@Composable
+private fun recoveryWarningText(row: RecoveryRowUi): String? {
+    val left = row.attemptsLeft?.takeIf { (row.ready || row.keptOther) && it in 1 until MAX_RECOVERY_ATTEMPTS }
+        ?: return null
+    val wrong = MAX_RECOVERY_ATTEMPTS - left
+    return pluralStringResource(R.plurals.feature_settings_security_recovery_wrong_pins, wrong, wrong)
+}
+
+private const val MAX_RECOVERY_ATTEMPTS = 10
+
+@Composable
+private fun recoveryErrorText(error: RecoverySetupError?): String? = when (error) {
+    null -> null
+
+    RecoverySetupError.Offline -> stringResource(R.string.feature_settings_security_recovery_offline)
+
+    RecoverySetupError.Refused -> stringResource(R.string.feature_settings_security_recovery_refused)
+
+    RecoverySetupError.RequireBiometric -> stringResource(R.string.feature_settings_security_pin_require_biometric)
+
+    is RecoverySetupError.LockedOut -> stringResource(
+        R.string.feature_settings_security_pin_locked_out,
+        waitText(error.wait),
+    )
+
+    is RecoverySetupError.WrongPin -> error.wait?.let {
+        stringResource(R.string.feature_settings_security_register_wrong_pin_wait, waitText(it))
+    } ?: stringResource(R.string.feature_settings_security_register_wrong_pin)
 }
 
 @Composable

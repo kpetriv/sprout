@@ -127,6 +127,9 @@ export const SIGNED_CALLABLES = {
   exportHousehold: 'sprout/export-household/v2',
   deleteHousehold: 'sprout/delete-household/v2',
   pruneMessages: 'sprout/prune-messages/v2',
+  setRecoveryPin: 'sprout/set-recovery-pin/v2',
+  recoveryStatus: 'sprout/recovery-status/v2',
+  recoverParentDevice: 'sprout/recover-parent-device/v2',
 } as const;
 
 export type SignedCallable = keyof typeof SIGNED_CALLABLES;

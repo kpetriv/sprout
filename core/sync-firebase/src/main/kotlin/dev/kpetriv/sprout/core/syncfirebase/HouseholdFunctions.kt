@@ -3,6 +3,14 @@ package dev.kpetriv.sprout.core.syncfirebase
 import dev.kpetriv.sprout.core.model.DeviceId
 import dev.kpetriv.sprout.core.model.HouseholdId
 import dev.kpetriv.sprout.core.model.KidId
+import dev.kpetriv.sprout.core.sync.RecoveredParentDevice
+import dev.kpetriv.sprout.core.sync.RecoveryDeviceStatus
+import dev.kpetriv.sprout.core.sync.RecoveryMethod
+import dev.kpetriv.sprout.core.sync.RecoveryPinRecord
+import dev.kpetriv.sprout.core.sync.RecoveryRefusal
+import dev.kpetriv.sprout.core.sync.RecoveryRefusedException
+import dev.kpetriv.sprout.core.sync.RecoveryStatus
+import dev.kpetriv.sprout.core.sync.StoredRecoveryPin
 import kotlinx.coroutines.CancellationException
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.SerializationException
@@ -265,6 +273,97 @@ class HouseholdFunctions @Inject constructor(private val invoker: CallableInvoke
         DeviceStatusAnswer(status, response.householdGone)
     }
 
+    /**
+     * Stores the account's recovery PIN check value (ADR-0013 §1, §4) from this ACTIVE parent device
+     * ([callerDeviceId]); [newPin] says the PIN was just chosen or changed (the server restarts the failed attempts);
+     * [signature] is the device's signature over [DeviceProof.setRecoveryPinPayload]. Answers whether the value was
+     * stored and the attempts left on the value the server holds (0..10). Never log the arguments.
+     */
+    @Suppress("LongParameterList") // The check value's four parts and the proof.
+    suspend fun setRecoveryPin(
+        salt: ByteArray,
+        kdf: String,
+        verifier: ByteArray,
+        newPin: Boolean,
+        callerDeviceId: DeviceId,
+        signature: ByteArray,
+    ): Result<StoredRecoveryPin> = call(
+        SET_RECOVERY_PIN,
+        SetRecoveryPinRequest(
+            Base64.Default.encode(salt),
+            kdf,
+            Base64.Default.encode(verifier),
+            newPin,
+            callerDeviceId,
+            Base64.Default.encode(signature),
+        ),
+        SetRecoveryPinRequest.serializer(),
+        SetRecoveryPinResponse.serializer(),
+    ).mapCatching { response ->
+        if (!response.set || response.attemptsLeft !in 0..MAX_RECOVERY_ATTEMPTS) {
+            throw FunctionsException(FunctionsError.MalformedResponse)
+        }
+        StoredRecoveryPin(response.stored, response.attemptsLeft)
+    }
+
+    /**
+     * The recovery options of this PENDING parent device ([deviceId], ADR-0013 §2); [signature] is that device's own
+     * signature over [DeviceProof.recoveryStatusPayload]. Refusals with a reason fail with [RecoveryRefusedException].
+     */
+    suspend fun recoveryStatus(deviceId: DeviceId, signature: ByteArray): Result<RecoveryStatus> = call(
+        RECOVERY_STATUS,
+        RecoveryRequestBody(deviceId, Base64.Default.encode(signature)),
+        RecoveryRequestBody.serializer(),
+        RecoveryStatusResponse.serializer(),
+    ).mapCatching { response ->
+        val pin = response.pin?.let { parameters ->
+            val salt = decodeBase64(parameters.salt) ?: throw FunctionsException(FunctionsError.MalformedResponse)
+            RecoveryPinRecord(salt, parameters.kdf)
+        }
+        if (response.attemptsLeft !in 0..MAX_RECOVERY_ATTEMPTS) {
+            throw FunctionsException(FunctionsError.MalformedResponse)
+        }
+        RecoveryStatus(pin, response.attemptsLeft, response.waitEndsAt?.let(Instant::fromEpochMilliseconds))
+    }.mapRecoveryRefusal()
+
+    /**
+     * Recovers this PENDING parent device ([deviceId], ADR-0013 §2) with the PIN's [verifier], or by waiting when it
+     * is null; [signature] is that device's own signature over [DeviceProof.recoverParentDevicePayload] of the same
+     * [verifier]. Refusals with a reason (`recent-sign-in`, `wrong-pin`, `pin-unavailable`, `wait`, `not-pending`)
+     * fail with [RecoveryRefusedException]; anything else with [FunctionsException]. The first `WAIT` call starts the
+     * wait and answers `wait` (a [RecoveryRefusal.Wait]). A success revokes every session of the account
+     * ([RecoveredParentDevice.signInAgain]); `internal` may mean the revocation did not finish, and calling again
+     * finishes it.
+     */
+    suspend fun recoverParentDevice(
+        verifier: ByteArray?,
+        deviceId: DeviceId,
+        signature: ByteArray,
+    ): Result<RecoveredParentDevice> = call(
+        RECOVER_PARENT_DEVICE,
+        RecoveryRequestBody(
+            deviceId,
+            Base64.Default.encode(signature),
+            method = if (verifier != null) METHOD_PIN else METHOD_WAIT,
+            verifier = verifier?.let { Base64.Default.encode(it) },
+        ),
+        RecoveryRequestBody.serializer(),
+        RecoveredDeviceResponse.serializer(),
+    ).mapCatching { response ->
+        val method = RecoveryMethod.entries.firstOrNull { it.name == response.method }
+            ?: throw FunctionsException(FunctionsError.MalformedResponse)
+        val valid = response.status == DeviceStatusValue.ACTIVE.name &&
+            response.revokedDevices >= 0 && response.attemptsLeft in 0..MAX_RECOVERY_ATTEMPTS
+        if (!valid) throw FunctionsException(FunctionsError.MalformedResponse)
+        RecoveredParentDevice(
+            response.deviceId,
+            response.revokedDevices,
+            method,
+            response.attemptsLeft,
+            response.signInAgain,
+        )
+    }.mapRecoveryRefusal()
+
     @Suppress("SwallowedException") // A decoding message may quote response data; only the code is kept.
     private suspend fun <Req, Res> call(
         name: String,
@@ -306,6 +405,15 @@ class HouseholdFunctions @Inject constructor(private val invoker: CallableInvoke
         const val DELETE_HOUSEHOLD: String = "deleteHousehold"
         const val DEVICE_STATUS: String = "deviceStatus"
         const val PRUNE_MESSAGES: String = "pruneMessages"
+        const val SET_RECOVERY_PIN: String = "setRecoveryPin"
+        const val RECOVERY_STATUS: String = "recoveryStatus"
+        const val RECOVER_PARENT_DEVICE: String = "recoverParentDevice"
+
+        /** `recoverParentDevice`'s `method` values. */
+        const val METHOD_PIN: String = "PIN"
+        const val METHOD_WAIT: String = "WAIT"
+
+        private const val MAX_RECOVERY_ATTEMPTS = 10
 
         private const val DEFAULT_TIMEOUT_MS = 30_000L
 
@@ -325,3 +433,45 @@ class HouseholdFunctions @Inject constructor(private val invoker: CallableInvoke
         }
     }
 }
+
+/**
+ * A [FunctionsException] whose `details.reason` is one of ADR-0013's (§4 "Errors") becomes a
+ * [RecoveryRefusedException]; anything else stays as it is. A reason with a missing or malformed parameter stays a
+ * [FunctionsException].
+ */
+internal fun <T> Result<T>.mapRecoveryRefusal(): Result<T> = recoverCatching { failure ->
+    throw (failure as? FunctionsException)?.recoveryRefusal()?.let(::RecoveryRefusedException) ?: failure
+}
+
+@Suppress("CyclomaticComplexMethod") // One branch per reason of ADR-0013 §4.
+internal fun FunctionsException.recoveryRefusal(): RecoveryRefusal? {
+    val number = { name: String -> (details[name] as? Number)?.toDouble()?.takeIf { it % 1.0 == 0.0 }?.toLong() }
+    return when {
+        error == FunctionsError.FailedPrecondition && reason == "recent-sign-in" -> RecoveryRefusal.RecentSignIn
+
+        error == FunctionsError.FailedPrecondition && reason == "pin-unavailable" -> RecoveryRefusal.PinUnavailable
+
+        error == FunctionsError.FailedPrecondition && reason == "other-parent" -> RecoveryRefusal.OtherParent
+
+        error == FunctionsError.PermissionDenied && reason == "wrong-pin" ->
+            number("attemptsLeft")
+                ?.takeIf { it in 0..MAX_RECOVERY_ATTEMPTS_LEFT }
+                ?.let { RecoveryRefusal.WrongPin(it.toInt()) }
+
+        error == FunctionsError.FailedPrecondition && reason == "wait" ->
+            number("waitEndsAt")?.let { RecoveryRefusal.Wait(Instant.fromEpochMilliseconds(it)) }
+
+        error == FunctionsError.FailedPrecondition && reason == "not-pending" -> RecoveryRefusal.NotPending(
+            when (details["status"]) {
+                "ACTIVE" -> RecoveryDeviceStatus.ACTIVE
+                "REVOKED" -> RecoveryDeviceStatus.REVOKED
+                else -> RecoveryDeviceStatus.OTHER
+            },
+        )
+
+        else -> null
+    }
+}
+
+/** The most attempts a recovery PIN has (ADR-0013 §2). */
+private const val MAX_RECOVERY_ATTEMPTS_LEFT = 10L

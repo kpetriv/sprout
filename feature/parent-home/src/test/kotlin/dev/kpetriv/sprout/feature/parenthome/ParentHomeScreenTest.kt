@@ -16,6 +16,7 @@ import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
 import dev.kpetriv.sprout.core.designsystem.theme.SproutTheme
 import dev.kpetriv.sprout.core.testing.accessibility.AccessibilityRule
 import org.junit.Rule
@@ -168,6 +169,17 @@ class ParentHomeScreenTest {
 
         compose.onAllNodes(hasText("permission-denied", substring = true)).assertCountEquals(0)
         compose.onNodeWithText("isn’t allowed to make it", substring = true).assertIsDisplayed()
+    }
+
+    @Test
+    fun `a phone waiting to join warns that it can take over the account with the PIN or after a wait`() {
+        show(ParentHomePreviewData.household())
+
+        compose.onNodeWithText("can take over the account at once with the parent PIN", substring = true)
+            .performScrollTo()
+            .assertIsDisplayed()
+        compose.onNodeWithText("7 days after it asks to. If it isn’t yours, remove it.", substring = true)
+            .assertIsDisplayed()
     }
 
     @Test

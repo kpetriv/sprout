@@ -19,6 +19,7 @@ import dev.kpetriv.sprout.core.model.UserId
 import dev.kpetriv.sprout.core.time.Clock
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -42,6 +43,11 @@ import javax.inject.Inject
  *   ACTIVE restores the session, PENDING goes back to waiting); otherwise this device registers PENDING with a
  *   pending key, saves a PENDING session and waits (one sync every [POLL_INTERVAL_MS]; the sync mirrors the registry
  *   into the session) until a parent approves.
+ *   A phone about to wait has no parent PIN of its own: any PIN already here is removed first
+ *   ([RecoveredPinKeeper.forgetForNewDevice]). While it waits, the screen offers account recovery ([WaitingRecovery],
+ *   ADR-0013 §3): with the parent PIN at once, or without it once a 7-day wait it asks for is over; while a restore
+ *   call runs, the approval poll stands aside. A recovered phone signs in again, then goes on as an approved one
+ *   does, and after a restore with the PIN that PIN becomes this phone's PIN ([RecoveredPinKeeper.keep]).
  *   Every way into the PIN and signing step from an existing household (restored, approved, resumed) first pulls the
  *   household ([OnboardingStep.FirstSync]), so enrolment finds the household's policy (D-REL-11), and recovers a
  *   policy that exists nowhere through the same checks as Settings (D-REL-24).
@@ -82,6 +88,8 @@ class OnboardingViewModel @Inject constructor(
     private val keys: DeviceKeyStore,
     private val sessions: SessionStore,
     private val clock: Clock,
+    private val accountRecovery: AccountRecovery,
+    private val pinKeeper: RecoveredPinKeeper,
 ) : ViewModel() {
     private val mutableState = MutableStateFlow(OnboardingUiState())
     val state: StateFlow<OnboardingUiState> = mutableState.asStateFlow()
@@ -99,12 +107,29 @@ class OnboardingViewModel @Inject constructor(
     /** A sync of the waiting phone succeeded, so household data may be on it. */
     private var pulledWhileWaiting = false
 
+    private val recovery = WaitingRecovery(
+        scope = viewModelScope,
+        recovery = accountRecovery,
+        auth = auth,
+        clock = clock,
+        current = { (mutableState.value.step as? OnboardingStep.WaitingForApproval)?.recovery },
+        update = { change ->
+            mutableState.update { state ->
+                val step = state.step as? OnboardingStep.WaitingForApproval ?: return@update state
+                state.copy(step = step.copy(recovery = change(step.recovery ?: RecoveryUi.Loading)))
+            }
+        },
+        onRecovered = ::recovered,
+        onRemoved = { claims?.householdId?.let { rejected(it) } },
+    )
+
     init {
         viewModelScope.launch { resume() }
     }
 
     @Suppress("CyclomaticComplexMethod") // One branch per event.
     fun onEvent(event: OnboardingEvent) {
+        if (recovery.onEvent(event)) return
         when (event) {
             OnboardingEvent.ChooseParent -> show(OnboardingStep.ParentSignIn(auth.usesEmailPassword))
 
@@ -142,6 +167,13 @@ class OnboardingViewModel @Inject constructor(
             OnboardingEvent.ParentLockDone -> parentLockDone()
 
             OnboardingEvent.DismissFailure -> mutableState.update { it.copy(failure = null) }
+
+            // Handled by [recovery] above.
+            OnboardingEvent.RetryRecoveryStatus, is OnboardingEvent.ChooseRecovery, OnboardingEvent.ShowRecoveryWait,
+            OnboardingEvent.StartRecoveryWait, OnboardingEvent.RecoveryResumed,
+            OnboardingEvent.ConfirmRecovery, OnboardingEvent.CancelRecovery, is OnboardingEvent.RecoveryPinDigit,
+            OnboardingEvent.RecoveryPinBackspace, is OnboardingEvent.RecoverySignIn,
+            -> Unit
         }
     }
 
@@ -305,6 +337,7 @@ class OnboardingViewModel @Inject constructor(
                 recoverPolicy(pulled)
                 show(OnboardingStep.ParentLock)
             } else {
+                forgetLocalPin()
                 household.saveSession(
                     Session(uid, householdId, Role.PARENT, null, deviceId, RegistrationStatus.PENDING, now()),
                 )
@@ -436,6 +469,7 @@ class OnboardingViewModel @Inject constructor(
         val key = pendingKey()
         val pending = backend.registerParentDevice(key).orFail()
         val deviceId = promote(pending.deviceId, key)
+        forgetLocalPin()
         purgeTrialDataIfAny()
         household.saveSession(
             Session(uid, householdId, Role.PARENT, null, deviceId, RegistrationStatus.PENDING, now()),
@@ -444,30 +478,122 @@ class OnboardingViewModel @Inject constructor(
         waitForApproval(householdId, displayFingerprint(deviceId))
     }
 
+    /**
+     * A waiting phone has no parent PIN of its own (ADR-0013 §1, app audit L1): a PIN restore adopts the PIN the server
+     * accepted, and every other admission chooses one after it. When the PIN cannot be removed the registration stops
+     * here with a failure; trying again finds the registered key and comes back through this step.
+     */
+    @Suppress("TooGenericExceptionCaught", "SwallowedException") // Storage or Keystore: a failure code, never logged.
+    private suspend fun forgetLocalPin() {
+        try {
+            pinKeeper.forgetForNewDevice()
+        } catch (cancellation: CancellationException) {
+            throw cancellation
+        } catch (failure: Exception) {
+            throw OnboardingException(OnboardingFailure.UNKNOWN)
+        }
+    }
+
+    /** True while a restore call runs (or waits for the sign-in it asked for) on the waiting screen. */
+    private fun restoring(state: OnboardingUiState): Boolean {
+        val recovery = (state.step as? OnboardingStep.WaitingForApproval)?.recovery as? RecoveryUi.Ready
+        return recovery != null && (recovery.restoring || recovery.signInNeeded)
+    }
+
     private fun waitForApproval(householdId: HouseholdId, fingerprint: String) {
-        show(OnboardingStep.WaitingForApproval(fingerprint))
+        show(OnboardingStep.WaitingForApproval(fingerprint, RecoveryUi.Loading))
+        recovery.load()
         waiting?.cancel()
         waiting = viewModelScope.launch {
             val poll = launch {
                 while (isActive) {
-                    if (attemptOrNull { household.syncNow() } == true) pulledWhileWaiting = true
+                    // While a restore call runs, the server may already hold this phone ACTIVE: a sync now would
+                    // race the call's own hand-over (audit M1), so the poll stands aside.
+                    if (!restoring(mutableState.value) && attemptOrNull { household.syncNow() } == true) {
+                        pulledWhileWaiting = true
+                    }
                     delay(POLL_INTERVAL_MS)
                 }
             }
             val status = sessions.observe().map { it?.deviceStatus }.first { it != RegistrationStatus.PENDING }
+            if (status == RegistrationStatus.ACTIVE && restoring(mutableState.value)) {
+                // ACTIVE while a restore call runs: that call hands over (and cancels this job). Only when it ends
+                // without handing over (a transport failure after the server admitted the phone) does this go on.
+                mutableState.first { !restoring(it) }
+            }
             poll.cancel()
+            recovery.cancel()
             if (status == RegistrationStatus.ACTIVE) {
                 attemptOrNull { household.startParentSetup(householdId) }
                 // A PENDING phone cannot read the household's documents: pull them now that it is ACTIVE.
                 parentLockAfterPull()
             } else {
-                // Revoked while waiting (or the session went): whatever the sync pulled is erased, not kept.
-                leavePending(householdId)
-                claims = null
-                pulledWhileWaiting = false
-                mutableState.value = OnboardingUiState(failure = OnboardingFailure.DEVICE_REJECTED)
+                rejected(householdId)
             }
         }
+    }
+
+    /** Revoked while waiting (or the session went): whatever the sync pulled is erased, not kept. */
+    private suspend fun rejected(householdId: HouseholdId) {
+        waiting?.takeIf { it != currentCoroutineContext()[Job] }?.cancel()
+        recovery.cancel()
+        leavePending(householdId)
+        claims = null
+        pulledWhileWaiting = false
+        mutableState.value = OnboardingUiState(failure = OnboardingFailure.DEVICE_REJECTED)
+    }
+
+    /**
+     * This phone was recovered (ADR-0013 §3), or approved while it tried ([restored] null): it goes on exactly as an
+     * approved phone does (first pull, then the PIN and signing step). After a restore with the PIN, that [pin] becomes
+     * this phone's PIN first (zeroed here), so the lock step skips "choose a PIN"; when it cannot be kept, the lock
+     * step runs as usual. The PIN and the session are stored **before** the sign-in the restore asks for
+     * ([RecoveredDevice.signInAgain]), so a cancelled sign-in loses nothing: the app's "Sign in again" screen stays up,
+     * and after a restart the now ACTIVE phone comes back the usual way (the parent setup step). Its old ID token can
+     * still read for up to an hour, but writes and callables are refused until the parent signs in again, which the
+     * app's "Sign in again" gate asks for once the session's refresh is refused.
+     */
+    private suspend fun recovered(pin: CharArray?, restored: RecoveredDevice?) {
+        waiting?.cancel()
+        try {
+            // Only an answer that says it compared the PIN keeps it (app audit N1); else the lock step asks for one.
+            if (pin != null && restored?.method == RecoveryChoice.PIN) attemptOrNull { pinKeeper.keep(pin) }
+        } finally {
+            pin?.fill('\u0000')
+        }
+        val session = attemptOrNull { sessions.get() }
+        if (session == null || session.isLocalTrial) {
+            // Nothing to go on with: leave "Restoring…" and say so (the restore screen no longer blocks Back).
+            mutableState.update { state ->
+                val step = state.step as? OnboardingStep.WaitingForApproval
+                val recovery = step?.recovery as? RecoveryUi.Ready
+                val left = recovery?.copy(restoring = false, pinEntry = null, confirming = null)
+                state.copy(
+                    step = if (step != null && left != null) step.copy(recovery = left) else state.step,
+                    failure = OnboardingFailure.UNKNOWN,
+                )
+            }
+            return
+        }
+        attemptOrNull { household.startParentSetup(session.householdId) }
+        attemptOrNull {
+            household.saveSession(
+                Session(
+                    session.uid,
+                    session.householdId,
+                    Role.PARENT,
+                    null,
+                    session.deviceId,
+                    RegistrationStatus.ACTIVE,
+                    now(),
+                ),
+            )
+        }
+        if (restored?.signInAgain == true) {
+            show(OnboardingStep.FirstSync)
+            if (attemptOrNull { accountRecovery.signInAgain() } != true) return
+        }
+        parentLockAfterPull()
     }
 
     private fun parentLockDone() {
@@ -600,11 +726,13 @@ class OnboardingViewModel @Inject constructor(
 
     private fun back() {
         val current = mutableState.value
-        // A call in flight (a key being registered) is never abandoned half-way.
-        if (current.busy) return
         val step = current.step
-        // Once the session is saved the device is set up; only the remaining local step is left.
-        if (step == OnboardingStep.ParentLock || step == OnboardingStep.FirstSync) return
+        // A call in flight (a key being registered) is never abandoned half-way. Once the session is saved the device
+        // is set up; only the remaining local step is left.
+        if (current.busy || step == OnboardingStep.ParentLock || step == OnboardingStep.FirstSync) return
+        // An open PIN pad or confirmation closes first; a restore in flight is never left half-way.
+        if (step is OnboardingStep.WaitingForApproval && recovery.back()) return
+        recovery.cancel()
         running?.cancel()
         waiting?.cancel()
         val pendingHousehold = claims?.householdId.takeIf { step is OnboardingStep.WaitingForApproval }
@@ -725,6 +853,10 @@ class OnboardingViewModel @Inject constructor(
     private enum class AfterPurge { CREATE, SECOND_DEVICE, KID_CODE }
 
     private fun deviceIdOf(publicKey: PublicKeyBytes): DeviceId = DeviceId(publicKey.fingerprint().toHex())
+
+    override fun onCleared() {
+        recovery.cancel()
+    }
 
     companion object {
         /** How often a phone waiting for approval syncs (the sync mirrors its registry status into the session). */

@@ -36,13 +36,21 @@ export const LIMITS = {
   exportHousehold: { uid: { max: 5, windowMs: HOUR }, ip: { max: 10, windowMs: HOUR } },
   deleteHousehold: { uid: { max: 3, windowMs: HOUR }, ip: { max: 10, windowMs: HOUR } },
   pruneMessages: { uid: { max: 10, windowMs: HOUR }, ip: { max: 30, windowMs: HOUR } },
+  // Account recovery (ADR-0013 §4): per IP before anything is read, then per device once its proof verified; no per-uid
+  // bucket, which whoever holds the Google account could keep full to lock the real parent out.
+  setRecoveryPin: { ip: { max: 30, windowMs: HOUR }, device: { max: 10, windowMs: HOUR } },
+  recoveryStatus: { ip: { max: 60, windowMs: HOUR }, device: { max: 30, windowMs: HOUR } },
+  recoverParentDevice: { ip: { max: 20, windowMs: HOUR }, device: { max: 10, windowMs: HOUR } },
   deviceStatus: { device: { max: 30, windowMs: HOUR }, ip: { max: 120, windowMs: HOUR } },
 } as const satisfies Record<string, Record<string, Limit>>;
 
 export type Callable = keyof typeof LIMITS;
 
-/** The callables of a signed-in user, limited per uid and IP ([limitCaller]). */
+/** The callables of a signed-in user, limited per IP and, unless [DeviceLimitedCallable], per uid ([limitCaller]). */
 export type UserCallable = Exclude<Callable, 'deviceStatus'>;
+
+/** The account recovery callables: per IP, then per device once the device proof verified ([limitDevice]). */
+export type DeviceLimitedCallable = 'setRecoveryPin' | 'recoveryStatus' | 'recoverParentDevice';
 
 /** HKDF `info` of the rate-limit id key (D-M8-44): derived from LINK_CODE_HMAC_KEY, so there is no new secret. */
 export const RATE_LIMIT_KEY_INFO = 'sprout/rate-limit/v1';
@@ -110,13 +118,24 @@ export function noIpLimit(callable: Callable): Limit {
   return { max: Math.max(1, Math.floor(ip.max / NO_IP_DIVISOR)), windowMs: ip.windowMs };
 }
 
-/** Applies the uid and IP limits of [callable]; [ip] is the rate-limit key from guards.ts `clientIp`, or null. */
+/**
+ * Applies the uid limit of [callable] (none for a [DeviceLimitedCallable]) and its IP limit; [ip] is the rate-limit key
+ * from guards.ts `clientIp`, or null.
+ */
 export async function limitCaller(callable: UserCallable, uid: string, ip: string | null): Promise<void> {
-  const limits: Record<string, Limit> = LIMITS[callable];
-  await hit(callable, 'uid', uid, limits.uid);
+  const limits: Partial<Record<string, Limit>> = LIMITS[callable];
+  if (limits.uid !== undefined) await hit(callable, 'uid', uid, limits.uid);
   if (ip === null) {
     await hit(callable, 'noip', 'shared', noIpLimit(callable));
   } else {
-    await hit(callable, 'ip', ip, limits.ip);
+    await hit(callable, 'ip', ip, limits.ip!);
   }
+}
+
+/**
+ * Applies the per-device limit of [callable] to device [deviceId] of household [hid]; called only once the device's
+ * proof verified, so nobody without its key can use up its allowance.
+ */
+export async function limitDevice(callable: DeviceLimitedCallable, hid: string, deviceId: string): Promise<void> {
+  await hit(callable, 'device', `${hid}|${deviceId}`, LIMITS[callable].device);
 }

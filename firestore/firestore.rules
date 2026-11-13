@@ -7,22 +7,26 @@ rules_version = '2';
 //   never trust a role, uid or household claimed inside client data.
 // - Every client write names its author: authorUid must be the caller and authorDeviceId an ACTIVE device registered
 //   to the caller in households/{hid}/devices (also written by Cloud Functions only).
-// - A member whose row carries tokensValidAfter (set by revokeDevice when a parent device is revoked) writes only
-//   with an ID token whose auth_time is not older than it: sessions signed in before the revocation are refused.
+// - A member whose row carries tokensValidAfter (set by the server when a parent device is revoked: revokeDevice, the
+//   app's recoverParentDevice and the operator's recover-household) writes only with an ID token whose auth_time is
+//   not older than it: sessions signed in before the revocation are refused.
 // - Ledger events are create-only. Documents (one collection per docType) follow the client ConflictResolver
 //   (core/sync): a tombstone (deleted == true) is never overwritten by a live copy and a parent may tombstone a live
 //   document whatever its lamport; two live chore submissions compare status rank first (APPROVED > REJECTED >
 //   SUBMITTED); everything else is last-writer-wins on (lamport, authorDeviceId). Deletion is a tombstone document,
 //   never a Firestore delete.
-// - parentKeys are written by Cloud Functions only (registerParentKey, revokeDevice). Device rows, including their
-//   encryption key (encryptionKey, encryptionKeySignature: M4 §1.1), are written by the server only.
+// - parentKeys are written by Cloud Functions only (registerParentKey; revokeDevice, recoverParentDevice and
+//   recover-household stamp revokedAtLamport). Device rows, including their encryption key (encryptionKey,
+//   encryptionKeySignature: M4 §1.1) and the recovery fields (recoveryRequestedAt, sessionsRevocationPending; ADR-0013),
+//   are written by the server only.
 // - Chat (M4 §2, §3): messages and blob chunks are create-only, authored by an ACTIVE device of the caller; a KID
 //   member writes only into its own kid's thread and reads only that thread (messages: threadId == kidId; blobs:
 //   kidId == its kid). Message ciphertext and blob data are Firestore bytes, so their size is checked exactly
 //   (8,192 and 716,800 bytes). Thread keys (threadKeys) are signed documents that only a PARENT member writes, one
 //   per (thread, epoch, creator device). Blob chunks count against a daily per-household budget (quotas).
 // - Top-level collections (linkCodes, challenges, deletionRecords, rateLimits, userHouseholds) and anything not
-//   matched below are closed to clients: there is no rule granting access, so the default deny applies.
+//   matched below are closed to clients: there is no rule granting access, so the default deny applies. The account
+//   recovery collections (recoveryPins, recoveries; ADR-0013) are denied explicitly as well.
 //
 // Size limits: rules cannot measure a document's byte size. Events (target <= 16 KB) are bounded by a closed key
 // set, a length bound on every scalar string and on causedBy (at most 16 ids of at most 128 characters). Documents
@@ -137,8 +141,9 @@ service cloud.firestore {
         return /databases/$(database)/documents/households/$(hid)/devices/$(id);
       }
 
-      // The caller's session is not older than the member's tokensValidAfter (epoch seconds), which revokeDevice sets
-      // when it revokes one of the member's parent devices; auth_time is the sign-in time, kept across token refresh.
+      // The caller's session is not older than the member's tokensValidAfter (epoch seconds), which the server sets when
+      // it revokes one of the member's parent devices (revokeDevice, recoverParentDevice, recover-household); auth_time
+      // is the sign-in time, kept across token refresh.
       function sessionIsFresh(m) {
         return !('tokensValidAfter' in m) || request.auth.token.auth_time >= m.tokensValidAfter;
       }
@@ -170,8 +175,8 @@ service cloud.firestore {
         allow write: if false;
       }
 
-      // Parent authorisation keys: written by functions only (registerParentKey creates, revokeDevice stamps
-      // revokedAtLamport). Readable by members, who verify parent signatures against them.
+      // Parent authorisation keys: written by functions only (registerParentKey creates; revokeDevice and the account
+      // recovery paths stamp revokedAtLamport). Readable by members, who verify parent signatures against them.
       match /parentKeys/{fingerprint} {
         allow read: if isMember();
         allow create, update, delete: if false;
@@ -600,6 +605,17 @@ service cloud.firestore {
                       && mayWrite(request.resource.data, member().data, resource.data);
         allow delete: if false;
       }
+    }
+
+    // Account recovery (ADR-0013): the check value of each parent's PIN (recoveryPins/{uid}) and the audit records
+    // (recoveries/{id}) are the server's only. Spelled out, although the default deny already closes them, so a later
+    // broad match cannot open them by accident.
+    match /recoveryPins/{uid} {
+      allow read, write: if false;
+    }
+
+    match /recoveries/{recoveryId} {
+      allow read, write: if false;
     }
   }
 }

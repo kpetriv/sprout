@@ -356,6 +356,13 @@ private fun ConfirmPurge(step: OnboardingStep.ConfirmPurge, busy: Boolean, onEve
 
 @Composable
 private fun WaitingForApproval(step: OnboardingStep.WaitingForApproval, onEvent: (OnboardingEvent) -> Unit) {
+    val recovery = step.recovery
+    // The recovery PIN pad replaces the waiting text while it is open (ADR-0013 §3); approval polling goes on.
+    val entry = (recovery as? RecoveryUi.Ready)?.pinEntry
+    if (recovery is RecoveryUi.Ready && entry != null) {
+        RecoveryPinPad(recovery, entry, onEvent)
+        return
+    }
     Title(stringResource(R.string.feature_onboarding_waiting_title))
     Text(stringResource(R.string.feature_onboarding_waiting_detail), style = MaterialTheme.typography.bodyLarge)
     // The fingerprint to compare with the parent's phone, on a Linen tile (as the parent's approval sheet shows it).
@@ -380,9 +387,11 @@ private fun WaitingForApproval(step: OnboardingStep.WaitingForApproval, onEvent:
     SproutButton(
         text = stringResource(R.string.feature_onboarding_waiting_cancel),
         onClick = { onEvent(OnboardingEvent.Back) },
+        enabled = (recovery as? RecoveryUi.Ready)?.let { !it.restoring && !it.signInNeeded } ?: true,
         style = SproutButtonStyle.Tertiary,
         modifier = Modifier.fillMaxWidth(),
     )
+    if (recovery != null) RecoverySection(recovery, onEvent)
 }
 
 @Composable
@@ -473,6 +482,7 @@ private val ChoiceIconSize = 48.dp
 private val ArrowInset = 12.dp
 
 @StringRes
+@Suppress("CyclomaticComplexMethod") // One string per failure.
 internal fun OnboardingFailure.messageRes(): Int = when (this) {
     OnboardingFailure.NETWORK -> R.string.feature_onboarding_failure_network
     OnboardingFailure.INVALID_CREDENTIAL -> R.string.feature_onboarding_failure_invalid_credential
@@ -485,5 +495,7 @@ internal fun OnboardingFailure.messageRes(): Int = when (this) {
     OnboardingFailure.CODE_NOT_ACCEPTED -> R.string.feature_onboarding_failure_code
     OnboardingFailure.NOT_ALLOWED -> R.string.feature_onboarding_failure_not_allowed
     OnboardingFailure.DEVICE_REJECTED -> R.string.feature_onboarding_failure_rejected
+    OnboardingFailure.SIGN_IN_AGAIN -> R.string.feature_onboarding_failure_sign_in_again
+    OnboardingFailure.WRONG_ACCOUNT -> R.string.feature_onboarding_failure_wrong_account
     OnboardingFailure.UNKNOWN -> R.string.feature_onboarding_failure_unknown
 }

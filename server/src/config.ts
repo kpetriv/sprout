@@ -58,8 +58,18 @@ export function allowUnattested(): boolean {
 export const CHALLENGE_TTL_MS = 10 * 60 * 1000;
 export const LINK_CODE_TTL_MS = 10 * 60 * 1000;
 
-/** deleteHousehold requires a sign-in (ID token `auth_time`) at most this old. */
+/** deleteHousehold and recoverParentDevice require a sign-in (ID token `auth_time`) at most this old. */
 export const RECENT_SIGN_IN_MS = 5 * 60 * 1000;
+
+/**
+ * Account recovery without the parent PIN (ADR-0013 §2, recoverParentDevice `WAIT`) and the operator's
+ * `recover-household` revoking a working phone (audit M1, D-M8-43) both need the PENDING phone to have registered at
+ * least this many days ago: meanwhile a working phone of the account shows "New device waiting" and can remove it.
+ */
+export const RECOVERY_WAITING_DAYS = 7;
+
+/** Wrong recovery PINs allowed in total (ADR-0013 §2) before PIN recovery closes until an ACTIVE device sets it again. */
+export const MAX_RECOVERY_PIN_ATTEMPTS = 10;
 
 /** At most this many unexpired, unused link codes per household. */
 export const MAX_LIVE_LINK_CODES = 5;
@@ -145,6 +155,32 @@ export function linkCodeKey(): string {
   const key = process.env[LINK_CODE_HMAC_KEY_ENV] ?? '';
   if (key.length < MIN_LINK_CODE_KEY_LENGTH) {
     throw new HttpsError('internal', 'Link codes are not configured');
+  }
+  return key;
+}
+
+/**
+ * The secret of the recovery PIN check values (ADR-0013 §1, audit L2): the `RECOVERY_PIN_HMAC_KEY` environment
+ * variable, a sensitive variable of the host, separate from LINK_CODE_HMAC_KEY so a leak or rotation of one does not
+ * touch the other.
+ */
+export const RECOVERY_PIN_HMAC_KEY_ENV = 'RECOVERY_PIN_HMAC_KEY';
+
+/** Fixed key used only in the emulator (demo project) when RECOVERY_PIN_HMAC_KEY is not set there. Public. */
+export const EMULATOR_RECOVERY_PIN_HMAC_KEY = 'sprout-emulator-only-recovery-pin-key-not-a-secret';
+
+/**
+ * The recovery PIN secret: the variable in production (`internal` when missing, shorter than 32 characters or equal
+ * to LINK_CODE_HMAC_KEY, so
+ * only the PIN paths fail closed: setRecoveryPin, recoveryStatus with a stored value, recovery with the PIN), the dev
+ * key in the emulator. Read on every use, never at start-up.
+ */
+export function recoveryPinSecret(): string {
+  if (isEmulator()) return process.env[RECOVERY_PIN_HMAC_KEY_ENV] || EMULATOR_RECOVERY_PIN_HMAC_KEY;
+  const key = process.env[RECOVERY_PIN_HMAC_KEY_ENV] ?? '';
+  // The same value as the link-code key would undo the separation (audit L2): refused like a missing key.
+  if (key.length < MIN_LINK_CODE_KEY_LENGTH || key === process.env[LINK_CODE_HMAC_KEY_ENV]) {
+    throw new HttpsError('internal', 'Recovery PINs are not configured');
   }
   return key;
 }

@@ -62,7 +62,11 @@ export async function seed(env: RulesTestEnvironment): Promise<void> {
     await setDoc(doc(db, `households/${HID}/devices/${PARENT_DEVICE}`), device(PARENT_UID, 'PARENT', 'ACTIVE'));
     await setDoc(doc(db, `households/${HID}/devices/${KID_DEVICE}`), device(KID_UID, 'KID', 'ACTIVE', KID_ID));
     await setDoc(doc(db, `households/${HID}/devices/${KID2_DEVICE}`), device(KID2_UID, 'KID', 'ACTIVE', KID2_ID));
-    await setDoc(doc(db, `households/${HID}/devices/${PENDING_DEVICE}`), device(PARENT_UID, 'PARENT', 'PENDING'));
+    // The PENDING phone has asked for a recovery by waiting (ADR-0013): a server-only field on its row.
+    await setDoc(doc(db, `households/${HID}/devices/${PENDING_DEVICE}`), {
+      ...device(PARENT_UID, 'PARENT', 'PENDING'),
+      recoveryRequestedAt: now,
+    });
     await setDoc(doc(db, `households/${HID}/devices/${REVOKED_DEVICE}`), device(PARENT_UID, 'PARENT', 'REVOKED'));
     await setDoc(doc(db, `households/${HID}/kids/${KID_ID}`), document('kids', { docId: KID_ID }));
     await setDoc(doc(db, `households/${HID}/kids/${KID2_ID}`), document('kids', { docId: KID2_ID }));
@@ -79,6 +83,13 @@ export async function seed(env: RulesTestEnvironment): Promise<void> {
     await setDoc(doc(db, 'deletionRecords/r1'), { hidHash: 'x' });
     await setDoc(doc(db, 'rateLimits/b1'), { hits: [] });
     await setDoc(doc(db, 'recoveries/r1'), { hidHash: 'x', deviceId: PENDING_DEVICE });
+    await setDoc(doc(db, `recoveryPins/${PARENT_UID}`), {
+      hid: HID,
+      salt: 'AAAAAAAAAAAAAAAAAAAAAA==',
+      kdf: 'pbkdf2-sha256$i=600000',
+      mac: 'x',
+      failedAttempts: 0,
+    });
     await setDoc(doc(db, `userHouseholds/${PARENT_UID}`), { hid: HID });
   });
 }

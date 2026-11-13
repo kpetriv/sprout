@@ -36,6 +36,7 @@ import kotlin.time.Duration
  * @property restoreNeeded this ACTIVE parent phone of a real household has no household policy: on a phone without a
  *   strong biometric, "Restore household settings" recovers it with the PIN (D-REL-22).
  * @property isRestoring the restore is checking, waiting for the confirmation or writing.
+ * @property recovery the "Account recovery" row (ADR-0013 §1), or null where it does not apply (the trial household).
  */
 data class ParentSecurityUiState(
     val availability: ParentAuthAvailability = ParentAuthAvailability.UNAVAILABLE_OTHER,
@@ -52,6 +53,7 @@ data class ParentSecurityUiState(
     val message: SettingsMessage? = null,
     val restoreNeeded: Boolean = false,
     val isRestoring: Boolean = false,
+    val recovery: RecoveryRowUi? = null,
 ) {
     /** What the fingerprint signing card shows. */
     val signing: SigningStatus
@@ -66,6 +68,37 @@ data class ParentSecurityUiState(
 
     /** "Restore household settings" is offered: no strong biometric to recover the policy with (D-REL-22). */
     val offerRestore: Boolean get() = restoreNeeded && signing == SigningStatus.UNAVAILABLE
+}
+
+/**
+ * The "Account recovery" row (ADR-0013 §1): [ready] when the PIN's check value is registered; otherwise "Enter your PIN
+ * to finish setting up account recovery", whose PIN entry is [pin] while open.
+ */
+data class RecoveryRowUi(
+    val ready: Boolean,
+    val attemptsLeft: Int? = null,
+    val keptOther: Boolean = false,
+    val pin: RecoveryPinUi? = null,
+    val isRegistering: Boolean = false,
+    val error: RecoverySetupError? = null,
+)
+
+/** The recovery row's PIN entry: digits typed and a shake counter. */
+data class RecoveryPinUi(val enteredDigits: Int = 0, val rejections: Int = 0)
+
+/** Why finishing account recovery's set-up failed. */
+sealed interface RecoverySetupError {
+    data class WrongPin(val wait: Duration?) : RecoverySetupError
+
+    data class LockedOut(val wait: Duration) : RecoverySetupError
+
+    data object RequireBiometric : RecoverySetupError
+
+    /** The PIN was right but the server was not reached. */
+    data object Offline : RecoverySetupError
+
+    /** The PIN was right but the server refused the call. */
+    data object Refused : RecoverySetupError
 }
 
 /** The household policy as settings shows it (D-M2-1). */
@@ -189,6 +222,15 @@ sealed interface ParentSecurityEvent {
 
     /** "Restore household settings" (D-REL-22): check, confirm with the PIN, then write the policy. */
     data object RestoreHouseholdSettings : ParentSecurityEvent
+
+    /** "Finish setting up" on the account recovery row: opens its PIN entry. */
+    data object StartRecoverySetup : ParentSecurityEvent
+
+    data object CancelRecoverySetup : ParentSecurityEvent
+
+    data class RecoveryPinDigit(val digit: Char) : ParentSecurityEvent
+
+    data object RecoveryPinBackspace : ParentSecurityEvent
 }
 
 /**
@@ -208,6 +250,7 @@ class ParentSecurityViewModel @Inject constructor(
     private val policies: HouseholdPolicyRepository,
     private val restorer: HouseholdSettingsRestorer,
     private val confirmation: ParentConfirmation,
+    private val recoverySetup: AccountRecoverySetup,
 ) : ViewModel() {
     private val local = MutableStateFlow(ParentSecurityUiState(availability = authorizer.availability()))
 
@@ -215,6 +258,7 @@ class ParentSecurityViewModel @Inject constructor(
     private val newPin = PinBuffer()
     private val confirmPin = PinBuffer()
     private val signingPin = PinBuffer()
+    private val recoveryPin = PinBuffer()
 
     private val policy = policies.observe()
         .map<HouseholdPolicy?, Load<SignaturePolicyUi?>> { policy ->
@@ -244,8 +288,30 @@ class ParentSecurityViewModel @Inject constructor(
 
     init {
         refresh()
+        viewModelScope.launch {
+            recoverySetup.state.catch { emit(null) }.collect { setup ->
+                val finished = setup == null || setup.ready || setup.keptOther
+                if (finished) recoveryPin.clear()
+                local.update { state ->
+                    val row = when {
+                        setup == null -> null
+
+                        finished -> RecoveryRowUi(setup.ready, setup.attemptsLeft, setup.keptOther)
+
+                        else -> state.recovery?.copy(
+                            ready = false,
+                            attemptsLeft = setup.attemptsLeft,
+                            keptOther = false,
+                        )
+                            ?: RecoveryRowUi(ready = false, attemptsLeft = setup.attemptsLeft)
+                    }
+                    state.copy(recovery = row)
+                }
+            }
+        }
     }
 
+    @Suppress("CyclomaticComplexMethod") // One branch per event.
     fun onEvent(event: ParentSecurityEvent) {
         when (event) {
             ParentSecurityEvent.Refresh -> refresh()
@@ -271,6 +337,24 @@ class ParentSecurityViewModel @Inject constructor(
             ParentSecurityEvent.MessageShown -> local.update { it.copy(message = null) }
 
             ParentSecurityEvent.RestoreHouseholdSettings -> restoreHouseholdSettings()
+
+            ParentSecurityEvent.StartRecoverySetup -> updateRecovery { row ->
+                if (row.ready || row.isRegistering) row else row.copy(pin = RecoveryPinUi(), error = null)
+            }.also { recoveryPin.clear() }
+
+            ParentSecurityEvent.CancelRecoverySetup -> if (local.value.recovery?.isRegistering != true) {
+                recoveryPin.clear()
+                updateRecovery { it.copy(pin = null, error = null) }
+            }
+
+            is ParentSecurityEvent.RecoveryPinDigit -> recoveryDigit(event.digit)
+
+            ParentSecurityEvent.RecoveryPinBackspace -> {
+                val row = local.value.recovery
+                if (row?.pin != null && !row.isRegistering && recoveryPin.removeLast()) {
+                    updateRecovery { it.copy(pin = it.pin?.copy(enteredDigits = recoveryPin.count)) }
+                }
+            }
         }
     }
 
@@ -408,6 +492,59 @@ class ParentSecurityViewModel @Inject constructor(
 
     // endregion
 
+    // region Account recovery
+
+    private fun updateRecovery(change: (RecoveryRowUi) -> RecoveryRowUi) =
+        local.update { state -> state.copy(recovery = state.recovery?.let(change)) }
+
+    private fun recoveryDigit(digit: Char) {
+        val entry = local.value.recovery?.takeUnless { it.isRegistering }?.pin ?: return
+        if (!recoveryPin.add(digit)) return
+        updateRecovery { it.copy(pin = entry.copy(enteredDigits = recoveryPin.count), error = null) }
+        if (recoveryPin.isFull) submitRecoveryPin()
+    }
+
+    private fun submitRecoveryPin() {
+        val pin = recoveryPin.take()
+        updateRecovery { it.copy(isRegistering = true, pin = it.pin?.copy(enteredDigits = 0)) }
+        viewModelScope.launch {
+            val outcome = try {
+                recoverySetup.finish(pin)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (@Suppress("TooGenericExceptionCaught") _: Exception) {
+                RecoverySetupOutcome.Offline
+            } finally {
+                pin.fill(ZERO_CHAR)
+            }
+            updateRecovery { row ->
+                val done = row.copy(isRegistering = false)
+                when (outcome) {
+                    RecoverySetupOutcome.Registered -> done.copy(ready = true, pin = null, error = null)
+
+                    // A wrong PIN keeps the entry open and shakes it.
+                    is RecoverySetupOutcome.WrongPin -> done.copy(
+                        pin = done.pin?.let { it.copy(rejections = it.rejections + 1) },
+                        error = outcome.next.toRecoveryError(wrongPin = true),
+                    )
+
+                    is RecoverySetupOutcome.LockedOut ->
+                        done.copy(pin = null, error = outcome.decision.toRecoveryError(wrongPin = false))
+
+                    RecoverySetupOutcome.Offline -> done.copy(pin = null, error = RecoverySetupError.Offline)
+
+                    RecoverySetupOutcome.Refused -> done.copy(pin = null, error = RecoverySetupError.Refused)
+
+                    RecoverySetupOutcome.KeptOther -> done.copy(keptOther = true, pin = null, error = null)
+
+                    RecoverySetupOutcome.NotAvailable -> done.copy(pin = null, error = null)
+                }
+            }
+        }
+    }
+
+    // endregion
+
     // region Change PIN
 
     private fun bufferFor(step: ChangePinStep) = when (step) {
@@ -487,6 +624,7 @@ class ParentSecurityViewModel @Inject constructor(
         newPin.clear()
         confirmPin.clear()
         signingPin.clear()
+        recoveryPin.clear()
     }
 
     private companion object {
@@ -538,4 +676,13 @@ private fun LockoutDecision.toRegisterError(wrongPin: Boolean): RegisterError = 
     is LockoutDecision.Wait -> if (wrongPin) RegisterError.WrongPin(remaining) else RegisterError.LockedOut(remaining)
     LockoutDecision.RequireBiometric -> RegisterError.RequireBiometric
     LockoutDecision.Allowed -> if (wrongPin) RegisterError.WrongPin(null) else RegisterError.Failed
+}
+
+private fun LockoutDecision.toRecoveryError(wrongPin: Boolean): RecoverySetupError? = when (this) {
+    is LockoutDecision.Wait ->
+        if (wrongPin) RecoverySetupError.WrongPin(remaining) else RecoverySetupError.LockedOut(remaining)
+
+    LockoutDecision.RequireBiometric -> RecoverySetupError.RequireBiometric
+
+    LockoutDecision.Allowed -> if (wrongPin) RecoverySetupError.WrongPin(null) else null
 }

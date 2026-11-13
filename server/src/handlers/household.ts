@@ -249,8 +249,8 @@ export async function exportHousehold(request: CallableRequest): Promise<ExportB
  * when the household or the device is missing). Then deletes the `members` rows (the rules key every client
  * permission off them, so clients lose access before anything else goes), `households/{hid}` recursively, the
  * household's outstanding link codes, and for every uid that was a member or owns a registered device (a revoked
- * kid's member row is already gone): its registration challenge, its `userHouseholds` row and its Auth user (kids and
- * parents, the caller included). A retry is possible only while the caller's member row and device still exist (a
+ * kid's member row is already gone): its registration challenge, its `userHouseholds` row, its recovery PIN check
+ * value (`recoveryPins`, ADR-0013) and its Auth user (kids and parents, the caller included). A retry is possible only while the caller's member row and device still exist (a
  * failure before the recursive delete); it records the deletion again (counts as then left). Auth users that fail to
  * delete are logged as a count only (the user keeps no household data; RUNBOOK §4 has the manual clean-up).
  */
@@ -329,7 +329,7 @@ export interface DeletionOutcome {
    * run cannot find them: the operator prints them for deletion by hand (review M2, RUNBOOK §4). Never logged.
    */
   readonly failedUids: readonly string[];
-  /** Link code, challenge and userHouseholds deletes that failed after the BulkWriter's retries. */
+  /** Link code, challenge, userHouseholds and recoveryPins deletes that failed after the BulkWriter's retries. */
   readonly cleanupFailures: number;
 }
 
@@ -353,7 +353,11 @@ export async function deleteHouseholdData(hid: string): Promise<DeletionOutcome>
   const codes = await db.collection('linkCodes').where('hid', '==', hid).get();
   const cleanupFailures = await bulkDelete([
     ...codes.docs.map((d) => d.ref),
-    ...uids.flatMap((uid) => [db.doc(`challenges/${uid}`), db.doc(`userHouseholds/${uid}`)]),
+    ...uids.flatMap((uid) => [
+      db.doc(`challenges/${uid}`),
+      db.doc(`userHouseholds/${uid}`),
+      db.doc(`recoveryPins/${uid}`),
+    ]),
   ]);
 
   const result = uids.length > 0 ? await auth.deleteUsers(uids) : { successCount: 0, errors: [] };

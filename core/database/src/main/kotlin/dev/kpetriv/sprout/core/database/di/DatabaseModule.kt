@@ -170,6 +170,7 @@ internal abstract class DatabaseModule {
                 File(context.noBackupFilesDir, LocalDataFiles.DATASTORE_DIRECTORY_NAME),
                 LocalDataFiles.TABLES_SETUP_FILE_NAME,
             ),
+            recoveryPinFile = File(context.dataDir, LocalDataFiles.RECOVERY_PIN_PREFERENCES),
         )
 
         /** The encrypted blob cache in `noBackupFilesDir/blobs` (M4 §2), bounded at 50 MB. */

@@ -2,6 +2,7 @@ import { FieldValue } from 'firebase-admin/firestore';
 import { HttpsError, type CallableRequest } from '../https.js';
 import { parseDeviceKey, registerParentKeyPayload } from '../crypto.js';
 import { proofOf, verifyDeviceProof } from '../deviceProof.js';
+import { finishMarkedRecovery } from '../recoverySessions.js';
 import { db } from '../firebase.js';
 import { dataOf, parent } from '../guards.js';
 import { lamportOf, maxLamport, nextLamport } from '../lamport.js';
@@ -38,12 +39,10 @@ export async function registerParentKey(
   const proof = proofOf(data, 'deviceId');
   const household = db.doc(`households/${caller.hid}`);
   const deviceRef = household.collection('devices').doc(proof.deviceId);
-  verifyDeviceProof(
-    await deviceRef.get(),
-    caller,
-    registerParentKeyPayload(caller.hid, caller.idTokenHash, key.spki),
-    proof.signature,
-  );
+  const callerDevice = await deviceRef.get();
+  verifyDeviceProof(callerDevice, caller, registerParentKeyPayload(caller.hid, caller.idTokenHash, key.spki), proof.signature);
+  // A phone restored in the app whose session revocation did not finish: finish it, answer `unauthenticated` (ADR-0013).
+  await finishMarkedRecovery(callerDevice, caller.hid, caller.uid);
   const attestation = await attestKey(caller.uid, data.attestationChain, key, {
     hardwareOnly: true,
     biometricPerUse: true,

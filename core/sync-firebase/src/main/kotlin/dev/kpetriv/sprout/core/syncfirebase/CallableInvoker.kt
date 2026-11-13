@@ -41,8 +41,30 @@ interface CallableInvoker {
         call(name, data, timeoutMs)
 }
 
-/** A failed callable. The message is the [FunctionsError] code; the server's message text is never kept. */
-class FunctionsException(val error: FunctionsError) : Exception(error.code)
+/**
+ * A failed callable. The message is the [FunctionsError] code; the server's message text is never kept. [details] are
+ * the error's `details` object reduced to its string, number and boolean fields (a refusal's `reason` and its
+ * parameters, ADR-0013 §4); empty when the server sent none. Neither `toString` nor the message shows them.
+ */
+class FunctionsException(val error: FunctionsError, val details: Map<String, Any> = emptyMap()) :
+    Exception(error.code) {
+    /** `details.reason`, or null. */
+    val reason: String? get() = details["reason"] as? String
+
+    companion object {
+        /** [raw] (the SDK's or the protocol's `details`) reduced to its scalar fields under string keys. */
+        internal fun detailsOf(raw: Any?): Map<String, Any> = (raw as? Map<*, *>).orEmpty().entries
+            .mapNotNull { (key, value) ->
+                val name = key as? String ?: return@mapNotNull null
+                when (value) {
+                    is String, is Boolean -> name to value
+                    is Number -> name to value
+                    else -> null
+                }
+            }
+            .toMap()
+    }
+}
 
 /** The HTTPS callable error of a failed call (M3 §1). Codes only, no message text. */
 sealed class FunctionsError(val code: String) {
@@ -107,7 +129,10 @@ class FirebaseCallableInvoker @Inject constructor(
         callable.setTimeout(timeoutMs, TimeUnit.MILLISECONDS)
         callable.call(data).await().getData()
     } catch (failure: FirebaseFunctionsException) {
-        throw FunctionsException(FunctionsError.fromCodeName(failure.code.name))
+        throw FunctionsException(
+            FunctionsError.fromCodeName(failure.code.name),
+            FunctionsException.detailsOf(failure.details),
+        )
     } catch (failure: FirebaseNetworkException) {
         throw FunctionsException(FunctionsError.Unavailable)
     }
@@ -201,7 +226,8 @@ internal object CallableHttp {
             "result" !in body -> FunctionsError.MalformedResponse
             else -> return PlainValues.toPlain(body.getValue("result"))
         }
-        throw FunctionsException(failure)
+        val details = ((error as? JsonObject)?.get("details"))?.let(PlainValues::toPlain)
+        throw FunctionsException(failure, FunctionsException.detailsOf(details))
     }
 
     @Suppress("SwallowedException") // The body may echo request data; only the outcome is kept.
