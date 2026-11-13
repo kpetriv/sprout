@@ -55,9 +55,13 @@ class InMemoryParentPinStore(initial: String? = null) : ParentPinStore {
         saves++
     }
 
+    /** [clear] returns without deleting anything (`AtomicFile.delete()` fails quietly). */
+    @Volatile
+    var clearSilentlyFails = false
+
     override suspend fun clear() {
         if (failWrites) throw IOException("Simulated write failure")
-        hash = null
+        if (!clearSilentlyFails) hash = null
     }
 }
 
@@ -326,7 +330,12 @@ class InMemoryRecoveryPinFlag(initial: RecoveryPinMarks = RecoveryPinMarks()) : 
 
     override suspend fun marks(): RecoveryPinMarks = state.value
 
+    /** When set, [setMarks] throws (a commit that failed) and keeps the old marks. */
+    @Volatile
+    var failWrites = false
+
     override suspend fun setMarks(marks: RecoveryPinMarks) {
+        if (failWrites) throw IOException("Simulated commit failure")
         writes += marks.registered != null
         state.value = marks
     }

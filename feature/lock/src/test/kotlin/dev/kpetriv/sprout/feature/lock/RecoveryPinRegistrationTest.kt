@@ -14,6 +14,8 @@ import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.days
+import kotlin.time.Duration.Companion.hours
+import kotlin.time.Duration.Companion.minutes
 
 /**
  * ADR-0013 §1: the server's recovery PIN check value follows the parent PIN. Set-up and change register the new PIN; a
@@ -176,23 +178,26 @@ class RecoveryPinRegistrationTest {
     }
 
     @Test
-    fun `a PIN restored from the server becomes the local PIN, unlocks and is registered`() = test {
+    fun `a restored PIN becomes the local PIN unregistered, and the first unlock registers it as unchanged`() = test {
         val fixture = fixture(pin = null)
-        val result = fixture.session.adoptRecoveredPin(PIN.toCharArray(), attemptsLeft = 7)
+        fixture.recoveryFlag.setMarks(RecoveryPinMarks(newPinPending = true))
+        val result = fixture.session.adoptRecoveredPin(PIN.toCharArray())
         assertEquals(RecoveredPinResult.Adopted, result)
-        assertEquals(RecoveryRegistration(fixture.clock.now(), 7), fixture.recoveryFlag.registration())
         assertEquals(ParentSessionState.Unlocked::class, fixture.session.state.value::class)
-        assertTrue(fixture.recoveryFlag.isRegistered())
+        assertEquals(RecoveryPinMarks(), fixture.recoveryFlag.marks(), "not registered, no new-PIN mark")
         runCurrent()
-        assertEquals(emptyList(), fixture.uploader.uploads, "the server's value already matches")
+        assertEquals(emptyList(), fixture.uploader.uploads, "nothing goes up at adoption")
         fixture.session.lock()
         assertEquals(PinUnlockResult.Unlocked, fixture.session.unlockWithPin(PIN.toCharArray()))
+        runCurrent()
+        assertEquals(listOf(false), fixture.uploader.newPins, "registered with newPin = false")
+        assertTrue(fixture.recoveryFlag.isRegistered())
     }
 
     @Test
     fun `an existing PIN is never replaced by a restored one`() = test {
         val fixture = fixture(pin = "135790")
-        assertEquals(RecoveredPinResult.NotAllowed, fixture.session.adoptRecoveredPin(PIN.toCharArray(), 7))
+        assertEquals(RecoveredPinResult.NotAllowed, fixture.session.adoptRecoveredPin(PIN.toCharArray()))
         assertEquals(ParentSessionState.Locked, fixture.session.state.value)
         assertFalse(fixture.recoveryFlag.isRegistered())
         assertEquals(PinUnlockResult.Unlocked, fixture.session.unlockWithPin("135790".toCharArray()))
@@ -256,10 +261,16 @@ class RecoveryPinRegistrationTest {
             assertEquals(1, fixture.uploader.uploads.size, "no upload at every unlock")
 
             fixture.session.lock()
-            fixture.clock.advanceBy(RecoveryPinRegistration.REFRESH_AFTER)
+            fixture.clock.advanceBy(23.hours)
             fixture.session.unlockWithPin(PIN.toCharArray())
             runCurrent()
-            assertEquals(2, fixture.uploader.uploads.size, "asked again after 30 days")
+            assertEquals(1, fixture.uploader.uploads.size, "23 hours later: still fresh")
+
+            fixture.session.lock()
+            fixture.clock.advanceBy(2.hours)
+            fixture.session.unlockWithPin(PIN.toCharArray())
+            runCurrent()
+            assertEquals(2, fixture.uploader.uploads.size, "25 hours later: asked again")
             assertEquals(listOf(false, false), fixture.uploader.newPins)
         }
 
@@ -299,7 +310,7 @@ class RecoveryPinRegistrationTest {
         assertEquals(RecoveryPinMarks(), fixture.recoveryFlag.marks())
         assertEquals(dev.kpetriv.sprout.core.crypto.LockoutDecision.Allowed, fixture.session.lockoutDecision())
 
-        assertEquals(RecoveredPinResult.Adopted, fixture.session.adoptRecoveredPin(PIN.toCharArray(), 9))
+        assertEquals(RecoveredPinResult.Adopted, fixture.session.adoptRecoveredPin(PIN.toCharArray()))
         fixture.session.lock()
         assertEquals(PinUnlockResult.Unlocked, fixture.session.unlockWithPin(PIN.toCharArray()))
     }
@@ -335,5 +346,53 @@ class RecoveryPinRegistrationTest {
         assertEquals(RecoveryPinSetupResult.KeptOther, fixture.session.registerRecoveryPin(PIN.toCharArray()))
         fixture.uploader.result = RecoveryUploadResult.Refused
         assertEquals(RecoveryPinSetupResult.Refused, fixture.session.registerRecoveryPin(PIN.toCharArray()))
+    }
+
+    // ---- fix pass 2 ----
+
+    @Test
+    fun `after a refusal an unlock waits an hour, a PIN change and Settings try at once`() = test {
+        val fixture = fixture()
+        fixture.uploader.result = RecoveryUploadResult.Refused
+        fixture.session.unlockWithPin(PIN.toCharArray())
+        runCurrent()
+        assertEquals(1, fixture.uploader.uploads.size)
+
+        fixture.session.lock()
+        fixture.clock.advanceBy(59.minutes)
+        fixture.session.unlockWithPin(PIN.toCharArray())
+        runCurrent()
+        assertEquals(1, fixture.uploader.uploads.size, "no derivation and no call within the hour")
+
+        assertEquals(RecoveryPinSetupResult.Refused, fixture.session.registerRecoveryPin(PIN.toCharArray()))
+        assertEquals(2, fixture.uploader.uploads.size, "Settings tries at once")
+
+        fixture.uploader.result = RecoveryUploadResult.Uploaded(stored = true, attemptsLeft = 10)
+        fixture.clock.advanceBy(1.hours)
+        fixture.session.lock()
+        fixture.session.unlockWithPin(PIN.toCharArray())
+        runCurrent()
+        assertEquals(3, fixture.uploader.uploads.size, "an hour after the last refusal, an unlock tries again")
+        assertTrue(fixture.recoveryFlag.isRegistered())
+    }
+
+    @Test
+    fun `a PIN change goes up as new even when its mark could not be written`() = test {
+        val fixture = fixture()
+        fixture.session.unlockWithPin(PIN.toCharArray())
+        runCurrent()
+        fixture.uploader.newPins.clear()
+        fixture.recoveryFlag.failWrites = true
+        fixture.session.changePin(PIN.toCharArray(), "271828".toCharArray(), "271828".toCharArray())
+        runCurrent()
+        assertEquals(listOf(true), fixture.uploader.newPins)
+    }
+
+    @Test
+    fun `a PIN whose delete failed quietly stops the new registration`() = test {
+        val fixture = fixture()
+        fixture.pinStore.clearSilentlyFails = true
+        val failure = runCatching { fixture.session.forgetPinForNewDevice() }.exceptionOrNull()
+        assertIs<java.io.IOException>(failure)
     }
 }

@@ -556,12 +556,25 @@ class OnboardingViewModel @Inject constructor(
     private suspend fun recovered(pin: CharArray?, restored: RecoveredDevice?) {
         waiting?.cancel()
         try {
-            if (pin != null && restored != null) attemptOrNull { pinKeeper.keep(pin, restored.attemptsLeft) }
+            // Only an answer that says it compared the PIN keeps it (app audit N1); else the lock step asks for one.
+            if (pin != null && restored?.method == RecoveryChoice.PIN) attemptOrNull { pinKeeper.keep(pin) }
         } finally {
             pin?.fill('\u0000')
         }
         val session = attemptOrNull { sessions.get() }
-        if (session == null || session.isLocalTrial) return
+        if (session == null || session.isLocalTrial) {
+            // Nothing to go on with: leave "Restoring…" and say so (the restore screen no longer blocks Back).
+            mutableState.update { state ->
+                val step = state.step as? OnboardingStep.WaitingForApproval
+                val recovery = step?.recovery as? RecoveryUi.Ready
+                val left = recovery?.copy(restoring = false, pinEntry = null, confirming = null)
+                state.copy(
+                    step = if (step != null && left != null) step.copy(recovery = left) else state.step,
+                    failure = OnboardingFailure.UNKNOWN,
+                )
+            }
+            return
+        }
         attemptOrNull { household.startParentSetup(session.householdId) }
         attemptOrNull {
             household.saveSession(

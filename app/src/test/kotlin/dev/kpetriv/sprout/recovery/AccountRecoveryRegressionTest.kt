@@ -32,6 +32,7 @@ import dev.kpetriv.sprout.core.sync.SyncError
 import dev.kpetriv.sprout.core.sync.SyncReport
 import dev.kpetriv.sprout.feature.lock.RecoveryUploadResult
 import dev.kpetriv.sprout.feature.onboarding.RecoveredDevice
+import dev.kpetriv.sprout.feature.onboarding.RecoveryChoice
 import dev.kpetriv.sprout.feature.onboarding.RecoveryException
 import dev.kpetriv.sprout.feature.onboarding.RecoveryProblem
 import kotlinx.coroutines.Dispatchers
@@ -186,7 +187,10 @@ class AccountRecoveryRegressionTest {
 
         // Restore with the PIN.
         val check = bRecovery.verifierFor(PIN.toCharArray(), parameters).getOrThrow()
-        assertEquals(RecoveredDevice(attemptsLeft = 10, signInAgain = true), bRecovery.recover(check).getOrThrow())
+        assertEquals(
+            RecoveredDevice(attemptsLeft = 10, signInAgain = true, method = RecoveryChoice.PIN),
+            bRecovery.recover(check).getOrThrow(),
+        )
         check.fill(0)
         assertEquals(DeviceStatus.Active, backend.device(b.deviceId)?.status)
         assertIs<DeviceStatus.Revoked>(backend.device(a.deviceId)?.status, "A is removed")
@@ -259,7 +263,10 @@ class AccountRecoveryRegressionTest {
         val old = assertIs<RecoveryException>(bRecovery.recover(null).exceptionOrNull()).problem
         assertEquals(RecoveryProblem.RecentSignIn, old, "the sign-in is six minutes old: sign in again")
         backend.recordSignIn(b.deviceId)
-        assertEquals(RecoveredDevice(attemptsLeft = 0, signInAgain = true), bRecovery.recover(null).getOrThrow())
+        assertEquals(
+            RecoveredDevice(attemptsLeft = 0, signInAgain = true, method = RecoveryChoice.WAIT),
+            bRecovery.recover(null).getOrThrow(),
+        )
         assertIs<DeviceStatus.Revoked>(backend.device(a.deviceId)?.status)
         assertNull(backend.recoveryPinOf(UserId(PARENT_UID)), "the PIN is forgotten; B registers a new one")
 
@@ -276,7 +283,10 @@ class AccountRecoveryRegressionTest {
         val parameters = assertNotNull(bRecovery.status().getOrThrow().pin)
         backend.failNextSessionRevocation = true
         val check = bRecovery.verifierFor(PIN.toCharArray(), parameters).getOrThrow()
-        assertEquals(RecoveredDevice(attemptsLeft = 10, signInAgain = true), bRecovery.recover(check).getOrThrow())
+        assertEquals(
+            RecoveredDevice(attemptsLeft = 10, signInAgain = true, method = RecoveryChoice.PIN),
+            bRecovery.recover(check).getOrThrow(),
+        )
         assertEquals(listOf("recoveryStatus", "recoverParentDevice:PIN", "recoverParentDevice:PIN"), bCalls.calls)
         assertTrue(backend.isSignedOut(a.deviceId), "the retry revoked the old sessions")
         assertEquals(1, backend.recoveries().size)
@@ -309,7 +319,10 @@ class AccountRecoveryRegressionTest {
             )
             val changed = assertNotNull(bRecovery.status().getOrThrow().pin)
             val again = bRecovery.verifierFor(OTHER_PIN.toCharArray(), changed).getOrThrow()
-            assertEquals(RecoveredDevice(attemptsLeft = 10, signInAgain = true), bRecovery.recover(again).getOrThrow())
+            assertEquals(
+                RecoveredDevice(attemptsLeft = 10, signInAgain = true, method = RecoveryChoice.PIN),
+                bRecovery.recover(again).getOrThrow(),
+            )
             assertIs<DeviceStatus.Revoked>(backend.device(a.deviceId)?.status)
             assertIs<DeviceStatus.Revoked>(backend.device(c.deviceId)?.status)
         } finally {

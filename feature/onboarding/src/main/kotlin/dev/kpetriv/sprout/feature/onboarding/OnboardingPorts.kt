@@ -305,8 +305,11 @@ interface AccountRecovery {
     suspend fun signInAgain(): Boolean
 }
 
-/** A restore went through: [attemptsLeft] of the PIN's wrong-PIN budget; [signInAgain]: sessions were revoked. */
-data class RecoveredDevice(val attemptsLeft: Int, val signInAgain: Boolean)
+/**
+ * A restore went through: [attemptsLeft] of the PIN's wrong-PIN budget; [signInAgain]: sessions were revoked;
+ * [method]: how the server says it admitted the phone (only [RecoveryChoice.PIN] lets the typed PIN be kept).
+ */
+data class RecoveredDevice(val attemptsLeft: Int, val signInAgain: Boolean, val method: RecoveryChoice)
 
 /**
  * The recorded check value's parameters (opaque here): its salt and KDF descriptor, and whether this phone can compute
@@ -352,11 +355,11 @@ class RecoveryException(val problem: RecoveryProblem) : Exception(problem.javaCl
 /** This phone's parent PIN around a restore (`feature/lock`'s `ParentSession`, the real PIN hasher and store). */
 interface RecoveredPinKeeper {
     /**
-     * After a restore with the PIN, that PIN becomes this phone's parent PIN, unlocked and marked as registered with
-     * the server ([attemptsLeft] as the restore answered), so the lock step goes straight to fingerprint signing
-     * (ADR-0013 §3). False when it was not kept (storage trouble): the lock step then asks for a PIN. Zeroes [pin].
+     * After a restore the server answered with `method: "PIN"`, that PIN becomes this phone's parent PIN, unlocked, so
+     * the lock step goes straight to fingerprint signing (ADR-0013 §3). It is not marked registered: the next correct
+     * PIN entry registers it. False when it was not kept: the lock step then asks for a PIN. Zeroes [pin].
      */
-    suspend fun keep(pin: CharArray, attemptsLeft: Int): Boolean
+    suspend fun keep(pin: CharArray): Boolean
 
     /**
      * This phone registers as a new PENDING parent device: any parent PIN already here, its lockout and the recovery

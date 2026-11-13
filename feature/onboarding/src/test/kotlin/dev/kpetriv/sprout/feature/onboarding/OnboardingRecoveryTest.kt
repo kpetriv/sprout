@@ -115,7 +115,6 @@ class OnboardingRecoveryTest {
         assertEquals(listOf<String?>("482935"), recovery.verifiers)
         assertTrue(recovery.pins.single().all { it == '\u0000' }, "the PIN copy is zeroed after the call")
         assertEquals(listOf("482935"), keeper.kept)
-        assertEquals(listOf(8), keeper.attempts)
         assertEquals(RegistrationStatus.ACTIVE, sessions.session.value?.deviceStatus)
         assertEquals(OnboardingStep.ParentLock, viewModel.state.value.step)
         assertEquals(HOUSEHOLD, household.setupPending)
@@ -238,7 +237,7 @@ class OnboardingRecoveryTest {
     fun `after the wait, the restore needs no PIN, signs in again, and the lock step chooses a new PIN`() = test {
         clock.advanceBy(8.days)
         recovery.options = Result.success(RecoveryOptions(pin = null, attemptsLeft = 0, waitEndsAt = WAIT_ENDS))
-        recovery.answers += restored(attemptsLeft = 0)
+        recovery.answers += restored(attemptsLeft = 0, method = RecoveryChoice.WAIT)
         val viewModel = waitingPhone()
         assertTrue(viewModel.ready.waitOver)
         viewModel.onEvent(OnboardingEvent.ChooseRecovery(RecoveryChoice.WAIT))
@@ -487,5 +486,31 @@ class OnboardingRecoveryTest {
         assertTrue(pinWay.copy(waitExpanded = true).showWait)
         assertTrue(pinWay.copy(waitEndsAt = WAIT_ENDS).showWait)
         assertTrue(pinWay.copy(pinAvailable = false).showWait)
+    }
+
+    // ---- fix pass 2 ----
+
+    @Test
+    fun `a PIN restore answered with another method does not keep the typed PIN`() = test {
+        recovery.answers += restored(method = RecoveryChoice.WAIT)
+        val viewModel = waitingPhone()
+        viewModel.restoreWithPin("482935")
+        runCurrent()
+        assertEquals(emptyList(), keeper.kept, "the answer did not say it compared the PIN")
+        assertEquals(OnboardingStep.ParentLock, viewModel.state.value.step, "the lock step asks for a PIN")
+    }
+
+    @Test
+    fun `a restore that finds no session afterwards leaves Restoring with a failure, and Back works again`() = test {
+        val viewModel = waitingPhone()
+        recovery.onRecover = { sessions.getFailure = java.io.IOException("disk") }
+        viewModel.restoreWithPin("482935")
+        runCurrent()
+        assertEquals(OnboardingFailure.UNKNOWN, viewModel.state.value.failure)
+        assertFalse(viewModel.ready.restoring)
+        assertNull(viewModel.ready.pinEntry)
+        sessions.getFailure = null
+        viewModel.onEvent(OnboardingEvent.Back)
+        assertEquals(OnboardingStep.Welcome, viewModel.state.value.step)
     }
 }

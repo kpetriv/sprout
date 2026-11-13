@@ -285,7 +285,13 @@ class FakeSessionStore(private val log: CallLog, initial: Session? = null) : Ses
 
     override fun observe(): Flow<Session?> = session
 
-    override suspend fun get(): Session? = session.value
+    /** When set, [get] throws it (storage trouble); [observe] goes on. */
+    var getFailure: Exception? = null
+
+    override suspend fun get(): Session? {
+        getFailure?.let { throw it }
+        return session.value
+    }
 
     override suspend fun save(session: Session) {
         log += "saveSession:${session.role}:${session.deviceStatus}"
@@ -310,8 +316,9 @@ val WAIT_ENDS: Instant = Instant.fromEpochMilliseconds(7L * 24 * 60 * 60 * 1000)
 fun pinParameters(supported: Boolean = true) =
     RecoveryPinParameters(ByteArray(16) { 1 }, "argon2id\$v=19\$m=65536,t=3,p=1", supported)
 
-/** A restore's answer: [attemptsLeft] of the PIN's budget, sessions revoked. */
-fun restored(attemptsLeft: Int = 10): Result<RecoveredDevice> = Result.success(RecoveredDevice(attemptsLeft, true))
+/** A restore's answer: [attemptsLeft] of the PIN's budget, sessions revoked, admitted by [method]. */
+fun restored(attemptsLeft: Int = 10, method: RecoveryChoice = RecoveryChoice.PIN): Result<RecoveredDevice> =
+    Result.success(RecoveredDevice(attemptsLeft, signInAgain = true, method = method))
 
 /**
  * The recovery callables of the waiting phone. [options] answers `recoveryStatus` (no wait asked for by default);
@@ -362,7 +369,6 @@ class FakeAccountRecovery(private val log: CallLog? = null) : AccountRecovery {
 /** The lock feature's PIN adoption: records each PIN it was handed (zeroing the array as the real one does). */
 class FakeRecoveredPinKeeper(private val log: CallLog) : RecoveredPinKeeper {
     val kept = mutableListOf<String>()
-    val attempts = mutableListOf<Int>()
     var keeps = true
 
     /** A local PIN on this phone (a trial's), until [forgetForNewDevice] removes it. */
@@ -380,10 +386,9 @@ class FakeRecoveredPinKeeper(private val log: CallLog) : RecoveredPinKeeper {
         localPin = null
     }
 
-    override suspend fun keep(pin: CharArray, attemptsLeft: Int): Boolean {
+    override suspend fun keep(pin: CharArray): Boolean {
         log += "keepPin"
         kept += String(pin)
-        attempts += attemptsLeft
         localPin = String(pin)
         pin.fill('\u0000')
         return keeps

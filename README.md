@@ -4,7 +4,7 @@ Sprout is an Android app for running a small "family economy". Kids earn credits
 
 It is one app with two roles. The parent area sits behind a PIN or biometric gate. Kid mode runs on the kid's own device with a UI that adapts to the kid's age. Devices sync through Firebase, chat and chore photos are end-to-end encrypted, and all AI features run on the device. The project is a portfolio piece built to the standard of a production app: multi-module, tested, threat-modelled, and aimed at a Play Store release.
 
-**Status:** milestones M0 to M9 are done (see [Roadmap](#roadmap)). 1.0.0 is the feature-complete v1; 1.1.0 (M9) is a visual redesign with a bottom navigation bar and a fourth brain game, Times tables. What is left before the Play internal track is the owner's console, real-project and device work, step by step in the [release checklist](docs/RELEASE_CHECKLIST.md).
+**Status:** milestones M0 to M9 are done (see [Roadmap](#roadmap)). 1.0.0 is the feature-complete v1; 1.1.0 (M9) is a visual redesign with a bottom navigation bar and a fourth brain game, Times tables; 1.1.1 lets a parent restore the household on a wiped or new phone with the parent PIN, or after a seven-day wait ([ADR-0013](docs/adr/0013-account-recovery.md)). What is left before the Play internal track is the owner's console, real-project and device work, step by step in the [release checklist](docs/RELEASE_CHECKLIST.md).
 
 ## Features
 

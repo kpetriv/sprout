@@ -9,6 +9,7 @@ import dev.kpetriv.sprout.core.model.Role
 import dev.kpetriv.sprout.core.sync.RecoveredParentDevice
 import dev.kpetriv.sprout.core.sync.RecoveryCallables
 import dev.kpetriv.sprout.core.sync.RecoveryDeviceStatus
+import dev.kpetriv.sprout.core.sync.RecoveryMethod
 import dev.kpetriv.sprout.core.sync.RecoveryRefusal
 import dev.kpetriv.sprout.core.sync.RecoveryRefusedException
 import dev.kpetriv.sprout.core.sync.RecoveryRequest
@@ -29,6 +30,7 @@ import dev.kpetriv.sprout.feature.onboarding.OnboardingException
 import dev.kpetriv.sprout.feature.onboarding.OnboardingFailure
 import dev.kpetriv.sprout.feature.onboarding.RecoveredDevice
 import dev.kpetriv.sprout.feature.onboarding.RecoveredPinKeeper
+import dev.kpetriv.sprout.feature.onboarding.RecoveryChoice
 import dev.kpetriv.sprout.feature.onboarding.RecoveryException
 import dev.kpetriv.sprout.feature.onboarding.RecoveryOptions
 import dev.kpetriv.sprout.feature.onboarding.RecoveryPinParameters
@@ -148,7 +150,13 @@ class SyncAccountRecovery @Inject constructor(
         return try {
             var answer = callables.recoverParentDevice(request)
             if (answer.isUnfinished()) answer = callables.recoverParentDevice(request)
-            answer.map { RecoveredDevice(it.attemptsLeft, it.signInAgain) }.mapForOnboarding()
+            answer.map { recovered ->
+                val method = when (recovered.method) {
+                    RecoveryMethod.PIN -> RecoveryChoice.PIN
+                    RecoveryMethod.WAIT -> RecoveryChoice.WAIT
+                }
+                RecoveredDevice(recovered.attemptsLeft, recovered.signInAgain, method)
+            }.mapForOnboarding()
         } finally {
             (request as? RecoveryRequest.Pin)?.wipe()
         }
@@ -240,8 +248,10 @@ class ServerRecoveryCheckUploader @Inject constructor(
                 callables.setRecoveryPin(checkValue.salt, checkValue.kdf.descriptor, bytes, newPin).fold(
                     { RecoveryUploadResult.Uploaded(it.stored, it.attemptsLeft) },
                     { failure ->
-                        val offline = (failure as? SyncException)?.error is SyncError.Transient
-                        if (offline) RecoveryUploadResult.Failed else RecoveryUploadResult.Refused
+                        // Offline, or a session that must sign in again (after a restore): not a refusal.
+                        val error = (failure as? SyncException)?.error
+                        val retryable = error is SyncError.Transient || error == SyncError.Unauthenticated
+                        if (retryable) RecoveryUploadResult.Failed else RecoveryUploadResult.Refused
                     },
                 )
             } finally {
@@ -253,8 +263,7 @@ class ServerRecoveryCheckUploader @Inject constructor(
 
 /** Onboarding's [RecoveredPinKeeper] over [ParentSession]'s `adoptRecoveredPin` and `forgetPinForNewDevice`. */
 class LockRecoveredPinKeeper @Inject constructor(private val session: ParentSession) : RecoveredPinKeeper {
-    override suspend fun keep(pin: CharArray, attemptsLeft: Int): Boolean =
-        session.adoptRecoveredPin(pin, attemptsLeft) == RecoveredPinResult.Adopted
+    override suspend fun keep(pin: CharArray): Boolean = session.adoptRecoveredPin(pin) == RecoveredPinResult.Adopted
 
     override suspend fun forgetForNewDevice() = session.forgetPinForNewDevice()
 }

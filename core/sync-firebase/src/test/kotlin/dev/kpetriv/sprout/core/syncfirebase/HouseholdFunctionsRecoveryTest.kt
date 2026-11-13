@@ -216,4 +216,31 @@ class HouseholdFunctionsRecoveryTest {
         }.exceptionOrNull()
         assertEquals(mapOf("reason" to "wait", "waitEndsAt" to 7L), assertIs<FunctionsException>(parsed).details)
     }
+
+    @Test
+    fun `a restore answer with an unknown or missing method is malformed`() = runTest {
+        val base = mapOf(
+            "deviceId" to device.value,
+            "status" to "ACTIVE",
+            "revokedDevices" to 1,
+            "attemptsLeft" to 10,
+            "signInAgain" to true,
+        )
+        for (answer in listOf(base + ("method" to "SOMETHING"), base)) {
+            val failure = HouseholdFunctions(Invoker { _, _ -> answer })
+                .recoverParentDevice(verifier, device, byteArrayOf(1))
+                .exceptionOrNull()
+            assertEquals(
+                FunctionsError.MalformedResponse,
+                assertIs<FunctionsException>(failure).error,
+                answer.toString(),
+            )
+        }
+        // A missing signInAgain is read as true: the phone signs in again rather than assume it may not.
+        val missing = base + ("method" to "PIN") - "signInAgain"
+        val recovered = HouseholdFunctions(Invoker { _, _ -> missing })
+            .recoverParentDevice(verifier, device, byteArrayOf(1))
+            .getOrThrow()
+        assertEquals(true, recovered.signInAgain)
+    }
 }

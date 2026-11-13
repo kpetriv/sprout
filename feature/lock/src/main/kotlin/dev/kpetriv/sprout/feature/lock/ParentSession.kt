@@ -343,15 +343,15 @@ class ParentSession @Inject constructor(
     }
 
     /**
-     * ADR-0013 §3: after a restore with the PIN, the PIN the parent just proved to the server becomes this phone's
-     * PIN, and the session unlocks (the parent just typed it). Only on a phone without a PIN
-     * ([ParentSessionState.SetupRequired] and nothing stored): an existing PIN (a trial's) is never replaced without
-     * itself, and is kept ([RecoveredPinResult.NotAllowed]); its check value is then registered at its next entry.
-     * A PIN that breaks [PinRules] is refused the same way, and the parent chooses a new one. The server's check value
-     * already matches (with [attemptsLeft] as the restore answered), so its registration is stored and nothing is
-     * uploaded. Zeroes [pin].
+     * ADR-0013 §3: after a restore whose answer says `method: "PIN"`, the PIN the parent just typed becomes this
+     * phone's PIN, and the session unlocks. The phone has no PIN of its own by then: registering as a PENDING device
+     * removed any ([forgetPinForNewDevice]); a PIN found anyway, a state other than
+     * [ParentSessionState.SetupRequired], or a PIN that breaks [PinRules] is [RecoveredPinResult.NotAllowed], and the
+     * lock step asks for a PIN. The recovery marks stay cleared (no "registered", no "new PIN not uploaded"): the next
+     * correct PIN entry registers the PIN with `newPin: false`, which the server stores, so even an answer that
+     * compared no PIN ends with the phone's PIN and the server's value the same. Zeroes [pin].
      */
-    suspend fun adoptRecoveredPin(pin: CharArray, attemptsLeft: Int): RecoveredPinResult = try {
+    suspend fun adoptRecoveredPin(pin: CharArray): RecoveredPinResult = try {
         if (PinRules.validate(pin) != null) {
             RecoveredPinResult.NotAllowed
         } else {
@@ -360,9 +360,9 @@ class ParentSession @Inject constructor(
                 if (mutableState.value != ParentSessionState.SetupRequired || pinStore.hasPin()) {
                     RecoveredPinResult.NotAllowed
                 } else {
+                    recoveryPin.forget()
                     pinStore.save(hasher.hash(pin))
                     lockout.registerSuccess()
-                    recoveryPin.markRegistered(attemptsLeft)
                     unlock(UnlockMethod.PIN_SETUP)
                     RecoveredPinResult.Adopted
                 }
@@ -385,6 +385,8 @@ class ParentSession @Inject constructor(
     suspend fun forgetPinForNewDevice() {
         mutex.withLock {
             pinStore.clear()
+            // A delete that failed quietly (AtomicFile) must not let the registration go on with the PIN still here.
+            if (pinStore.hasPin()) throw IOException("The parent PIN could not be removed")
             lockout.registerSuccess()
             recoveryPin.forget()
             mutableState.value = ParentSessionState.SetupRequired

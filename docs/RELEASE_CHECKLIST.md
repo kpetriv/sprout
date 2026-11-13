@@ -230,6 +230,27 @@ gh run download --name sprout-v1.1.0               # the signed AAB and mapping.
 
 Evidence to paste: "v1.1.0 (versionCode <n>) built by release.yml run <id> on <date>; every household device on 1.1.0 before the first Times tables play" → CONTROLS SE-6.
 
+#### 1.1.1 (restoring a wiped or new parent phone, ADR-0013)
+
+1.1.1 lets a parent get back into the household after the app's data was cleared, the app was reinstalled or the phone was replaced ([ADR-0013](adr/0013-account-recovery.md)). The server and the rules go out before the app: a 1.1.1 phone asks for callables an older server does not have.
+
+- [ ] Set the new server secret, without it ever appearing on screen or in the shell history (it must differ from `LINK_CODE_HMAC_KEY`): `openssl rand -base64 32 | tr -d '\n' | npx vercel@64.7.0 env add RECOVERY_PIN_HMAC_KEY production --sensitive` from `server/`. Changing it later makes every stored check value useless: a phone uploads a fresh one at its first PIN entry once its registration is 30 days old, at a PIN change, or at once from Settings → Parent security → Account recovery → "Finish setting up"; until then only the seven-day way works ([RUNBOOK](RUNBOOK.md) §5).
+- [ ] Deploy the server with the real pages (item 5), then restore the example pages; deploy the rules (`npx --no-install --prefix firestore firebase deploy --only firestore --project sprout-3e1c7`). Check: `curl -s -o /dev/null -w '%{http_code}\n' -X POST https://<host>/recoverParentDevice -H 'Content-Type: application/json' -d '{"data":{}}'` answers 401 (not 404).
+- [ ] Merge the pull request, wait for CI on `main`, then tag and build as for 1.1.0:
+
+```
+git switch main && git pull && gh run list --workflow ci.yml --branch main --limit 1   # completed, success
+git tag -a v1.1.1 -m "Sprout 1.1.1" && git push origin v1.1.1
+gh workflow run release.yml --ref main -f tag=v1.1.1
+```
+
+- [ ] Release notes: paste `play/listing/en-GB/whatsnew.txt` under `<en-GB>`.
+- [ ] **After updating, open the parent area with the PIN once on each parent phone** (not with the fingerprint): that is when the phone hands the server the check value for the PIN. Settings → Parent security → "Account recovery" then says "Ready" (on a second phone of the same parent with a different PIN it says the account restores with the PIN of the other phone; "Finish setting up" there does the same as a PIN entry). A household whose parent has not done this on 1.1.1 can only be restored the seven-day way.
+- [ ] Device check (the JVM tests cannot cover these): on a phone with the PIN registered, clear the app's data, sign in with the same Google account, choose "Restore with your Sprout PIN", confirm, enter the PIN, sign in with Google once more; the household is back and the old device shows as removed in Settings → Devices. Then the same with a wrong PIN (the count of tries left goes down), and "Forgot your PIN?" → "Start the 7-day wait" (the screen shows the date seven days ahead).
+- [ ] A household that got stuck on 1.1.0 or earlier (the only parent phone was wiped, so nothing can approve the new one) has no check value on the server. Either start the 7-day wait on 1.1.1 ("Forgot your PIN?") and restore when it is over, or delete the household in the Firebase console ([RUNBOOK](RUNBOOK.md) §4) and set it up again.
+
+Evidence to paste: "v1.1.1 (versionCode <n>) built by release.yml run <id> on <date>; RECOVERY_PIN_HMAC_KEY set <date>; server and rules deployed before the app; PIN restore and the seven-day request walked on <device>" → CONTROLS SE-6.
+
 ### 10. Device verification
 
 Run [SECURITY_REVIEW.md](SECURITY_REVIEW.md#owner-procedures) P1 to P10 on the internal-track build: the network capture including a receipt scan (P1), the release build walk (P2), Play Integrity and App Check (P3; then enforce, item 6), Google sign-in (P4), key attestation (P5), voice notes (P6), time bank auto-stop (P7), process death (P8), Gemini Nano on a Pixel 9 or later (P9), TalkBack (P10).

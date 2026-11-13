@@ -66,22 +66,22 @@ class AccountRecoveryRowTest {
     }
 
     @Test
-    fun `nine attempts left says one wrong PIN was tried`() {
+    fun `nine attempts left says one wrong PIN was entered`() {
         show(RecoveryRowUi(ready = true, attemptsLeft = 9))
-        shows("1 wrong PIN was tried when someone tried to restore this account on another phone. Change your PIN.")
+        shows("1 wrong PIN was entered while restoring this account. Choose a new, different PIN.")
     }
 
     @Test
-    fun `one attempt left says nine wrong PINs were tried`() {
+    fun `one attempt left says nine wrong PINs were entered`() {
         show(RecoveryRowUi(ready = true, attemptsLeft = 1))
-        shows("9 wrong PINs were tried when someone tried to restore this account on another phone. Change your PIN.")
+        shows("9 wrong PINs were entered while restoring this account. Choose a new, different PIN.")
     }
 
     @Test
     fun `none left says the PIN way is closed until the PIN is changed`() {
         show(RecoveryRowUi(ready = true, attemptsLeft = 0))
-        shows("Restoring with your PIN is closed. Change your PIN to open it again.")
-        hidden("wrong PIN was tried")
+        shows("Restoring with your PIN is closed. Choose a new, different PIN to open it again.")
+        hidden("wrong PIN was entered")
         hidden("Ready.")
     }
 
@@ -102,6 +102,6 @@ class AccountRecoveryRowTest {
     @Test
     fun `a value kept on the other phone still warns about wrong PINs`() {
         show(RecoveryRowUi(ready = false, attemptsLeft = 8, keptOther = true))
-        shows("2 wrong PINs were tried")
+        shows("2 wrong PINs were entered")
     }
 }
