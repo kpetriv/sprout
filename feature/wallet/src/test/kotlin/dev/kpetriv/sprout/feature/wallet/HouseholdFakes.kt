@@ -138,6 +138,9 @@ class FakeRewardRepository : RewardRepository {
     val rewards = MutableStateFlow<List<Reward>>(emptyList())
     var failing = false
 
+    /** Makes [upsert] throw, as a storage failure would. */
+    var failWrites = false
+
     override fun observeRewards(kidId: KidId?, includeInactive: Boolean): Flow<List<Reward>> = rewards.map { all ->
         check(!failing) { "storage unavailable" }
         all.filter { if (kidId == null) includeInactive || it.active else it.isAvailableTo(kidId) }
@@ -147,6 +150,7 @@ class FakeRewardRepository : RewardRepository {
     override suspend fun get(id: RewardId): Reward? = rewards.value.firstOrNull { it.id == id }
 
     override suspend fun upsert(reward: Reward) {
+        check(!failWrites) { "write failed" }
         rewards.value = rewards.value.filterNot { it.id == reward.id } + reward
     }
 

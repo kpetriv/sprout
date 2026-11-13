@@ -178,4 +178,80 @@
   <string name="feature_wallet_shop_failed_no_account">Your wallet isn\'t ready for this yet. Ask a parent.</string>
   <string name="feature_wallet_shop_failed_not_allowed">Purchases happen in kid mode.</string>
   <string name="feature_wallet_shop_failed">Couldn\'t buy that right now. Try again.</string>
+  <!-- Parent shop preview: the action that opens the rewards list. -->
+  <string name="feature_wallet_shop_edit_rewards">Edit rewards</string>
+  <string name="feature_wallet_shop_empty_parent">No rewards for this kid yet. Use Edit rewards to add some.</string>
+
+  <!-- Rewards list (parent only) -->
+  <string name="feature_wallet_rewards_title">Rewards</string>
+  <string name="feature_wallet_rewards_loading">Loading rewards</string>
+  <string name="feature_wallet_rewards_error">Something went wrong while loading the rewards.</string>
+  <string name="feature_wallet_rewards_add">Add reward</string>
+  <string name="feature_wallet_rewards_see_shop">See the shop as a kid</string>
+  <string name="feature_wallet_rewards_intro">Kids spend their money on these in the shop. Tap a reward to change it.</string>
+  <string name="feature_wallet_rewards_empty_title">No rewards yet</string>
+  <string name="feature_wallet_rewards_empty_body">Add the first reward your kids can buy with their money, such as a treat, an outing or screen time.</string>
+  <string name="feature_wallet_rewards_all_kids">All kids</string>
+  <!-- A reward for kids who have all left the household: no kid sees it until a parent picks again. -->
+  <string name="feature_wallet_rewards_no_kids">No kids picked</string>
+  <!-- %1$s is a list of first names ("Mia, Leo"). -->
+  <string name="feature_wallet_rewards_for_kids">For %1$s</string>
+  <!-- Joins names into a list, one pair at a time: %1$s is the names so far, %2$s the next name ("Mia, Leo"). -->
+  <string name="feature_wallet_rewards_name_list">%1$s, %2$s</string>
+  <!-- The line under a screen-time reward's title: %1$s is the kind ("Screen time"), %2$s the minutes ("30 min"). -->
+  <string name="feature_wallet_rewards_kind_minutes">%1$s · %2$s</string>
+  <!-- A reward row read aloud: %1$s title, %2$s kind or, for screen time, the screen time it gives ("30 min of screen
+       time"), %3$s price, %4$s who it is for, %5$s in the shop or hidden. -->
+  <string name="feature_wallet_rewards_row_description">%1$s, %2$s, %3$s, %4$s, %5$s</string>
+  <string name="feature_wallet_rewards_hidden">Hidden</string>
+  <string name="feature_wallet_rewards_in_shop">In the shop</string>
+  <!-- %1$s is the minutes a screen-time reward gives ("30 min"). -->
+  <string name="feature_wallet_rewards_minutes">%1$s of screen time</string>
+  <string name="feature_wallet_rewards_placeholder">Pick a reward to change it, or add a new one.</string>
+
+  <!-- Reward kinds -->
+  <string name="feature_wallet_reward_kind_screen_time">Screen time</string>
+  <string name="feature_wallet_reward_kind_treat">Treat</string>
+  <string name="feature_wallet_reward_kind_outing">Outing</string>
+  <string name="feature_wallet_reward_kind_other">Something else</string>
+
+  <!-- Reward editor (parent only) -->
+  <string name="feature_wallet_reward_editor_new">New reward</string>
+  <string name="feature_wallet_reward_editor_edit">Edit reward</string>
+  <string name="feature_wallet_reward_editor_save">Save</string>
+  <string name="feature_wallet_reward_editor_not_found">This reward isn\'t here any more.</string>
+  <string name="feature_wallet_reward_editor_save_failed">Couldn\'t save the reward. Try again.</string>
+  <string name="feature_wallet_reward_field_title">Name</string>
+  <string name="feature_wallet_reward_field_title_hint">For example: Ice cream</string>
+  <string name="feature_wallet_reward_field_kind">What kind of reward</string>
+  <!-- %1$s is the household currency code ("GBP"). -->
+  <string name="feature_wallet_reward_field_price">Price (%1$s)</string>
+  <string name="feature_wallet_reward_field_minutes">Minutes of screen time</string>
+  <string name="feature_wallet_reward_field_minutes_help">Added to the kid\'s screen time when they buy it.</string>
+  <string name="feature_wallet_reward_field_for">Who can buy it</string>
+  <string name="feature_wallet_reward_for_all">All kids</string>
+  <string name="feature_wallet_reward_for_chosen">Chosen kids</string>
+  <string name="feature_wallet_reward_no_kids_yet">Add a kid in Settings to choose who can buy it.</string>
+  <string name="feature_wallet_reward_field_active">Show in the shop</string>
+  <string name="feature_wallet_reward_field_active_on">Kids can see and buy it.</string>
+  <string name="feature_wallet_reward_field_active_off">Hidden. Kids can\'t see it. Rewards already bought stay in their history.</string>
+  <!-- Errors, shown under the field. -->
+  <string name="feature_wallet_reward_error_title_blank">Give the reward a name.</string>
+  <string name="feature_wallet_reward_error_title_too_long">Use 80 characters or fewer.</string>
+  <string name="feature_wallet_reward_error_price_missing">Enter a price.</string>
+  <!-- %1$s is an example price in the reward's currency, as it is typed ("2.50", or "250" for yen). -->
+  <string name="feature_wallet_reward_error_price_not_a_number">Enter a price like %1$s.</string>
+  <string name="feature_wallet_reward_error_price_whole">Enter a whole price.</string>
+  <plurals name="feature_wallet_reward_error_price_decimals">
+    <item quantity="one">Use at most %1$d decimal place.</item>
+    <item quantity="other">Use at most %1$d decimal places.</item>
+  </plurals>
+  <string name="feature_wallet_reward_error_price_not_positive">Enter a price above zero.</string>
+  <string name="feature_wallet_reward_error_price_too_high">That price is too high for a kid to pay.</string>
+  <string name="feature_wallet_reward_error_minutes_missing">Enter how many minutes it gives.</string>
+  <string name="feature_wallet_reward_error_minutes_not_a_number">Enter whole minutes, like 30.</string>
+  <string name="feature_wallet_reward_error_minutes_not_positive">Enter more than 0 minutes.</string>
+  <!-- %1$d is the most minutes one screen-time reward may give (1440, a day). -->
+  <string name="feature_wallet_reward_error_minutes_over_a_day">Use at most %1$d minutes (24 hours).</string>
+  <string name="feature_wallet_reward_error_no_kids">Choose at least one kid, or pick All kids.</string>
 </resources>

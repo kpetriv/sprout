@@ -5,6 +5,7 @@ import androidx.navigation3.runtime.NavKey
 import dev.kpetriv.sprout.core.model.ChoreId
 import dev.kpetriv.sprout.core.model.KidId
 import dev.kpetriv.sprout.core.model.KidUiTier
+import dev.kpetriv.sprout.core.model.RewardId
 import dev.kpetriv.sprout.feature.wallet.WalletMode
 import org.junit.Test
 import kotlin.test.assertEquals
@@ -130,6 +131,131 @@ class TopLevelBackStackTest {
         navigation.openDetail(ChoreEditorKey(ChoreId("chore-2")))
 
         assertEquals(listOf(ChoresKey, ChoreEditorKey(ChoreId("chore-2"))), navigation.current.toList())
+    }
+
+    @Test
+    fun `the dashboard's Shop opens the rewards list, whose editor replaces itself and goes back to the list`() {
+        val navigation = navigation()
+        navigation.openRewards()
+        navigation.openDetail(RewardEditorKey())
+        navigation.openDetail(RewardEditorKey(RewardId("reward-1")))
+
+        assertEquals(listOf(ParentHomeKey, RewardsKey, RewardEditorKey(RewardId("reward-1"))), navigation.shown)
+        assertTrue(navigation.back())
+        assertEquals(RewardsKey, navigation.top)
+        assertTrue(navigation.back())
+        assertEquals(ParentHomeKey, navigation.top)
+    }
+
+    @Test
+    fun `Edit rewards from a preview opened beside an open reward returns to the list and keeps the reward`() {
+        val navigation = navigation()
+        val editor = RewardEditorKey(RewardId("reward-1"))
+        navigation.openRewards()
+        navigation.openDetail(editor)
+        // "See the shop as a kid": the kid picker is a dialog, so only the shop goes on the stack.
+        navigation.push(ShopKey(leo, WalletMode.PARENT))
+
+        navigation.openRewards()
+
+        assertEquals(listOf(ParentHomeKey, RewardsKey, editor), navigation.current.toList())
+        navigation.openRewards()
+        assertEquals(listOf(ParentHomeKey, RewardsKey, editor), navigation.current.toList(), "never stacked twice")
+    }
+
+    @Test
+    fun `Edit rewards from a preview opened from the list on a phone returns to the list alone`() {
+        val navigation = navigation()
+        navigation.openRewards()
+        navigation.push(ShopKey(leo, WalletMode.PARENT))
+
+        navigation.openRewards()
+
+        assertEquals(listOf<NavKey>(ParentHomeKey, RewardsKey), navigation.current.toList())
+    }
+
+    @Test
+    fun `returning keeps only an entry the caller names, and only directly above the target`() {
+        val navigation = navigation()
+        val shop = ShopKey(leo, WalletMode.PARENT)
+        navigation.push(RewardsKey)
+        navigation.push(shop)
+        navigation.push(ApprovalsKey)
+
+        navigation.pushOrReturnTo(RewardsKey) { it is RewardEditorKey }
+
+        assertEquals(listOf<NavKey>(ParentHomeKey, RewardsKey), navigation.current.toList(), "the shop is not kept")
+    }
+
+    @Test
+    fun `Edit rewards in a preview opened from a wallet opens the list on top`() {
+        val navigation = navigation()
+        navigation.select(ChoresKey)
+        val wallet = WalletKey(leo, WalletMode.PARENT)
+        val shop = ShopKey(leo, WalletMode.PARENT)
+        navigation.push(wallet)
+        navigation.push(shop)
+
+        navigation.openRewards()
+
+        assertEquals(listOf(ChoresKey, wallet, shop, RewardsKey), navigation.current.toList())
+        navigation.pushOrReturnTo(ChoresKey)
+        assertEquals(ChoresKey, navigation.selectedTab, "a tab's root key still selects the tab")
+        assertEquals(RewardsKey, navigation.top)
+    }
+
+    @Test
+    fun `wallet, shop, Edit rewards, See the shop for the same kid opens the preview above the list`() {
+        val navigation = navigation()
+        val wallet = WalletKey(leo, WalletMode.PARENT)
+        val shop = ShopKey(leo, WalletMode.PARENT)
+        val editor = RewardEditorKey(RewardId("reward-1"))
+        navigation.push(wallet)
+        navigation.push(shop)
+        navigation.openRewards()
+        navigation.openDetail(editor)
+
+        navigation.push(shop) // The kid picker's "See the shop as a kid".
+
+        assertEquals(listOf(ParentHomeKey, wallet, shop, RewardsKey, editor, shop), navigation.current.toList())
+        navigation.openRewards()
+        assertEquals(listOf(ParentHomeKey, wallet, shop, RewardsKey, editor), navigation.current.toList())
+    }
+
+    @Test
+    fun `leaving the rewards list closes the reward open beside it too`() {
+        val navigation = navigation()
+        navigation.openRewards()
+        navigation.openDetail(RewardEditorKey(RewardId("reward-1")))
+
+        assertTrue(navigation.leave(RewardsKey))
+
+        assertEquals(listOf<NavKey>(ParentHomeKey), navigation.current.toList())
+    }
+
+    @Test
+    fun `leaving the rewards list on top is a single pop`() {
+        val navigation = navigation()
+        val wallet = WalletKey(leo, WalletMode.PARENT)
+        navigation.push(wallet)
+        navigation.openRewards()
+
+        assertTrue(navigation.leave(RewardsKey))
+
+        assertEquals(listOf(ParentHomeKey, wallet), navigation.current.toList())
+    }
+
+    @Test
+    fun `leaving a screen that is not open is the system back`() {
+        val navigation = navigation()
+        navigation.select(ChoresKey)
+        navigation.push(ApprovalsKey)
+
+        assertTrue(navigation.leave(RewardsKey))
+        assertEquals(listOf<NavKey>(ChoresKey), navigation.current.toList())
+        assertTrue(navigation.leave(ChoresKey), "a tab's root: back to the first tab")
+        assertEquals(ParentHomeKey, navigation.selectedTab)
+        assertFalse(navigation.leave(RewardsKey), "at the first tab's root, back leaves the mode")
     }
 
     @Test

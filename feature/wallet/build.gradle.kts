@@ -23,4 +23,7 @@ dependencies {
     }
     // activity 1.13 asks for androidx.core 1.18; align on the catalog's version, which the app resolves.
     implementation(libs.androidx.core.ktx)
+
+    // TestHousehold: a real Room household, so the reward editor is tested against the shop and the purchase use case.
+    testImplementation(testFixtures(projects.core.database))
 }

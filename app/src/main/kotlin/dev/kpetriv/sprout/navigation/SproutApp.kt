@@ -62,6 +62,9 @@ import dev.kpetriv.sprout.feature.parenthome.ParentHomeRoute
 import dev.kpetriv.sprout.feature.settings.SettingsRoute
 import dev.kpetriv.sprout.feature.settings.SettingsSection
 import dev.kpetriv.sprout.feature.timebank.TimeBankRoute
+import dev.kpetriv.sprout.feature.wallet.RewardEditorPlaceholder
+import dev.kpetriv.sprout.feature.wallet.RewardEditorRoute
+import dev.kpetriv.sprout.feature.wallet.RewardListRoute
 import dev.kpetriv.sprout.feature.wallet.ShopRoute
 import dev.kpetriv.sprout.feature.wallet.WalletMode
 import dev.kpetriv.sprout.feature.wallet.WalletRoute
@@ -83,9 +86,10 @@ import kotlinx.coroutines.flow.Flow
  * - **Parent**: everything behind `RequireParent` (PIN or fingerprint; `FLAG_SECURE`), in the parent shell (M9 §5):
  *   a bottom bar (a rail on Expanded windows) with Home ([ParentHomeKey]), Chores ([ChoresKey]), Chat
  *   ([ChatThreadsKey], real households only) and Settings ([SettingsKey]), one back stack per tab
- *   ([TopLevelBackStack]). "Switch to kid mode" picks a kid, locks the parent session and enters kid mode. On an
- *   Expanded window the chat inbox and a thread, and the chore list and its editor, sit side by side (list-detail,
- *   M7 §5).
+ *   ([TopLevelBackStack]). "Switch to kid mode" picks a kid, locks the parent session and enters kid mode. The
+ *   dashboard's "Shop" opens the household's rewards ([RewardsKey], add and edit; "See the shop as a kid" picks a kid
+ *   for the preview). On an Expanded window the chat inbox and a thread, the chore list and its editor, and the
+ *   rewards list and its editor sit side by side (list-detail, M7 §5).
  * - **Kid**: the kid shell in the kid's tier: Wallet ([KidHomeKey]), Chores ([KidChoresKey]), Shop ([ShopKey]), Games
  *   ([KidGamesKey], one [GamePlayKey] per play, read aloud by text-to-speech) and Chat ([ChatThreadKey], real
  *   households only, read aloud too) on Sprout and Sapling; Wallet, Chores and Shop on Seedling, whose wallet keeps
@@ -313,8 +317,8 @@ private fun ParentArea(
     val navigation = rememberTopLevelBackStack(roots)
     val decorators = rememberTabDecorators(navigation.tabs)
     var picking by rememberSaveable { mutableStateOf<KidPickPurpose?>(null) }
-    // On an Expanded window the chat inbox and a thread, and the chore list and its editor, share the screen
-    // (M7 §5, D-M7-2); a Compact or Medium window shows one pane as before.
+    // On an Expanded window the chat inbox and a thread, the chore list and its editor, and the rewards list and its
+    // editor share the screen (M7 §5, D-M7-2); a Compact or Medium window shows one pane as before.
     val listDetail = rememberListDetailSceneStrategy<NavKey>()
     // The shell sits inside the gate: no bar or rail on the PIN entry or setup (D-M9-10).
     RequireParent(modifier = modifier) {
@@ -332,7 +336,8 @@ private fun ParentArea(
                         ParentHomeRoute(
                             requester = requester,
                             onOpenApprovals = { navigation.push(ApprovalsKey) },
-                            onOpenShop = { picking = KidPickPurpose.SHOP },
+                            // The household's rewards first (add and edit); the kid's preview is one tap from there.
+                            onOpenShop = { navigation.openRewards() },
                             onSwitchToKidMode = { picking = KidPickPurpose.KID_MODE },
                             onOpenKid = { kidId -> navigation.push(WalletKey(kidId, WalletMode.PARENT)) },
                             onSetUpSync = onSetUpSync,
@@ -341,7 +346,7 @@ private fun ParentArea(
                             onOpenAiSettings = { navigation.push(AiSettingsKey) },
                         )
                     }
-                    parentEntries(navigation)
+                    parentEntries(navigation, onPickShopKid = { picking = KidPickPurpose.SHOP })
                 },
             )
         }
@@ -355,6 +360,9 @@ private fun ParentArea(
                     picking = null
                     when (purpose) {
                         KidPickPurpose.KID_MODE -> onEnterKidMode(kidId)
+
+                        // Only reached from the rewards list: the preview opens above it, so "Edit rewards" there
+                        // returns to the list (and the reward open beside it).
                         KidPickPurpose.SHOP -> navigation.push(ShopKey(kidId, WalletMode.PARENT))
                     }
                 },
@@ -367,9 +375,10 @@ private fun ParentArea(
 /**
  * The parent area's entries other than the dashboard. Pushed screens go onto the selected tab ([TopLevelBackStack.push]
  * selects a tab instead when the key is one, such as the parent wallet's link to the chore list). A back arrow is the
- * system back; "Done" closes only the screen it is on.
+ * system back; "Done" closes only the screen it is on. [onPickShopKid] asks which kid's shop to preview (the rewards
+ * list's "See the shop as a kid").
  */
-private fun EntryProviderScope<NavKey>.parentEntries(navigation: TopLevelBackStack) {
+private fun EntryProviderScope<NavKey>.parentEntries(navigation: TopLevelBackStack, onPickShopKid: () -> Unit) {
     val back: () -> Unit = { navigation.back() }
     entry<WalletKey> { key ->
         WalletRoute(
@@ -380,7 +389,14 @@ private fun EntryProviderScope<NavKey>.parentEntries(navigation: TopLevelBackSta
             onOpenChores = { navigation.push(ChoresKey) },
         )
     }
-    entry<ShopKey> { key -> ShopRoute(kidId = key.kidId, mode = key.mode, onBack = back) }
+    entry<ShopKey> { key ->
+        ShopRoute(
+            kidId = key.kidId,
+            mode = key.mode,
+            onBack = back,
+            onEditRewards = { navigation.openRewards() },
+        )
+    }
     entry<ApprovalsKey> { ApprovalsInboxRoute(onBack = back) }
     // The Settings tab root: no back arrow (M9 §5.2); system back still leaves the tab.
     entry<SettingsKey> { SettingsRoute(onBack = null) }
@@ -404,12 +420,49 @@ private fun EntryProviderScope<NavKey>.parentEntries(navigation: TopLevelBackSta
         )
     }
     listDetailEntries(navigation, back)
+    rewardEntries(navigation, back, onPickShopKid)
+}
+
+/**
+ * Opens the rewards list: back to it when it is already open below (keeping the reward open beside it), otherwise
+ * pushed onto the selected tab.
+ */
+internal fun TopLevelBackStack.openRewards() = pushOrReturnTo(RewardsKey) { it is RewardEditorKey }
+
+/**
+ * The household's rewards (parent area only): the list, pushed onto the selected tab from the dashboard's "Shop" or a
+ * shop preview's "Edit rewards", and its editor. On an Expanded window `ListDetailSceneStrategy` shows the list with
+ * the open reward (or a placeholder) beside it, as for chores (M7 §5, D-M7-2).
+ */
+@OptIn(ExperimentalMaterial3AdaptiveApi::class)
+private fun EntryProviderScope<NavKey>.rewardEntries(
+    navigation: TopLevelBackStack,
+    back: () -> Unit,
+    onPickShopKid: () -> Unit,
+) {
+    val rewardsList = ListDetailSceneStrategy.listPane(detailPlaceholder = { RewardEditorPlaceholder() })
+    entry<RewardsKey>(metadata = rewardsList) {
+        ListPane {
+            RewardListRoute(
+                onAddReward = { navigation.openDetail(RewardEditorKey()) },
+                onEditReward = { rewardId -> navigation.openDetail(RewardEditorKey(rewardId)) },
+                onSeeShop = onPickShopKid,
+                // Leaves Rewards, with the reward open beside it on an Expanded window (a phone: the same pop).
+                onBack = { navigation.leave(RewardsKey) },
+                selectedRewardId = (navigation.current.lastOrNull() as? RewardEditorKey)?.rewardId,
+            )
+        }
+    }
+    entry<RewardEditorKey>(metadata = ListDetailSceneStrategy.detailPane()) { key ->
+        RewardEditorRoute(rewardId = key.rewardId, onDone = { navigation.popIf(key) }, onBack = back)
+    }
 }
 
 /**
  * The parent's list-detail flows (M7 §5, D-M7-2): the chore list and its editor, the chat inbox and a thread, each the
  * root of its own tab. On an Expanded window `ListDetailSceneStrategy` shows each list with its open item (or a
- * placeholder) beside it.
+ * placeholder) beside it. The rewards list and its editor are the same kind of flow, pushed rather than a tab root
+ * ([rewardEntries]).
  */
 @OptIn(ExperimentalMaterial3AdaptiveApi::class)
 private fun EntryProviderScope<NavKey>.listDetailEntries(navigation: TopLevelBackStack, back: () -> Unit) {

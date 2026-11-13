@@ -6,6 +6,7 @@ import dev.kpetriv.sprout.core.model.ChoreId
 import dev.kpetriv.sprout.core.model.DeviceId
 import dev.kpetriv.sprout.core.model.KidId
 import dev.kpetriv.sprout.core.model.KidUiTier
+import dev.kpetriv.sprout.core.model.RewardId
 import dev.kpetriv.sprout.feature.wallet.WalletMode
 import kotlinx.serialization.Serializable
 
@@ -22,6 +23,14 @@ data class WalletKey(val kidId: KidId, val mode: WalletMode) : NavKey
 /** One kid's shop, in either area. */
 @Serializable
 data class ShopKey(val kidId: KidId, val mode: WalletMode) : NavKey
+
+/** The parent's rewards list: the household's shop catalogue, from the dashboard's "Shop" or "Edit rewards". */
+@Serializable
+data object RewardsKey : NavKey
+
+/** Add ([rewardId] null) or edit a shop reward. */
+@Serializable
+data class RewardEditorKey(val rewardId: RewardId? = null) : NavKey
 
 /** The parent's chore list. */
 @Serializable

@@ -581,7 +581,7 @@ private fun BalanceTiles(summary: KidSummaryUi, formatter: MoneyFormatter) {
     }
 }
 
-/** "Shop (parent view)" and "Switch to kid mode" as two Linen pills in one row (stacked at large font sizes). */
+/** "Rewards" and "Switch to kid mode" as two Linen pills in one row (stacked at large font sizes). */
 @Composable
 private fun ModeButtons(links: ParentHomeLinks) {
     val shop = stringResource(R.string.feature_parent_home_link_shop)

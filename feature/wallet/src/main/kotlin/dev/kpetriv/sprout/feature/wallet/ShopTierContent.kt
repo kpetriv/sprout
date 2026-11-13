@@ -58,6 +58,7 @@ internal fun SeedlingShopContent(
     state: ShopUiState.Ready,
     onSelect: (ShopItemUi) -> Unit,
     modifier: Modifier = Modifier,
+    onEditRewards: (() -> Unit)? = null,
 ) {
     ContentWidth(modifier = modifier.fillMaxSize(), max = GRID_MAX_WIDTH) { gutters ->
         LazyVerticalGrid(
@@ -68,7 +69,7 @@ internal fun SeedlingShopContent(
             horizontalArrangement = Arrangement.spacedBy(SproutSpacing.md),
             verticalArrangement = Arrangement.spacedBy(SproutSpacing.md),
         ) {
-            item(span = { GridItemSpan(maxLineSpan) }) { ShopBalanceHeader(state) }
+            item(span = { GridItemSpan(maxLineSpan) }) { ShopBalanceHeader(state, onEditRewards = onEditRewards) }
             items(state.items, key = { it.rewardId.value }) { item ->
                 PictureTile(item, enabled = state.canPurchase, onClick = { onSelect(item) })
             }
@@ -152,6 +153,7 @@ internal fun SproutShopContent(
     state: ShopUiState.Ready,
     onSelect: (ShopItemUi) -> Unit,
     modifier: Modifier = Modifier,
+    onEditRewards: (() -> Unit)? = null,
 ) {
     ContentWidth(modifier = modifier.fillMaxSize()) { gutters ->
         LazyColumn(
@@ -160,7 +162,7 @@ internal fun SproutShopContent(
                 .withGutters(gutters),
             verticalArrangement = Arrangement.spacedBy(SproutSpacing.md),
         ) {
-            item { ShopBalanceHeader(state) }
+            item { ShopBalanceHeader(state, onEditRewards = onEditRewards) }
             items(state.items, key = { it.rewardId.value }) { item ->
                 RewardRow(item, KidUiTier.SPROUT, state.canPurchase, onBuy = { onSelect(item) })
             }
@@ -178,6 +180,7 @@ internal fun SaplingShopContent(
     onSelect: (ShopItemUi) -> Unit,
     onToggleWishlist: (ShopItemUi) -> Unit,
     modifier: Modifier = Modifier,
+    onEditRewards: (() -> Unit)? = null,
 ) {
     val tier = KidUiTier.SAPLING
     ContentWidth(modifier = modifier.fillMaxSize()) { gutters ->
@@ -187,7 +190,7 @@ internal fun SaplingShopContent(
                 .withGutters(gutters),
             verticalArrangement = Arrangement.spacedBy(SproutSpacing.md),
         ) {
-            item { ShopBalanceHeader(state) }
+            item { ShopBalanceHeader(state, onEditRewards = onEditRewards) }
             if (state.items.isNotEmpty()) {
                 item { SectionHeading(stringResource(R.string.feature_wallet_shop_wishlist), tier) }
                 val wishlist = state.wishlist
