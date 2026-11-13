@@ -182,3 +182,56 @@ data class RevokedDevice(val deviceId: DeviceId, val revokedAtLamport: Long)
  */
 @Serializable
 data class ParentKeyRegistration(val fingerprint: String, val validFromLamport: Long)
+
+/** `setRecoveryPin` (ADR-0013 §4): the check value, base64, with the ACTIVE caller's proof. */
+@Serializable
+internal data class SetRecoveryPinRequest(
+    val salt: String,
+    val kdf: String,
+    val verifier: String,
+    val newPin: Boolean,
+    val callerDeviceId: DeviceId,
+    val signature: String,
+) {
+    override fun toString(): String = "SetRecoveryPinRequest(newPin=$newPin, <redacted>)"
+}
+
+/** `recoveryStatus` and `recoverParentDevice`: the PENDING device's own proof, and the method with its verifier. */
+@Serializable
+internal data class RecoveryRequestBody(
+    val deviceId: DeviceId,
+    val signature: String,
+    val method: String? = null,
+    val verifier: String? = null,
+) {
+    override fun toString(): String = "RecoveryRequestBody(method=$method, <redacted>)"
+}
+
+@Serializable
+internal data class RecoveryPinParameters(val salt: String, val kdf: String) {
+    override fun toString(): String = "RecoveryPinParameters(kdf=$kdf, <redacted>)"
+}
+
+@Serializable
+internal data class RecoveryStatusResponse(
+    val pin: RecoveryPinParameters? = null,
+    val attemptsLeft: Int,
+    val waitEndsAt: Long? = null,
+)
+
+/**
+ * `setRecoveryPin`'s answer: the attempts left on the value the server holds (wrong PINs tried in restores add up), and
+ * whether this call's value was stored (false: another ACTIVE phone's value was kept; missing means true).
+ */
+@Serializable
+internal data class SetRecoveryPinResponse(val set: Boolean, val attemptsLeft: Int, val stored: Boolean = true)
+
+@Serializable
+internal data class RecoveredDeviceResponse(
+    val deviceId: DeviceId,
+    val status: String,
+    val revokedDevices: Int,
+    val method: String,
+    val attemptsLeft: Int,
+    val signInAgain: Boolean = true,
+)

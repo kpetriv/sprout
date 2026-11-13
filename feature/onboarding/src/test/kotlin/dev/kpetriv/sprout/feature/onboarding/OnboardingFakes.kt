@@ -12,8 +12,10 @@ import dev.kpetriv.sprout.core.model.HouseholdId
 import dev.kpetriv.sprout.core.model.KidId
 import dev.kpetriv.sprout.core.model.Role
 import dev.kpetriv.sprout.core.model.UserId
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlin.time.Instant
 
 /** Everything the fakes did, in order, so tests can assert the sequence of a flow. */
 class CallLog {
@@ -41,6 +43,14 @@ class FakeOnboardingAuth(private val log: CallLog, override val usesEmailPasswor
     override suspend fun signInWithGoogle(activityContext: Context): Result<Unit> {
         log += "signInWithGoogle"
         return signInResult
+    }
+
+    /** What a re-authentication answers (another account: WRONG_ACCOUNT). */
+    var reauthResult: Result<Unit> = Result.success(Unit)
+
+    override suspend fun reauthenticateWithGoogle(activityContext: Context): Result<Unit> {
+        log += "reauthenticateWithGoogle"
+        return reauthResult
     }
 
     override suspend fun signInWithEmailPassword(email: String, password: String): Result<Unit> {
@@ -292,3 +302,92 @@ class FakeSessionStore(private val log: CallLog, initial: Session? = null) : Ses
 
 fun parentClaims(householdId: HouseholdId? = HOUSEHOLD) =
     AccountClaims(PARENT_UID, householdId, if (householdId != null) Role.PARENT else null, null)
+
+/** The end of a recovery wait started at [FakeClock]'s start (the epoch): 7 days later. */
+val WAIT_ENDS: Instant = Instant.fromEpochMilliseconds(7L * 24 * 60 * 60 * 1000)
+
+/** Recorded check value parameters this phone can compute. */
+fun pinParameters(supported: Boolean = true) =
+    RecoveryPinParameters(ByteArray(16) { 1 }, "argon2id\$v=19\$m=65536,t=3,p=1", supported)
+
+/** A restore's answer: [attemptsLeft] of the PIN's budget, sessions revoked. */
+fun restored(attemptsLeft: Int = 10): Result<RecoveredDevice> = Result.success(RecoveredDevice(attemptsLeft, true))
+
+/**
+ * The recovery callables of the waiting phone. [options] answers `recoveryStatus` (no wait asked for by default);
+ * [answers] answer successive `recoverParentDevice` calls (the last one repeats, a restore when empty). The "verifier"
+ * is the PIN's bytes, so tests see which PIN a call carried; [verifiers] are what each call received, [pins] the arrays
+ * derived from. [signInAgain] is the app's "Sign in again" path: [signInGate], when set, holds it (the parent has not
+ * signed in yet), and [signInResult] is what it returns.
+ */
+class FakeAccountRecovery(private val log: CallLog? = null) : AccountRecovery {
+    var options: Result<RecoveryOptions> = Result.success(RecoveryOptions(pinParameters(), 10, waitEndsAt = null))
+    val answers = ArrayDeque<Result<RecoveredDevice>>()
+    val statusCalls = mutableListOf<Unit>()
+    val pins = mutableListOf<CharArray>()
+    val verifiers = mutableListOf<String?>()
+    var signInGate: CompletableDeferred<Unit>? = null
+    var signInResult = true
+
+    override suspend fun status(): Result<RecoveryOptions> {
+        statusCalls += Unit
+        return options
+    }
+
+    override suspend fun verifierFor(pin: CharArray, parameters: RecoveryPinParameters): Result<ByteArray> {
+        pins += pin
+        return Result.success(String(pin).encodeToByteArray())
+    }
+
+    /** Runs inside `recoverParentDevice` before it answers (the server admitted the phone, say). */
+    var onRecover: () -> Unit = {}
+
+    /** When set, `recoverParentDevice` waits for it before it answers. */
+    var recoverGate: CompletableDeferred<Unit>? = null
+
+    override suspend fun recover(verifier: ByteArray?): Result<RecoveredDevice> {
+        verifiers += verifier?.decodeToString()
+        onRecover()
+        recoverGate?.await()
+        return if (answers.size > 1) answers.removeFirst() else answers.firstOrNull() ?: restored()
+    }
+
+    override suspend fun signInAgain(): Boolean {
+        log?.plusAssign("signInAgain")
+        signInGate?.await()
+        return signInResult
+    }
+}
+
+/** The lock feature's PIN adoption: records each PIN it was handed (zeroing the array as the real one does). */
+class FakeRecoveredPinKeeper(private val log: CallLog) : RecoveredPinKeeper {
+    val kept = mutableListOf<String>()
+    val attempts = mutableListOf<Int>()
+    var keeps = true
+
+    /** A local PIN on this phone (a trial's), until [forgetForNewDevice] removes it. */
+    var localPin: String? = null
+
+    /** How often the PIN was removed for a new PENDING registration (not logged: other tests check the log). */
+    var forgotten = 0
+
+    /** When set, [forgetForNewDevice] throws it. */
+    var forgetFailure: Exception? = null
+
+    override suspend fun forgetForNewDevice() {
+        forgetFailure?.let { throw it }
+        forgotten += 1
+        localPin = null
+    }
+
+    override suspend fun keep(pin: CharArray, attemptsLeft: Int): Boolean {
+        log += "keepPin"
+        kept += String(pin)
+        attempts += attemptsLeft
+        localPin = String(pin)
+        pin.fill('\u0000')
+        return keeps
+    }
+}
+
+fun refused(problem: RecoveryProblem): Result<RecoveredDevice> = Result.failure(RecoveryException(problem))

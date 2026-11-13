@@ -40,6 +40,30 @@
   <string name="feature_onboarding_waiting_progress">Waiting for approval…</string>
   <string name="feature_onboarding_waiting_cancel">Cancel</string>
 
+  <!-- Account recovery on the waiting screen (ADR-0013 §3) -->
+  <string name="feature_onboarding_recovery_title">Don’t have your other phone?</string>
+  <string name="feature_onboarding_recovery_loading">Checking how this account can be restored…</string>
+  <string name="feature_onboarding_recovery_retry">Try again</string>
+  <string name="feature_onboarding_recovery_other_parent">This account can’t be restored here. Approve this phone on the other parent’s phone.</string>
+  <string name="feature_onboarding_recovery_with_pin">Restore with your Sprout PIN</string>
+  <string name="feature_onboarding_recovery_forgot_pin">Forgot your PIN?</string>
+  <string name="feature_onboarding_recovery_wait_intro">You can restore this account without the PIN after a 7-day wait. If another phone still has Sprout, it will show this phone and can approve or remove it.</string>
+  <string name="feature_onboarding_recovery_start_wait">Start the 7-day wait</string>
+  <string name="feature_onboarding_recovery_wait_date">You can restore this account from %1$s.</string>
+  <string name="feature_onboarding_recovery_restore">Restore this account</string>
+  <string name="feature_onboarding_recovery_pin_closed">Too many wrong PINs, so the PIN can’t be used to restore this account any more.</string>
+  <string name="feature_onboarding_recovery_pin_unsupported">This phone can’t check the PIN saved by your other phone.</string>
+  <string name="feature_onboarding_recovery_pin_title">Enter the parent PIN you set or changed last.</string>
+  <plurals name="feature_onboarding_recovery_wrong_pin">
+    <item quantity="one">That PIN doesn’t match. %d try left.</item>
+    <item quantity="other">That PIN doesn’t match. %d tries left.</item>
+  </plurals>
+  <string name="feature_onboarding_recovery_restoring">Restoring…</string>
+  <string name="feature_onboarding_recovery_confirm_title">Restore on this phone?</string>
+  <string name="feature_onboarding_recovery_confirm_text">Every other phone signed in to this parent account is removed from the household. Earlier chat messages can’t be read on this phone; everything else comes back.</string>
+  <string name="feature_onboarding_recovery_confirm">Restore</string>
+  <string name="feature_onboarding_recovery_cancel">Cancel</string>
+
   <!-- Kid device code -->
   <string name="feature_onboarding_code_title">Enter the code</string>
   <string name="feature_onboarding_code_detail">On a parent’s phone, open Settings → Kids, pick the kid and choose “Link a device”.</string>
@@ -73,5 +97,7 @@
   <string name="feature_onboarding_failure_code">That code didn’t work. Check it, or ask for a new one: codes are single-use and expire after 10 minutes.</string>
   <string name="feature_onboarding_failure_not_allowed">This account can’t be used as a parent here.</string>
   <string name="feature_onboarding_failure_rejected">This device wasn’t approved.</string>
+  <string name="feature_onboarding_failure_sign_in_again">Restoring needs a fresh sign-in. Tap restore again and sign in with Google when asked.</string>
+  <string name="feature_onboarding_failure_wrong_account">That is a different Google account. Sign in with the account this family uses.</string>
   <string name="feature_onboarding_failure_unknown">Something went wrong. Try again.</string>
 </resources>

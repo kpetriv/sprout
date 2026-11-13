@@ -32,6 +32,7 @@ class ParentSecurityViewModelTest {
     }
     private val restorer = FakeHouseholdSettingsRestorer()
     private val confirmation = FakeParentConfirmation()
+    private val recovery = FakeAccountRecoverySetup()
 
     private fun TestScope.viewModel(keys: ParentKeyRegistrar = registrar): ParentSecurityViewModel {
         val vm = ParentSecurityViewModel(
@@ -42,6 +43,7 @@ class ParentSecurityViewModelTest {
             policies,
             restorer,
             confirmation,
+            recovery,
         )
         backgroundScope.launch(main.dispatcher) { vm.state.collect {} }
         return vm
@@ -51,6 +53,9 @@ class ParentSecurityViewModelTest {
 
     private fun ParentSecurityViewModel.typeChange(pin: String) =
         pin.forEach { onEvent(ParentSecurityEvent.ChangePinDigit(it)) }
+
+    private fun ParentSecurityViewModel.typeRecovery(pin: String) =
+        pin.forEach { onEvent(ParentSecurityEvent.RecoveryPinDigit(it)) }
 
     private fun ParentSecurityViewModel.typeSigning(pin: String) =
         pin.forEach { onEvent(ParentSecurityEvent.SigningPinDigit(it)) }
@@ -407,4 +412,75 @@ class ParentSecurityViewModelTest {
         assertFalse(lockPreferences.lockWhenLeaving.value)
         assertFalse(vm.state.value.lockWhenLeaving)
     }
+
+    // region Account recovery (ADR-0013 §1)
+
+    @Test
+    fun `the recovery row is hidden where it does not apply and says ready once registered`() = test {
+        recovery.current.value = null
+        val vm = viewModel()
+        assertNull(vm.state.value.recovery)
+        recovery.current.value = RecoverySetupState(ready = true, attemptsLeft = 9)
+        assertEquals(RecoveryRowUi(ready = true, attemptsLeft = 9), vm.state.value.recovery)
+        vm.onEvent(ParentSecurityEvent.StartRecoverySetup)
+        assertNull(vm.state.value.recovery?.pin, "nothing to finish when ready")
+    }
+
+    @Test
+    fun `finishing set-up checks the PIN, registers it and turns the row ready`() = test {
+        val vm = viewModel()
+        assertEquals(RecoveryRowUi(ready = false), vm.state.value.recovery)
+        vm.onEvent(ParentSecurityEvent.StartRecoverySetup)
+        assertEquals(RecoveryPinUi(), vm.state.value.recovery?.pin)
+        vm.typeRecovery("4829")
+        assertEquals(4, vm.state.value.recovery?.pin?.enteredDigits)
+        vm.onEvent(ParentSecurityEvent.RecoveryPinBackspace)
+        vm.typeRecovery("135")
+        assertEquals(listOf("482135"), recovery.finished)
+        assertTrue(recovery.arrays.single().all { it == '\u0000' }, "the PIN array is zeroed")
+        assertEquals(RecoveryRowUi(ready = true, attemptsLeft = 10), vm.state.value.recovery)
+    }
+
+    @Test
+    fun `a wrong PIN keeps the entry open and shakes it, offline closes it with a message`() = test {
+        val vm = viewModel()
+        recovery.outcome = RecoverySetupOutcome.WrongPin(LockoutDecision.Allowed)
+        vm.onEvent(ParentSecurityEvent.StartRecoverySetup)
+        vm.typeRecovery("111222")
+        val wrong = vm.state.value.recovery
+        assertEquals(RecoverySetupError.WrongPin(null), wrong?.error)
+        assertEquals(RecoveryPinUi(enteredDigits = 0, rejections = 1), wrong?.pin)
+
+        recovery.outcome = RecoverySetupOutcome.LockedOut(LockoutDecision.Wait(30.seconds))
+        vm.typeRecovery("111222")
+        assertEquals(RecoverySetupError.LockedOut(30.seconds), vm.state.value.recovery?.error)
+        assertNull(vm.state.value.recovery?.pin)
+
+        recovery.outcome = RecoverySetupOutcome.Offline
+        vm.onEvent(ParentSecurityEvent.StartRecoverySetup)
+        vm.typeRecovery("482135")
+        assertEquals(RecoveryRowUi(ready = false, error = RecoverySetupError.Offline), vm.state.value.recovery)
+
+        vm.onEvent(ParentSecurityEvent.StartRecoverySetup)
+        vm.onEvent(ParentSecurityEvent.CancelRecoverySetup)
+        assertEquals(RecoveryRowUi(ready = false), vm.state.value.recovery)
+    }
+
+    @Test
+    fun `a kept-other answer closes the entry and shows that state, a refusal says so`() = test {
+        val vm = viewModel()
+        recovery.outcome = RecoverySetupOutcome.Refused
+        vm.onEvent(ParentSecurityEvent.StartRecoverySetup)
+        vm.typeRecovery("482135")
+        assertEquals(RecoverySetupError.Refused, vm.state.value.recovery?.error)
+
+        recovery.outcome = RecoverySetupOutcome.KeptOther
+        vm.onEvent(ParentSecurityEvent.StartRecoverySetup)
+        vm.typeRecovery("482135")
+        assertEquals(RecoveryRowUi(ready = false, keptOther = true), vm.state.value.recovery)
+        recovery.current.value = RecoverySetupState(ready = false, attemptsLeft = 10, keptOther = true)
+        assertEquals(RecoveryRowUi(ready = false, attemptsLeft = 10, keptOther = true), vm.state.value.recovery)
+    }
+
+    // endregion
 }

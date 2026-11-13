@@ -152,6 +152,9 @@ class FakeBackend(val householdId: HouseholdId, private val pageSize: Int = DEFA
 
     @Synchronized
     fun registerDevice(device: RegisteredDevice) {
+        // For the recent-sign-in check, the first registration of an id is the device's sign-in time: a phone
+        // registers right after signing in.
+        signedInAtMs.getOrPut(device.deviceId) { nowEpochMs() }
         devices.remove(device.deviceId)
         devices[device.deviceId] = Stored(nextSeq(DEVICES), device)
         writeFlow.tryEmit(Write(DEVICES, null))
@@ -411,6 +414,269 @@ class FakeBackend(val householdId: HouseholdId, private val pageSize: Int = DEFA
 
     /** The two reads behind [SyncTransport.householdRoot]: the root document and the `householdPolicy` document. */
     enum class RootPath { ROOT, POLICY }
+
+    // ---- account recovery (ADR-0013) ----
+
+    /** When the session of each device last signed in (`auth_time`), epoch ms; see [recordSignIn]. */
+    private val signedInAtMs = mutableMapOf<DeviceId, Long>()
+
+    /** `devices/{id}.recoveryRequestedAt`: the first `WAIT` call of each PENDING device, epoch ms. */
+    private val recoveryRequestedAtMs = mutableMapOf<DeviceId, Long>()
+
+    /** `recoveryPins/{uid}`: the check value (kept as the verifier here; the server keeps a MAC of it). */
+    private val recoveryPins = mutableMapOf<UserId, RecoveryPinRow>()
+
+    private val recoveryLog = mutableListOf<RecoveryRecord>()
+
+    /** Devices this recovery admitted whose session revocation has not finished (`sessionsRevocationPending`). */
+    private val revocationPending = mutableMapOf<DeviceId, RecoveredParentDevice>()
+
+    /**
+     * True makes the next recovery's session revocation fail (Auth unreachable): the device is ACTIVE, the call answers
+     * `internal`, and calling again finishes the revocation and answers as the first call would have.
+     */
+    @Volatile
+    var failNextSessionRevocation: Boolean = false
+
+    /** A stored check value as the tests may inspect it. */
+    data class RecoveryPinRow(
+        val salt: ByteArray,
+        val kdf: String,
+        val verifier: ByteArray,
+        val failedAttempts: Int,
+        val setByDeviceId: DeviceId,
+    ) {
+        override fun toString(): String = "RecoveryPinRow(kdf=$kdf, failedAttempts=$failedAttempts, <redacted>)"
+    }
+
+    /** One `recoveries/{autoId}` record. */
+    data class RecoveryRecord(val deviceId: DeviceId, val method: RecoveryMethod, val revokedDevices: Int, val at: Long)
+
+    /** The session of [deviceId] signed in again now (Credential Manager), as `auth_time`; a revoked one comes back. */
+    @Synchronized
+    fun recordSignIn(deviceId: DeviceId) {
+        signedInAtMs[deviceId] = nowEpochMs()
+        signedOut -= deviceId
+    }
+
+    /** The check value stored for [uid], or null. */
+    @Synchronized
+    fun recoveryPinOf(uid: UserId): RecoveryPinRow? = recoveryPins[uid]
+
+    /** Every recovery recorded, in order. */
+    @Synchronized
+    fun recoveries(): List<RecoveryRecord> = recoveryLog.toList()
+
+    /** The registry row of [deviceId], or null. */
+    @Synchronized
+    fun device(deviceId: DeviceId): RegisteredDevice? = devices[deviceId]?.value
+
+    /** Every parent key row, as the server holds it. */
+    @Synchronized
+    fun parentKeys(): List<RegisteredParentKey> = parentKeys.values.map { it.value }
+
+    /** True while [deviceId]'s session is refused (signed out or revoked). */
+    @Synchronized
+    fun isSignedOut(deviceId: DeviceId): Boolean = deviceId in signedOut
+
+    /**
+     * Mirrors `setRecoveryPin` (ADR-0013 §1) minus the proof's signature and the rate limit: the caller must be an
+     * ACTIVE PARENT device of its uid (`permission-denied`); [salt] 16 bytes, [verifier] 32 bytes and a [kdf] in the
+     * server's shape (`invalid-argument`). With [newPin] the uid's row is replaced and its failed attempts start at 0.
+     * Without it (an unchanged PIN registered again) the count is kept, and a row another device set that is still
+     * ACTIVE is kept as it is: the answer then says `stored: false` (one value per account: the PIN set or changed
+     * last on any of its phones). Answers the attempts left of the row the server holds afterwards.
+     */
+    @Synchronized
+    internal fun setRecoveryPin(
+        caller: Caller,
+        salt: ByteArray,
+        kdf: String,
+        verifier: ByteArray,
+        newPin: Boolean,
+    ): Result<StoredRecoveryPin> {
+        recoveryReachable(caller)?.let { return Result.failure(it) }
+        val device = devices[caller.deviceId]?.value
+        val refusal = when {
+            device == null || device.uid != caller.uid || device.role != Role.PARENT ||
+                device.status != DeviceStatus.Active -> PERMISSION_DENIED
+
+            salt.size != RECOVERY_SALT_BYTES || verifier.size != RECOVERY_VERIFIER_BYTES ||
+                !RECOVERY_KDF_SHAPES.any { it.matches(kdf) } -> INVALID_ARGUMENT
+
+            else -> null
+        }
+        if (refusal != null) return Result.failure(SyncException(SyncError.Permanent(refusal)))
+        val existing = recoveryPins[caller.uid]
+        val keptOther = !newPin && existing != null && existing.setByDeviceId != caller.deviceId &&
+            devices[existing.setByDeviceId]?.value?.status == DeviceStatus.Active
+        if (keptOther) {
+            return Result.success(StoredRecoveryPin(stored = false, RECOVERY_MAX_ATTEMPTS - existing.failedAttempts))
+        }
+        val failed = if (newPin) 0 else existing?.failedAttempts ?: 0
+        recoveryPins[caller.uid] = RecoveryPinRow(salt.copyOf(), kdf, verifier.copyOf(), failed, caller.deviceId)
+        return Result.success(StoredRecoveryPin(stored = true, RECOVERY_MAX_ATTEMPTS - failed))
+    }
+
+    /**
+     * Mirrors `recoveryStatus` (ADR-0013 §2): the caller's own PENDING PARENT device (`not-pending` with its status
+     * otherwise; `permission-denied` for a row that is missing or another account's). `pin` is null without a row or
+     * once ten attempts failed; `waitEndsAt` is null until the first `WAIT` call, then that time plus
+     * [RECOVERY_WAIT_MS]. Reading it never starts the wait.
+     */
+    @Synchronized
+    internal fun recoveryStatus(caller: Caller): Result<RecoveryStatus> {
+        recoveryReachable(caller)?.let { return Result.failure(it) }
+        pendingProof(caller)?.let { return Result.failure(it) }
+        val row = recoveryPins[caller.uid]?.takeIf { it.failedAttempts < RECOVERY_MAX_ATTEMPTS }
+        return Result.success(
+            RecoveryStatus(
+                pin = row?.let { RecoveryPinRecord(it.salt, it.kdf) },
+                attemptsLeft = row?.let { RECOVERY_MAX_ATTEMPTS - it.failedAttempts } ?: 0,
+                waitEndsAt = recoveryRequestedAtMs[caller.deviceId]
+                    ?.let { Instant.fromEpochMilliseconds(it + RECOVERY_WAIT_MS) },
+            ),
+        )
+    }
+
+    /**
+     * Mirrors `recoverParentDevice` (ADR-0013 §2) minus the signature and the rate limits: the caller's own PENDING
+     * PARENT device (an ACTIVE one whose session revocation is still pending finishes it and answers as before); a
+     * sign-in within [RECENT_SIGN_IN_MS] ([recordSignIn]); no ACTIVE parent device of another account
+     * (`other-parent`). `PIN`: no row or ten failures is `pin-unavailable`; a wrong verifier counts a failure and
+     * answers `wrong-pin` with the attempts left; a match keeps the count. `WAIT`: the first call starts the wait and
+     * answers `wait`, as does every call before its end; after it, it deletes the row. Then the device becomes ACTIVE,
+     * every other non-revoked PARENT device of the uid is revoked at one above its highest stored lamport with its
+     * parent keys stamped, every session of the account is refused (this phone's too: `signInAgain`), and a recovery
+     * is recorded.
+     */
+    @Synchronized
+    @Suppress("CyclomaticComplexMethod", "LongMethod", "ReturnCount") // The callable's steps, in the server's order.
+    internal fun recoverParentDevice(caller: Caller, request: RecoveryRequest): Result<RecoveredParentDevice> {
+        recoveryReachable(caller)?.let { return Result.failure(it) }
+        revocationPending[caller.deviceId]?.let { first ->
+            if (devices[caller.deviceId]?.value?.uid == caller.uid) {
+                revocationPending.remove(caller.deviceId)
+                revokeSessions(caller.uid)
+                return Result.success(first)
+            }
+        }
+        pendingProof(caller)?.let { return Result.failure(it) }
+        val now = nowEpochMs()
+        if (now - (signedInAtMs[caller.deviceId] ?: 0) > RECENT_SIGN_IN_MS) {
+            return Result.failure(RecoveryRefusedException(RecoveryRefusal.RecentSignIn))
+        }
+        val otherAccountActive = devices.values.any {
+            it.value.role == Role.PARENT && it.value.uid != caller.uid && it.value.status == DeviceStatus.Active
+        }
+        if (otherAccountActive) return Result.failure(RecoveryRefusedException(RecoveryRefusal.OtherParent))
+        when (request) {
+            is RecoveryRequest.Pin -> {
+                val row = recoveryPins[caller.uid]?.takeIf { it.failedAttempts < RECOVERY_MAX_ATTEMPTS }
+                    ?: return Result.failure(RecoveryRefusedException(RecoveryRefusal.PinUnavailable))
+                val candidate = request.verifier()
+                val matches = java.security.MessageDigest.isEqual(candidate, row.verifier)
+                candidate.fill(0)
+                if (!matches) {
+                    val failed = row.failedAttempts + 1
+                    recoveryPins[caller.uid] = row.copy(failedAttempts = failed)
+                    val left = RECOVERY_MAX_ATTEMPTS - failed
+                    return Result.failure(RecoveryRefusedException(RecoveryRefusal.WrongPin(left)))
+                }
+            }
+
+            RecoveryRequest.Wait -> {
+                val endsAt = recoveryRequestedAtMs.getOrPut(caller.deviceId) { now } + RECOVERY_WAIT_MS
+                if (now < endsAt) {
+                    return Result.failure(
+                        RecoveryRefusedException(RecoveryRefusal.Wait(Instant.fromEpochMilliseconds(endsAt))),
+                    )
+                }
+                recoveryPins.remove(caller.uid)
+            }
+        }
+        val others = devices.values.map { it.value }.filter {
+            it.deviceId != caller.deviceId && it.uid == caller.uid && it.role == Role.PARENT &&
+                it.status !is DeviceStatus.Revoked
+        }
+        others.forEach { other ->
+            val atLamport = maxLamportOf(other.deviceId) + 1
+            setStatus(other.deviceId, DeviceStatus.Revoked(atLamport))
+            parentKeys.values.map { it.value }
+                .filter { it.deviceId == other.deviceId && it.revokedAtLamport == null }
+                .forEach { key ->
+                    addParentKey(
+                        RegisteredParentKey(
+                            key.fingerprint,
+                            key.publicKey,
+                            key.uid,
+                            key.deviceId,
+                            key.validFromLamport,
+                            atLamport,
+                        ),
+                    )
+                }
+        }
+        setStatus(caller.deviceId, DeviceStatus.Active)
+        recoveryLog += RecoveryRecord(caller.deviceId, request.method, others.size, now)
+        val left = recoveryPins[caller.uid]?.let { RECOVERY_MAX_ATTEMPTS - it.failedAttempts } ?: 0
+        val answer = RecoveredParentDevice(caller.deviceId, others.size, request.method, left, signInAgain = true)
+        if (failNextSessionRevocation) {
+            failNextSessionRevocation = false
+            revocationPending[caller.deviceId] = answer
+            return Result.failure(SyncException(SyncError.Permanent(INTERNAL)))
+        }
+        revokeSessions(caller.uid)
+        return Result.success(answer)
+    }
+
+    /** `revokeRefreshTokens` of the account: every device session of [uid] is refused until it signs in again. */
+    private fun revokeSessions(uid: UserId) {
+        devices.values.filter { it.value.uid == uid }.forEach { signedOut += it.value.deviceId }
+    }
+
+    /** The household or the network, as for every call; null when the call may go on. */
+    private fun recoveryReachable(caller: Caller): SyncException? = try {
+        checkReachable(caller.deviceId)
+        null
+    } catch (failure: SyncException) {
+        failure
+    }
+
+    /**
+     * The PENDING device proof: the row must exist and be the caller's PARENT device (`permission-denied`), and be
+     * PENDING (`not-pending` with its status).
+     */
+    private fun pendingProof(caller: Caller): Exception? {
+        val device = devices[caller.deviceId]?.value
+        return when {
+            device == null || device.uid != caller.uid || device.role != Role.PARENT ->
+                SyncException(SyncError.Permanent(PERMISSION_DENIED))
+
+            device.status == DeviceStatus.Active ->
+                RecoveryRefusedException(RecoveryRefusal.NotPending(RecoveryDeviceStatus.ACTIVE))
+
+            device.status is DeviceStatus.Revoked ->
+                RecoveryRefusedException(RecoveryRefusal.NotPending(RecoveryDeviceStatus.REVOKED))
+
+            else -> null
+        }
+    }
+
+    /** The highest lamport of anything [deviceId] stored (events, documents, messages): the server's `maxLamport`. */
+    private fun maxLamportOf(deviceId: DeviceId): Long {
+        val fromEvents = events.values.mapNotNull { stored ->
+            val envelope = stored.value.json["envelope"] as? JsonObject
+            envelope?.takeIf { it.string(AUTHOR_DEVICE_ID) == deviceId.value }?.long(LAMPORT)
+        }
+        val fromDocuments = documents.values.map { it.value }
+            .filter { it.authorDeviceId == deviceId }
+            .map { it.lamport }
+        val fromMessages = messages.values.mapNotNull { stored ->
+            stored.value.takeIf { it.string(AUTHOR_DEVICE_ID) == deviceId.value }?.long(LAMPORT)
+        }
+        return (fromEvents + fromDocuments + fromMessages).maxOrNull() ?: 0
+    }
 
     // ---- what transports call ----
 
@@ -935,6 +1201,22 @@ class FakeBackend(val householdId: HouseholdId, private val pageSize: Int = DEFA
         const val UNKNOWN_DOC_TYPE: String = "unknown-doc-type"
         const val UNSIGNED: String = "unsigned"
         const val PERMISSION_DENIED: String = "permission-denied"
+        const val INVALID_ARGUMENT: String = "invalid-argument"
+        const val FAILED_PRECONDITION: String = "failed-precondition"
+        const val INTERNAL: String = "internal"
+
+        /** ADR-0013: ten wrong PINs close PIN recovery; the wait is 7 days; a recovery needs a 5-minute sign-in. */
+        const val RECOVERY_MAX_ATTEMPTS: Int = 10
+        const val RECOVERY_WAIT_MS: Long = 7 * DAY_MS
+        const val RECENT_SIGN_IN_MS: Long = 5 * 60 * 1000
+        private const val RECOVERY_SALT_BYTES = 16
+        private const val RECOVERY_VERIFIER_BYTES = 32
+
+        /** The server's shape check of a KDF descriptor (ADR-0013 §4). */
+        private val RECOVERY_KDF_SHAPES = listOf(
+            Regex("argon2id\\\$v=19\\\$m=\\d{1,7},t=\\d{1,2},p=\\d"),
+            Regex("pbkdf2-sha256\\\$i=\\d{1,8}"),
+        )
 
         private const val WRITE_BUFFER = 256
         private const val MAX_ID = 128

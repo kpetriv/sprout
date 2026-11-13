@@ -10,6 +10,8 @@ import dev.kpetriv.sprout.core.database.HouseholdPolicyRepository
 import dev.kpetriv.sprout.core.domainledger.Currency
 import dev.kpetriv.sprout.core.model.DeviceId
 import dev.kpetriv.sprout.core.model.KidId
+import dev.kpetriv.sprout.core.sync.RecoveryRefusal
+import dev.kpetriv.sprout.core.sync.RecoveryRefusedException
 import dev.kpetriv.sprout.core.syncfirebase.CallableInvoker
 import dev.kpetriv.sprout.core.syncfirebase.DeviceProof
 import dev.kpetriv.sprout.core.syncfirebase.DeviceStatusAnswer
@@ -141,6 +143,69 @@ class HouseholdAdminFunctionsTest {
         assertTrue(verifies(deletion, delete.second["signature"]))
         assertEquals(REAL_HOUSEHOLD.value, delete.second["confirmation"])
         assertTrue(invoker.withoutAuth.isEmpty(), "every proof call carries the ID token")
+    }
+
+    @Test
+    fun `the recovery calls sign their payloads with the session's device, and a wrong PIN is never sent twice`() =
+        runTest {
+            val verifier = ByteArray(32) { 2 }
+            val invoker = RecordingInvoker(
+                mapOf(
+                    "deviceId" to THIS_DEVICE.value,
+                    "status" to "ACTIVE",
+                    "revokedDevices" to 1,
+                    "method" to "PIN",
+                    "attemptsLeft" to 10,
+                    "signInAgain" to true,
+                ),
+            )
+            val functions = admin(invoker)
+            val recovered = functions.recoverParentDevice(verifier).getOrThrow()
+            assertTrue(recovered.signInAgain)
+            val (name, data) = invoker.calls.single()
+            assertEquals(HouseholdFunctions.RECOVER_PARENT_DEVICE, name)
+            assertEquals(THIS_DEVICE.value, data["deviceId"])
+            val payload = DeviceProof.recoverParentDevicePayload(REAL_HOUSEHOLD, tokens.hashOf(1), verifier)
+            assertTrue(verifies(payload, data["signature"]))
+
+            invoker.calls.clear()
+            invoker.failure = FunctionsException(
+                FunctionsError.PermissionDenied,
+                mapOf("reason" to "wrong-pin", "attemptsLeft" to 4L),
+            )
+            val wrong = functions.recoverParentDevice(verifier).exceptionOrNull()
+            assertEquals(
+                RecoveryRefusal.WrongPin(4),
+                (wrong as RecoveryRefusedException).refusal,
+            )
+            assertEquals(1, invoker.calls.size, "a wrong PIN is one attempt, never retried")
+        }
+
+    @Test
+    fun `a PIN restore refused with a bare permission-denied is not sent again, a wait call is`() = runTest {
+        val invoker = RecordingInvoker(null)
+        invoker.failure = FunctionsException(FunctionsError.PermissionDenied)
+        val functions = admin(invoker)
+        functions.recoverParentDevice(ByteArray(32) { 2 })
+        assertEquals(1, invoker.calls.size, "one tap, one PIN attempt at most")
+        invoker.calls.clear()
+        functions.recoverParentDevice(null)
+        assertEquals(2, invoker.calls.size, "a wait call is retried over a fresh token")
+    }
+
+    @Test
+    fun `a restore answered for another device is a malformed answer`() = runTest {
+        val invoker = RecordingInvoker(
+            mapOf(
+                "deviceId" to "f".repeat(64),
+                "status" to "ACTIVE",
+                "revokedDevices" to 1,
+                "method" to "WAIT",
+                "attemptsLeft" to 0,
+            ),
+        )
+        val failure = admin(invoker).recoverParentDevice(null).exceptionOrNull()
+        assertEquals(FunctionsError.MalformedResponse, (failure as FunctionsException).error)
     }
 
     @Test

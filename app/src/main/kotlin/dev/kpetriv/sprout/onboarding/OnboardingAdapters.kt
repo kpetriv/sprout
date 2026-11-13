@@ -82,6 +82,10 @@ class FirebaseOnboardingAuth @Inject constructor(private val auth: FirebaseAuthS
     override suspend fun signInWithGoogle(activityContext: Context): Result<Unit> =
         auth.signInWithGoogle(activityContext).mapAuthFailure()
 
+    /** The signed-in account proved again (`FirebaseUser.reauthenticate`): another account is WRONG_ACCOUNT. */
+    override suspend fun reauthenticateWithGoogle(activityContext: Context): Result<Unit> =
+        auth.reauthenticateWithGoogle(activityContext).mapAuthFailure()
+
     override suspend fun signInWithEmailPassword(email: String, password: String): Result<Unit> =
         auth.signInWithEmailPassword(email, password).mapAuthFailure()
 
@@ -347,7 +351,8 @@ private fun <T> Result<T>.mapAuthFailure(): Result<T> = recoverCatching { failur
             AuthError.UserDisabled -> OnboardingFailure.ACCOUNT_DISABLED
             AuthError.Network -> OnboardingFailure.NETWORK
             AuthError.TooManyRequests -> OnboardingFailure.TOO_MANY_ATTEMPTS
-            AuthError.SignedOut, AuthError.UserMismatch, AuthError.Unknown, null -> OnboardingFailure.UNKNOWN
+            AuthError.UserMismatch -> OnboardingFailure.WRONG_ACCOUNT
+            AuthError.SignedOut, AuthError.Unknown, null -> OnboardingFailure.UNKNOWN
         },
     )
 }

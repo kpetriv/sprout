@@ -90,6 +90,67 @@ class DeviceProofTest {
     }
 
     @Test
+    fun `canonical JSON leaves base64 and KDF descriptor characters unescaped (ADR-0013 vector)`() {
+        val args = buildJsonObject {
+            put("verifier", "//////////////////////////////////////////8=")
+            put("salt", "AAAAAAAAAAAAAAAAAAAAAA==")
+            put("kdf", "argon2id\$v=19\$m=65536,t=3,p=1")
+        }
+        assertEquals(
+            """{"kdf":"argon2id${'$'}v=19${'$'}m=65536,t=3,p=1","salt":"AAAAAAAAAAAAAAAAAAAAAA==",""" +
+                """"verifier":"//////////////////////////////////////////8="}""",
+            DeviceProof.canonicalJson(args),
+        )
+        val setArgs = buildJsonObject {
+            put("verifier", "//////////////////////////////////////////8=")
+            put("salt", "AAAAAAAAAAAAAAAAAAAAAA==")
+            put("newPin", false)
+            put("kdf", "pbkdf2-sha256\$i=600000")
+        }
+        assertEquals(
+            """{"kdf":"pbkdf2-sha256${'$'}i=600000","newPin":false,"salt":"AAAAAAAAAAAAAAAAAAAAAA==",""" +
+                """"verifier":"//////////////////////////////////////////8="}""",
+            DeviceProof.canonicalJson(setArgs),
+        )
+        assertEquals("{}", DeviceProof.canonicalJson(JsonObject(emptyMap())))
+        assertEquals("""{"method":"WAIT"}""", DeviceProof.canonicalJson(buildJsonObject { put("method", "WAIT") }))
+        val pin = buildJsonObject {
+            put("verifier", "ab+/=")
+            put("method", "PIN")
+        }
+        assertEquals("""{"method":"PIN","verifier":"ab+/="}""", DeviceProof.canonicalJson(pin))
+    }
+
+    @Test
+    fun `the recovery callables sign the check value, nothing, and the method with its verifier (ADR-0013)`() {
+        val salt = ByteArray(16) { 1 }
+        val verifier = ByteArray(32) { 2 }
+        assertEquals(
+            "7370726f75742f7365742d7265636f766572792d70696e2f763200686f6d652d3100" + tokenHex +
+                "007b226b6466223a2270626b6466322d73686132353624693d363030303030222c226e657750696e223a747275652c22" +
+                "73616c74223a22415145424151454241514542415145424151454241513d3d222c227665726966696572223a22416749" +
+                "434167494341674943416749434167494341674943416749434167494341674943416749434167493d227d",
+            DeviceProof.setRecoveryPinPayload(hid, tokenHash, salt, "pbkdf2-sha256\$i=600000", verifier, newPin = true)
+                .hex(),
+        )
+        assertEquals(
+            "7370726f75742f7265636f766572792d7374617475732f763200686f6d652d3100" + tokenHex + "007b7d",
+            DeviceProof.recoveryStatusPayload(hid, tokenHash).hex(),
+        )
+        assertEquals(
+            "7370726f75742f7265636f7665722d706172656e742d6465766963652f763200686f6d652d3100" + tokenHex +
+                "007b226d6574686f64223a2250494e222c227665726966696572223a2241674943416749434167494341674943416749" +
+                "4341674943416749434167494341674943416749434167493d227d",
+            DeviceProof.recoverParentDevicePayload(hid, tokenHash, verifier).hex(),
+        )
+        assertEquals(
+            "7370726f75742f7265636f7665722d706172656e742d6465766963652f763200686f6d652d3100" + tokenHex +
+                "007b226d6574686f64223a2257414954227d",
+            DeviceProof.recoverParentDevicePayload(hid, tokenHash, verifier = null).hex(),
+        )
+    }
+
+    @Test
     fun `registerEncryptionKey signs the raw 32-byte X25519 key`() {
         assertEquals(
             "7370726f75742f72656769737465722d656e6372797074696f6e2d6b65792f763200686f6d652d3100" + tokenHex + "00" +

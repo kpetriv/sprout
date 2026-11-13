@@ -10,6 +10,7 @@ import dev.kpetriv.sprout.core.common.Dispatcher
 import dev.kpetriv.sprout.core.common.SproutDispatchers
 import dev.kpetriv.sprout.core.crypto.Aead
 import dev.kpetriv.sprout.core.crypto.AndroidBootClock
+import dev.kpetriv.sprout.core.crypto.Argon2KtFunction
 import dev.kpetriv.sprout.core.crypto.Argon2idPinHasher
 import dev.kpetriv.sprout.core.crypto.BootClock
 import dev.kpetriv.sprout.core.crypto.EncryptedLockoutStateStore
@@ -18,6 +19,7 @@ import dev.kpetriv.sprout.core.crypto.KeystoreHmacPepper
 import dev.kpetriv.sprout.core.crypto.LockoutStateStore
 import dev.kpetriv.sprout.core.crypto.PinHasher
 import dev.kpetriv.sprout.core.crypto.PinPepper
+import dev.kpetriv.sprout.core.crypto.RecoveryPinVerifier
 import dev.kpetriv.sprout.core.crypto.SecretStore
 import kotlinx.coroutines.CoroutineDispatcher
 import java.security.SecureRandom
@@ -41,6 +43,14 @@ internal object PinModule {
         @Dispatcher(SproutDispatchers.Default) dispatcher: CoroutineDispatcher,
         pepper: PinPepper,
     ): PinHasher = Argon2idPinHasher(random, dispatcher, pepper)
+
+    /** The recovery PIN check value (ADR-0013 §1): Argon2id through argon2kt, no pepper. */
+    @Provides
+    @Singleton
+    fun recoveryPinVerifier(
+        random: SecureRandom,
+        @Dispatcher(SproutDispatchers.Default) dispatcher: CoroutineDispatcher,
+    ): RecoveryPinVerifier = RecoveryPinVerifier(random, dispatcher, Argon2KtFunction())
 
     @Provides
     @Singleton

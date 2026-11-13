@@ -272,3 +272,22 @@ class FakeHouseholdSettingsRestorer(
         return onRestore()
     }
 }
+
+/** [AccountRecoverySetup]: [ready] as the test sets it; [finish] answers [outcome] and records the PINs it got. */
+class FakeAccountRecoverySetup(initial: RecoverySetupState? = RecoverySetupState(ready = false)) :
+    AccountRecoverySetup {
+    val current = MutableStateFlow(initial)
+    override val state: Flow<RecoverySetupState?> = current
+    var outcome: RecoverySetupOutcome = RecoverySetupOutcome.Registered
+    val finished = mutableListOf<String>()
+    val arrays = mutableListOf<CharArray>()
+
+    override suspend fun finish(pin: CharArray): RecoverySetupOutcome {
+        finished += String(pin)
+        arrays += pin
+        if (outcome == RecoverySetupOutcome.Registered) {
+            current.value = RecoverySetupState(ready = true, attemptsLeft = 10)
+        }
+        return outcome
+    }
+}

@@ -227,6 +227,28 @@ class PurgeAndWipeTest {
         assertTrue(files.secretsDirectory.listFiles().orEmpty().isEmpty())
     }
 
+    // The account recovery marks (ADR-0013 §1) go with the household; a file left behind is not a complete wipe.
+    @Test
+    fun wipeDeletesTheRecoveryMarksFile() = runTest {
+        val context = RuntimeEnvironment.getApplication()
+        val (database, base) = filesWithEverySecret("wipe-recovery")
+        val marks = File(context.noBackupFilesDir, "prefs-${UUID.randomUUID()}/sprout_recovery_pin.xml")
+        marks.parentFile?.mkdirs()
+        marks.writeText("<map />")
+        File("${marks.path}.bak").writeText("<map />")
+        val files = LocalDataFiles(
+            base.databaseFile,
+            base.photoDirectory,
+            base.secretsDirectory,
+            base.blobDirectory,
+            base.tablesSetupFile,
+            recoveryPinFile = marks,
+        )
+        assertTrue(wipe(database, files)())
+        assertFalse(marks.exists())
+        assertFalse(File("${marks.path}.bak").exists())
+    }
+
     // The kids' Times tables setup names kid ids: it goes with the household (M9-games §6.3, D-M9-G7).
     @Test
     fun wipeClearsTheTimesTablesSetupStoreThenDeletesItsFiles() = runTest {

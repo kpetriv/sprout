@@ -14,6 +14,7 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.test.TestCoroutineScheduler
@@ -25,6 +26,7 @@ import javax.crypto.SecretKeyFactory
 import javax.crypto.spec.PBEKeySpec
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.milliseconds
+import kotlin.time.Instant
 
 /** In-memory [ParentPinStore]. [unreadable] simulates a stored hash that cannot be decrypted. */
 class InMemoryParentPinStore(initial: String? = null) : ParentPinStore {
@@ -51,6 +53,11 @@ class InMemoryParentPinStore(initial: String? = null) : ParentPinStore {
         if (failWrites) throw IOException("Simulated write failure")
         this.hash = hash
         saves++
+    }
+
+    override suspend fun clear() {
+        if (failWrites) throw IOException("Simulated write failure")
+        hash = null
     }
 }
 
@@ -196,6 +203,9 @@ class SessionFixture(
     val challenges = FakeChallengeSource()
     val settings = FakeLockSettings(lockWhenLeaving)
     val foreground = FakeAppForeground()
+    val uploader = FakeRecoveryCheckUploader()
+    val recoveryFlag = InMemoryRecoveryPinFlag()
+    val recoveryPin = RecoveryPinRegistration(uploader, recoveryFlag, clock, scope)
 
     init {
         if (pin != null) kotlinx.coroutines.runBlocking { pinStore.hash = hasher.hash(pin.toCharArray()) }
@@ -219,6 +229,7 @@ class SessionFixture(
         clock = clock,
         bootClock = bootClock,
         random = random,
+        recoveryPin = recoveryPin,
         appForeground = foreground,
         scope = scope,
         ioDispatcher = dispatcher,
@@ -275,4 +286,58 @@ class TestSchedulerBootClock(private val scheduler: TestCoroutineScheduler) : Bo
     private companion object {
         val START = 10_000.milliseconds
     }
+}
+
+/**
+ * The app's check value upload (ADR-0013 §1): records each PIN it was given (as a String, test only) and answers
+ * [result]; [gate], when set, holds every upload until completed.
+ */
+class FakeRecoveryCheckUploader : RecoveryCheckUploader {
+    val uploads = mutableListOf<String>()
+
+    /** The `newPin` flag of each upload. */
+    val newPins = mutableListOf<Boolean>()
+
+    @Volatile
+    var result: RecoveryUploadResult = RecoveryUploadResult.Uploaded(stored = true, attemptsLeft = 10)
+
+    @Volatile
+    var gate: CompletableDeferred<Unit>? = null
+
+    /** The arrays handed over, to check they were zeroed afterwards. */
+    val arrays = mutableListOf<CharArray>()
+
+    override suspend fun upload(pin: CharArray, newPin: Boolean): RecoveryUploadResult {
+        uploads += String(pin)
+        newPins += newPin
+        arrays += pin
+        gate?.await()
+        return result
+    }
+}
+
+class InMemoryRecoveryPinFlag(initial: RecoveryPinMarks = RecoveryPinMarks()) : RecoveryPinFlag {
+    private val state = MutableStateFlow(initial)
+
+    /** Every value written, in order: true when a registration was written, false otherwise. */
+    val writes = mutableListOf<Boolean>()
+
+    override val marks: Flow<RecoveryPinMarks> = state
+
+    override suspend fun marks(): RecoveryPinMarks = state.value
+
+    override suspend fun setMarks(marks: RecoveryPinMarks) {
+        writes += marks.registered != null
+        state.value = marks
+    }
+
+    override suspend fun clear() {
+        state.value = RecoveryPinMarks()
+    }
+
+    fun isRegistered(): Boolean = state.value.registered != null
+
+    fun registeredAt(): Instant? = state.value.registered?.at
+
+    fun registration(): RecoveryRegistration? = state.value.registered
 }

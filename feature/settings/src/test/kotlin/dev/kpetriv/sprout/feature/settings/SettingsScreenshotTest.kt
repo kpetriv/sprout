@@ -194,4 +194,66 @@ class SettingsScreenshotTest : ScreenshotTest(checkAccessibility = true) {
             onBack = {},
         )
     }
+
+    @Test
+    @Config(qualifiers = "+h1400dp")
+    fun `parent security, account recovery ready`() = screenshot.captureLightDark("settings_security_recovery_ready") {
+        ParentSecurityScreen(
+            SettingsPreviewData.security().copy(recovery = RecoveryRowUi(ready = true)),
+            onEvent = {},
+            onBack = {},
+        )
+    }
+
+    @Test
+    @Config(qualifiers = "+h1700dp")
+    fun `parent security, account recovery asks for the PIN`() =
+        screenshot.captureLightDark("settings_security_recovery_pin") {
+            ParentSecurityScreen(
+                SettingsPreviewData.security().copy(
+                    recovery = RecoveryRowUi(
+                        ready = false,
+                        pin = RecoveryPinUi(enteredDigits = 3, rejections = 1),
+                        error = RecoverySetupError.WrongPin(null),
+                    ),
+                ),
+                onEvent = {},
+                onBack = {},
+            )
+        }
+
+    @Test
+    @Config(qualifiers = "+h1400dp")
+    fun `parent security, wrong PINs tried in a restore`() =
+        screenshot.captureLightDark("settings_security_recovery_wrong_pins") {
+            ParentSecurityScreen(
+                SettingsPreviewData.security().copy(recovery = RecoveryRowUi(ready = true, attemptsLeft = 9)),
+                onEvent = {},
+                onBack = {},
+            )
+        }
+
+    @Test
+    @Config(qualifiers = "+h1400dp")
+    fun `parent security, restoring by PIN closed`() =
+        screenshot.captureLightDark("settings_security_recovery_closed") {
+            ParentSecurityScreen(
+                SettingsPreviewData.security().copy(recovery = RecoveryRowUi(ready = true, attemptsLeft = 0)),
+                onEvent = {},
+                onBack = {},
+            )
+        }
+
+    @Test
+    @Config(qualifiers = "+h1400dp")
+    fun `parent security, the other phone's PIN restores`() =
+        screenshot.captureLightDark("settings_security_recovery_kept_other") {
+            ParentSecurityScreen(
+                SettingsPreviewData.security().copy(
+                    recovery = RecoveryRowUi(ready = false, attemptsLeft = 10, keptOther = true),
+                ),
+                onEvent = {},
+                onBack = {},
+            )
+        }
 }

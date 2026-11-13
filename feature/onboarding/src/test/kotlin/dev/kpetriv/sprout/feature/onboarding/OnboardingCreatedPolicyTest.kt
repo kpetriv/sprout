@@ -37,7 +37,16 @@ class OnboardingCreatedPolicyTest {
         household.ownerOf = { auth.lastClaims?.let { RegisteredOwner(it.uid, it.role ?: Role.PARENT, it.kidId) } }
     }
 
-    private fun viewModel() = OnboardingViewModel(auth, backend, household, keys, sessions, clock)
+    private fun viewModel() = OnboardingViewModel(
+        auth,
+        backend,
+        household,
+        keys,
+        sessions,
+        clock,
+        FakeAccountRecovery(),
+        FakeRecoveredPinKeeper(log),
+    )
 
     private fun currentDevice(): DeviceId = keys.publicKey().deviceId()
 

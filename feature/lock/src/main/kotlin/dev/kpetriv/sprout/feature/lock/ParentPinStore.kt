@@ -25,6 +25,9 @@ interface ParentPinStore {
 
     /** Replaces the stored hash atomically. */
     suspend fun save(hash: String)
+
+    /** Deletes the stored hash (a phone about to register as a new PENDING parent device, ADR-0013 §1). */
+    suspend fun clear()
 }
 
 /** A PIN hash is stored but cannot be read. The PIN path stays closed; it never falls back to "no PIN". */
@@ -76,6 +79,10 @@ class EncryptedParentPinStore(
         } finally {
             plaintext.fill(0)
         }
+    }
+
+    override suspend fun clear() {
+        storage.delete(HASH_BLOB)
     }
 
     companion object {

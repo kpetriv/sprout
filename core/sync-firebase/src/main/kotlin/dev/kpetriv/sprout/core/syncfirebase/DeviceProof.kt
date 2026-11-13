@@ -13,6 +13,7 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.longOrNull
 import kotlinx.serialization.json.put
 import java.security.MessageDigest
+import kotlin.io.encoding.Base64
 import kotlin.time.Instant
 
 /**
@@ -46,6 +47,9 @@ object DeviceProof {
         HouseholdFunctions.EXPORT_HOUSEHOLD to "sprout/export-household/v2",
         HouseholdFunctions.DELETE_HOUSEHOLD to "sprout/delete-household/v2",
         HouseholdFunctions.PRUNE_MESSAGES to "sprout/prune-messages/v2",
+        HouseholdFunctions.SET_RECOVERY_PIN to "sprout/set-recovery-pin/v2",
+        HouseholdFunctions.RECOVERY_STATUS to "sprout/recovery-status/v2",
+        HouseholdFunctions.RECOVER_PARENT_DEVICE to "sprout/recover-parent-device/v2",
     )
 
     /** Domain of the `registerParentKey` signature (`REGISTER_PARENT_KEY_DOMAIN`). */
@@ -125,6 +129,49 @@ object DeviceProof {
             put("purge", purge)
         }
         return payload(HouseholdFunctions.PRUNE_MESSAGES, hid, idTokenHash, args)
+    }
+
+    /**
+     * [payload] for `setRecoveryPin` (ADR-0013 §4), signed by an ACTIVE parent device: the signed arguments are
+     * `{ kdf, newPin, salt, verifier }`, [salt] and [verifier] as the standard base64 the request carries and [newPin]
+     * a JSON boolean.
+     */
+    @Suppress("LongParameterList") // The household, the token and the check value's four signed fields.
+    fun setRecoveryPinPayload(
+        hid: HouseholdId,
+        idTokenHash: ByteArray,
+        salt: ByteArray,
+        kdf: String,
+        verifier: ByteArray,
+        newPin: Boolean,
+    ): ByteArray {
+        val args = buildJsonObject {
+            put("kdf", kdf)
+            put("newPin", newPin)
+            put("salt", Base64.Default.encode(salt))
+            put("verifier", Base64.Default.encode(verifier))
+        }
+        return payload(HouseholdFunctions.SET_RECOVERY_PIN, hid, idTokenHash, args)
+    }
+
+    /** [payload] for `recoveryStatus`, signed by the PENDING device itself: no signed arguments (`{}`). */
+    fun recoveryStatusPayload(hid: HouseholdId, idTokenHash: ByteArray): ByteArray =
+        payload(HouseholdFunctions.RECOVERY_STATUS, hid, idTokenHash, JsonObject(emptyMap()))
+
+    /**
+     * [payload] for `recoverParentDevice`, signed by the PENDING device itself: `{ method: "PIN", verifier }` (base64)
+     * when [verifier] is set, else `{ method: "WAIT" }`.
+     */
+    fun recoverParentDevicePayload(hid: HouseholdId, idTokenHash: ByteArray, verifier: ByteArray?): ByteArray {
+        val args = buildJsonObject {
+            if (verifier != null) {
+                put("method", HouseholdFunctions.METHOD_PIN)
+                put("verifier", Base64.Default.encode(verifier))
+            } else {
+                put("method", HouseholdFunctions.METHOD_WAIT)
+            }
+        }
+        return payload(HouseholdFunctions.RECOVER_PARENT_DEVICE, hid, idTokenHash, args)
     }
 
     /**

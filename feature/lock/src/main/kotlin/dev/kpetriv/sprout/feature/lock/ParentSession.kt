@@ -59,6 +59,11 @@ annotation class LockScope
  *   the wall clock changes nothing. The background timer locks even if the app never returns; coming back after
  *   the limit (or after a reboot) locks too, in case the timer did not run.
  *
+ * - **Account recovery** (ADR-0013 §1): the PIN set up, changed or entered correctly goes (as a copy) to
+ *   [RecoveryPinRegistration], which registers the server's check value in the background; nothing waits for it.
+ *   [adoptRecoveredPin] makes a PIN restored from the server this phone's PIN; [registerRecoveryPin] is Settings'
+ *   "finish setting up".
+ *
  * Any storage or Keystore failure keeps the session locked. The session is only the UX gate: money events still
  * need their own per-event parent authorisation (`ParentAuthorizationRequester`).
  *
@@ -78,6 +83,7 @@ class ParentSession @Inject constructor(
     private val clock: Clock,
     private val bootClock: BootClock,
     private val random: SecureRandom,
+    private val recoveryPin: RecoveryPinRegistration,
     appForeground: AppForegroundSource,
     @LockScope private val scope: CoroutineScope,
     @Dispatcher(SproutDispatchers.IO) private val ioDispatcher: CoroutineDispatcher,
@@ -158,6 +164,8 @@ class ParentSession @Inject constructor(
         is PinCheck.Verified -> {
             rehashIfNeeded(pin, check.storedHash)
             unlock(UnlockMethod.PIN)
+            // ADR-0013 §1: a correct PIN registers the server's check value if it is not known to match yet.
+            recoveryPin.pinVerified(pin.copyOf())
             PinUnlockResult.Unlocked
         }
 
@@ -213,7 +221,7 @@ class ParentSession @Inject constructor(
                 KeyChangePinCheck.NotAllowed
             } else {
                 when (val check = checkPin(pin)) {
-                    is PinCheck.Verified -> KeyChangePinCheck.Verified
+                    is PinCheck.Verified -> KeyChangePinCheck.Verified.also { recoveryPin.pinVerified(pin.copyOf()) }
                     is PinCheck.Wrong -> KeyChangePinCheck.Wrong(check.next)
                     is PinCheck.LockedOut -> KeyChangePinCheck.LockedOut(check.decision)
                     PinCheck.NoPin -> KeyChangePinCheck.NotAllowed
@@ -275,9 +283,11 @@ class ParentSession @Inject constructor(
             }
 
             else -> {
+                val token = recoveryPin.beforePinChange(samePin = false)
                 pinStore.save(hasher.hash(pin))
                 lockout.registerSuccess()
                 unlock(UnlockMethod.PIN_SETUP)
+                recoveryPin.afterPinChange(pin.copyOf(), token)
                 PinSetupResult.Saved
             }
         }
@@ -316,7 +326,10 @@ class ParentSession @Inject constructor(
         if (mutableState.value !is ParentSessionState.Unlocked) return ChangePinResult.NotAllowed
         return when (val check = checkPin(current)) {
             is PinCheck.Verified -> {
+                // "Changing" the PIN to the PIN it is must not hand a guesser ten new attempts (ADR-0013 §1).
+                val token = recoveryPin.beforePinChange(samePin = sameDigits(current, new))
                 pinStore.save(hasher.hash(new))
+                recoveryPin.afterPinChange(new.copyOf(), token)
                 ChangePinResult.Changed
             }
 
@@ -327,6 +340,81 @@ class ParentSession @Inject constructor(
             // Unlocked without a stored PIN cannot happen; refuse rather than set a PIN without the old one.
             PinCheck.NoPin -> ChangePinResult.Failed
         }
+    }
+
+    /**
+     * ADR-0013 §3: after a restore with the PIN, the PIN the parent just proved to the server becomes this phone's
+     * PIN, and the session unlocks (the parent just typed it). Only on a phone without a PIN
+     * ([ParentSessionState.SetupRequired] and nothing stored): an existing PIN (a trial's) is never replaced without
+     * itself, and is kept ([RecoveredPinResult.NotAllowed]); its check value is then registered at its next entry.
+     * A PIN that breaks [PinRules] is refused the same way, and the parent chooses a new one. The server's check value
+     * already matches (with [attemptsLeft] as the restore answered), so its registration is stored and nothing is
+     * uploaded. Zeroes [pin].
+     */
+    suspend fun adoptRecoveredPin(pin: CharArray, attemptsLeft: Int): RecoveredPinResult = try {
+        if (PinRules.validate(pin) != null) {
+            RecoveredPinResult.NotAllowed
+        } else {
+            mutex.withLock {
+                ensureInitialized()
+                if (mutableState.value != ParentSessionState.SetupRequired || pinStore.hasPin()) {
+                    RecoveredPinResult.NotAllowed
+                } else {
+                    pinStore.save(hasher.hash(pin))
+                    lockout.registerSuccess()
+                    recoveryPin.markRegistered(attemptsLeft)
+                    unlock(UnlockMethod.PIN_SETUP)
+                    RecoveredPinResult.Adopted
+                }
+            }
+        }
+    } catch (expected: GeneralSecurityException) {
+        RecoveredPinResult.Failed
+    } catch (expected: IOException) {
+        RecoveredPinResult.Failed
+    } finally {
+        pin.fill(ZERO_CHAR)
+    }
+
+    /**
+     * A phone about to register as a new PENDING parent device (ADR-0013 §1, app audit L1): any parent PIN already here
+     * (only a debug or benchmark build's local trial can have one), its lockout state and the recovery marks are
+     * removed, so a restore with the PIN adopts the PIN the server accepted and every other admission chooses its PIN
+     * after it. Throws when the PIN cannot be removed: the registration must not go on then.
+     */
+    suspend fun forgetPinForNewDevice() {
+        mutex.withLock {
+            pinStore.clear()
+            lockout.registerSuccess()
+            recoveryPin.forget()
+            mutableState.value = ParentSessionState.SetupRequired
+        }
+    }
+
+    /**
+     * Settings' "finish setting up account recovery" (ADR-0013 §1): only inside an unlocked session, [pin] is checked
+     * under the same [PinLockoutPolicy] as an unlock (a wrong PIN counts), then its check value is uploaded and the
+     * result returned. The session state does not change. Zeroes [pin].
+     */
+    suspend fun registerRecoveryPin(pin: CharArray): RecoveryPinSetupResult = try {
+        val check = mutex.withLock {
+            ensureInitialized()
+            if (mutableState.value !is ParentSessionState.Unlocked) null else checkPin(pin)
+        }
+        when (check) {
+            null, PinCheck.NoPin -> RecoveryPinSetupResult.NotAllowed
+            is PinCheck.Wrong -> RecoveryPinSetupResult.WrongPin(check.next)
+            is PinCheck.LockedOut -> RecoveryPinSetupResult.LockedOut(check.decision)
+            is PinCheck.Verified -> recoveryPin.registerNow(pin.copyOf()).toSetupResult()
+        }
+    } catch (expected: GeneralSecurityException) {
+        RecoveryPinSetupResult.Unavailable
+    } catch (expected: IOException) {
+        RecoveryPinSetupResult.Unavailable
+    } catch (expected: IllegalArgumentException) {
+        RecoveryPinSetupResult.Unavailable
+    } finally {
+        pin.fill(ZERO_CHAR)
     }
 
     /**
@@ -490,6 +578,26 @@ class ParentSession @Inject constructor(
     }
 
     private data class BackgroundMark(val bootId: String, val at: Duration)
+
+    private fun RecoveryUploadResult.toSetupResult(): RecoveryPinSetupResult = when (this) {
+        is RecoveryUploadResult.Uploaded ->
+            if (stored) RecoveryPinSetupResult.Registered else RecoveryPinSetupResult.KeptOther
+
+        RecoveryUploadResult.NotApplicable -> RecoveryPinSetupResult.NotAllowed
+
+        RecoveryUploadResult.Failed -> RecoveryPinSetupResult.Failed
+
+        RecoveryUploadResult.Refused -> RecoveryPinSetupResult.Refused
+    }
+
+    /** Constant-time comparison of two PINs held in memory (no early exit on the first different digit). */
+    private fun sameDigits(a: CharArray, b: CharArray): Boolean {
+        var difference = a.size xor b.size
+        for (i in 0 until maxOf(a.size, b.size)) {
+            difference = difference or (a.getOrElse(i) { ZERO_CHAR }.code xor b.getOrElse(i) { ZERO_CHAR }.code)
+        }
+        return difference == 0
+    }
 
     /** Outcome of [checkPin]. */
     private sealed interface PinCheck {

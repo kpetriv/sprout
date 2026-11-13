@@ -336,3 +336,48 @@ class ChatExportMessage(
 ) {
     override fun toString(): String = "ChatExportMessage(sentAt=$sentAt, author=$author, kind=$kind, locked=$locked)"
 }
+
+/**
+ * Account recovery's PIN check value (ADR-0013 §1) for Settings → Security. The app adapts `feature/lock`'s
+ * `RecoveryPinRegistration` (the registration time) and `ParentSession.registerRecoveryPin`.
+ */
+interface AccountRecoverySetup {
+    /**
+     * Null when account recovery does not apply here (the trial household, a phone that is not a signed-in parent's
+     * ACTIVE device); otherwise whether a check value is registered and what is left of its wrong-PIN budget.
+     */
+    val state: Flow<RecoverySetupState?>
+
+    /** Checks [pin] under the PIN lockout, then registers its check value. Zeroes [pin]. */
+    suspend fun finish(pin: CharArray): RecoverySetupOutcome
+}
+
+/**
+ * The account recovery row's facts: [ready] when the PIN's check value is registered; [keptOther] when the server kept
+ * the value of the PIN set or changed last on another working phone of the account (this phone's PIN does not
+ * restore); [attemptsLeft] (0..10, null when unknown) as the server last said: below 10, wrong PINs were tried in a
+ * restore (ADR-0013 §1, §3).
+ */
+data class RecoverySetupState(val ready: Boolean, val attemptsLeft: Int? = null, val keptOther: Boolean = false)
+
+/** Outcome of [AccountRecoverySetup.finish]. */
+sealed interface RecoverySetupOutcome {
+    data object Registered : RecoverySetupOutcome
+
+    /** Wrong PIN; [next] is the lockout decision that now applies. */
+    data class WrongPin(val next: LockoutDecision) : RecoverySetupOutcome
+
+    data class LockedOut(val decision: LockoutDecision) : RecoverySetupOutcome
+
+    /** The PIN was right but the server could not be reached: try again later. */
+    data object Offline : RecoverySetupOutcome
+
+    /** The PIN was right but the server refused the call: try again later. */
+    data object Refused : RecoverySetupOutcome
+
+    /** The PIN was right; the server kept the value of the PIN set or changed last on another working phone. */
+    data object KeptOther : RecoverySetupOutcome
+
+    /** Nothing to set up here any more (the session locked, or the phone is no longer a parent's ACTIVE device). */
+    data object NotAvailable : RecoverySetupOutcome
+}

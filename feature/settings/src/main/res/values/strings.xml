@@ -149,6 +149,19 @@
   <string name="feature_settings_security_signing_not_required">Your signing key works on this phone, but the household’s settings say parent signatures aren’t required. Renew the key with your PIN and fingerprint to require them again.</string>
   <string name="feature_settings_security_signing_pin_enrol">Enter your PIN to turn on fingerprint signing</string>
   <string name="feature_settings_security_signing_pin_renew">Enter your PIN to renew the signing key</string>
+  <string name="feature_settings_security_recovery_title">Account recovery</string>
+  <string name="feature_settings_security_recovery_ready">Ready. If this phone is lost or reset, you can get back in on a new one with your Google account and the parent PIN you set or changed last.</string>
+  <string name="feature_settings_security_recovery_kept_other">This account restores with the parent PIN you set or changed last, on your other phone. Change your PIN here to make this phone’s PIN the one that restores.</string>
+  <string name="feature_settings_security_recovery_not_ready">Enter your PIN to finish setting up account recovery.</string>
+  <string name="feature_settings_security_recovery_finish">Finish setting up</string>
+  <string name="feature_settings_security_recovery_pin">Enter your PIN</string>
+  <plurals name="feature_settings_security_recovery_wrong_pins">
+    <item quantity="one">%d wrong PIN was tried when someone tried to restore this account on another phone. Change your PIN.</item>
+    <item quantity="other">%d wrong PINs were tried when someone tried to restore this account on another phone. Change your PIN.</item>
+  </plurals>
+  <string name="feature_settings_security_recovery_closed">Too many wrong PINs were tried when someone tried to restore this account. Restoring with your PIN is closed. Change your PIN to open it again.</string>
+  <string name="feature_settings_security_recovery_offline">Couldn’t reach Sprout. Try again when you’re online.</string>
+  <string name="feature_settings_security_recovery_refused">Sprout couldn’t finish setting up account recovery. Try again later.</string>
   <string name="feature_settings_security_lock_title">Lock when leaving the app</string>
   <string name="feature_settings_security_lock_summary">Ask for the PIN or fingerprint again as soon as you switch away. When off, the parent area locks after 2 minutes away.</string>
 

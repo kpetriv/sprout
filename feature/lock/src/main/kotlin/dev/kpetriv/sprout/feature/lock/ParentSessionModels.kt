@@ -155,3 +155,41 @@ sealed interface ChangePinResult {
     /** The stored hash, the pepper key or the lockout state cannot be read or written. The old PIN still works. */
     data object Failed : ChangePinResult
 }
+
+/** Outcome of [ParentSession.adoptRecoveredPin]. */
+sealed interface RecoveredPinResult {
+    /** The recovered PIN is this phone's PIN now, and the session is unlocked. */
+    data object Adopted : RecoveredPinResult
+
+    /** A PIN exists already (it is kept), or the PIN breaks [PinRules]: the parent unlocks or chooses as usual. */
+    data object NotAllowed : RecoveredPinResult
+
+    /** Storage or Keystore trouble: nothing was stored. */
+    data object Failed : RecoveredPinResult
+}
+
+/** Outcome of [ParentSession.registerRecoveryPin]. */
+sealed interface RecoveryPinSetupResult {
+    /** The server stores the check value of this phone's PIN. */
+    data object Registered : RecoveryPinSetupResult
+
+    /** Wrong PIN; [next] is the lockout decision that now applies. */
+    data class WrongPin(val next: LockoutDecision) : RecoveryPinSetupResult
+
+    data class LockedOut(val decision: LockoutDecision) : RecoveryPinSetupResult
+
+    /** Locked, no PIN, or nothing to register on this phone (not a signed-in parent with an ACTIVE device). */
+    data object NotAllowed : RecoveryPinSetupResult
+
+    /** The stored PIN or lockout state cannot be read. */
+    data object Unavailable : RecoveryPinSetupResult
+
+    /** The PIN was right, but the upload failed (offline): try again later. */
+    data object Failed : RecoveryPinSetupResult
+
+    /** The PIN was right, but the server refused the upload: try again later. */
+    data object Refused : RecoveryPinSetupResult
+
+    /** The PIN was right, and the server kept the value of the PIN set or changed last on another working phone. */
+    data object KeptOther : RecoveryPinSetupResult
+}

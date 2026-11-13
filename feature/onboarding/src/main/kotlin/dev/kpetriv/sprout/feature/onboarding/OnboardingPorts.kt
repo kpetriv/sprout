@@ -9,6 +9,7 @@ import dev.kpetriv.sprout.core.model.HouseholdId
 import dev.kpetriv.sprout.core.model.KidId
 import dev.kpetriv.sprout.core.model.Role
 import dev.kpetriv.sprout.core.model.UserId
+import kotlin.time.Instant
 
 /*
  * What onboarding needs from the rest of the app (M3 §1, §6). The app adapts these to core/sync-firebase
@@ -52,6 +53,12 @@ enum class OnboardingFailure {
     /** A parent revoked this phone while it waited for approval. */
     DEVICE_REJECTED,
 
+    /** The sign-in is too old to restore the account, and this build cannot sign in again in place (D-M3-2). */
+    SIGN_IN_AGAIN,
+
+    /** Another Google account was picked than the one this phone is signed in with (a re-authentication). */
+    WRONG_ACCOUNT,
+
     UNKNOWN,
 }
 
@@ -71,6 +78,12 @@ interface OnboardingAuth {
 
     /** Google through Credential Manager; [activityContext] hosts the account picker. */
     suspend fun signInWithGoogle(activityContext: Context): Result<Unit>
+
+    /**
+     * Proves the **signed-in** account again with Google (a fresh sign-in time), never replacing it: another account
+     * fails with [OnboardingFailure.WRONG_ACCOUNT] and changes nothing.
+     */
+    suspend fun reauthenticateWithGoogle(activityContext: Context): Result<Unit>
 
     suspend fun signInWithEmailPassword(email: String, password: String): Result<Unit>
 
@@ -259,4 +272,95 @@ enum class SigningSetupResult {
     /** Refused before the PIN check and the prompt: the household policy has not synced to this phone (D-REL-15). */
     POLICY_NOT_SYNCED,
     FAILED,
+}
+
+/**
+ * Account recovery for a phone waiting for approval (ADR-0013 §2, §3): the PENDING phone's own `recoveryStatus` and
+ * `recoverParentDevice`, and the PIN's check value (`RecoveryPinVerifier`). The app adapts core/sync's
+ * `RecoveryCallables` and core/crypto. A refusal with a reason fails with [RecoveryException]; anything else with
+ * [OnboardingException].
+ */
+interface AccountRecovery {
+    /** What this phone can recover with. */
+    suspend fun status(): Result<RecoveryOptions>
+
+    /**
+     * The check value of [pin] with the recorded [parameters] (slow: Argon2id). Does not zero [pin]; the caller
+     * zeroes the result.
+     */
+    suspend fun verifierFor(pin: CharArray, parameters: RecoveryPinParameters): Result<ByteArray>
+
+    /**
+     * Recovers this phone with the PIN's [verifier], or by waiting when it is null (the first such call starts the
+     * wait: [RecoveryProblem.Wait]). Does not zero [verifier]. A call the server could not finish (`internal`) is sent
+     * once more here: the server finishes it for the now ACTIVE phone.
+     */
+    suspend fun recover(verifier: ByteArray?): Result<RecoveredDevice>
+
+    /**
+     * The restore revoked every session of the account, this phone's too: sign in once more through the app's own
+     * "Sign in again" path (the one a phone whose session was revoked takes) and return once it is done; false when
+     * this phone's session is gone instead (erased from that screen).
+     */
+    suspend fun signInAgain(): Boolean
+}
+
+/** A restore went through: [attemptsLeft] of the PIN's wrong-PIN budget; [signInAgain]: sessions were revoked. */
+data class RecoveredDevice(val attemptsLeft: Int, val signInAgain: Boolean)
+
+/**
+ * The recorded check value's parameters (opaque here): its salt and KDF descriptor, and whether this phone can compute
+ * that KDF ([supported]; if not, the phone says so and offers the wait).
+ */
+class RecoveryPinParameters(salt: ByteArray, val kdf: String, val supported: Boolean) {
+    private val saltBytes = salt.copyOf()
+
+    val salt: ByteArray get() = saltBytes.copyOf()
+
+    override fun toString(): String = "RecoveryPinParameters(kdf=$kdf, supported=$supported, <redacted>)"
+}
+
+/**
+ * `recoveryStatus`: [pin] null without a check value (or with its attempts used up); [attemptsLeft] 0..10; the wait
+ * ends at [waitEndsAt], null until this phone asked for it.
+ */
+class RecoveryOptions(val pin: RecoveryPinParameters?, val attemptsLeft: Int, val waitEndsAt: Instant?)
+
+/** Why a recovery call was refused (ADR-0013 §4 "Errors"). */
+sealed interface RecoveryProblem {
+    /** The sign-in is older than 5 minutes: sign in again and retry. */
+    data object RecentSignIn : RecoveryProblem
+
+    data class WrongPin(val attemptsLeft: Int) : RecoveryProblem
+
+    /** No check value, or its attempts are used up: only the wait is left. */
+    data object PinUnavailable : RecoveryProblem
+
+    /** The wait ends at [waitEndsAt]; the answer to the first `WAIT` call too (the wait has started). */
+    data class Wait(val waitEndsAt: Instant) : RecoveryProblem
+
+    /** Another parent account of the household has an ACTIVE phone: it can approve this one. */
+    data object OtherParent : RecoveryProblem
+
+    /** This phone is not PENDING any more: [active] (approved meanwhile: carry on) or not (removed: start again). */
+    data class NotPending(val active: Boolean) : RecoveryProblem
+}
+
+/** A recovery call refused with a [problem]. */
+class RecoveryException(val problem: RecoveryProblem) : Exception(problem.javaClass.simpleName)
+
+/** This phone's parent PIN around a restore (`feature/lock`'s `ParentSession`, the real PIN hasher and store). */
+interface RecoveredPinKeeper {
+    /**
+     * After a restore with the PIN, that PIN becomes this phone's parent PIN, unlocked and marked as registered with
+     * the server ([attemptsLeft] as the restore answered), so the lock step goes straight to fingerprint signing
+     * (ADR-0013 §3). False when it was not kept (storage trouble): the lock step then asks for a PIN. Zeroes [pin].
+     */
+    suspend fun keep(pin: CharArray, attemptsLeft: Int): Boolean
+
+    /**
+     * This phone registers as a new PENDING parent device: any parent PIN already here, its lockout and the recovery
+     * marks are removed (ADR-0013 §1, a phone never carries a local PIN into a restore). Throws when they cannot be.
+     */
+    suspend fun forgetForNewDevice()
 }
