@@ -187,6 +187,7 @@ class WalletScreenshotTest : ScreenshotTest(checkAccessibility = true) {
             state = ShopPreviewData.ready(tier, affordable = true, canPurchase = false),
             onEvent = {},
             onBack = {},
+            onEditRewards = {},
         )
     }
 

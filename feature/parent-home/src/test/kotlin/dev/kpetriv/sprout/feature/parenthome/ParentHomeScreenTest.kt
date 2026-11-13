@@ -194,7 +194,7 @@ class ParentHomeScreenTest {
         show(ParentHomePreviewData.busy())
 
         compose.onNodeWithText("Sign now").performClick()
-        compose.onNodeWithText("Shop (parent view)").performClick()
+        compose.onNodeWithText("Rewards").performClick()
         compose.onNodeWithText("Switch to kid mode").performClick()
         compose.onNodeWithText("Leo, 9").performClick()
 

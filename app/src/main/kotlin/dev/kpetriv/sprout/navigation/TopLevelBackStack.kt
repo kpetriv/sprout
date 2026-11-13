@@ -187,6 +187,38 @@ internal class TopLevelBackStack(
 }
 
 /**
+ * Opens [key] in the selected tab without stacking it twice: when [key] is already in the tab (below the top), the
+ * screens above it are closed; otherwise it is [TopLevelBackStack.push]ed (a tab's root key selects that tab).
+ *
+ * [keepAbove] names an entry that may stay directly above [key] when returning to it: "Edit rewards" in a shop preview
+ * opened from the rewards list goes back to that list and keeps the reward open beside it (list-detail), closing only
+ * what was opened after.
+ */
+internal fun TopLevelBackStack.pushOrReturnTo(key: NavKey, keepAbove: (NavKey) -> Boolean = { false }) {
+    val index = current.lastIndexOf(key)
+    if (index < 0 || key in tabs) {
+        push(key)
+        return
+    }
+    val kept = current.getOrNull(index + 1)?.takeIf(keepAbove)?.let { index + 1 } ?: index
+    while (current.lastIndex > kept && pop()) Unit
+}
+
+/**
+ * Leaves the screen [key] (the selected tab's last copy of it) and everything opened above it: a list's back arrow,
+ * which on an Expanded window must close the list together with the detail open beside it, not only the detail. On a
+ * phone, where the list is on top, this is the usual single pop. Without [key] in the tab, or with [key] its root,
+ * this is the system back ([TopLevelBackStack.back]). Returns what that returns: false only when back should leave
+ * the mode.
+ */
+internal fun TopLevelBackStack.leave(key: NavKey): Boolean {
+    val index = current.lastIndexOf(key)
+    if (index <= 0) return back()
+    while (current.lastIndex >= index && pop()) Unit
+    return true
+}
+
+/**
  * A [TopLevelBackStack] for [tabs] whose stacks and selection survive configuration changes and process death. Each
  * tab's stack is remembered under its root key, so a tab that stays when [tabs] changes (chat becoming available)
  * keeps its stack. The instance itself stays the same when [tabs] changes ([TopLevelBackStack.update]), so callbacks

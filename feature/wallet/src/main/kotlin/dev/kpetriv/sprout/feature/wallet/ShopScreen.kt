@@ -34,6 +34,7 @@ import dev.kpetriv.sprout.core.designsystem.components.SproutButton
 import dev.kpetriv.sprout.core.designsystem.components.SproutButtonStyle
 import dev.kpetriv.sprout.core.designsystem.components.SproutCard
 import dev.kpetriv.sprout.core.designsystem.components.SproutTopBar
+import dev.kpetriv.sprout.core.designsystem.icon.SproutIcons
 import dev.kpetriv.sprout.core.designsystem.theme.ProvideKidTier
 import dev.kpetriv.sprout.core.designsystem.theme.SproutSpacing
 import dev.kpetriv.sprout.core.model.KidId
@@ -48,9 +49,16 @@ import dev.kpetriv.sprout.core.ui.TierTextRole
  *
  * @param mode [WalletMode.KID] lets the kid buy, and the shop is a tab root there (no back arrow, M9 §5.2);
  *   [WalletMode.PARENT] only browses, on a pushed screen with a back arrow ([onBack]).
+ * @param onEditRewards "Edit rewards" in the parent's preview (opens the rewards list); never offered in kid mode.
  */
 @Composable
-fun ShopRoute(kidId: KidId, mode: WalletMode, onBack: () -> Unit, modifier: Modifier = Modifier) {
+fun ShopRoute(
+    kidId: KidId,
+    mode: WalletMode,
+    onBack: () -> Unit,
+    modifier: Modifier = Modifier,
+    onEditRewards: (() -> Unit)? = null,
+) {
     val viewModel = featureViewModel<ShopViewModel>(
         key = "shop:${kidId.value}:${mode.name}",
         args = Bundle().apply {
@@ -64,6 +72,7 @@ fun ShopRoute(kidId: KidId, mode: WalletMode, onBack: () -> Unit, modifier: Modi
         onEvent = viewModel::onEvent,
         modifier = modifier,
         onBack = onBack.takeIf { mode == WalletMode.PARENT },
+        onEditRewards = onEditRewards.takeIf { mode == WalletMode.PARENT },
     )
 }
 
@@ -74,6 +83,7 @@ fun ShopRoute(kidId: KidId, mode: WalletMode, onBack: () -> Unit, modifier: Modi
  * height, so Seedling gets big buttons. A kid's top bar takes the tier; a parent's keeps parent sizing.
  *
  * @param onBack the top bar's back arrow; null on a tab root (the kid's shop, M9 §5.2).
+ * @param onEditRewards with a parent browsing, "Edit rewards" beside the preview note; ignored while a kid can buy.
  */
 @Composable
 fun ShopScreen(
@@ -81,6 +91,7 @@ fun ShopScreen(
     onEvent: (ShopEvent) -> Unit,
     modifier: Modifier = Modifier,
     onBack: (() -> Unit)? = null,
+    onEditRewards: (() -> Unit)? = null,
 ) {
     val ready = state as? ShopUiState.Ready
     val kidTier = ready?.tier?.takeIf { ready.canPurchase }
@@ -98,8 +109,12 @@ fun ShopScreen(
         Box(modifier = Modifier.padding(padding).fillMaxSize()) {
             when (state) {
                 ShopUiState.Loading -> ShopLoading()
+
                 is ShopUiState.Error -> ShopErrorContent(state.reason, onRetry = { onEvent(ShopEvent.Refresh) })
-                is ShopUiState.Ready -> ProvideKidTier(state.tier) { ShopReadyContent(state, onEvent) }
+
+                is ShopUiState.Ready -> ProvideKidTier(state.tier) {
+                    ShopReadyContent(state, onEvent, onEditRewards.takeUnless { state.canPurchase })
+                }
             }
         }
     }
@@ -112,17 +127,18 @@ fun ShopScreen(
 }
 
 @Composable
-private fun ShopReadyContent(state: ShopUiState.Ready, onEvent: (ShopEvent) -> Unit) {
+private fun ShopReadyContent(state: ShopUiState.Ready, onEvent: (ShopEvent) -> Unit, onEditRewards: (() -> Unit)?) {
     val select: (ShopItemUi) -> Unit = { onEvent(ShopEvent.Select(it.rewardId)) }
     when (state.tier) {
-        KidUiTier.SEEDLING -> SeedlingShopContent(state, onSelect = select)
+        KidUiTier.SEEDLING -> SeedlingShopContent(state, onSelect = select, onEditRewards = onEditRewards)
 
-        KidUiTier.SPROUT -> SproutShopContent(state, onSelect = select)
+        KidUiTier.SPROUT -> SproutShopContent(state, onSelect = select, onEditRewards = onEditRewards)
 
         KidUiTier.SAPLING -> SaplingShopContent(
             state = state,
             onSelect = select,
             onToggleWishlist = { onEvent(ShopEvent.ToggleWishlist(it.rewardId)) },
+            onEditRewards = onEditRewards,
         )
     }
 }
@@ -173,10 +189,14 @@ internal fun ShopItemUi.savingsPlanText(): String? {
 
 /**
  * The balance card over the rewards ("You have 20 coins" and a coin, Honey on Seedling), then the parent-preview
- * note and the empty-shop note when they apply.
+ * note (with "Edit rewards" when [onEditRewards] is set) and the empty-shop note when they apply.
  */
 @Composable
-internal fun ShopBalanceHeader(state: ShopUiState.Ready, modifier: Modifier = Modifier) {
+internal fun ShopBalanceHeader(
+    state: ShopUiState.Ready,
+    modifier: Modifier = Modifier,
+    onEditRewards: (() -> Unit)? = null,
+) {
     Column(modifier = modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(SproutSpacing.md)) {
         state.balanceText?.let {
             SproutCard(modifier = Modifier.fillMaxWidth(), meaning = CardMeaning.Attention) {
@@ -194,20 +214,40 @@ internal fun ShopBalanceHeader(state: ShopUiState.Ready, modifier: Modifier = Mo
                 }
             }
         }
-        if (!state.canPurchase) {
+        if (!state.canPurchase) ParentPreviewNote(state.tier, onEditRewards)
+        if (state.items.isEmpty()) {
             TierScaledText(
-                text = stringResource(R.string.feature_wallet_shop_parent_preview),
-                role = TierTextRole.Label,
+                text = stringResource(
+                    if (!state.canPurchase && onEditRewards != null) {
+                        R.string.feature_wallet_shop_empty_parent
+                    } else {
+                        R.string.feature_wallet_shop_empty
+                    },
+                ),
+                role = TierTextRole.Body,
                 tier = state.tier,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
-        if (state.items.isEmpty()) {
-            TierScaledText(
-                text = stringResource(R.string.feature_wallet_shop_empty),
-                role = TierTextRole.Body,
-                tier = state.tier,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+    }
+}
+
+/** "You're looking at the shop" for a parent browsing, and "Edit rewards" under it (opens the rewards list). */
+@Composable
+private fun ParentPreviewNote(tier: KidUiTier, onEditRewards: (() -> Unit)?) {
+    Column(verticalArrangement = Arrangement.spacedBy(SproutSpacing.sm)) {
+        TierScaledText(
+            text = stringResource(R.string.feature_wallet_shop_parent_preview),
+            role = TierTextRole.Label,
+            tier = tier,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        if (onEditRewards != null) {
+            SproutButton(
+                text = stringResource(R.string.feature_wallet_shop_edit_rewards),
+                onClick = onEditRewards,
+                style = SproutButtonStyle.Secondary,
+                icon = SproutIcons.Edit,
             )
         }
     }

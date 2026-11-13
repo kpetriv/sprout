@@ -1,3 +1,3 @@
-Restore your account on a new or wiped phone. If the app's data was cleared, the app was reinstalled or the phone was replaced, sign in with the same Google account and enter your parent PIN: the household comes back and the old phone is removed. Forgot the PIN? Ask on the new phone and you can restore seven days later.
+Set up your shop. The dashboard's Rewards button now opens a list of your rewards: add one, give it a price, choose whether it is screen time, a treat or an outing, and offer it to all your kids or only some. Switch "Show in the shop" off to hide a reward without losing it. "See the shop as a kid" shows what each child sees.
 
-After updating, open the parent area with your PIN once so the restore is ready. Settings, Parent security shows the state.
+Earlier builds had no way to add rewards, so the shop stayed empty.

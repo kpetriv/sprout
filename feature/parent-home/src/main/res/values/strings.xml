@@ -117,8 +117,8 @@
   <string name="feature_parent_home_summary_unavailable">The summary is not available right now.</string>
   <string name="feature_parent_home_summary_download">Download the on-device model</string>
 
-  <!-- Shop and kid mode, at the end of the dashboard -->
-  <string name="feature_parent_home_link_shop">Shop (parent view)</string>
+  <!-- Rewards (the shop catalogue) and kid mode, at the end of the dashboard -->
+  <string name="feature_parent_home_link_shop">Rewards</string>
   <string name="feature_parent_home_link_kid_mode">Switch to kid mode</string>
 
   <!-- Household and sync (M3) -->

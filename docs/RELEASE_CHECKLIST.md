@@ -251,6 +251,22 @@ gh workflow run release.yml --ref main -f tag=v1.1.1
 
 Evidence to paste: "v1.1.1 (versionCode <n>) built by release.yml run <id> on <date>; RECOVERY_PIN_HMAC_KEY set <date>; server and rules deployed before the app; PIN restore and the seven-day request walked on <device>" → CONTROLS SE-6.
 
+#### 1.1.2 (the parent's Rewards list and reward editor)
+
+1.1.2 adds what release builds were missing: a way for a parent to create shop rewards (D-REL-59). App only; nothing changes on the server or in the rules.
+
+- [ ] Merge the pull request, wait for CI on `main`, then tag and build as before:
+
+```bash
+git tag -a v1.1.2 -m "Sprout 1.1.2" && git push origin v1.1.2
+gh workflow run release.yml --ref main -f tag=v1.1.2
+```
+
+- [ ] Release notes: paste `play/listing/en-GB/whatsnew.txt`.
+- [ ] On a parent phone: dashboard → Rewards → Add reward (one treat, one screen-time reward with minutes, one for a single kid); on a kid phone the shop shows them and a purchase goes through; hide one and it leaves the kid's shop; change a price and the kid pays the new one.
+
+Evidence to paste: "v1.1.2 (versionCode <n>) built by release.yml run <id> on <date>; a reward added, bought, edited and hidden on <devices>" → CONTROLS SE-6.
+
 ### 10. Device verification
 
 Run [SECURITY_REVIEW.md](SECURITY_REVIEW.md#owner-procedures) P1 to P10 on the internal-track build: the network capture including a receipt scan (P1), the release build walk (P2), Play Integrity and App Check (P3; then enforce, item 6), Google sign-in (P4), key attestation (P5), voice notes (P6), time bank auto-stop (P7), process death (P8), Gemini Nano on a Pixel 9 or later (P9), TalkBack (P10).
