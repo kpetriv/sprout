@@ -70,13 +70,13 @@ Evidence to paste: "Legal review <date> by <role>; rendered with EFFECTIVE_DATE 
 
 ### 5. Deploy the server and publish the pages
 
-Follow FIREBASE.md "Service account (least privilege)" and "Deploying the server (Vercel)" (step 5 of its checklist): create the `sprout-server` service account, set `FIREBASE_SERVICE_ACCOUNT_JSON`, `FIREBASE_PROJECT_ID` and `LINK_CODE_HMAC_KEY` as sensitive Vercel variables, delete the local key file, then from the working tree that holds the rendered real pages (item 4):
+Follow FIREBASE.md "Service account (least privilege)" and "Deploying the server (Vercel)" (step 5 of its checklist): create the `sprout-server` service account, set `FIREBASE_SERVICE_ACCOUNT_JSON`, `FIREBASE_PROJECT_ID`, `LINK_CODE_HMAC_KEY` and (from 1.1.1) `RECOVERY_PIN_HMAC_KEY` as sensitive Vercel variables, delete the local key file, then from the working tree that holds the rendered real pages (item 4):
 
 ```
 cd server && npx vercel@64.7.0 --prod
 ```
 
-`LINK_CODE_HMAC_KEY` is required: link codes and the rate limit of every callable are keyed from it (D-M8-44), so without it every callable answers `internal`. Vercel's build runs `npm run check:deploy`, which refuses placeholder pages. Then restore the committed example pages: `git checkout server/public` (or `python3 tools/privacy/render.py && npm --prefix server run build:static -- --example`), and check `git status` is clean.
+`LINK_CODE_HMAC_KEY` is required: link codes and the rate limit of every callable are keyed from it (D-M8-44), so without it every callable answers `internal`. `RECOVERY_PIN_HMAC_KEY` (`openssl rand -base64 32`, a different value) is needed for restoring an account with the parent PIN (ADR-0013); without it only those calls answer `internal`. Vercel's build runs `npm run check:deploy`, which refuses placeholder pages. Then restore the committed example pages: `git checkout server/public` (or `python3 tools/privacy/render.py && npm --prefix server run build:static -- --example`), and check `git status` is clean.
 
 Verify:
 

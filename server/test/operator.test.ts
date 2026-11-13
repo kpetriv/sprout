@@ -50,6 +50,11 @@ const device = async (hid: string, id: string) => (await db.doc(`households/${hi
 
 const DAY = 24 * 60 * 60 * 1000;
 
+/** Sets the `recoveryRequestedAt` of device [id] ("Start the 7-day wait" in the app) to [days] days ago. */
+async function requestedDaysAgo(hid: string, id: string, days: number): Promise<void> {
+  await db.doc(`households/${hid}/devices/${id}`).update({ recoveryRequestedAt: Timestamp.fromMillis(Date.now() - days * DAY) });
+}
+
 /** Sets the `registeredAt` of device [id] to [days] days ago and returns it as the dry run prints it. */
 async function registeredDaysAgo(hid: string, id: string, days: number): Promise<string> {
   const at = Timestamp.fromMillis(Math.floor((Date.now() - days * DAY) / 1000) * 1000);
@@ -117,6 +122,7 @@ describe('recover-household', () => {
     const linked = await linkKid(h);
     const lostAt = await registeredDaysAgo(h.hid, lost, 90);
     const phoneAt = await registeredDaysAgo(h.hid, phone.deviceId, 8);
+    await requestedDaysAgo(h.hid, phone.deviceId, 8);
 
     const dry = await operator('recover-household', '--hid', h.hid, '--new-parent-uid', h.parent.uid);
     expect(dry).toEqual([
@@ -197,37 +203,40 @@ describe('recover-household', () => {
     );
   });
 
-  it('revokes a working phone of the account only after the waiting period (audit M1)', async () => {
+  it('revokes a working phone of the account only 7 days after the new phone asked for the wait (audit M1)', async () => {
     const h = await newHousehold();
     const phone = await pendingPhone(h);
     const args = ['recover-household', '--hid', h.hid, '--new-parent-uid', h.parent.uid, '--device', phone.deviceId];
 
-    // Just registered: the dry run says why --apply would refuse, and --apply refuses without writing.
+    // Registered long ago but never asked: refused, with what to do (re-audit L2).
+    await registeredDaysAgo(h.hid, phone.deviceId, 30);
     const dry = await operator(...args);
     expect(dry.find((line) => line.startsWith('  --apply would be refused:'))).toMatch(
-      new RegExp(`${h.device.deviceId} of user ${h.parent.uid} is ACTIVE, and ${phone.deviceId} registered less than 7 day\\(s\\) ago: wait until `),
+      new RegExp(`${h.device.deviceId} of user ${h.parent.uid} is ACTIVE, and ${phone.deviceId} has not asked for the wait: on the new phone, tap "Start the 7-day wait"`),
     );
-    await refused([...args, '--apply', '--confirm', h.hid], /Refused: .* is ACTIVE, .*New device waiting/);
-    await registeredDaysAgo(h.hid, phone.deviceId, 6);
-    await refused([...args, '--apply', '--confirm', h.hid], /Refused: /);
+    await refused([...args, '--apply', '--confirm', h.hid], /Refused: .* has not asked for the wait.*--count-from-registration/);
+
+    // Asked 6 days ago: still refused.
+    await requestedDaysAgo(h.hid, phone.deviceId, 6);
+    const waiting = await operator(...args);
+    expect(waiting.find((line) => line.startsWith('  --apply would be refused:'))).toMatch(
+      new RegExp(`${phone.deviceId} asked for the wait less than 7 day\\(s\\) ago: wait until `),
+    );
+    await refused([...args, '--apply', '--confirm', h.hid], /Refused: .* is ACTIVE, .*can remove it/);
     expect((await device(h.hid, phone.deviceId)).status).toBe('PENDING');
     expect((await device(h.hid, h.device.deviceId)).status).toBe('ACTIVE');
     expect((await db.collection('recoveries').get()).size).toBe(0);
 
-    // No registration time: refused as well.
-    await db.doc(`households/${h.hid}/devices/${phone.deviceId}`).update({ registeredAt: FieldValue.delete() });
-    await refused([...args, '--apply', '--confirm', h.hid], /its registration time is unknown/);
-
-    // The override exists for tests and is never used by the runbook.
+    // The override of the length exists for tests and is never used by the runbook.
     await operator(...args, '--waiting-period-days', '0', '--apply', '--confirm', h.hid);
     expect((await device(h.hid, phone.deviceId)).status).toBe('ACTIVE');
     expect((await device(h.hid, h.device.deviceId)).status).toBe('REVOKED');
   });
 
-  it('admits after the waiting period when the working phone did not remove the new one', async () => {
+  it('admits 7 days after the request when the working phone did not remove the new one', async () => {
     const h = await newHousehold();
     const phone = await pendingPhone(h);
-    await registeredDaysAgo(h.hid, phone.deviceId, 7);
+    await requestedDaysAgo(h.hid, phone.deviceId, 7);
     const dry = await operator('recover-household', '--hid', h.hid, '--new-parent-uid', h.parent.uid);
     expect(dry.some((line) => line.includes('would be refused'))).toBe(false);
     await operator(
@@ -238,10 +247,39 @@ describe('recover-household', () => {
     expect((await device(h.hid, h.device.deviceId)).status).toBe('REVOKED');
   });
 
+  it('--count-from-registration counts from the registration, says what it skips, and never shortens a request', async () => {
+    const h = await newHousehold();
+    const phone = await pendingPhone(h);
+    const args = [
+      'recover-household', '--hid', h.hid, '--new-parent-uid', h.parent.uid, '--device', phone.deviceId,
+      '--count-from-registration',
+    ];
+    await registeredDaysAgo(h.hid, phone.deviceId, 6);
+    await refused([...args, '--apply', '--confirm', h.hid], /registered less than 7 day\(s\) ago: wait until /);
+    // No registration time: refused as well.
+    await db.doc(`households/${h.hid}/devices/${phone.deviceId}`).update({ registeredAt: FieldValue.delete() });
+    await refused([...args, '--apply', '--confirm', h.hid], /its registration time is unknown/);
+
+    const registeredAt = await registeredDaysAgo(h.hid, phone.deviceId, 8);
+    const skipLine =
+      `  --count-from-registration: not checking that ${phone.deviceId} asked for the wait in the app; ` +
+      `the 7 day(s) count from its registration (${registeredAt})`;
+    expect(await operator(...args)).toContain(skipLine);
+    // A request in the app takes precedence: the flag cannot count an earlier start.
+    await requestedDaysAgo(h.hid, phone.deviceId, 1);
+    await refused([...args, '--apply', '--confirm', h.hid], /asked for the wait less than 7 day\(s\) ago/);
+    await db.doc(`households/${h.hid}/devices/${phone.deviceId}`).update({ recoveryRequestedAt: FieldValue.delete() });
+
+    const out = await operator(...args, '--apply', '--confirm', h.hid);
+    expect(out).toContain(skipLine);
+    expect((await device(h.hid, phone.deviceId)).status).toBe('ACTIVE');
+    expect((await device(h.hid, h.device.deviceId)).status).toBe('REVOKED');
+  });
+
   it('completes a session revocation an earlier run did not finish (review L13)', async () => {
     const h = await newHousehold();
     const phone = await pendingPhone(h);
-    await registeredDaysAgo(h.hid, phone.deviceId, 8);
+    await requestedDaysAgo(h.hid, phone.deviceId, 8);
     await operator(
       'recover-household', '--hid', h.hid, '--new-parent-uid', h.parent.uid, '--device', phone.deviceId,
       '--apply', '--confirm', h.hid,
@@ -290,7 +328,7 @@ describe('recover-household', () => {
       ['recover-household', '--hid', h.hid, '--new-parent-uid', h.parent.uid, '--device', h.device.deviceId],
       /is not a PENDING parent device/,
     );
-    await registeredDaysAgo(h.hid, second.deviceId, 8);
+    await requestedDaysAgo(h.hid, second.deviceId, 8);
     await operator(
       'recover-household', '--hid', h.hid, '--new-parent-uid', h.parent.uid,
       '--device', second.deviceId, '--apply', '--confirm', h.hid,
@@ -438,6 +476,7 @@ describe('prune-expired', () => {
       '  rateLimits: 1 expired (stale bucket)',
       '  linkCodes: 1 expired',
       '  challenges: 1 expired',
+      '  recoveryPins: 0 without their household or member row',
       'Dry run: nothing was written. To do it: --apply',
     ]);
     expect((await db.collection('rateLimits').get()).size).toBe(2);
@@ -448,6 +487,22 @@ describe('prune-expired', () => {
       const ids = (await db.collection(name).get()).docs.map((d) => d.id);
       expect(ids, name).toEqual([name === 'deletionRecords' || name === 'recoveries' ? 'new' : 'live']);
     }
+  });
+
+  it('deletes recovery PIN check values whose household or member row is gone (audit L1)', async () => {
+    const h = await newHousehold();
+    await Promise.all([
+      db.doc(`recoveryPins/${h.parent.uid}`).set({ hid: h.hid, failedAttempts: 0 }),
+      db.doc('recoveryPins/gone-household').set({ hid: 'deleted-household', failedAttempts: 0 }),
+      db.doc('recoveryPins/gone-member').set({ hid: h.hid, failedAttempts: 0 }),
+      db.doc('recoveryPins/no-hid').set({ failedAttempts: 0 }),
+    ]);
+    const dry = await operator('prune-expired');
+    expect(dry).toContain('  recoveryPins: 3 without their household or member row');
+    expect((await db.collection('recoveryPins').get()).size).toBe(4);
+    const out = await operator('prune-expired', '--apply');
+    expect(out).toContain('  recoveryPins: deleted 3 without their household or member row');
+    expect((await db.collection('recoveryPins').get()).docs.map((d) => d.id)).toEqual([h.parent.uid]);
   });
 
   it('cuts records at 12 calendar months', () => {

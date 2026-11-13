@@ -10,6 +10,8 @@ delete process.env.ALLOW_UNATTESTED;
 // A configured server's key (44 characters, as `openssl rand -base64 32` gives): the rate limiter derives its id key
 // from it on every callable (D-M8-44), so the production-behaviour tests need one. Tests of the key itself clear it.
 process.env.LINK_CODE_HMAC_KEY = 'test-only-link-code-hmac-key-not-a-secret-44';
+// The recovery PIN secret (ADR-0013 §1, audit L2), set for the same reason; tests of a missing key clear it.
+process.env.RECOVERY_PIN_HMAC_KEY = 'test-only-recovery-pin-hmac-key-not-secret-44';
 delete process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
 
 if (!process.env.FIRESTORE_EMULATOR_HOST || !process.env.FIREBASE_AUTH_EMULATOR_HOST) {

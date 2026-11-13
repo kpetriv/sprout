@@ -1,7 +1,9 @@
+import { pbkdf2Sync, randomBytes } from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   addKid,
   call,
+  db,
   expectCode,
   fns,
   newDevice,
@@ -11,6 +13,7 @@ import {
   Proof,
   req,
   resetEmulators,
+  signed,
   withProof,
 } from './helpers.js';
 
@@ -114,6 +117,84 @@ describe('logging', () => {
       ...(linkProof.signature as Proof).sent,
       ...(revokeProof.signature as Proof).sent,
       ...(deleteProof.signature as Proof).sent,
+    ];
+    expect(secrets.length).toBe(13);
+    for (const secret of secrets) {
+      expect(everything).not.toContain(secret);
+    }
+  });
+
+  it('logs account recovery as ids and counts: never the PIN, its salt, verifier, MAC or KDF', async () => {
+    const h = await newHousehold();
+    const pin = '730461';
+    const kdf = 'pbkdf2-sha256$i=1000';
+    const saltBytes = randomBytes(16);
+    const salt = saltBytes.toString('base64');
+    const derive = (p: string) =>
+      pbkdf2Sync(Buffer.from(`sprout/recovery-pin/v1\u0000${h.hid}\u0000${p}`, 'utf8'), saltBytes, 1000, 32, 'sha256').toString('base64');
+    const verifier = derive(pin);
+    const wrong = derive('111111');
+    const setProof = withProof(h, 'setRecoveryPin', { kdf, newPin: true, salt, verifier });
+    await call(fns.setRecoveryPin, req(h.parent, setProof));
+    const mac = (await db.doc(`recoveryPins/${h.parent.uid}`).get()).get('mac') as string;
+
+    const phone = newDevice();
+    await call(fns.registerParentDevice, req(h.parent, { devicePublicKey: phone.publicKey }));
+    const own = (callable: 'recoveryStatus' | 'recoverParentDevice', args: Record<string, unknown> = {}) => {
+      const { callerDeviceId, signature } = signed(phone, callable, h.hid, args);
+      return { ...args, deviceId: callerDeviceId, signature };
+    };
+    const statusProof = own('recoveryStatus');
+    await call(fns.recoveryStatus, req(h.parent, statusProof));
+    const wrongProof = own('recoverParentDevice', { method: 'PIN', verifier: wrong });
+    await expectCode(call(fns.recoverParentDevice, req(h.parent, wrongProof)), 'permission-denied');
+    const waitProof = own('recoverParentDevice', { method: 'WAIT' });
+    await expectCode(call(fns.recoverParentDevice, req(h.parent, waitProof)), 'failed-precondition');
+    const rightProof = own('recoverParentDevice', { method: 'PIN', verifier });
+    await call(fns.recoverParentDevice, req(h.parent, rightProof));
+
+    const lines = captured();
+    const events = lines.map((args) => args[0]);
+    expect(events).toEqual(
+      expect.arrayContaining([
+        'recoveryPin.set',
+        'recovery.statusChecked',
+        'device.recoveryRefused',
+        'device.recoveryWaitStarted',
+        'device.recovered',
+      ]),
+    );
+    const refusals = lines.filter(([event]) => event === 'device.recoveryRefused').map(([, fields]) => fields);
+    expect(refusals).toEqual([expect.objectContaining({ reason: 'wrong-pin', attemptsLeft: 9, deviceId: phone.deviceId })]);
+    const waitStarted = lines.find(([event]) => event === 'device.recoveryWaitStarted')![1];
+    expect(waitStarted.deviceId).toBe(phone.deviceId);
+    expect(waitStarted.waitEndsAt).toBeTypeOf('number');
+    expect(lines.find(([event]) => event === 'device.recovered')![1]).toMatchObject({
+      hid: h.hid,
+      deviceId: phone.deviceId,
+      method: 'PIN',
+      revokedDevices: 1,
+    });
+    for (const [, fields] of lines) {
+      for (const value of Object.values(fields)) {
+        expect(['string', 'number', 'boolean'].includes(typeof value) || value === null).toBe(true);
+      }
+    }
+    const everything = consoleOutput.join('\n');
+    const secrets = [
+      pin,
+      salt,
+      verifier,
+      wrong,
+      mac,
+      kdf,
+      Buffer.from(verifier, 'base64').toString('hex'),
+      Buffer.from(mac, 'base64').toString('hex'),
+      ...(setProof.signature as Proof).sent,
+      ...(statusProof.signature as Proof).sent,
+      ...(wrongProof.signature as Proof).sent,
+      ...(waitProof.signature as Proof).sent,
+      ...(rightProof.signature as Proof).sent,
     ];
     expect(secrets.length).toBe(13);
     for (const secret of secrets) {

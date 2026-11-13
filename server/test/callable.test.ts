@@ -88,7 +88,7 @@ describe('callable protocol: success', () => {
     expect(() => decode({ '@type': 'type.googleapis.com/google.protobuf.Other', value: '1' })).toThrow();
   });
 
-  it('serves the thirteen callables of the server', () => {
+  it('serves the sixteen callables of the server', () => {
     expect(fns.callables.map((c) => c.name).sort()).toEqual(
       [
         'approveDevice',
@@ -98,11 +98,14 @@ describe('callable protocol: success', () => {
         'deleteHousehold',
         'exportHousehold',
         'pruneMessages',
+        'recoverParentDevice',
+        'recoveryStatus',
         'redeemLinkCode',
         'registerParentDevice',
         'registerParentKey',
         'registerEncryptionKey',
         'revokeDevice',
+        'setRecoveryPin',
         'deviceStatus',
       ].sort(),
     );

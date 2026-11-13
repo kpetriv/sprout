@@ -113,7 +113,7 @@ describe('devices and members', () => {
 
 describe('top-level collections are closed', () => {
   for (const path of ['linkCodes/abc', `challenges/${PARENT_UID}`, 'deletionRecords/r1', 'rateLimits/b1',
-    'recoveries/r1', `userHouseholds/${PARENT_UID}`]) {
+    'recoveries/r1', `recoveryPins/${PARENT_UID}`, `userHouseholds/${PARENT_UID}`]) {
     it(`${path} is unreadable and unwritable, even by members`, async () => {
       await assertFails(getDoc(doc(asParent(env), path)));
       await assertFails(getDoc(doc(asKid(env), path)));
@@ -122,4 +122,34 @@ describe('top-level collections are closed', () => {
       await assertFails(setDoc(doc(asParent(env), path), { x: 1 }));
     });
   }
+});
+
+describe('account recovery collections (ADR-0013)', () => {
+  it("a parent can neither read nor change its own PIN check value, nor reset its wrong-PIN count", async () => {
+    const own = doc(asParent(env), `recoveryPins/${PARENT_UID}`);
+    await assertFails(getDoc(own));
+    await assertFails(updateDoc(own, { failedAttempts: 0 }));
+    await assertFails(setDoc(own, { hid: HID, failedAttempts: 0 }));
+    await assertFails(deleteDoc(own));
+    await assertFails(setDoc(doc(asParent(env), `recoveryPins/${KID_UID}`), { hid: HID }));
+    await assertFails(getDoc(doc(asOtherParent(env), `recoveryPins/${PARENT_UID}`)));
+  });
+
+  it('no client sets, moves or clears the wait of a PENDING phone (recoveryRequestedAt) or the session mark', async () => {
+    const pending = doc(asParent(env), `households/${HID}/devices/${PENDING_DEVICE}`);
+    await assertSucceeds(getDoc(pending));
+    await assertFails(updateDoc(pending, { recoveryRequestedAt: serverTimestamp() }));
+    await assertFails(updateDoc(pending, { recoveryRequestedAt: null }));
+    await assertFails(updateDoc(doc(asParent(env), `households/${HID}/devices/${PARENT_DEVICE}`), { recoveryRequestedAt: serverTimestamp() }));
+    await assertFails(updateDoc(doc(asParent(env), `households/${HID}/devices/${PARENT_DEVICE}`), { sessionsRevocationPending: true }));
+    await assertFails(updateDoc(doc(asKid(env), `households/${HID}/devices/${PENDING_DEVICE}`), { recoveryRequestedAt: serverTimestamp() }));
+  });
+
+  it('nobody reads, writes or deletes recovery records', async () => {
+    await assertFails(getDoc(doc(asParent(env), 'recoveries/r1')));
+    await assertFails(getDocs(collection(asParent(env), 'recoveries')));
+    await assertFails(setDoc(doc(asParent(env), 'recoveries/r2'), { hidHash: 'x' }));
+    await assertFails(updateDoc(doc(asParent(env), 'recoveries/r1'), { deviceId: REVOKED_DEVICE }));
+    await assertFails(deleteDoc(doc(asParent(env), 'recoveries/r1')));
+  });
 });

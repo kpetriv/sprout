@@ -89,7 +89,8 @@ export function requireAppCheck(request: CallableRequest): void {
 /**
  * Every callable that needs a user starts here: App Check (unless in the emulator, D-M3-6; the adapter in src/callable.ts already
  * rejects such requests, this is the same check for direct handler invocations), a signed-in caller, and the
- * callable's per-uid and per-IP rate limits.
+ * callable's per-uid (none for the account recovery callables, which count per device once the proof verified) and
+ * per-IP rate limits.
  */
 export async function signedIn(request: CallableRequest, callable: UserCallable): Promise<Caller> {
   requireAppCheck(request);

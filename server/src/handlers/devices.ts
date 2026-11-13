@@ -221,8 +221,15 @@ export async function planRevocation(
   return { target, uid, role, already: false, revokedAtLamport, parentKeys: keys.docs.map((k) => k.ref), kidMember };
 }
 
-/** Writes [plan] in [tx]: the device REVOKED, its parent keys stamped, a kid's member row deleted. */
-export function applyRevocation(tx: Transaction, plan: RevocationPlan): RevocationOutcome {
+/**
+ * Writes [plan] in [tx]: the device REVOKED, its parent keys stamped, a kid's member row deleted. [deviceFields] are
+ * written to the device row with the revocation (account recovery marks `sessionsRevokedAt` there, ADR-0013 §2).
+ */
+export function applyRevocation(
+  tx: Transaction,
+  plan: RevocationPlan,
+  deviceFields: Readonly<Record<string, unknown>> = {},
+): RevocationOutcome {
   if (plan.already) {
     return {
       revokedAtLamport: plan.revokedAtLamport,
@@ -234,7 +241,12 @@ export function applyRevocation(tx: Transaction, plan: RevocationPlan): Revocati
     };
   }
   const { revokedAtLamport } = plan;
-  tx.update(plan.target.ref, { status: 'REVOKED', revokedAt: FieldValue.serverTimestamp(), revokedAtLamport });
+  tx.update(plan.target.ref, {
+    ...deviceFields,
+    status: 'REVOKED',
+    revokedAt: FieldValue.serverTimestamp(),
+    revokedAtLamport,
+  });
   plan.parentKeys.forEach((k) => tx.update(k, { revokedAtLamport }));
   if (plan.kidMember !== undefined) tx.delete(plan.kidMember);
   return {
