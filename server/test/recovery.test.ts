@@ -160,7 +160,7 @@ describe('setRecoveryPin', () => {
   it('stores the MAC of the verifier under RECOVERY_PIN_HMAC_KEY, never the verifier', async () => {
     const h = await newHousehold();
     const pin = pinFor(h);
-    await expect(setPin(h, pin)).resolves.toEqual({ set: true, attemptsLeft: 10 });
+    await expect(setPin(h, pin)).resolves.toEqual({ set: true, stored: true, attemptsLeft: 10 });
 
     const row = await pinRow(h.parent.uid);
     expect(row.data()).toMatchObject({
@@ -194,25 +194,166 @@ describe('setRecoveryPin', () => {
     const h = await newHousehold();
     const pin = pinFor(h);
     // No row yet: false starts at 0 too.
-    await expect(setPin(h, pin, { newPin: false })).resolves.toEqual({ set: true, attemptsLeft: 10 });
+    await expect(setPin(h, pin, { newPin: false })).resolves.toEqual({ set: true, stored: true, attemptsLeft: 10 });
     const lastFailedAt = Timestamp.fromMillis(Date.now() - 60_000);
     await (await pinRow(h.parent.uid)).ref.update({ failedAttempts: 7, lastFailedAt });
 
     const again = pinFor(h); // the same PIN, a new salt (the 30-day refresh)
-    await expect(setPin(h, again, { newPin: false })).resolves.toEqual({ set: true, attemptsLeft: 3 });
+    await expect(setPin(h, again, { newPin: false })).resolves.toEqual({ set: true, stored: true, attemptsLeft: 3 });
     const kept = await pinRow(h.parent.uid);
     expect(kept.data()).toMatchObject({ salt: again.salt, failedAttempts: 7, lastFailedAt });
 
     const changed = pinFor(h, '000111');
-    await expect(setPin(h, changed)).resolves.toEqual({ set: true, attemptsLeft: 10 });
+    await expect(setPin(h, changed)).resolves.toEqual({ set: true, stored: true, attemptsLeft: 10 });
     const reset = await pinRow(h.parent.uid);
     expect(reset.data()).toMatchObject({ mac: expectedMac(h.hid, h.parent.uid, changed.verifier), failedAttempts: 0 });
     expect(reset.get('lastFailedAt')).toBeUndefined();
 
     // A row of another household (cannot happen: it is deleted with its household) is not carried over.
     await reset.ref.update({ hid: 'another-household', failedAttempts: 9, lastFailedAt });
-    await expect(setPin(h, changed, { newPin: false })).resolves.toEqual({ set: true, attemptsLeft: 10 });
+    await expect(setPin(h, changed, { newPin: false })).resolves.toEqual({ set: true, stored: true, attemptsLeft: 10 });
     expect((await pinRow(h.parent.uid)).get('lastFailedAt')).toBeUndefined();
+  });
+
+  describe('one value per account, several phones (ADR-0013 §1)', () => {
+    /** A second ACTIVE phone of the household's parent. */
+    async function secondPhone(h: Household): Promise<TestDevice> {
+      const phone = await pendingPhone(h);
+      await db.doc(`households/${h.hid}/devices/${phone.deviceId}`).update({ status: 'ACTIVE' });
+      return phone;
+    }
+
+    it("a refresh from another phone keeps the value of an ACTIVE phone's PIN, which still restores", async () => {
+      const h = await newHousehold();
+      const pinA = pinFor(h, '482915');
+      await setPin(h, pinA);
+      await (await pinRow(h.parent.uid)).ref.update({ failedAttempts: 2 });
+      const beforeRow = await pinRow(h.parent.uid);
+      const before = beforeRow.data();
+      const b = await secondPhone(h);
+      const pinB = pinFor(h, '111222');
+      await expect(setPin(h, pinB, { device: b, newPin: false })).resolves.toEqual({ set: true, stored: false, attemptsLeft: 8 });
+      const afterRow = await pinRow(h.parent.uid);
+      expect(afterRow.data()).toEqual(before);
+      // Not written at all: the document's update time is the same.
+      expect(afterRow.updateTime!.isEqual(beforeRow.updateTime!)).toBe(true);
+      expect((await pinRow(h.parent.uid)).get('setByDeviceId')).toBe(h.device.deviceId);
+
+      const phone = await pendingPhone(h);
+      await expectRefusal(recoverWithPin(h, phone, pinB.verifier), 'permission-denied', { reason: 'wrong-pin', attemptsLeft: 7 });
+      await expect(recoverWithPin(h, phone, pinA.verifier)).resolves.toMatchObject({ status: 'ACTIVE', attemptsLeft: 7 });
+    });
+
+    it('replaces the value of a REVOKED phone, keeping the count', async () => {
+      const h = await newHousehold();
+      await setPin(h, pinFor(h, '482915'));
+      await (await pinRow(h.parent.uid)).ref.update({ failedAttempts: 3 });
+      const b = await secondPhone(h);
+      await db.doc(`households/${h.hid}/devices/${h.device.deviceId}`).update({ status: 'REVOKED' });
+      const pinB = pinFor(h, '111222');
+      await expect(setPin(h, pinB, { device: b, newPin: false })).resolves.toEqual({ set: true, stored: true, attemptsLeft: 7 });
+      expect((await pinRow(h.parent.uid)).data()).toMatchObject({
+        mac: expectedMac(h.hid, h.parent.uid, pinB.verifier),
+        setByDeviceId: b.deviceId,
+        failedAttempts: 3,
+      });
+    });
+
+    it('replaces a value made under an earlier key, keeping the count', async () => {
+      const h = await newHousehold();
+      await setPin(h, pinFor(h, '482915'));
+      await (await pinRow(h.parent.uid)).ref.update({ keyId: '0'.repeat(32), failedAttempts: 1 });
+      const b = await secondPhone(h);
+      const pinB = pinFor(h, '111222');
+      await expect(setPin(h, pinB, { device: b, newPin: false })).resolves.toEqual({ set: true, stored: true, attemptsLeft: 9 });
+      expect((await pinRow(h.parent.uid)).data()).toMatchObject({
+        mac: expectedMac(h.hid, h.parent.uid, pinB.verifier),
+        setByDeviceId: b.deviceId,
+        failedAttempts: 1,
+      });
+      expect((await pinRow(h.parent.uid)).get('keyId')).not.toBe('0'.repeat(32));
+    });
+
+    it("a new PIN on another phone (newPin: true) replaces the value and resets the count; the same phone's refresh replaces too", async () => {
+      const h = await newHousehold();
+      await setPin(h, pinFor(h, '482915'));
+      await (await pinRow(h.parent.uid)).ref.update({ failedAttempts: 4 });
+      const b = await secondPhone(h);
+      const pinB = pinFor(h, '111222');
+      await expect(setPin(h, pinB, { device: b })).resolves.toEqual({ set: true, stored: true, attemptsLeft: 10 });
+      expect((await pinRow(h.parent.uid)).data()).toMatchObject({
+        mac: expectedMac(h.hid, h.parent.uid, pinB.verifier),
+        setByDeviceId: b.deviceId,
+        failedAttempts: 0,
+      });
+      // The phone that set the value refreshes it (new salt) as before.
+      const again = pinFor(h, '111222');
+      await expect(setPin(h, again, { device: b, newPin: false })).resolves.toEqual({ set: true, stored: true, attemptsLeft: 10 });
+      expect((await pinRow(h.parent.uid)).get('salt')).toBe(again.salt);
+      // And the first phone's refresh now leaves B's value alone.
+      await expect(setPin(h, pinFor(h, '482915'), { newPin: false })).resolves.toEqual({
+        set: true,
+        stored: false,
+        attemptsLeft: 10,
+      });
+      expect((await pinRow(h.parent.uid)).get('salt')).toBe(again.salt);
+    });
+
+    it('replaces a value whose setter is PENDING or has no device row, keeping the count', async () => {
+      const h = await newHousehold();
+      const b = await secondPhone(h);
+      await setPin(h, pinFor(h, '111111'), { device: b });
+      await (await pinRow(h.parent.uid)).ref.update({ failedAttempts: 2 });
+      await db.doc(`households/${h.hid}/devices/${b.deviceId}`).update({ status: 'PENDING' });
+      const pinA = pinFor(h, '222222');
+      await expect(setPin(h, pinA, { newPin: false })).resolves.toEqual({ set: true, stored: true, attemptsLeft: 8 });
+      expect((await pinRow(h.parent.uid)).data()).toMatchObject({
+        mac: expectedMac(h.hid, h.parent.uid, pinA.verifier),
+        setByDeviceId: h.device.deviceId,
+        failedAttempts: 2,
+      });
+
+      // A setter id with no device row (a deleted row) counts as gone.
+      await (await pinRow(h.parent.uid)).ref.update({ setByDeviceId: 'f'.repeat(64) });
+      const again = pinFor(h, '222222');
+      await expect(setPin(h, again, { newPin: false })).resolves.toEqual({ set: true, stored: true, attemptsLeft: 8 });
+      expect((await pinRow(h.parent.uid)).data()).toMatchObject({
+        salt: again.salt,
+        setByDeviceId: h.device.deviceId,
+        failedAttempts: 2,
+      });
+    });
+
+    it("keeps a closed value of another ACTIVE phone closed: newPin: false stores nothing", async () => {
+      const h = await newHousehold();
+      const b = await secondPhone(h);
+      await setPin(h, pinFor(h, '111111'), { device: b });
+      await (await pinRow(h.parent.uid)).ref.update({ failedAttempts: 10 });
+      const beforeRow = await pinRow(h.parent.uid);
+      await expect(setPin(h, pinFor(h, '222222'), { newPin: false })).resolves.toEqual({
+        set: true,
+        stored: false,
+        attemptsLeft: 0,
+      });
+      const afterRow = await pinRow(h.parent.uid);
+      expect(afterRow.data()).toEqual(beforeRow.data());
+      expect(afterRow.updateTime!.isEqual(beforeRow.updateTime!)).toBe(true);
+    });
+
+    it("replaces another household's row even when its setter names another ACTIVE phone, with a new count", async () => {
+      const h = await newHousehold();
+      const b = await secondPhone(h);
+      await setPin(h, pinFor(h, '111111'), { device: b });
+      await (await pinRow(h.parent.uid)).ref.update({ hid: 'other-household', failedAttempts: 9 });
+      const pinA = pinFor(h, '222222');
+      await expect(setPin(h, pinA, { newPin: false })).resolves.toEqual({ set: true, stored: true, attemptsLeft: 10 });
+      expect((await pinRow(h.parent.uid)).data()).toMatchObject({
+        hid: h.hid,
+        mac: expectedMac(h.hid, h.parent.uid, pinA.verifier),
+        setByDeviceId: h.device.deviceId,
+        failedAttempts: 0,
+      });
+    });
   });
 
   it('accepts the Argon2id descriptor of the devices', async () => {
@@ -392,7 +533,7 @@ describe('RECOVERY_PIN_HMAC_KEY', () => {
     await expectCode(setPin(h, pin), 'internal');
     // The emulator's dev key is never used in production.
     process.env.RECOVERY_PIN_HMAC_KEY = 'production-recovery-pin-hmac-key-not-real-44';
-    await expect(setPin(h, pin)).resolves.toEqual({ set: true, attemptsLeft: 10 });
+    await expect(setPin(h, pin)).resolves.toEqual({ set: true, stored: true, attemptsLeft: 10 });
   });
 });
 
@@ -625,7 +766,7 @@ describe('recoverParentDevice with the PIN', () => {
     await expect(status(h, phone)).resolves.toMatchObject({ pin: null, attemptsLeft: 0 });
 
     // Registering the same PIN again keeps it closed; only a new PIN reopens it.
-    await expect(setPin(h, pin, { newPin: false })).resolves.toEqual({ set: true, attemptsLeft: 0 });
+    await expect(setPin(h, pin, { newPin: false })).resolves.toEqual({ set: true, stored: true, attemptsLeft: 0 });
     await expect(status(h, phone)).resolves.toMatchObject({ pin: null, attemptsLeft: 0 });
     await setPin(h, pin);
     await expect(status(h, phone)).resolves.toMatchObject({ attemptsLeft: 10 });
@@ -639,7 +780,7 @@ describe('recoverParentDevice with the PIN', () => {
     const phone = await pendingPhone(h);
     for (let i = 0; i < 6; i++) await expectCode(recoverWithPin(h, phone, pinFor(h, String(400000 + i)).verifier), 'permission-denied');
     await clearRateLimits();
-    await expect(setPin(h, pin, { newPin: false })).resolves.toEqual({ set: true, attemptsLeft: 4 });
+    await expect(setPin(h, pin, { newPin: false })).resolves.toEqual({ set: true, stored: true, attemptsLeft: 4 });
     for (let left = 3; left >= 0; left--) {
       await expectRefusal(recoverWithPin(h, phone, pinFor(h, String(500000 + left)).verifier), 'permission-denied', {
         reason: 'wrong-pin',

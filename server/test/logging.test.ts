@@ -201,4 +201,32 @@ describe('logging', () => {
       expect(everything).not.toContain(secret);
     }
   });
+
+  it('logs a kept recovery PIN value with the caller and counts only', async () => {
+    const h = await newHousehold();
+    const kdf = 'pbkdf2-sha256$i=1000';
+    const value = (pin: string) => {
+      const saltBytes = randomBytes(16);
+      const verifier = pbkdf2Sync(Buffer.from(`sprout/recovery-pin/v1\u0000${h.hid}\u0000${pin}`, 'utf8'), saltBytes, 1000, 32, 'sha256');
+      return { salt: saltBytes.toString('base64'), verifier: verifier.toString('base64') };
+    };
+    const first = value('730461');
+    await call(fns.setRecoveryPin, req(h.parent, withProof(h, 'setRecoveryPin', { kdf, newPin: true, ...first })));
+    const mac = (await db.doc(`recoveryPins/${h.parent.uid}`).get()).get('mac') as string;
+    const other = newDevice();
+    await call(fns.registerParentDevice, req(h.parent, { devicePublicKey: other.publicKey }));
+    await db.doc(`households/${h.hid}/devices/${other.deviceId}`).update({ status: 'ACTIVE' });
+    const second = value('111222');
+    const answer = await call(fns.setRecoveryPin, req(h.parent, withProof(h, 'setRecoveryPin', { kdf, newPin: false, ...second }, other)));
+    expect(answer).toMatchObject({ stored: false });
+
+    const kept = consoleOutput.filter((text) => text.includes('"recoveryPin.kept"'));
+    expect(kept).toHaveLength(1);
+    const { message, severity, time, ...fields } = JSON.parse(kept[0]) as Record<string, unknown>;
+    expect([message, severity, typeof time]).toEqual(['recoveryPin.kept', 'INFO', 'string']);
+    expect(fields).toEqual({ hid: h.hid, deviceId: other.deviceId, attemptsLeft: 10 });
+    for (const secret of [first.salt, first.verifier, second.salt, second.verifier, mac, kdf, h.parent.uid, h.device.deviceId]) {
+      expect(kept[0]).not.toContain(secret);
+    }
+  });
 });

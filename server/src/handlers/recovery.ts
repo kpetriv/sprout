@@ -89,18 +89,24 @@ function waitEndsAtOf(device: DocumentSnapshot): number | null {
 }
 
 /**
- * setRecoveryPin({ kdf, newPin, salt, verifier, callerDeviceId, signature }) → { set: true, attemptsLeft }: stores the
+ * setRecoveryPin({ kdf, newPin, salt, verifier, callerDeviceId, signature }) → { set: true, stored, attemptsLeft }: stores the
  * check value of the parent PIN (ADR-0013 §1) in `recoveryPins/{uid}` = `{ hid, salt, kdf, mac, keyId, failedAttempts,
  * lastFailedAt?, setAt, setByDeviceId }`, replacing any earlier one. `salt` (16 bytes) and `verifier` (32 bytes, the
  * client's KDF of the PIN) are canonical standard base64; `kdf` is a descriptor of the shape ADR-0013 §4 gives; `mac`
  * is [recoveryPinMac] (base64) and `keyId` [recoveryPinKeyId]; the verifier itself is not stored. `newPin: true` (a PIN
  * just chosen or changed) starts `failedAttempts` at 0; `newPin: false` (the same PIN registered again) keeps
  * `failedAttempts` and `lastFailedAt` of an existing row of the same household, so registering again never hands a
- * guesser new attempts. Signed by an ACTIVE parent device of the caller over `callablePayload('setRecoveryPin', hid,
- * sha256(raw ID token), { kdf, newPin, salt, verifier })`. The member row, the device and the existing row are read and
+ * guesser new attempts. One value per account (ADR-0013 §1): `newPin: false` leaves an existing row of the same
+ * household under the current key untouched when another device of the caller set it and is still ACTIVE (that phone's
+ * PIN, set or changed most recently, is the one that restores), and answers from that row with `stored: false` (every
+ * call that writes the row answers `stored: true`; `set` is true in both, for clients that read only `attemptsLeft`). Signed by an ACTIVE parent
+ * device of the caller over `callablePayload('setRecoveryPin', hid, sha256(raw ID token), { kdf, newPin, salt,
+ * verifier })`. The member row, the device and the existing row are read and
  * the row written in one transaction, so a household being deleted (members go first) cannot get its row back.
  */
-export async function setRecoveryPin(request: CallableRequest): Promise<{ set: true; attemptsLeft: number }> {
+export async function setRecoveryPin(
+  request: CallableRequest,
+): Promise<{ set: true; stored: boolean; attemptsLeft: number }> {
   const caller = await parent(request, 'setRecoveryPin');
   const data = dataOf(request);
   exactBase64(data.salt, 'salt', RECOVERY_SALT_BYTES);
@@ -126,7 +132,7 @@ export async function setRecoveryPin(request: CallableRequest): Promise<{ set: t
   const keyId = recoveryPinKeyId();
   const pinRef = db.doc(`recoveryPins/${caller.uid}`);
 
-  const failed = await db.runTransaction(async (tx) => {
+  const { failed, keptOther } = await db.runTransaction(async (tx) => {
     const [device, member, row] = await Promise.all([
       tx.get(deviceRef),
       tx.get(household.collection('members').doc(caller.uid)),
@@ -134,7 +140,19 @@ export async function setRecoveryPin(request: CallableRequest): Promise<{ set: t
     ]);
     verifyDeviceProof(device, caller, payload, proof.signature);
     if (!member.exists || member.get('role') !== 'PARENT') throw new HttpsError('permission-denied', 'Parents only');
-    const keep = !newPin && row.exists && row.get('hid') === caller.hid;
+    const sameHousehold = row.exists && row.get('hid') === caller.hid;
+    // One value per account (ADR-0013 §1): a refresh never replaces the value of the PIN another ACTIVE phone of the
+    // account set or changed, made under the current key; that phone's PIN is the one that restores.
+    if (!newPin && sameHousehold && row.get('keyId') === keyId) {
+      const setBy: unknown = row.get('setByDeviceId');
+      if (typeof setBy === 'string' && /^[0-9a-f]{64}$/.test(setBy) && setBy !== proof.deviceId) {
+        const setter = await tx.get(household.collection('devices').doc(setBy));
+        if (setter.exists && setter.get('status') === 'ACTIVE' && setter.get('uid') === caller.uid) {
+          return { failed: failedAttemptsOf(row), keptOther: true };
+        }
+      }
+    }
+    const keep = !newPin && sameHousehold;
     const count = keep ? failedAttemptsOf(row) : 0;
     const lastFailedAt: unknown = keep ? row.get('lastFailedAt') : undefined;
     tx.set(pinRef, {
@@ -148,11 +166,15 @@ export async function setRecoveryPin(request: CallableRequest): Promise<{ set: t
       setAt: FieldValue.serverTimestamp(),
       setByDeviceId: proof.deviceId,
     });
-    return count;
+    return { failed: count, keptOther: false };
   });
   const attemptsLeft = attemptsLeftAfter(failed);
-  log.info('recoveryPin.set', { hid: caller.hid, deviceId: proof.deviceId, newPin, attemptsLeft });
-  return { set: true, attemptsLeft };
+  if (keptOther) {
+    log.info('recoveryPin.kept', { hid: caller.hid, deviceId: proof.deviceId, attemptsLeft });
+  } else {
+    log.info('recoveryPin.set', { hid: caller.hid, deviceId: proof.deviceId, newPin, attemptsLeft });
+  }
+  return { set: true, stored: !keptOther, attemptsLeft };
 }
 
 export interface RecoveryStatus {
