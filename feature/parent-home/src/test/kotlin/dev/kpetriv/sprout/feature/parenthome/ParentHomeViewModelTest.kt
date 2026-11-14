@@ -1,6 +1,8 @@
 package dev.kpetriv.sprout.feature.parenthome
 
+import dev.kpetriv.sprout.core.database.CurrentReward
 import dev.kpetriv.sprout.core.database.FailedParentAction
+import dev.kpetriv.sprout.core.database.entity.PurchaseFlagReason
 import dev.kpetriv.sprout.core.domainhousehold.AllowanceSchedule
 import dev.kpetriv.sprout.core.domainledger.Currency
 import dev.kpetriv.sprout.core.domainledger.Money
@@ -51,6 +53,7 @@ class ParentHomeViewModelTest {
     private val householdStatus = MutableStateFlow(HouseholdStatus())
     private var statusFails = false
     private val summaries = FakeWeeklySummarySource()
+    private val purchaseFlags = FakePurchaseFlagRepository()
 
     private val authorization = ParentAuthorization { payload -> payload }
 
@@ -69,6 +72,7 @@ class ParentHomeViewModelTest {
             fixedToday(),
             status,
             summaries,
+            purchaseFlags,
         )
         backgroundScope.launch(main.dispatcher) { vm.state.collect {} }
         return vm
@@ -361,6 +365,102 @@ class ParentHomeViewModelTest {
         assertEquals("permission-denied", ready.household.sync?.blockedCode)
         householdStatus.value = HouseholdStatus(trial = true)
         assertEquals(true, vm.ready().household.trial)
+    }
+
+    @Test
+    fun `no purchases to check while nothing is flagged`() = test {
+        assertEquals(emptyList(), viewModel().ready().purchasesToCheck)
+    }
+
+    @Test
+    fun `flagged purchases are listed newest first with the kid's name and the reward as it is now`() = test {
+        val filmNight = CurrentReward("Film night", Money(200), GBP, minutesGranted = 60)
+        purchaseFlags.flags.value = listOf(
+            flaggedPurchase(1, leo.id, flaggedAtSeconds = 100, amount = 50, minutes = 90, currentReward = filmNight),
+            flaggedPurchase(2, zoe.id, 300, amount = 150, reason = PurchaseFlagReason.NO_SUCH_REWARD),
+            flaggedPurchase(3, KidId("gone"), flaggedAtSeconds = 200, amount = 75),
+        )
+
+        val listed = viewModel().ready().purchasesToCheck
+
+        assertEquals(listOf("hash-2", "hash-3", "hash-1"), listed.map { it.hash })
+        val (zoes, unknownKid, leos) = listed
+        assertEquals(
+            PurchaseToCheckUi(
+                eventId = purchaseFlags.flags.value[0].eventId,
+                hash = "hash-1",
+                kidName = "Leo",
+                rewardTitle = "Film night",
+                paid = MoneyUi(Money(50), GBP),
+                minutes = Money(90),
+                now = RewardPriceUi(MoneyUi(Money(200), GBP), Money(60)),
+            ),
+            leos,
+        )
+        // No current reward: no title and no current price; no minutes credited.
+        assertEquals("Zoe", zoes.kidName)
+        assertNull(zoes.rewardTitle)
+        assertNull(zoes.now)
+        assertNull(zoes.minutes)
+        assertEquals(MoneyUi(Money(150), GBP), zoes.paid)
+        // A kid no longer in the household is unnamed, never shown by id.
+        assertNull(unknownKid.kidName)
+    }
+
+    @Test
+    fun `a reward that gives no minutes has a current price without minutes`() = test {
+        val stickers = CurrentReward("Sticker pack", Money(250), GBP, minutesGranted = null)
+        purchaseFlags.flags.value = listOf(flaggedPurchase(1, leo.id, flaggedAtSeconds = 1, currentReward = stickers))
+
+        val purchase = viewModel().ready().purchasesToCheck.single()
+
+        assertEquals(RewardPriceUi(MoneyUi(Money(250), GBP), minutes = null), purchase.now)
+        assertEquals("Sticker pack", purchase.rewardTitle)
+    }
+
+    @Test
+    fun `dismissing a purchase calls the repository and the row leaves`() = test {
+        val first = flaggedPurchase(1, leo.id, flaggedAtSeconds = 100)
+        val second = flaggedPurchase(2, zoe.id, flaggedAtSeconds = 200)
+        purchaseFlags.flags.value = listOf(first, second)
+        val vm = viewModel()
+        assertEquals(2, vm.ready().purchasesToCheck.size)
+
+        vm.onEvent(ParentHomeEvent.DismissPurchase(second.eventId, second.hash))
+
+        assertEquals(listOf(second.eventId to second.hash), purchaseFlags.dismissed)
+        assertEquals(listOf(first.hash), vm.ready().purchasesToCheck.map { it.hash })
+        vm.onEvent(ParentHomeEvent.DismissPurchase(first.eventId, first.hash))
+        assertEquals(emptyList(), vm.ready().purchasesToCheck)
+    }
+
+    @Test
+    fun `a failing dismissal keeps the purchase listed and the dashboard up`() = test {
+        val purchase = flaggedPurchase(1, leo.id, flaggedAtSeconds = 100)
+        purchaseFlags.flags.value = listOf(purchase)
+        purchaseFlags.dismissFails = true
+        val vm = viewModel()
+
+        vm.onEvent(ParentHomeEvent.DismissPurchase(purchase.eventId, purchase.hash))
+
+        assertEquals(listOf(purchase.hash), vm.ready().purchasesToCheck.map { it.hash })
+        purchaseFlags.dismissFails = false
+        vm.onEvent(ParentHomeEvent.DismissPurchase(purchase.eventId, purchase.hash))
+        assertEquals(emptyList(), vm.ready().purchasesToCheck, "the parent can try again")
+    }
+
+    @Test
+    fun `a failing flag read hides the purchases instead of failing the dashboard`() = test {
+        purchaseFlags.fails = true
+        val ready = viewModel().ready()
+        assertEquals(emptyList(), ready.purchasesToCheck)
+        assertEquals(listOf("Leo", "Zoe"), ready.kids.map { it.kid.firstName })
+    }
+
+    @Test
+    fun `kid names and reward titles stay out of a purchase's toString`() {
+        val purchase = ParentHomePreviewData.filmNightPurchase.toString()
+        assertEquals(false, purchase.contains("Leo") || purchase.contains("Film night"))
     }
 
     @Test

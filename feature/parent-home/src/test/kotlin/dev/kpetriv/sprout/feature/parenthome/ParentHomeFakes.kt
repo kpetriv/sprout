@@ -3,12 +3,16 @@ package dev.kpetriv.sprout.feature.parenthome
 import dev.kpetriv.sprout.core.database.AccountRepository
 import dev.kpetriv.sprout.core.database.AllowanceRepository
 import dev.kpetriv.sprout.core.database.ChoreRepository
+import dev.kpetriv.sprout.core.database.CurrentReward
 import dev.kpetriv.sprout.core.database.FailedParentAction
+import dev.kpetriv.sprout.core.database.FlaggedPurchase
 import dev.kpetriv.sprout.core.database.KidRepository
 import dev.kpetriv.sprout.core.database.PendingParentActionRepository
+import dev.kpetriv.sprout.core.database.PurchaseFlagRepository
 import dev.kpetriv.sprout.core.database.SubmissionDecision
 import dev.kpetriv.sprout.core.database.SubmissionFilter
 import dev.kpetriv.sprout.core.database.entity.PendingActionStatus
+import dev.kpetriv.sprout.core.database.entity.PurchaseFlagReason
 import dev.kpetriv.sprout.core.database.usecase.DrainResult
 import dev.kpetriv.sprout.core.database.usecase.FailedAction
 import dev.kpetriv.sprout.core.domainhousehold.AllowanceSchedule
@@ -302,3 +306,46 @@ class FakeWeeklySummarySource : WeeklySummarySource {
         return ready
     }
 }
+
+/**
+ * Open purchase flags (D-REL-65); dismissing one removes it, as Room's re-query would. [fails] makes reads throw and
+ * [dismissFails] makes dismissals throw.
+ */
+class FakePurchaseFlagRepository : PurchaseFlagRepository {
+    val flags = MutableStateFlow<List<FlaggedPurchase>>(emptyList())
+    val dismissed = mutableListOf<Pair<EventId, String>>()
+    var fails = false
+    var dismissFails = false
+
+    override fun observePurchaseFlags(): Flow<List<FlaggedPurchase>> =
+        if (fails) flow { error("flags unreadable") } else flags
+
+    override suspend fun dismissPurchaseFlag(eventId: EventId, hash: String) {
+        if (dismissFails) error("database closed")
+        dismissed += eventId to hash
+        flags.value = flags.value.filterNot { it.eventId == eventId && it.hash == hash }
+    }
+}
+
+/** A flagged purchase of [kidId] at [amount] pence, flagged at [flaggedAtSeconds]; [n] makes its event id. */
+@Suppress("LongParameterList") // Every field a test varies.
+fun flaggedPurchase(
+    n: Int,
+    kidId: KidId,
+    flaggedAtSeconds: Long,
+    amount: Long = 50,
+    minutes: Long? = null,
+    currentReward: CurrentReward? = null,
+    reason: PurchaseFlagReason = PurchaseFlagReason.NO_MATCHING_VERSION,
+) = FlaggedPurchase(
+    eventId = EventId("00000000-0000-4000-8000-%012d".format(n)),
+    hash = "hash-$n",
+    kidId = kidId,
+    rewardId = "reward-$n",
+    reason = reason,
+    amount = Money(amount),
+    currency = GBP,
+    minutesGranted = minutes?.let(::Money),
+    flaggedAt = Instant.fromEpochSeconds(flaggedAtSeconds),
+    currentReward = currentReward,
+)

@@ -1,11 +1,15 @@
 package dev.kpetriv.sprout.feature.parenthome
 
+import androidx.annotation.StringRes
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.key
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.pluralStringResource
@@ -18,8 +22,11 @@ import dev.kpetriv.sprout.core.designsystem.components.SproutButton
 import dev.kpetriv.sprout.core.designsystem.components.SproutButtonStyle
 import dev.kpetriv.sprout.core.designsystem.icon.SproutIcons
 import dev.kpetriv.sprout.core.designsystem.theme.SproutSpacing
+import dev.kpetriv.sprout.core.domainledger.Currency
 import dev.kpetriv.sprout.core.model.DeviceId
 import dev.kpetriv.sprout.core.model.Role
+import dev.kpetriv.sprout.core.ui.MoneyFormatter
+import dev.kpetriv.sprout.core.ui.rememberMoneyFormatter
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.time.format.FormatStyle
@@ -221,6 +228,96 @@ private fun RejectedEventsRow(rejected: List<RejectedEvent>) {
         },
     )
 }
+
+/**
+ * "Purchases to check" (D-REL-65), right after the refused events: each flagged purchase with the kid, the reward as it
+ * is now, what was paid and credited, the current price, and its own "Dismiss", which only hides the row. Like the
+ * refused events, the first [MAX_ROWS] are listed, then "and N more".
+ */
+@Composable
+internal fun PurchasesToCheckRow(purchases: List<PurchaseToCheckUi>, onDismiss: (PurchaseToCheckUi) -> Unit) {
+    val formatter = rememberMoneyFormatter()
+    AttentionRow(
+        lead = AttentionLead.Count(purchases.size),
+        title = stringResource(R.string.feature_parent_home_purchases_title),
+        detail = pluralStringResource(R.plurals.feature_parent_home_purchases_text, purchases.size, purchases.size),
+        extra = {
+            purchases.take(MAX_ROWS).forEach { purchase ->
+                // Keyed by purchase, so after a dismissal TalkBack focus stays with the purchase it was on instead of
+                // moving to the next purchase's "Dismiss".
+                key(purchase.eventId, purchase.hash) { PurchaseToCheckItem(purchase, formatter, onDismiss) }
+            }
+            if (purchases.size > MAX_ROWS) {
+                Text(
+                    stringResource(R.string.feature_parent_home_rejected_more, purchases.size - MAX_ROWS),
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.padding(top = SproutSpacing.sm),
+                )
+            }
+        },
+    )
+}
+
+/**
+ * One purchase to check: its text as one stop for TalkBack, then its own "Dismiss", in one traversal group so the
+ * "Dismiss" is read right after the purchase it dismisses.
+ */
+@Composable
+private fun PurchaseToCheckItem(
+    purchase: PurchaseToCheckUi,
+    formatter: MoneyFormatter,
+    onDismiss: (PurchaseToCheckUi) -> Unit,
+) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(SproutSpacing.sm),
+        modifier = Modifier.padding(top = SproutSpacing.sm).semantics { isTraversalGroup = true },
+    ) {
+        val row = stringResource(
+            R.string.feature_parent_home_purchase_row,
+            purchase.kidName ?: stringResource(R.string.feature_parent_home_purchase_kid_unknown),
+            purchase.rewardTitle ?: stringResource(R.string.feature_parent_home_purchase_reward_unknown),
+        )
+        val paid = formatter.format(purchase.paid.amount, purchase.paid.currency)
+        Column(modifier = Modifier.weight(1f).semantics(mergeDescendants = true) {}) {
+            Text(row, style = MaterialTheme.typography.bodyLarge)
+            Text(
+                priceText(
+                    R.string.feature_parent_home_purchase_paid,
+                    R.string.feature_parent_home_purchase_paid_minutes,
+                    paid,
+                    purchase.minutes?.let { formatter.format(it, Currency.Minutes) },
+                ),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            purchase.now?.let { now ->
+                Text(
+                    priceText(
+                        R.string.feature_parent_home_purchase_now,
+                        R.string.feature_parent_home_purchase_now_minutes,
+                        formatter.format(now.cost.amount, now.cost.currency),
+                        now.minutes?.let { formatter.format(it, Currency.Minutes) },
+                    ),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+        val description = stringResource(R.string.feature_parent_home_purchase_dismiss_described, row, paid)
+        SproutButton(
+            text = stringResource(R.string.feature_parent_home_purchase_dismiss),
+            onClick = { onDismiss(purchase) },
+            style = SproutButtonStyle.Tertiary,
+            modifier = Modifier.semantics { contentDescription = description },
+        )
+    }
+}
+
+/** "Paid £0.50" or, with [minutes], "Paid £0.50 for 1 h 30 min of screen time" (and the same for "Now costs"). */
+@Composable
+private fun priceText(@StringRes plain: Int, @StringRes withMinutes: Int, amount: String, minutes: String?): String =
+    if (minutes == null) stringResource(plain, amount) else stringResource(withMinutes, amount, minutes)
 
 @Composable
 private fun deviceText(device: DeviceLabel): String = when (device.role) {

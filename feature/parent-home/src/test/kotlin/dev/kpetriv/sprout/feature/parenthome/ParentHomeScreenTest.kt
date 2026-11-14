@@ -268,6 +268,97 @@ class ParentHomeScreenTest {
         )
     }
 
+    @Test
+    fun `purchases to check show the kid, the reward, what was paid and the price now, and can be dismissed`() {
+        show(ParentHomePreviewData.purchasesToCheck())
+
+        compose.onNodeWithText("Purchases to check").assertIsDisplayed()
+        compose.onNodeWithText(
+            "4 purchases don’t match the reward as a parent set it up: its price, its screen time or who can buy it.",
+            substring = true,
+        ).assertIsDisplayed()
+        compose.onNodeWithText("A phone that missed a change can cause this.", substring = true).assertIsDisplayed()
+        compose.onNodeWithText("Leo: Film night", useUnmergedTree = true).assertIsDisplayed()
+        compose.onNodeWithText("Paid £0.50 for 1 h 30 min of screen time", useUnmergedTree = true).assertIsDisplayed()
+        compose.onNodeWithText("Now costs £2.00 for 1 h of screen time", useUnmergedTree = true).assertIsDisplayed()
+        compose.onNodeWithText("Zoe: Sticker pack", useUnmergedTree = true).assertIsDisplayed()
+        compose.onNodeWithText("Paid £1.50", useUnmergedTree = true).assertIsDisplayed()
+        compose.onNodeWithText("Now costs £2.50", useUnmergedTree = true).assertIsDisplayed()
+        compose.onNodeWithText("Mia: A reward this phone doesn’t have", useUnmergedTree = true).assertIsDisplayed()
+        compose.onNodeWithText("Paid £1.00", useUnmergedTree = true).assertIsDisplayed()
+        // Three listed, like the refused events, then the rest as a count.
+        compose.onNodeWithText("Paid £0.20", substring = true, useUnmergedTree = true).assertDoesNotExist()
+        compose.onNodeWithText("and 1 more").assertIsDisplayed()
+        // Each Dismiss is read with its purchase, the visible text stays "Dismiss".
+        compose.onAllNodes(hasText("Dismiss") and hasClickAction()).assertCountEquals(3)
+        compose.onNodeWithContentDescription("Dismiss Leo: Film night, paid £0.50").performClick()
+
+        val film = ParentHomePreviewData.filmNightPurchase
+        assertEquals(listOf<ParentHomeEvent>(ParentHomeEvent.DismissPurchase(film.eventId, film.hash)), events)
+    }
+
+    @Test
+    fun `a purchase's text is one stop, read before its Dismiss`() {
+        show(ParentHomePreviewData.onePurchaseToCheck())
+
+        compose.onNode(
+            hasText("Leo: Film night") and hasText("Paid £0.50 for 1 h 30 min of screen time") and
+                hasText("Now costs £2.00 for 1 h of screen time"),
+        ).assertIsDisplayed()
+    }
+
+    @Test
+    fun `after dismissing a purchase the remaining Dismiss belongs to the next purchase`() {
+        val (first, second) = ParentHomePreviewData.purchasesToCheck().purchasesToCheck
+        var state by mutableStateOf(ParentHomePreviewData.empty().copy(purchasesToCheck = listOf(first, second)))
+        compose.setContent {
+            SproutTheme {
+                ParentHomeScreen(
+                    state,
+                    onEvent = { event ->
+                        events += event
+                        if (event is ParentHomeEvent.DismissPurchase) {
+                            val left = state.purchasesToCheck.filterNot { it.hash == event.hash }
+                            state = state.copy(purchasesToCheck = left)
+                        }
+                    },
+                    onSignNow = {},
+                    links = links,
+                )
+            }
+        }
+
+        compose.onNodeWithContentDescription("Dismiss Leo: Film night, paid £0.50").performClick()
+
+        compose.onNodeWithContentDescription("Dismiss Leo: Film night, paid £0.50").assertDoesNotExist()
+        compose.onAllNodes(hasText("Dismiss") and hasClickAction()).assertCountEquals(1)
+        compose.onNodeWithContentDescription("Dismiss Zoe: Sticker pack, paid £1.50").performClick()
+        assertEquals(
+            listOf<ParentHomeEvent>(
+                ParentHomeEvent.DismissPurchase(first.eventId, first.hash),
+                ParentHomeEvent.DismissPurchase(second.eventId, second.hash),
+            ),
+            events,
+        )
+    }
+
+    @Test
+    fun `a purchase of a reward this phone doesn't have by an unknown kid shows no ids and no current price`() {
+        show(ParentHomePreviewData.purchaseOfUnknownReward())
+
+        compose.onNodeWithText("1 purchase doesn’t match the reward", substring = true).assertIsDisplayed()
+        compose.onNodeWithText("A kid: A reward this phone doesn’t have", useUnmergedTree = true).assertIsDisplayed()
+        compose.onNodeWithText("Now costs", substring = true, useUnmergedTree = true).assertDoesNotExist()
+        compose.onNodeWithText("kid-", substring = true, useUnmergedTree = true).assertDoesNotExist()
+    }
+
+    @Test
+    fun `no purchases to check, no card`() {
+        show(ParentHomePreviewData.busy())
+
+        compose.onNodeWithText("Purchases to check").assertDoesNotExist()
+    }
+
     private companion object {
         const val SNACKBAR_MILLIS = 10_000L
     }
