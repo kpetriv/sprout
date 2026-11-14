@@ -1,3 +1,1 @@
-Set up your shop. The dashboard's Rewards button now opens a list of your rewards: add one, give it a price, choose whether it is screen time, a treat or an outing, and offer it to all your kids or only some. Switch "Show in the shop" off to hide a reward without losing it. "See the shop as a kid" shows what each child sees.
-
-Earlier builds had no way to add rewards, so the shop stayed empty.
+Purchases to check. If a purchase from a kid's phone doesn't match a reward as a parent set it up (its price, its screen time or who can buy it), your dashboard now lists it under "Purchases to check", with what was paid and what the reward costs now. A phone that missed a change can cause this, so check, then dismiss it or correct the balance with an adjustment.

@@ -48,14 +48,14 @@ Content is drawn on a `Surface` with the theme's background colour. The image is
 
 The single source for what is covered. Rule: **parent screens light and dark; kid screens every tier in the light theme, plus one dark golden per kid screen family.** Tablet and font-scale 2.0 goldens cover the subset M7 §5 and §8 and M9 name. **Games (M9-games §5, D-M9-G9): every play screen and the result also get a landscape tablet and a portrait tablet golden for each tier that plays it** (`_tablet_<tier>`, `_tablet_portrait_<tier>`); the Playground field is the same in the light and dark theme, so the games have no dark goldens. Design-system components (`core/designsystem`) get a golden per tier, parent light and dark, and font scale 2.0 where text can wrap. "Tiers" means `_seedling`, `_sprout`, `_sapling`; "L/D" means `_light`, `_dark`. Sheets and dialogs that are separate windows are captured with `screen = true`.
 
-547 goldens at the end of M9 (375 at v1.0.0, 378 on `main` at M9's merge base): `app` 35, `core/designsystem` 66, `feature/chat` 45, `feature/chores` 37, `feature/games` 129, `feature/lock` 20, `feature/onboarding` 20, `feature/parent-home` 22, `feature/settings` 77, `feature/timebank` 21, `feature/wallet` 69, `widget` 6.
+595 goldens at 1.1.3 (589 before it; 1.1.3 adds the six "Purchases to check" states): `app` 35, `core/designsystem` 66, `feature/chat` 45, `feature/chores` 37, `feature/games` 129, `feature/lock` 20, `feature/onboarding` 42, `feature/parent-home` 28, `feature/settings` 87, `feature/timebank` 21, `feature/wallet` 79, `widget` 6. 547 goldens at the end of M9 (375 at v1.0.0, 378 on `main` at M9's merge base): `app` 35, `core/designsystem` 66, `feature/chat` 45, `feature/chores` 37, `feature/games` 129, `feature/lock` 20, `feature/onboarding` 20, `feature/parent-home` 22, `feature/settings` 77, `feature/timebank` 21, `feature/wallet` 69, `widget` 6.
 
 | Module | Screen | States | Variants |
 |---|---|---|---|
 | core/designsystem | Components (`component_<name>`) | card, button, stat tile, ledger row, goal bar, chip, avatar, top bar, navigation bar, navigation rail | tiers; parent L/D (`_parent_light`, `_parent_dark`) |
 | core/designsystem | Components at font scale 2.0 | navigation bar, top bar (tiers and parent), goal bar, avatar (tiers) | `_font200_<tier>`, `_parent_font200` |
 | core/designsystem | Pictogram set | all 36 pictograms | L/D |
-| parent-home | Dashboard | empty, busy, signing in progress, payments needing attention, trial banner, new device + rejected events, signing key not registered, fingerprint signing off, sync blocked | L/D |
+| parent-home | Dashboard | empty, busy, signing in progress, payments needing attention, trial banner, new device + rejected events, signing key not registered, fingerprint signing off, sync blocked, one purchase to check, several purchases to check, purchase of a reward this phone does not have | L/D |
 | parent-home | Dashboard | busy | tablet (two columns), font 2.0 |
 | parent-home | Weekly summary card | ready | L/D |
 | chat | Kid thread | empty, messages, locked, recording, sending failed, voice note playing | tiers |

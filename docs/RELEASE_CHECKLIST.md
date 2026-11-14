@@ -267,6 +267,23 @@ gh workflow run release.yml --ref main -f tag=v1.1.2
 
 Evidence to paste: "v1.1.2 (versionCode <n>) built by release.yml run <id> on <date>; a reward added, bought, edited and hidden on <devices>" → CONTROLS SE-6.
 
+#### 1.1.3 (purchases to check, D-REL-65)
+
+1.1.3 makes parent phones check purchases they pull from a kid's phone against every price the parent has set for that reward, and list the ones that match none under "Purchases to check" ([D-REL-65 review](reviews/D-REL-65-pulled-purchases.md), THREAT_MODEL T27, CONTROLS IA-25). Nothing changes in the server code or the rules; the privacy page gains one sentence (what stays on one phone), so redeploy the server's static pages before the app reaches users (the deploy steps above, rendering with the real `docs/privacy.properties`). The database moves to version 10 (`reward_versions`, `reward_history`, `purchase_flags`); the migration records each reward's current version and starts the history, so purchases made before the update are never flagged.
+
+- [ ] Merge the pull request, wait for CI on `main`, then tag and build as before:
+
+```bash
+git tag -a v1.1.3 -m "Sprout 1.1.3" && git push origin v1.1.3
+gh workflow run release.yml --ref main -f tag=v1.1.3
+```
+
+- [ ] Release notes: paste `play/listing/en-GB/whatsnew.txt`.
+- [ ] Upgrade a parent phone and a kid phone from 1.1.2: the dashboard shows no "Purchases to check" card, and earlier purchases are not flagged.
+- [ ] On the parent phone change a reward's price; on the kid phone buy it at the new price: no card. Put the kid phone offline, change the price again on the parent phone, buy on the kid phone at the price it still shows, then reconnect: no card (the parent phone saw that price). Dismiss works when a card appears.
+
+Evidence to paste: "v1.1.3 (versionCode <n>) built by release.yml run <id> on <date>; upgrade from 1.1.2 and the offline price change checked on <devices>" → CONTROLS SE-6 and IA-25.
+
 ### 10. Device verification
 
 Run [SECURITY_REVIEW.md](SECURITY_REVIEW.md#owner-procedures) P1 to P10 on the internal-track build: the network capture including a receipt scan (P1), the release build walk (P2), Play Integrity and App Check (P3; then enforce, item 6), Google sign-in (P4), key attestation (P5), voice notes (P6), time bank auto-stop (P7), process death (P8), Gemini Nano on a Pixel 9 or later (P9), TalkBack (P10).
