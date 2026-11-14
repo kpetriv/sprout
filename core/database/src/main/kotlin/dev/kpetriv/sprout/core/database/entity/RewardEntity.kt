@@ -14,7 +14,8 @@ import kotlinx.serialization.builtins.ListSerializer
 
 /**
  * An item of the rewards catalogue ([Reward]). A synced document. Kid-authored `RewardPurchased` events are checked
- * against this row (cost, currency, minutes) before they are stored.
+ * against this row (cost, currency, minutes) before a local append; pulled ones are compared with the recorded
+ * versions in `reward_versions` and flagged, never refused (D-REL-65).
  *
  * @property forKidsJson JSON array of the kid ids that see the reward; `[]` means every kid.
  * @property stamp author, signature and tombstone flag of the row's current state (schema version 3).

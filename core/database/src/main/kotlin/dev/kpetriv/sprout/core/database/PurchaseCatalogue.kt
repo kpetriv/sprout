@@ -1,6 +1,7 @@
 package dev.kpetriv.sprout.core.database
 
 import dev.kpetriv.sprout.core.database.entity.RewardEntity
+import dev.kpetriv.sprout.core.database.entity.RewardVersionEntity
 import dev.kpetriv.sprout.core.domainhousehold.Reward
 import dev.kpetriv.sprout.core.domainledger.DeviceRegistry
 import dev.kpetriv.sprout.core.domainledger.RewardPurchased
@@ -12,8 +13,12 @@ import dev.kpetriv.sprout.core.model.RewardId
 import dev.kpetriv.sprout.core.model.Role
 import dev.kpetriv.sprout.core.sync.DocTypes
 import dev.kpetriv.sprout.core.sync.DocumentEnvelope
+import java.nio.charset.CharacterCodingException
 
-/** Checks a kid-authored [RewardPurchased] against the reward catalogue. [matches] runs inside a transaction. */
+/**
+ * Checks a kid-authored [RewardPurchased] against the reward catalogue. [matches] runs inside a transaction. Appending
+ * devices only; receivers flag rather than refuse ([RewardTableCatalogue.matchesAnyVersion], D-REL-65).
+ */
 internal fun interface PurchaseCatalogue {
     suspend fun matches(event: RewardPurchased): Boolean
 }
@@ -43,13 +48,46 @@ internal class RewardTableCatalogue(
             ?.let { database.rewardDao().get(RewardId(it)) }
             ?.takeUnless { it.stamp.deleted }
             ?: return false
-        val reward = row.toDomain()
-        return reward.isAvailableTo(event.envelope.kidId) &&
+        return sells(row, row.toDomain(), event)
+    }
+
+    /**
+     * The receiver-side check of a pulled kid purchase (D-REL-65): some reward version this device recorded
+     * (`reward_versions`) sells it ([versionSells]). Lamports are not causal, so a kid who bought offline at a price
+     * that a parent changed meanwhile is still matched by the version it saw, if this device saw it too. Inside a
+     * transaction.
+     */
+    suspend fun matchesAnyVersion(event: RewardPurchased): Boolean {
+        val id = event.rewardId.takeIf(ID_PATTERN::matches)?.let(::RewardId) ?: return false
+        return database.rewardVersionDao().before(id, event.lamport).any { versionSells(it, event) }
+    }
+
+    /**
+     * [version] sells [event] by the same rule as [matches]: same reward id, a lower lamport than the purchase, live,
+     * available to the kid, same cost, currency and minutes, parent-authored. Fails closed: a tombstone, a marker, or
+     * a row that no longer decodes into a valid reward, no longer rebuilds into a valid envelope or no longer verifies
+     * never sells, and never throws ([IllegalArgumentException], [CharacterCodingException]) into the caller's
+     * ingest or document transaction.
+     */
+    suspend fun versionSells(version: RewardVersionEntity, event: RewardPurchased): Boolean = try {
+        val row = version.toRewardRow()
+        val reward = row?.toDomain()
+        row != null && reward != null && version.rewardId.value == event.rewardId &&
+            version.lamport < event.lamport && sells(row, reward, event)
+    } catch (expected: IllegalArgumentException) {
+        false
+    } catch (expected: CharacterCodingException) {
+        // A title edited into an unpaired surrogate cannot be canonically encoded.
+        false
+    }
+
+    /** [row] ([reward]) sells [event]: available to its kid, at its amount, currency and minutes, parent-authored. */
+    private suspend fun sells(row: RewardEntity, reward: Reward, event: RewardPurchased): Boolean =
+        reward.isAvailableTo(event.envelope.kidId) &&
             reward.cost == event.amount &&
             reward.currency == event.currency &&
             reward.minutesGranted?.toLong() == event.minutesGranted?.minorUnits &&
             isParentAuthored(row, reward)
-    }
 
     private suspend fun isParentAuthored(row: RewardEntity, reward: Reward): Boolean {
         val author = row.stamp.authorDeviceId

@@ -38,7 +38,9 @@ data class PurgeReport(val counts: Map<String, Int>) {
  * household (ADR-0004 §2, M3 §6), after the user confirmed the "your trial data will be deleted" screen.
  *
  * One transaction removes: its kids and their accounts, ledger events, balances, anomalies, chores, submissions,
- * rewards, allowance schedules, savings goals, interest policy, pending parent actions and photo rows; its chat
+ * rewards and their recorded versions (with the reward history start when no other version is left, so the real
+ * household's history starts when it is joined, D-REL-65) and the purchase flags of its kids,
+ * allowance schedules, savings goals, interest policy, pending parent actions and photo rows; its chat
  * messages, message sequence numbers, thread keys, read marks and cached blobs (M4; the trial household never syncs, so
  * these are normally empty); the household
  * policy (this device's view of the trial household, including the locally registered parent key: the parent
@@ -89,7 +91,11 @@ class PurgeLocalHouseholdUseCase @Inject constructor(
             "anomalies" to purge.deleteAnomalies(kids),
             "chores" to purge.deleteChores(household, kids),
             "chore_submissions" to purge.deleteSubmissions(kids),
+            // Before the rewards: the trial's reward versions are found through them too (D-REL-65).
+            "reward_versions" to purge.deleteRewardVersions(household),
             "rewards" to purge.deleteRewards(household),
+            "reward_history" to purge.deleteRewardHistoryIfNoVersions(),
+            "purchase_flags" to purge.deletePurchaseFlags(kids),
             "allowance_schedules" to purge.deleteAllowances(kids),
             "savings_goals" to purge.deleteGoals(kids),
             "interest_policy" to purge.deleteInterestPolicy(household),

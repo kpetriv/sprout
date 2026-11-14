@@ -32,6 +32,7 @@ import dev.kpetriv.sprout.core.database.MonotonicClock
 import dev.kpetriv.sprout.core.database.PendingActionDescriber
 import dev.kpetriv.sprout.core.database.PendingParentActionRepository
 import dev.kpetriv.sprout.core.database.PhotoStore
+import dev.kpetriv.sprout.core.database.PurchaseFlagRepository
 import dev.kpetriv.sprout.core.database.RewardRepository
 import dev.kpetriv.sprout.core.database.RoomAccountRepository
 import dev.kpetriv.sprout.core.database.RoomAllowanceRepository
@@ -44,6 +45,7 @@ import dev.kpetriv.sprout.core.database.RoomLedgerRepository
 import dev.kpetriv.sprout.core.database.RoomLedgerWriter
 import dev.kpetriv.sprout.core.database.RoomOutboxSource
 import dev.kpetriv.sprout.core.database.RoomPendingParentActionRepository
+import dev.kpetriv.sprout.core.database.RoomPurchaseFlagRepository
 import dev.kpetriv.sprout.core.database.RoomRemoteApplier
 import dev.kpetriv.sprout.core.database.RoomRewardRepository
 import dev.kpetriv.sprout.core.database.RoomSavingsGoalRepository
@@ -98,6 +100,9 @@ internal abstract class DatabaseModule {
 
     @Binds
     abstract fun rewardRepository(impl: RoomRewardRepository): RewardRepository
+
+    @Binds
+    abstract fun purchaseFlagRepository(impl: RoomPurchaseFlagRepository): PurchaseFlagRepository
 
     @Binds
     abstract fun allowanceRepository(impl: RoomAllowanceRepository): AllowanceRepository

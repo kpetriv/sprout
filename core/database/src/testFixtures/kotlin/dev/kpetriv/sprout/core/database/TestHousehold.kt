@@ -144,7 +144,10 @@ class TestHousehold(
     val kids = RoomKidRepository(database, authors, clock, photos, signer)
     val accounts = RoomAccountRepository(database, authors, clock, signer)
     val chores = RoomChoreRepository(database, authors, clock, ledger, photos, signer)
-    val rewards = RoomRewardRepository(database, authors, clock, signer)
+    val rewards = RoomRewardRepository(database, authors, clock, signer, signatureCheck)
+
+    /** Flagged pulled kid purchases (D-REL-65). */
+    val purchaseFlags = RoomPurchaseFlagRepository(database, clock)
     val allowances = RoomAllowanceRepository(database, authors, clock, signer)
     val goals = RoomSavingsGoalRepository(database, authors, clock, signer)
     val interest = RoomInterestPolicyRepository(database, authors, clock, signer)

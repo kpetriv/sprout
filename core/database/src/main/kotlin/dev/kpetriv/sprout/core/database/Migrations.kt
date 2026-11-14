@@ -109,6 +109,21 @@ object Migrations {
         }
     }
 
+    /**
+     * 9 to 10 (D-REL-65): flags on pulled kid purchases that match no reward version this device has seen. Additive:
+     * `reward_versions` is seeded with the current state of every `rewards` row that names its author device (its
+     * stamp and lamport, recorded now), `reward_history` starts now (purchases the server stamped before the upgrade
+     * are never flagged), and `purchase_flags` starts empty.
+     */
+    val MIGRATION_9_10: Migration = object : Migration(9, 10) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            VERSION_10_STATEMENTS.forEach(db::execSQL)
+            val now = arrayOf<Any>(System.currentTimeMillis())
+            db.execSQL(SEED_REWARD_VERSIONS, now)
+            db.execSQL("INSERT OR IGNORE INTO `reward_history` (`id`, `startedAtEpochMs`) VALUES (0, ?)", now)
+        }
+    }
+
     val ALL: Array<Migration> = arrayOf(
         MIGRATION_1_2,
         MIGRATION_2_3,
@@ -118,7 +133,35 @@ object Migrations {
         MIGRATION_6_7,
         MIGRATION_7_8,
         MIGRATION_8_9,
+        MIGRATION_9_10,
     )
+
+    private val VERSION_10_STATEMENTS: List<String> = listOf(
+        "CREATE TABLE IF NOT EXISTS `reward_versions` (`rewardId` TEXT NOT NULL, `lamport` INTEGER NOT NULL, " +
+            "`authorDeviceId` TEXT NOT NULL, `authorUid` TEXT, `signature` TEXT, `deleted` INTEGER NOT NULL, " +
+            "`householdId` TEXT, `title` TEXT, `kind` TEXT, `cost` INTEGER, `currency` TEXT, " +
+            "`minutesGranted` INTEGER, `active` INTEGER, `forKidsJson` TEXT, `recordedAtEpochMs` INTEGER NOT NULL, " +
+            "PRIMARY KEY(`rewardId`, `lamport`, `authorDeviceId`))",
+        "CREATE TABLE IF NOT EXISTS `reward_history` (`id` INTEGER NOT NULL, `startedAtEpochMs` INTEGER NOT NULL, " +
+            "PRIMARY KEY(`id`))",
+        "CREATE TABLE IF NOT EXISTS `purchase_flags` (`eventId` TEXT NOT NULL, `hash` TEXT NOT NULL, " +
+            "`kidId` TEXT NOT NULL, `rewardId` TEXT NOT NULL, `purchaseLamport` INTEGER NOT NULL, " +
+            "`reason` TEXT NOT NULL, `amount` INTEGER NOT NULL, " +
+            "`currency` TEXT NOT NULL, `minutesGranted` INTEGER, `flaggedAtEpochMs` INTEGER NOT NULL, " +
+            "`dismissedAtEpochMs` INTEGER, PRIMARY KEY(`eventId`, `hash`))",
+        "CREATE INDEX IF NOT EXISTS `index_purchase_flags_rewardId_purchaseLamport` " +
+            "ON `purchase_flags` (`rewardId`, `purchaseLamport`)",
+        "CREATE INDEX IF NOT EXISTS `index_purchase_flags_flaggedAtEpochMs` ON `purchase_flags` (`flaggedAtEpochMs`)",
+    )
+
+    /** Every current `rewards` row with an author device, as a version recorded at the bound time (D-REL-65). */
+    private const val SEED_REWARD_VERSIONS: String =
+        "INSERT OR IGNORE INTO `reward_versions` (`rewardId`, `lamport`, `authorDeviceId`, `authorUid`, " +
+            "`signature`, `deleted`, `householdId`, `title`, `kind`, `cost`, `currency`, `minutesGranted`, " +
+            "`active`, `forKidsJson`, `recordedAtEpochMs`) " +
+            "SELECT `rewardId`, `lamport`, `authorDeviceId`, `authorUid`, `signature`, `deleted`, `householdId`, " +
+            "`title`, `kind`, `cost`, `currency`, `minutesGranted`, `active`, `forKidsJson`, ? " +
+            "FROM `rewards` WHERE `authorDeviceId` IS NOT NULL"
 
     private val VERSION_9_STATEMENTS: List<String> = listOf(
         "ALTER TABLE `messages` ADD COLUMN `serverReceivedAtEpochMs` INTEGER",

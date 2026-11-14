@@ -5,6 +5,7 @@ import dev.kpetriv.sprout.core.database.entity.AuditAction
 import dev.kpetriv.sprout.core.database.entity.RewardEntity
 import dev.kpetriv.sprout.core.domainhousehold.Reward
 import dev.kpetriv.sprout.core.domainledger.EventAuthor
+import dev.kpetriv.sprout.core.domainledger.SignatureCheck
 import dev.kpetriv.sprout.core.model.KidId
 import dev.kpetriv.sprout.core.model.RewardId
 import dev.kpetriv.sprout.core.sync.DocTypes
@@ -31,15 +32,21 @@ interface RewardRepository {
     suspend fun setActive(id: RewardId, active: Boolean): Boolean
 }
 
-/** [RewardRepository] on Room: each write, its outbox `DOCUMENT` row and its audit row in one transaction. */
+/**
+ * [RewardRepository] on Room: each write, its outbox `DOCUMENT` row and its audit row in one transaction, with the
+ * version it wrote recorded in this device's reward history (D-REL-65, [RewardVersionHistory]; [check] verifies the
+ * pulled versions that history re-checks open purchase flags against).
+ */
 class RoomRewardRepository @Inject constructor(
     database: SproutDatabase,
     private val authors: SessionAuthorProvider,
     clock: Clock,
     signer: DeviceSigner,
+    check: SignatureCheck,
 ) : RewardRepository {
     private val rewards = database.rewardDao()
     private val writes = DocumentWrites(database, clock, signer)
+    private val history = RewardVersionHistory(database, clock, check)
 
     override fun observeRewards(kidId: KidId?, includeInactive: Boolean): Flow<List<Reward>> =
         rewards.observeAll().map { rows ->
@@ -80,6 +87,8 @@ class RoomRewardRepository @Inject constructor(
             put("currency", Converters.currencyToString(reward.currency))
             put("active", reward.active)
         }
-        rewards.upsert(row.copy(stamp = stamp))
+        val stamped = row.copy(stamp = stamp)
+        rewards.upsert(stamped)
+        history.record(stamped)
     }
 }

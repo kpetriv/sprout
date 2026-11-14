@@ -25,8 +25,10 @@ import dev.kpetriv.sprout.core.database.dao.OutboxDao
 import dev.kpetriv.sprout.core.database.dao.ParentKeyDao
 import dev.kpetriv.sprout.core.database.dao.PendingParentActionDao
 import dev.kpetriv.sprout.core.database.dao.PhotoDao
+import dev.kpetriv.sprout.core.database.dao.PurchaseFlagDao
 import dev.kpetriv.sprout.core.database.dao.PurgeDao
 import dev.kpetriv.sprout.core.database.dao.RewardDao
+import dev.kpetriv.sprout.core.database.dao.RewardVersionDao
 import dev.kpetriv.sprout.core.database.dao.SavingsGoalDao
 import dev.kpetriv.sprout.core.database.dao.SessionDao
 import dev.kpetriv.sprout.core.database.dao.SyncCursorDao
@@ -54,8 +56,11 @@ import dev.kpetriv.sprout.core.database.entity.OutboxEntity
 import dev.kpetriv.sprout.core.database.entity.ParentKeyEntity
 import dev.kpetriv.sprout.core.database.entity.PendingParentActionEntity
 import dev.kpetriv.sprout.core.database.entity.PhotoEntity
+import dev.kpetriv.sprout.core.database.entity.PurchaseFlagEntity
 import dev.kpetriv.sprout.core.database.entity.ReadMarkEntity
 import dev.kpetriv.sprout.core.database.entity.RewardEntity
+import dev.kpetriv.sprout.core.database.entity.RewardHistoryEntity
+import dev.kpetriv.sprout.core.database.entity.RewardVersionEntity
 import dev.kpetriv.sprout.core.database.entity.SavingsGoalEntity
 import dev.kpetriv.sprout.core.database.entity.SessionEntity
 import dev.kpetriv.sprout.core.database.entity.SyncCursorEntity
@@ -97,6 +102,9 @@ import dev.kpetriv.sprout.core.database.entity.TimeBankClockEntity
         BlobEntity::class,
         ReadMarkEntity::class,
         TimeBankClockEntity::class,
+        RewardVersionEntity::class,
+        RewardHistoryEntity::class,
+        PurchaseFlagEntity::class,
     ],
     version = SproutDatabase.VERSION,
     exportSchema = true,
@@ -162,6 +170,10 @@ abstract class SproutDatabase : RoomDatabase() {
 
     abstract fun timeBankClockDao(): TimeBankClockDao
 
+    abstract fun rewardVersionDao(): RewardVersionDao
+
+    abstract fun purchaseFlagDao(): PurchaseFlagDao
+
     companion object {
         /**
          * 2 (M2): chores, submissions, rewards, allowance, savings, interest, pending parent actions, photos and the
@@ -188,7 +200,9 @@ abstract class SproutDatabase : RoomDatabase() {
          * time bank's monotonic start readings (`time_bank_clocks`, D-M4-24). See [Migrations.MIGRATION_7_8].
          * 9 (M7 fix pass 2): `messages.serverReceivedAtEpochMs`, the server stamp of pulled messages for the chat
          * prune watermark's gap check (D-M7-80). See [Migrations.MIGRATION_8_9].
+         * 10 (D-REL-65): the reward versions this device has seen (`reward_versions`), where its reward history starts
+         * (`reward_history`) and flagged pulled purchases (`purchase_flags`). See [Migrations.MIGRATION_9_10].
          */
-        const val VERSION: Int = 9
+        const val VERSION: Int = 10
     }
 }

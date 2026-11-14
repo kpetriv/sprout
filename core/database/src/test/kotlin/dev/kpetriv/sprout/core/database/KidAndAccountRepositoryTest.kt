@@ -44,7 +44,7 @@ class KidAndAccountRepositoryTest {
         kids = kids,
         accounts = accounts,
         chores = RoomChoreRepository(database, authors, clock, NothingPaid, photos, signer),
-        rewards = RoomRewardRepository(database, authors, clock, signer),
+        rewards = RoomRewardRepository(database, authors, clock, signer, VerifierSignatureCheck(JceEcdsaVerifier())),
         allowances = RoomAllowanceRepository(database, authors, clock, signer),
         goals = RoomSavingsGoalRepository(database, authors, clock, signer),
         policies = RoomHouseholdPolicyRepository(

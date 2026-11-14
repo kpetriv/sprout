@@ -34,6 +34,7 @@ import kotlin.test.assertTrue
  * and the result is validated against the new version's exported schema.
  */
 @RunWith(RobolectricTestRunner::class)
+@Suppress("LargeClass") // One case per migration, sharing the version 1 fixtures.
 class MigrationTest {
     @get:Rule
     val helper = MigrationTestHelper(InstrumentationRegistry.getInstrumentation(), SproutDatabase::class.java)
@@ -511,6 +512,77 @@ class MigrationTest {
         helper.createDatabase(TEST_DB, 1).use { db -> insertVersion1Rows(db, chore) }
 
         helper.runMigrationsAndValidate(TEST_DB, 9, true, *Migrations.ALL).use { db ->
+            db.query("SELECT hash FROM ledger_events").use { cursor ->
+                cursor.moveToFirst()
+                assertEquals(chore.envelope.hash, cursor.getString(0))
+            }
+        }
+    }
+
+    @Test
+    fun migration9To10SeedsTheRewardVersionsAndStartsTheHistory() = runTest {
+        val stamped = listOf(
+            "rewardId" to "treat",
+            "householdId" to "home-1",
+            "title" to "Treat",
+            "kind" to "TREAT",
+            "cost" to 100L,
+            "currency" to "GBP",
+            "minutesGranted" to null,
+            "active" to 1,
+            "forKidsJson" to "[]",
+            "lamport" to 7L,
+            "authorUid" to "parent-uid",
+            "authorDeviceId" to "device-1",
+            "signature" to "c2ln",
+            "deleted" to 0,
+        )
+        helper.createDatabase(TEST_DB, 9).use { db ->
+            db.insertRow("rewards", *stamped.toTypedArray())
+            // A row without an author device (never accepted by the catalogue) is not seeded.
+            db.insertRow(
+                "rewards",
+                *stamped.map { (column, value) ->
+                    column to when (column) {
+                        "rewardId" -> "old"
+                        "authorUid", "authorDeviceId", "signature" -> null
+                        else -> value
+                    }
+                }.toTypedArray(),
+            )
+        }
+        val startedNoEarlierThan = System.currentTimeMillis()
+
+        helper.runMigrationsAndValidate(TEST_DB, 10, true, Migrations.MIGRATION_9_10).use { db ->
+            db.query("SELECT COUNT(*) FROM purchase_flags").use { cursor ->
+                cursor.moveToFirst()
+                assertEquals(0, cursor.getInt(0))
+            }
+            db.query("SELECT startedAtEpochMs FROM reward_history WHERE id = 0").use { cursor ->
+                assertTrue(cursor.moveToFirst(), "the history starts at the upgrade")
+                assertTrue(cursor.getLong(0) >= startedNoEarlierThan)
+            }
+        }
+
+        val database = Room.databaseBuilder(RuntimeEnvironment.getApplication(), SproutDatabase::class.java, TEST_DB)
+            .addMigrations(*Migrations.ALL)
+            .build()
+        try {
+            val version = database.rewardVersionDao().all().single()
+            val row = assertNotNull(database.rewardDao().get(RewardId("treat")))
+            assertEquals(row, version.toRewardRow())
+            assertTrue(version.recordedAtEpochMs >= startedNoEarlierThan)
+            assertEquals(version.recordedAtEpochMs, database.rewardVersionDao().historyStart()?.startedAtEpochMs)
+        } finally {
+            database.close()
+        }
+    }
+
+    @Test
+    fun migration1To10KeepsTheM1Rows() = runTest {
+        helper.createDatabase(TEST_DB, 1).use { db -> insertVersion1Rows(db, chore) }
+
+        helper.runMigrationsAndValidate(TEST_DB, 10, true, *Migrations.ALL).use { db ->
             db.query("SELECT hash FROM ledger_events").use { cursor ->
                 cursor.moveToFirst()
                 assertEquals(chore.envelope.hash, cursor.getString(0))
