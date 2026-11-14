@@ -122,7 +122,9 @@ import kotlin.time.Instant
  *
  * **Reward catalogue (M2, M3).** A kid-authored [RewardPurchased] appended here must match the catalogue row of its
  * reward (active, available to the kid, same cost, currency and granted minutes, and a parent-authored row: see
- * [RewardTableCatalogue]), or it is [CATALOGUE_REJECTION].
+ * [RewardTableCatalogue]), or it is [CATALOGUE_REJECTION]. A pulled kid-authored purchase is never refused for the
+ * catalogue: on a PARENT device [purchaseReview] may **flag** it once it is stored (D-REL-65), which changes nothing
+ * that is stored or projected, so every device still converges.
  *
  * @param localEvents decides what counts as this device's own, signed event.
  * @param policies the ledger policy and parent key in force, loaded inside each transaction.
@@ -130,6 +132,7 @@ import kotlin.time.Instant
  * @param registry the household's device registry, for remote events.
  * @param check verifies remote device and parent signatures.
  * @param calendar the household's today, for the local played-on window.
+ * @param purchaseReview flags pulled kid purchases that match no reward version this device has seen (D-REL-65).
  */
 @Suppress("TooManyFunctions", "LargeClass") // The LedgerRepository API, ingest and the data layer's internal reads.
 class RoomLedgerRepository internal constructor(
@@ -141,6 +144,7 @@ class RoomLedgerRepository internal constructor(
     private val registry: DeviceRegistry = RoomDeviceRegistry(database),
     private val check: SignatureCheck = VerifierSignatureCheck(JceEcdsaVerifier()),
     private val calendar: HouseholdCalendar = HouseholdCalendar(clock),
+    private val purchaseReview: PurchaseReview = RewardVersionHistory(database, clock, check, registry),
 ) : LedgerRepository {
     @Inject
     constructor(
@@ -158,6 +162,7 @@ class RoomLedgerRepository internal constructor(
         RoomDeviceRegistry(database),
         VerifierSignatureCheck(verifier),
         calendar,
+        RewardVersionHistory(database, clock, VerifierSignatureCheck(verifier)),
     )
 
     private val events = database.ledgerEventDao()
@@ -1054,6 +1059,8 @@ class RoomLedgerRepository internal constructor(
         val storedCopies = events.copiesOf(event.eventId).filterNot { it.quarantined }
         if (storedCopies.isNotEmpty()) {
             storeRemote(event, verified.json, item, now, null, AuditAction.LEDGER_EVENT_CONFLICT)
+            // The projection decides which copy applies; a forged copy is still worth a parent's look (D-REL-65).
+            reviewPurchase(event, item)
             return RemoteOutcome.Stored(conflict = true)
         }
         val violations = (LedgerRules.validate(event, before) as? ValidationResult.Invalid)?.violations.orEmpty()
@@ -1068,9 +1075,21 @@ class RoomLedgerRepository internal constructor(
 
             else -> {
                 storeRemote(event, verified.json, item, now, null, AuditAction.LEDGER_EVENT_INGESTED)
+                reviewPurchase(event, item)
                 RemoteOutcome.Stored(conflict = false)
             }
         }
+    }
+
+    /**
+     * After [event] was stored as ingested or as a conflict copy: a kid-authored [RewardPurchased] with a server stamp
+     * (a held event keeps the one it was pulled with) goes to [purchaseReview], which may flag it on a PARENT device
+     * (D-REL-65). Quarantined and still-held events never get here, and nothing here changes what was stored or what
+     * the projection folds.
+     */
+    private suspend fun reviewPurchase(event: LedgerEvent, item: Incoming) {
+        val stamp = item.serverReceivedAtEpochMs ?: return
+        if (event is RewardPurchased && event.envelope.authorRole == Role.KID) purchaseReview.review(event, stamp)
     }
 
     /**

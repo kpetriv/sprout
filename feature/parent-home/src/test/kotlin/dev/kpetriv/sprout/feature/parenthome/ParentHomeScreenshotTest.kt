@@ -99,4 +99,36 @@ class ParentHomeScreenshotTest : ScreenshotTest(checkAccessibility = true) {
     fun `sync blocked`() = screenshot.captureLightDark("parent_home_sync_blocked") {
         ParentHomeScreen(ParentHomePreviewData.syncBlocked(), onEvent = {}, onSignNow = {}, links = ParentHomeLinks())
     }
+
+    @Test
+    fun `one purchase to check`() = screenshot.captureLightDark("parent_home_purchase_to_check") {
+        ParentHomeScreen(
+            ParentHomePreviewData.onePurchaseToCheck(),
+            onEvent = {},
+            onSignNow = {},
+            links = ParentHomeLinks(),
+        )
+    }
+
+    @Test
+    @Config(qualifiers = "+h1200dp") // The whole card, three purchases and "and 1 more", in one image.
+    fun `several purchases to check`() = screenshot.captureLightDark("parent_home_purchases_to_check") {
+        ParentHomeScreen(
+            ParentHomePreviewData.purchasesToCheck(),
+            onEvent = {},
+            onSignNow = {},
+            links = ParentHomeLinks(),
+        )
+    }
+
+    @Test
+    fun `purchase of a reward this phone does not have`() =
+        screenshot.captureLightDark("parent_home_purchase_unknown_reward") {
+            ParentHomeScreen(
+                ParentHomePreviewData.purchaseOfUnknownReward(),
+                onEvent = {},
+                onSignNow = {},
+                links = ParentHomeLinks(),
+            )
+        }
 }

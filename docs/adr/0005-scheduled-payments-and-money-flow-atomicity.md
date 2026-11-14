@@ -75,4 +75,4 @@ A `Once` chore with no due date uses its **creation date** as the occurrence key
 - `appendAllAsKid` must keep chain and lamport assignment correct across a batch; tests cover rollback mid-batch.
 - Scheduled money waits for the parent to tap "Sign now"; the dashboard must make pending actions obvious.
 - `FAILED` and cancelled actions need dashboard UI and a clear way to fix the schedule.
-- The receiver side (M3) needs signed reward definitions (ADR-0004 amendments) to verify that a purchase's cost and minutes match the catalogue.
+- The receiver side needs signed reward definitions (ADR-0004 amendments) to check a purchase's cost and minutes. M3 signed the definitions (D-M3-3, D-M3-27) but only the appending device compared purchases with them. Since 1.1.3 receivers keep every reward version they apply and parent phones **flag**, never refuse, a pulled kid purchase that matches none of them: each device holds different versions, so refusing would split the ledger ([D-REL-65 review](../reviews/D-REL-65-pulled-purchases.md), THREAT_MODEL T27).

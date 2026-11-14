@@ -10,11 +10,16 @@ import dev.kpetriv.sprout.core.crypto.SecretUnavailableException
 import dev.kpetriv.sprout.core.crypto.WrappedSecretStore
 import dev.kpetriv.sprout.core.database.entity.AuditAction
 import dev.kpetriv.sprout.core.database.entity.DeviceStateEntity
+import dev.kpetriv.sprout.core.database.entity.DocumentStamp
 import dev.kpetriv.sprout.core.database.entity.MessageEntity
 import dev.kpetriv.sprout.core.database.entity.MessageSeqEntity
 import dev.kpetriv.sprout.core.database.entity.MessageStatus
+import dev.kpetriv.sprout.core.database.entity.PurchaseFlagEntity
+import dev.kpetriv.sprout.core.database.entity.PurchaseFlagReason
 import dev.kpetriv.sprout.core.database.entity.ReadMarkEntity
 import dev.kpetriv.sprout.core.database.entity.RegistrationStatus
+import dev.kpetriv.sprout.core.database.entity.RewardHistoryEntity
+import dev.kpetriv.sprout.core.database.entity.RewardVersionEntity
 import dev.kpetriv.sprout.core.database.entity.ThreadKeyEntity
 import dev.kpetriv.sprout.core.database.usecase.ForgetChatKeyUseCase
 import dev.kpetriv.sprout.core.database.usecase.PurgeLocalHouseholdUseCase
@@ -24,6 +29,7 @@ import dev.kpetriv.sprout.core.domainhousehold.ChoreReward
 import dev.kpetriv.sprout.core.domainhousehold.PendingParentAction
 import dev.kpetriv.sprout.core.domainhousehold.Reward
 import dev.kpetriv.sprout.core.domainhousehold.SavingsGoal
+import dev.kpetriv.sprout.core.domainledger.EventId
 import dev.kpetriv.sprout.core.domainledger.GamePlayed
 import dev.kpetriv.sprout.core.domainledger.JvmSha256Hasher
 import dev.kpetriv.sprout.core.domainledger.Money
@@ -37,6 +43,7 @@ import dev.kpetriv.sprout.core.model.ChoreSchedule
 import dev.kpetriv.sprout.core.model.DeviceId
 import dev.kpetriv.sprout.core.model.GoalId
 import dev.kpetriv.sprout.core.model.HouseholdId
+import dev.kpetriv.sprout.core.model.KidId
 import dev.kpetriv.sprout.core.model.RewardId
 import dev.kpetriv.sprout.core.model.RewardKind
 import dev.kpetriv.sprout.core.model.Role
@@ -105,6 +112,20 @@ class PurgeAndWipeTest {
         household.interest.set(dev.kpetriv.sprout.core.model.InterestPolicy(LocalTrial.HOUSEHOLD, 100, 1))
     }
 
+    /** A flag on a purchase of [kid] (D-REL-65); the purchase itself need not be stored. */
+    private fun flagFor(kid: KidId) = PurchaseFlagEntity(
+        eventId = EventId(UUID.randomUUID().toString()),
+        hash = "h",
+        kidId = kid,
+        rewardId = "treat",
+        purchaseLamport = 1,
+        reason = PurchaseFlagReason.NO_SUCH_REWARD,
+        amount = Money(1),
+        currency = household.gbp,
+        minutesGranted = null,
+        flaggedAtEpochMs = 0,
+    )
+
     private fun count(table: String): Int =
         household.database.openHelper.readableDatabase.query("SELECT COUNT(*) FROM $table").use { cursor ->
             cursor.moveToFirst()
@@ -144,11 +165,18 @@ class PurgeAndWipeTest {
                 household.clock.now(),
             )
         household.sessions.save(real)
+        assertEquals(1, household.database.rewardVersionDao().all().size, "the trial reward's version")
+        val trialKid = household.database.purgeDao().kidsOf(LocalTrial.HOUSEHOLD).single()
+        household.database.purchaseFlagDao().insertIfAbsent(flagFor(trialKid))
+        val otherKid = flagFor(KID_X)
+        household.database.purchaseFlagDao().insertIfAbsent(otherKid)
 
         val report = household.purge()
 
         for (table in PURGED_TABLES) assertEquals(0, count(table), table)
         assertTrue(report.total > 0)
+        assertEquals(1, report.counts.getValue("purchase_flags"), "only the trial kid's flag")
+        assertEquals(listOf(otherKid), household.database.purchaseFlagDao().all())
         assertEquals(1, report.counts.getValue("kids"))
         assertEquals(1, report.counts.getValue("photos"))
         assertEquals(1, report.counts.getValue("parent_keys"), "only the trial parent's key")
@@ -632,6 +660,17 @@ class PurgeAndWipeTest {
         File(secrets, "photos.key.bin").writeBytes(byteArrayOf(1))
         val files = LocalDataFiles(context.getDatabasePath(name), photos, secrets)
         assertTrue(files.databaseFile.exists())
+        // The purchase flags and the reward history this device kept (D-REL-65) go with the database file.
+        database.rewardVersionDao().insertIfAbsent(
+            RewardVersionEntity.marker(
+                RewardId("treat"),
+                1,
+                DocumentStamp(UserId("parent-uid"), household.deviceId, "c2ln", deleted = true),
+                0,
+            ),
+        )
+        database.rewardVersionDao().startHistoryIfAbsent(RewardHistoryEntity(startedAtEpochMs = 0))
+        database.purchaseFlagDao().insertIfAbsent(flagFor(KID_X))
 
         assertTrue(wipe(database, files)(), "everything is gone")
 
@@ -643,6 +682,9 @@ class PurgeAndWipeTest {
         val reopened = fileDatabase(name)
         try {
             assertNull(RoomSessionStore(reopened, household.clock).get())
+            assertTrue(reopened.rewardVersionDao().all().isEmpty())
+            assertNull(reopened.rewardVersionDao().historyStart())
+            assertTrue(reopened.purchaseFlagDao().all().isEmpty())
         } finally {
             reopened.close()
             context.deleteDatabase(name)
@@ -699,6 +741,8 @@ class PurgeAndWipeTest {
             "chores",
             "chore_submissions",
             "rewards",
+            "reward_versions",
+            "reward_history",
             "allowance_schedules",
             "savings_goals",
             "interest_policy",

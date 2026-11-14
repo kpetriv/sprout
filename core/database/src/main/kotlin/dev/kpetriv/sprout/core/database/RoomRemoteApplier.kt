@@ -15,6 +15,7 @@ import dev.kpetriv.sprout.core.database.entity.InterestPolicyEntity
 import dev.kpetriv.sprout.core.database.entity.KidEntity
 import dev.kpetriv.sprout.core.database.entity.RegistrationStatus
 import dev.kpetriv.sprout.core.database.entity.RewardEntity
+import dev.kpetriv.sprout.core.database.entity.RewardVersionEntity
 import dev.kpetriv.sprout.core.database.entity.SavingsGoalEntity
 import dev.kpetriv.sprout.core.database.entity.SessionEntity
 import dev.kpetriv.sprout.core.database.entity.SyncCursorEntity
@@ -110,6 +111,7 @@ class RoomRemoteApplier internal constructor(
 
     private val chat = ChatApplier(database, clock, check, maxLamportJump, crypto)
     private val registry = RoomDeviceRegistry(database)
+    private val rewardHistory = RewardVersionHistory(database, clock, check, registry)
     private val deviceClock = DeviceClock.of(database)
     private val audit = database.auditLogDao()
 
@@ -637,16 +639,42 @@ class RoomRemoteApplier internal constructor(
         )
     }
 
-    private suspend fun applyReward(envelope: DocumentEnvelope, fallback: DeviceId): Outcome = resolve(
-        envelope,
-        DocumentPayloads.decodeOrNull(Reward.serializer(), envelope.payload),
-        { it.id.value == envelope.docId && it.householdId == envelope.householdId },
-        database.rewardDao().get(RewardId(envelope.docId)),
-        { storedOf(it.lamport, it.stamp, fallback) },
-        { reward, _ -> RewardEntity.from(reward, 0) },
-        { row, lamport, stamp -> row.copy(lamport = lamport, stamp = stamp) },
-        { database.rewardDao().upsert(it) },
-    )
+    /**
+     * A reward document, resolved like the others. Whatever the outcome, a verified version whose payload is this
+     * reward (or a tombstone whose payload does not decode, as a marker) is also recorded in the reward history
+     * (D-REL-65): a version that loses last-writer-wins is still a price a kid may have seen.
+     */
+    private suspend fun applyReward(envelope: DocumentEnvelope, fallback: DeviceId): Outcome {
+        val decoded = DocumentPayloads.decodeOrNull(Reward.serializer(), envelope.payload)
+        val matches = { reward: Reward ->
+            reward.id.value == envelope.docId && reward.householdId == envelope.householdId
+        }
+        val outcome = resolve(
+            envelope,
+            decoded,
+            matches,
+            database.rewardDao().get(RewardId(envelope.docId)),
+            { storedOf(it.lamport, it.stamp, fallback) },
+            { reward, _ -> RewardEntity.from(reward, 0) },
+            { row, lamport, stamp -> row.copy(lamport = lamport, stamp = stamp) },
+            { database.rewardDao().upsert(it) },
+        )
+        val stamp = DocumentStamp(envelope.authorUid, envelope.authorDeviceId, envelope.signature, envelope.deleted)
+        when {
+            decoded != null && matches(decoded) ->
+                rewardHistory.record(RewardEntity.from(decoded, envelope.lamport).copy(stamp = stamp))
+
+            decoded == null && envelope.deleted -> rewardHistory.record(
+                RewardVersionEntity.marker(
+                    RewardId(envelope.docId),
+                    envelope.lamport,
+                    stamp,
+                    clock.now().toEpochMilliseconds(),
+                ),
+            )
+        }
+        return outcome
+    }
 
     private suspend fun applyAllowance(envelope: DocumentEnvelope, fallback: DeviceId): Outcome = resolve(
         envelope,

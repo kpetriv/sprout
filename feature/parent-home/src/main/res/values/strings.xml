@@ -155,6 +155,25 @@
   </plurals>
   <string name="feature_parent_home_rejected_row">%1$s · %2$s · %3$s</string>
   <string name="feature_parent_home_rejected_more">and %1$d more</string>
+  <!-- Purchases to check (D-REL-65): kids' purchases from their phones that match no reward version a parent set up -->
+  <string name="feature_parent_home_purchases_title">Purchases to check</string>
+  <plurals name="feature_parent_home_purchases_text">
+    <item quantity="one">%d purchase doesn’t match the reward as a parent set it up: its price, its screen time or who can buy it. A phone that missed a change can cause this. To correct a balance, use Adjust balance in the kid’s wallet.</item>
+    <item quantity="other">%d purchases don’t match the reward as a parent set it up: its price, its screen time or who can buy it. A phone that missed a change can cause this. To correct a balance, use Adjust balance in the kid’s wallet.</item>
+  </plurals>
+  <!-- A purchase to check: the kid's first name and the reward's current title, "Leo: Film night". -->
+  <string name="feature_parent_home_purchase_row">%1$s: %2$s</string>
+  <string name="feature_parent_home_purchase_kid_unknown">A kid</string>
+  <!-- A purchase whose reward this phone has no row for: deleted, not pulled yet, or an id the kid's phone made up. -->
+  <string name="feature_parent_home_purchase_reward_unknown">A reward this phone doesn’t have</string>
+  <string name="feature_parent_home_purchase_paid">Paid %1$s</string>
+  <!-- "Paid £0.50 for 1 h 30 min of screen time" -->
+  <string name="feature_parent_home_purchase_paid_minutes">Paid %1$s for %2$s of screen time</string>
+  <string name="feature_parent_home_purchase_now">Now costs %1$s</string>
+  <string name="feature_parent_home_purchase_now_minutes">Now costs %1$s for %2$s of screen time</string>
+  <string name="feature_parent_home_purchase_dismiss">Dismiss</string>
+  <!-- Spoken label of a purchase's Dismiss: its row and what was paid, "Dismiss Leo: Film night, paid £0.50". -->
+  <string name="feature_parent_home_purchase_dismiss_described">Dismiss %1$s, paid %2$s</string>
   <string name="feature_parent_home_device_parent">Parent’s phone %1$s</string>
   <string name="feature_parent_home_device_kid">%1$s’s phone</string>
   <string name="feature_parent_home_device_kid_unknown">A kid’s phone</string>

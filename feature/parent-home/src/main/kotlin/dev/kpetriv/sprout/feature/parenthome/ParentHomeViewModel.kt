@@ -9,6 +9,7 @@ import dev.kpetriv.sprout.core.database.ChoreRepository
 import dev.kpetriv.sprout.core.database.FailedParentAction
 import dev.kpetriv.sprout.core.database.KidRepository
 import dev.kpetriv.sprout.core.database.PendingParentActionRepository
+import dev.kpetriv.sprout.core.database.PurchaseFlagRepository
 import dev.kpetriv.sprout.core.database.SubmissionFilter
 import dev.kpetriv.sprout.core.database.usecase.DrainResult
 import dev.kpetriv.sprout.core.domainhousehold.AllowancePlanner
@@ -18,6 +19,7 @@ import dev.kpetriv.sprout.core.domainledger.Account
 import dev.kpetriv.sprout.core.domainledger.AccountKind
 import dev.kpetriv.sprout.core.domainledger.Balance
 import dev.kpetriv.sprout.core.domainledger.Currency
+import dev.kpetriv.sprout.core.domainledger.EventId
 import dev.kpetriv.sprout.core.domainledger.LedgerRepository
 import dev.kpetriv.sprout.core.domainledger.Money
 import dev.kpetriv.sprout.core.domainledger.ParentAuthorizationRequester
@@ -50,6 +52,9 @@ import javax.inject.Inject
  * The on-device weekly summary ([WeeklySummarySource], M6) is collected only while the dashboard is, for the week the
  * card's toggle picks; it starts as [WeeklySummaryUi.Loading] and a failing source becomes
  * [WeeklySummaryUi.Unavailable] without touching the rest of the dashboard.
+ *
+ * "Purchases to check" lists the open flags of [PurchaseFlagRepository] (D-REL-65), kids named by first name; the
+ * parent dismisses each one. A failing flag read hides the card instead of failing the dashboard.
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 @HiltViewModel
@@ -65,6 +70,7 @@ class ParentHomeViewModel @Inject constructor(
     private val calendar: HouseholdCalendar,
     private val householdStatus: HouseholdStatusSource,
     private val summaries: WeeklySummarySource,
+    private val purchaseFlags: PurchaseFlagRepository,
 ) : ViewModel() {
     private val local = MutableStateFlow(LocalState())
     private val summaryWeek = MutableStateFlow(SummaryWeek.THIS_WEEK)
@@ -74,7 +80,8 @@ class ParentHomeViewModel @Inject constructor(
         local,
         household(),
         summary(),
-    ) { loaded, localState, status, summary ->
+        purchaseRows(),
+    ) { loaded, localState, status, summary, purchases ->
         when (loaded) {
             Loaded.Loading -> ParentHomeUiState.Loading
 
@@ -84,6 +91,7 @@ class ParentHomeViewModel @Inject constructor(
                 signing = localState.signing,
                 signResult = localState.signResult,
                 household = status,
+                purchasesToCheck = purchases,
                 summaryWeek = summary.first,
                 summary = summary.second,
             )
@@ -95,6 +103,7 @@ class ParentHomeViewModel @Inject constructor(
             is ParentHomeEvent.SignNow -> signNow(event.requester)
             ParentHomeEvent.SignResultShown -> local.update { it.copy(signResult = null) }
             is ParentHomeEvent.Dismiss -> dismiss(event.key)
+            is ParentHomeEvent.DismissPurchase -> dismissPurchase(event.eventId, event.hash)
             is ParentHomeEvent.SummaryWeekChanged -> summaryWeek.value = event.week
         }
     }
@@ -110,6 +119,14 @@ class ParentHomeViewModel @Inject constructor(
     /** The household cards are extras: a failing source hides them instead of failing the dashboard. */
     private fun household(): Flow<HouseholdStatus> =
         householdStatus.observe().onStart { emit(HouseholdStatus()) }.catch { emit(HouseholdStatus()) }
+
+    /** The open purchase flags (D-REL-65); like the household cards, a failing read hides them. */
+    private fun purchaseRows(): Flow<List<PurchaseToCheckUi>> =
+        combine(purchaseFlags.observePurchaseFlags(), kids.observeKids()) { flags, kidList ->
+            purchasesToCheck(flags, kidList)
+        }
+            .onStart { emit(emptyList()) }
+            .catch { emit(emptyList()) }
 
     private fun dashboard(): Flow<Loaded> = combine(
         kidSummaries(),
@@ -221,6 +238,18 @@ class ParentHomeViewModel @Inject constructor(
         viewModelScope.launch {
             try {
                 pendingActions.dismiss(key)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (@Suppress("TooGenericExceptionCaught", "SwallowedException") _: Exception) {
+                // The row stays listed; the parent can try again.
+            }
+        }
+    }
+
+    private fun dismissPurchase(eventId: EventId, hash: String) {
+        viewModelScope.launch {
+            try {
+                purchaseFlags.dismissPurchaseFlag(eventId, hash)
             } catch (e: CancellationException) {
                 throw e
             } catch (@Suppress("TooGenericExceptionCaught", "SwallowedException") _: Exception) {

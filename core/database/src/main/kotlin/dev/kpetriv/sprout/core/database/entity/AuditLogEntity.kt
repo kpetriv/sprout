@@ -123,6 +123,19 @@ enum class AuditAction {
      * (`retention` or `purge`), the cut and counts only.
      */
     CHAT_PRUNED,
+
+    /**
+     * A pulled kid purchase matched no reward version this PARENT device has seen and was flagged for a parent to
+     * check (D-REL-65); it is stored and projected as usual. Actor: the purchase's author. Hash, kid id, reward id and
+     * the reason only; never amounts or titles.
+     */
+    PURCHASE_FLAGGED,
+
+    /**
+     * A flag of [PURCHASE_FLAGGED] was dropped because a reward version that sells the purchase was recorded later
+     * (D-REL-65). Actor: the purchase's author. Hash, kid id, reward id and the version's lamport and author device.
+     */
+    PURCHASE_FLAG_CLEARED,
 }
 
 /**

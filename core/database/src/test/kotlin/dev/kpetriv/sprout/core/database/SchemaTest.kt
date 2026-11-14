@@ -71,6 +71,9 @@ class SchemaTest {
                 "blobs",
                 "read_marks",
                 "time_bank_clocks",
+                "reward_versions",
+                "reward_history",
+                "purchase_flags",
             ),
             entities().map { it.getValue("tableName").jsonPrimitive.content }.toSet(),
         )

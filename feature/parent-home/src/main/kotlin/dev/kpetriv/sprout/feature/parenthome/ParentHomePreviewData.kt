@@ -4,6 +4,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.tooling.preview.Preview
 import dev.kpetriv.sprout.core.designsystem.theme.SproutTheme
 import dev.kpetriv.sprout.core.domainledger.Currency
+import dev.kpetriv.sprout.core.domainledger.EventId
 import dev.kpetriv.sprout.core.domainledger.Money
 import dev.kpetriv.sprout.core.model.CalendarDate
 import dev.kpetriv.sprout.core.model.DeviceId
@@ -16,7 +17,7 @@ import dev.kpetriv.sprout.core.model.YearMonth
 import kotlin.time.Instant
 
 /** Fixed dashboard states for previews and screenshot tests. No clock, no random ids, no real people. */
-@Suppress("MagicNumber") // Sample balances, dates and counts are the data itself.
+@Suppress("MagicNumber", "TooManyFunctions") // Sample balances, dates and counts are the data; one function per state.
 object ParentHomePreviewData {
     private val household = HouseholdId("preview-household")
     private val gbp = Currency.Fiat("GBP")
@@ -169,6 +170,59 @@ object ParentHomePreviewData {
             ),
         ),
     )
+
+    /** The film night purchase of [onePurchaseToCheck], the one [purchasesToCheck] lists first. */
+    val filmNightPurchase: PurchaseToCheckUi = PurchaseToCheckUi(
+        eventId = EventId("00000000-0000-4000-8000-000000000001"),
+        hash = "preview-hash-1",
+        kidName = "Leo",
+        rewardTitle = "Film night",
+        paid = MoneyUi(Money(50), gbp),
+        minutes = Money(90),
+        now = RewardPriceUi(MoneyUi(Money(200), gbp), Money(60)),
+    )
+
+    private val unknownRewardPurchase = PurchaseToCheckUi(
+        eventId = EventId("00000000-0000-4000-8000-000000000003"),
+        hash = "preview-hash-3",
+        kidName = "Mia",
+        rewardTitle = null,
+        paid = MoneyUi(Money(100), gbp),
+        minutes = null,
+        now = null,
+    )
+
+    /** A quiet household with one purchase to check (D-REL-65): paid less and credited more than the reward gives. */
+    fun onePurchaseToCheck(): ParentHomeUiState.Ready = empty().copy(purchasesToCheck = listOf(filmNightPurchase))
+
+    /**
+     * Four purchases to check: a cheaper film night, a sticker pack at an old price, a reward this phone does not have
+     * and a second film night; the card lists three and "and 1 more".
+     */
+    fun purchasesToCheck(): ParentHomeUiState.Ready = empty().copy(
+        purchasesToCheck = listOf(
+            filmNightPurchase,
+            PurchaseToCheckUi(
+                eventId = EventId("00000000-0000-4000-8000-000000000002"),
+                hash = "preview-hash-2",
+                kidName = "Zoe",
+                rewardTitle = "Sticker pack",
+                paid = MoneyUi(Money(150), gbp),
+                minutes = null,
+                now = RewardPriceUi(MoneyUi(Money(250), gbp), null),
+            ),
+            unknownRewardPurchase,
+            filmNightPurchase.copy(
+                eventId = EventId("00000000-0000-4000-8000-000000000004"),
+                hash = "preview-hash-4",
+                paid = MoneyUi(Money(20), gbp),
+            ),
+        ),
+    )
+
+    /** One purchase of a reward this phone does not have, by a kid not in the household on this phone. */
+    fun purchaseOfUnknownReward(): ParentHomeUiState.Ready =
+        empty().copy(purchasesToCheck = listOf(unknownRewardPurchase.copy(kidName = null)))
 }
 
 @Preview

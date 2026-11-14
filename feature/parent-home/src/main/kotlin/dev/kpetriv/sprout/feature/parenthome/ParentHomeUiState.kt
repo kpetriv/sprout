@@ -1,6 +1,7 @@
 package dev.kpetriv.sprout.feature.parenthome
 
 import dev.kpetriv.sprout.core.domainledger.Currency
+import dev.kpetriv.sprout.core.domainledger.EventId
 import dev.kpetriv.sprout.core.domainledger.Money
 import dev.kpetriv.sprout.core.domainledger.ParentAuthorizationRequester
 import dev.kpetriv.sprout.core.model.CalendarDate
@@ -20,6 +21,7 @@ sealed interface ParentHomeUiState {
      * @property signing progress while "Sign now" runs; null otherwise.
      * @property signResult how the last "Sign now" ended, until acknowledged.
      * @property household the trial banner, the sync line, refused events and phones waiting for approval (M3).
+     * @property purchasesToCheck pulled kid purchases that match no price a parent set (D-REL-65), newest first.
      * @property summaryWeek the week the summary card shows.
      * @property summary the on-device weekly summary of [summaryWeek] (M6); its own failures never fail the dashboard.
      */
@@ -31,6 +33,7 @@ sealed interface ParentHomeUiState {
         val signing: SigningProgress? = null,
         val signResult: SignResult? = null,
         val household: HouseholdStatus = HouseholdStatus(),
+        val purchasesToCheck: List<PurchaseToCheckUi> = emptyList(),
         val summaryWeek: SummaryWeek = SummaryWeek.THIS_WEEK,
         val summary: WeeklySummaryUi = WeeklySummaryUi.Loading,
     ) : ParentHomeUiState {
@@ -152,6 +155,12 @@ sealed interface ParentHomeEvent {
 
     /** Withdraw the failed or skipped payment [key] from the "need attention" card. */
     data class Dismiss(val key: String) : ParentHomeEvent
+
+    /**
+     * Dismiss the "Purchases to check" row of the purchase `(eventId, hash)` (D-REL-65). Only the row goes: the
+     * purchase stays in the ledger, and a balance is corrected with an adjustment in the kid's wallet.
+     */
+    data class DismissPurchase(val eventId: EventId, val hash: String) : ParentHomeEvent
 
     /** The summary card's "This week so far" / "Last week" toggle. */
     data class SummaryWeekChanged(val week: SummaryWeek) : ParentHomeEvent

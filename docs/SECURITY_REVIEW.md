@@ -304,6 +304,7 @@ Unchanged from the [threat model](THREAT_MODEL.md#accepted-risks) unless noted; 
 - Attestation leniency in the details (software keys accepted and shown; boot state logged, not enforced; revocation list fails open).
 - No server-side backups on Spark (AV-7), accepted for v1 at this review.
 - Rate-limit buckets hash IP addresses without a salt.
+- **New at 1.1.3:** pulled reward purchases that match no reward version a parent phone has seen are flagged, not refused, and a purchase at any earlier parent-signed version of the reward (price, minutes, availability), even after it was changed, hidden or deleted, is not flagged (T27, D-REL-65).
 - **New at M8:** Firebase Instance ID ships inside the Functions client (D-M8-32), which cannot start without it (D-M8-41); disclosed in PRIVACY.md and DATA_SAFETY.md.
 - **New at M8:** Google Play services' per-receipt-scan usage event (D-M6-51), disclosed and gated by the AI switch.
 - **Product, not security:** the splash window is not `FLAG_SECURE` (D-M7-76, no household data); the widget on a background kid phone follows the next sync (D-M7-72).

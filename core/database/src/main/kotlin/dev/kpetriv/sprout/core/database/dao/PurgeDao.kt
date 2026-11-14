@@ -40,6 +40,20 @@ interface PurgeDao {
     @Query("DELETE FROM rewards WHERE householdId = :householdId")
     suspend fun deleteRewards(householdId: HouseholdId): Int
 
+    /** The recorded versions of [householdId]'s rewards (markers carry no household: found through `rewards`). */
+    @Query(
+        "DELETE FROM reward_versions WHERE householdId = :householdId " +
+            "OR rewardId IN (SELECT rewardId FROM rewards WHERE householdId = :householdId)",
+    )
+    suspend fun deleteRewardVersions(householdId: HouseholdId): Int
+
+    @Query("DELETE FROM purchase_flags WHERE kidId IN (:kids)")
+    suspend fun deletePurchaseFlags(kids: List<KidId>): Int
+
+    /** The device-wide reward history start, once no recorded version is left. */
+    @Query("DELETE FROM reward_history WHERE NOT EXISTS (SELECT 1 FROM reward_versions)")
+    suspend fun deleteRewardHistoryIfNoVersions(): Int
+
     @Query("DELETE FROM allowance_schedules WHERE kidId IN (:kids)")
     suspend fun deleteAllowances(kids: List<KidId>): Int
 

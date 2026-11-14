@@ -186,8 +186,8 @@ private fun Dashboard(
 }
 
 /**
- * The sync line, then "Needs you": the household's rows ([householdRows]), chores to approve, payments to sign,
- * payments that need attention and the ledger check, in one card.
+ * The sync line, then "Needs you": the household's rows ([householdRows]), purchases to check (D-REL-65), chores to
+ * approve, payments to sign, payments that need attention and the ledger check, in one card.
  */
 @Composable
 private fun NeedsYou(
@@ -199,6 +199,13 @@ private fun NeedsYou(
     state.household.sync?.let { SyncStatusLine(it) }
     SectionTitle(stringResource(R.string.feature_parent_home_needs_you))
     val rows = householdRows(state.household, links) + buildList<@Composable () -> Unit> {
+        if (state.purchasesToCheck.isNotEmpty()) {
+            add {
+                PurchasesToCheckRow(state.purchasesToCheck) {
+                    onEvent(ParentHomeEvent.DismissPurchase(it.eventId, it.hash))
+                }
+            }
+        }
         add { ApprovalsRow(state.pendingApprovals, links.onOpenApprovals) }
         add { PendingActionsRow(state.pendingActions, state.signing, onSignNow) }
         if (state.attention.isNotEmpty()) {
