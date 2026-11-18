@@ -12,9 +12,17 @@ python3 tools/store/compose.py --check   # compares with what is committed
 
 Edit the text and the choice of screens in `listing.yaml`, never the files here. The screenshots are composed from the committed screenshot-test goldens (the demo household Mia, Leo and Zoe; no real data), so re-run after re-recording goldens: CI does not check this folder (the captions depend on the fonts), so goldens re-recorded without a re-run leave the listing stale without any failure. Captions, labels and the name are set in the app's own fonts (Outfit for headings and the name, Plus Jakarta Sans for the tagline), read from `core/designsystem/src/main/res/font`, so the images are the same on every machine with the same Pillow; `SPROUT_STORE_FONT`, `SPROUT_STORE_FONT_BOLD` and `SPROUT_STORE_FONT_DISPLAY` override them.
 
-## Upload order
+## Upload
 
-Play Console → Grow users → Store presence → Main store listing (English (United Kingdom) – en-GB):
+**By workflow (D-REL-67):** once the listing is on `main`, run
+
+```
+gh workflow run publish-listing.yml --ref main
+```
+
+and approve the run in GitHub (it uses the `release` environment, so the owner approves it like a release). It lays this folder out for Gradle Play Publisher with `tools/store/layout_play.py` and runs `:app:publishListing`, which replaces the title, the descriptions, the icon, the feature graphic, the phone screenshots and both tablet slots in one Play edit. It needs the service account to have "Manage store presence" on the app (Play Console → Users and permissions). Release notes, category, contact details and the declarations are not part of a listing upload and stay console steps.
+
+**By hand**, in this order (Play Console → Grow users → Store presence → Main store listing, English (United Kingdom) – en-GB):
 
 1. **App name:** `en-GB/title.txt` (27 of 30 characters).
 2. **Short description:** `en-GB/short_description.txt` (80 of 80).
@@ -50,4 +58,4 @@ Play Console → Grow users → Store presence → Main store listing (English (
 
 `compose.py` fails when the launcher foreground uses anything but plain filled paths (groups, fill types, alpha or strokes are not drawn), `--check` also when a committed PNG is not produced by `listing.yaml`, and either fails when a text is over Play's limit, an image has alpha, is over 8 MB or outside 320 to 3,840 px or 2:1, there are more than 8 screenshots of a type, or the images together pass 3 MB.
 
-The layout differs from Gradle Play Publisher's (`listings/<locale>/graphics/...`); the release workflow publishes only the app bundle, so these files stay a manual upload.
+The layout here differs from Gradle Play Publisher's (`listings/<locale>/graphics/...`); `tools/store/layout_play.py` converts it on demand into the gitignored `app/src/main/play/`, which only `publish-listing.yml` (or a local `:app:publishListing`) uses.
