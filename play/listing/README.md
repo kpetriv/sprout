@@ -10,7 +10,7 @@ python3 tools/store/compose.py           # writes this folder; prints each file'
 python3 tools/store/compose.py --check   # compares with what is committed
 ```
 
-Edit the text and the choice of screens in `listing.yaml`, never the files here. The screenshots are composed from the committed screenshot-test goldens (the demo household Mia, Leo and Zoe; no real data), so re-run after re-recording goldens: CI does not check this folder (the captions depend on the fonts), so goldens re-recorded without a re-run leave the listing stale without any failure. The committed images were made on macOS with Arial; another machine falls back to DejaVu Sans or Roboto (or `SPROUT_STORE_FONT` / `SPROUT_STORE_FONT_BOLD`), which changes the captions slightly.
+Edit the text and the choice of screens in `listing.yaml`, never the files here. The screenshots are composed from the committed screenshot-test goldens (the demo household Mia, Leo and Zoe; no real data), so re-run after re-recording goldens: CI does not check this folder (the captions depend on the fonts), so goldens re-recorded without a re-run leave the listing stale without any failure. Captions, labels and the name are set in the app's own fonts (Outfit for headings and the name, Plus Jakarta Sans for the tagline), read from `core/designsystem/src/main/res/font`, so the images are the same on every machine with the same Pillow; `SPROUT_STORE_FONT`, `SPROUT_STORE_FONT_BOLD` and `SPROUT_STORE_FONT_DISPLAY` override them.
 
 ## Upload order
 
@@ -21,7 +21,7 @@ Play Console → Grow users → Store presence → Main store listing (English (
 3. **Full description:** `en-GB/full_description.txt` (about 2,990 of 4,000).
 4. **App icon:** `en-GB/images/icon.png` (512 × 512, 24-bit PNG, no alpha; Play adds the rounded mask).
 5. **Feature graphic:** `en-GB/images/feature_graphic.png` (1024 × 500).
-6. **Phone screenshots:** `en-GB/images/phone/light/01…08` in file-name order (1080 × 1920, 9:16, which also meets the 1080 px minimum for promotion in Play's recommendations). Each shows the golden's first screen scaled down to fit its card, so the app's bottom bar is in the picture (D-M9-20). The `phone/dark` set (the four screens that have dark goldens: dashboard, chat, time bank, household data) is an alternative for a later listing experiment, not a second upload.
+6. **Phone screenshots:** `en-GB/images/phone/light/01…08` in file-name order (1080 × 1920, 9:16, which also meets the 1080 px minimum for promotion in Play's recommendations). Each shows the golden's first screen scaled down to fit its card, inside a dark green bezel, so the app's bottom bar is in the picture (D-M9-20). The `phone/dark` set (the four screens that have dark goldens: dashboard, chat, time bank, household data) is an alternative for a later listing experiment, not a second upload.
 7. **7-inch tablet screenshots** and **10-inch tablet screenshots:** the same `en-GB/images/tablet/light/01…04` in both slots (1920 × 1080, 16:9; the tablet goldens are 1280 × 800 and are placed 1:1, not scaled).
 8. Category **Parenting**; contact e-mail the privacy contact (`docs/privacy.properties`); privacy policy URL `https://<host>/privacy`.
 
@@ -31,21 +31,21 @@ Play Console → Grow users → Store presence → Main store listing (English (
 
 | File | Size | What it shows |
 |---|---|---|
-| `images/icon.png` | 11 KB | The launcher's two-leaf sprout, drawn from `ic_launcher_foreground.xml` on `@color/ic_launcher_background` |
-| `images/feature_graphic.png` | 31 KB | The sprout mark, "Sprout", and the tagline |
-| `images/phone/light/01-parent-dashboard.png` | 205 KB | Parent dashboard with the bottom bar (the shell golden) |
-| `images/phone/light/02-grows-with-your-child.png` | 236 KB | The kid wallet in the three tiers side by side, each with its bottom bar |
-| `images/phone/light/03-chores.png` | 149 KB | A Sprout-tier kid's chores for today |
-| `images/phone/light/04-shop.png` | 227 KB | A Seedling's shop |
-| `images/phone/light/05-chat.png` | 123 KB | A parent's chat thread |
-| `images/phone/light/06-games.png` | 138 KB | A Sprout-tier Times tables question on the Playground field |
-| `images/phone/light/07-time-bank.png` | 160 KB | The time bank running |
-| `images/phone/light/08-your-data.png` | 283 KB | Settings → Household data (retention, export, delete) |
-| `images/phone/dark/01, 05, 07, 08` | 218, 126, 162, 310 KB | The same four screens in the dark theme |
-| `images/tablet/light/01-parent-dashboard.png` | 97 KB | Dashboard, two columns, with the navigation rail |
-| `images/tablet/light/02-chores.png` | 106 KB | Chore list and editor side by side |
-| `images/tablet/light/03-chat.png` | 65 KB | Chat list and thread side by side |
-| `images/tablet/light/04-kid-wallet.png` | 86 KB | A Sprout kid's wallet on a tablet, with the navigation rail |
+| `images/icon.png` | 12 KB | The launcher's two-leaf sprout (Botanical on Leaf tint since 1.1), drawn from `ic_launcher_foreground.xml` on `@color/ic_launcher_background` |
+| `images/feature_graphic.png` | 79 KB | The mark on a white disc, "Sprout" in Outfit, the two-line tagline, three pills, and two phone cards (the Sprout wallet and a Times tables question) cut by the bottom edge; the screens and text come from `listing.yaml` `feature` |
+| `images/phone/light/01-parent-dashboard.png` | 202 KB | Parent dashboard with the bottom bar (the shell golden) |
+| `images/phone/light/02-grows-with-your-child.png` | 234 KB | The kid wallet in the three tiers side by side, each with its bottom bar |
+| `images/phone/light/03-chores.png` | 145 KB | A Sprout-tier kid's chores for today |
+| `images/phone/light/04-shop.png` | 225 KB | A Seedling's shop |
+| `images/phone/light/05-chat.png` | 121 KB | A parent's chat thread |
+| `images/phone/light/06-games.png` | 135 KB | A Sprout-tier Times tables question on the Playground field |
+| `images/phone/light/07-time-bank.png` | 156 KB | The time bank running |
+| `images/phone/light/08-your-data.png` | 280 KB | Settings → Household data (retention, export, delete) |
+| `images/phone/dark/01, 05, 07, 08` | 216, 124, 158, 307 KB | The same four screens in the dark theme |
+| `images/tablet/light/01-parent-dashboard.png` | 96 KB | Dashboard, two columns, with the navigation rail |
+| `images/tablet/light/02-chores.png` | 105 KB | Chore list and editor side by side |
+| `images/tablet/light/03-chat.png` | 64 KB | Chat list and thread side by side |
+| `images/tablet/light/04-kid-wallet.png` | 85 KB | A Sprout kid's wallet on a tablet, with the navigation rail |
 | **Total** | **2.7 MB** | 18 images; budget 3 MB, Play's limit 8 MB each |
 
 `compose.py` fails when the launcher foreground uses anything but plain filled paths (groups, fill types, alpha or strokes are not drawn), `--check` also when a committed PNG is not produced by `listing.yaml`, and either fails when a text is over Play's limit, an image has alpha, is over 8 MB or outside 320 to 3,840 px or 2:1, there are more than 8 screenshots of a type, or the images together pass 3 MB.
