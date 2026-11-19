@@ -62,16 +62,27 @@ MAX_IMAGE_BYTES = 8 * 1024 * 1024
 MAX_TOTAL_BYTES = 3 * 1024 * 1024
 TEXT_LIMITS = {"title": 30, "short_description": 80, "full_description": 4000}
 
+FONTS = ROOT / "core" / "designsystem" / "src" / "main" / "res" / "font"
+# The brand fonts bundled with the app (M9 §2.2, D-M9-4) come first, so the listing is the same on every machine;
+# the system fonts are a fallback for a checkout without them.
 FONT_CANDIDATES = {
     "regular": [
+        str(FONTS / "plus_jakarta_sans_semibold.ttf"),
         "/System/Library/Fonts/Supplemental/Arial.ttf",
         "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
         "/usr/share/fonts/truetype/roboto/unhinted/RobotoTTF/Roboto-Regular.ttf",
     ],
     "bold": [
+        str(FONTS / "outfit_bold.ttf"),
         "/System/Library/Fonts/Supplemental/Arial Bold.ttf",
         "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
         "/usr/share/fonts/truetype/roboto/unhinted/RobotoTTF/Roboto-Bold.ttf",
+    ],
+    "display": [
+        str(FONTS / "outfit_extrabold.ttf"),
+        str(FONTS / "outfit_bold.ttf"),
+        "/System/Library/Fonts/Supplemental/Arial Bold.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
     ],
 }
 
@@ -81,7 +92,7 @@ class ComposeError(Exception):
 
 
 def font(kind: str, size: int) -> ImageFont.FreeTypeFont:
-    override = os.environ.get("SPROUT_STORE_FONT_BOLD" if kind == "bold" else "SPROUT_STORE_FONT")
+    override = os.environ.get({"bold": "SPROUT_STORE_FONT_BOLD", "display": "SPROUT_STORE_FONT_DISPLAY"}.get(kind, "SPROUT_STORE_FONT"))
     for path in ([override] if override else []) + FONT_CANDIDATES[kind]:
         if path and Path(path).is_file():
             return ImageFont.truetype(path, size)
@@ -214,16 +225,35 @@ def icon() -> Image.Image:
     return image
 
 
-def feature_graphic(colours: Dict[str, Tuple[int, int, int]]) -> Image.Image:
-    background, _ = launcher_layers()
-    image = Image.new("RGB", FEATURE, background)
-    mark = draw_foreground(360, (0, 0), (18, 18, 72))
-    image.paste(mark, (60, 70), mark)
+def feature_graphic(colours: Dict[str, Tuple[int, int, int]], listing: dict) -> Image.Image:
+    """Leaf tint canvas, the mark on a white disc, "Sprout" in the display face, the tagline, pills, and two phone
+    cards (the screens named in listing.yaml `feature`) cut by the bottom edge. Text keeps left of TEXT_RIGHT."""
+    text_right = 620
+    image = Image.new("RGB", FEATURE, colours["brand_light"])
     draw = ImageDraw.Draw(image)
-    draw.text((450, 150), "Sprout", font=font("bold", 120), fill=colours["brand_dark"])
-    tagline = font("regular", 40)
-    draw.text((456, 300), "Chores, pocket money and", font=tagline, fill=colours["caption_light"])
-    draw.text((456, 350), "screen time for families", font=tagline, fill=colours["caption_light"])
+    draw.ellipse((48, 52, 48 + 140, 52 + 140), fill=(255, 255, 255))
+    mark = draw_foreground(110, (0, 0), (18, 18, 72))
+    image.paste(mark, (63, 67), mark)
+    draw.text((214, 40), "Sprout", font=font("display", 104), fill=colours["brand_dark"])
+    tagline = font("regular", 27)
+    for index, line in enumerate(listing["feature"]["tagline"]):
+        if tagline.getlength(line) > text_right - 60:
+            raise ComposeError(f"feature tagline line too long: {line!r}")
+        draw.text((60, 232 + index * 38), line, font=tagline, fill=colours["caption_light"])
+    pill = font("bold", 22)
+    x = 60
+    for text in listing["feature"]["pills"]:
+        width = int(pill.getlength(text)) + 40
+        if x + width > text_right:
+            raise ComposeError("feature pills do not fit; use fewer or shorter pills")
+        draw.rounded_rectangle((x, 350, x + width, 350 + 48), 24, fill=(255, 255, 255), outline=colours["brand"], width=2)
+        draw.text((x + 20, 350 + 10), text, font=pill, fill=colours["brand_dark"])
+        x += width + 12
+    left = 664
+    for path in listing["feature"]["screens"]:
+        screen = fit_screen(golden(path))
+        card(image, screen, (left, 60, left + 160, FEATURE[1]), 22, colours["brand"], bezel=8)
+        left += 184
     return image
 
 
@@ -263,11 +293,11 @@ def wrap(text: str, typeface: ImageFont.FreeTypeFont, width: int) -> List[str]:
 
 def caption(draw: ImageDraw.ImageDraw, text: str, box: Tuple[int, int, int, int], size: int, colour) -> None:
     left, top, right, bottom = box
-    typeface = font("bold", size)
+    typeface = font("display", size)
     lines = wrap(text, typeface, right - left)
     while len(lines) > 2 and size > 24:
         size -= 4
-        typeface = font("bold", size)
+        typeface = font("display", size)
         lines = wrap(text, typeface, right - left)
     if len(lines) > 2:
         raise ComposeError(f"caption too long for two lines: {text!r}")
@@ -279,9 +309,9 @@ def caption(draw: ImageDraw.ImageDraw, text: str, box: Tuple[int, int, int, int]
         y += line_height
 
 
-def card(image: Image.Image, screen: Image.Image, box: Tuple[int, int, int, int], radius: int, outline, closed: bool = False) -> None:
+def card(image: Image.Image, screen: Image.Image, box: Tuple[int, int, int, int], radius: int, outline, closed: bool = False, bezel: int = 2) -> None:
     """Scales [screen] to the box width, crops it to the box height and pastes it with rounded top corners (all four
-    when [closed]; otherwise it runs off the bottom edge)."""
+    when [closed]; otherwise it runs off the bottom edge), inside a [bezel] px border in [outline] (a phone's bezel)."""
     tail = 0 if closed else radius * 4
     left, top, right, bottom = box
     width, height = right - left, bottom - top
@@ -298,13 +328,13 @@ def card(image: Image.Image, screen: Image.Image, box: Tuple[int, int, int, int]
     mask = Image.new("L", (width * 2, height * 2), 0)
     ImageDraw.Draw(mask).rounded_rectangle((0, 0, width * 2 - 1, height * 2 - 1 + tail), radius * 2, fill=255)
     mask = mask.resize((width, height), Image.LANCZOS)
-    extra = 4 if closed else 2
-    border = Image.new("RGB", (width + 4, height + extra), outline)
-    border_mask = Image.new("L", ((width + 4) * 2, (height + extra) * 2), 0)
+    extra = 2 * bezel if closed else bezel
+    border = Image.new("RGB", (width + 2 * bezel, height + extra), outline)
+    border_mask = Image.new("L", ((width + 2 * bezel) * 2, (height + extra) * 2), 0)
     ImageDraw.Draw(border_mask).rounded_rectangle(
-        (0, 0, (width + 4) * 2 - 1, (height + extra) * 2 - 1 + tail), (radius + 2) * 2, fill=255
+        (0, 0, (width + 2 * bezel) * 2 - 1, (height + extra) * 2 - 1 + tail), (radius + bezel) * 2, fill=255
     )
-    image.paste(border, (left - 2, top - 2), border_mask.resize((width + 4, height + extra), Image.LANCZOS))
+    image.paste(border, (left - bezel, top - bezel), border_mask.resize((width + 2 * bezel, height + extra), Image.LANCZOS))
     image.paste(panel, (left, top), mask)
 
 
@@ -313,12 +343,12 @@ def phone_image(entry: dict, theme: str, colours) -> Image.Image:
     image = Image.new("RGB", PHONE, colours["surface_dark"] if dark else colours["brand_light"])
     draw = ImageDraw.Draw(image)
     caption(draw, entry["caption"], (70, 60, PHONE[0] - 70, 290), 64, colours["caption_dark"] if dark else colours["caption_light"])
-    outline = (60, 66, 58) if dark else colours["brand"]
+    outline = (59, 70, 62) if dark else colours["brand_dark"]
     if "tiers" in entry:
         tiers = entry["tiers"]
         gap, margin = 24, 48
         width = (PHONE[0] - 2 * margin - gap * (len(tiers) - 1)) // len(tiers)
-        label = font("bold", 34)
+        label = font("display", 36)
         # Each tier's whole screen at the column width (D-M9-20), top-aligned under its label; when the screens are
         # shorter than the space under the labels, the cards close at the screen's foot.
         screens = [fit_screen(golden(tier["image"])) for tier in tiers]
@@ -329,14 +359,14 @@ def phone_image(entry: dict, theme: str, colours) -> Image.Image:
             left = margin + index * (width + gap)
             text = tier["label"]
             draw.text((left + (width - label.getlength(text)) / 2, 330), text, font=label, fill=colours["caption_light"])
-            card(image, screen, (left, 400, left + width, 400 + card_height), 28, outline, closed=closed)
+            card(image, screen, (left, 400, left + width, 400 + card_height), 28, outline, closed=closed, bezel=6)
         return image
     source = fit_screen(golden(entry["dark"] if dark else entry["light"]))
     height = PHONE[1] - 320
     # The whole screen, scaled down to the card's height (aspect kept, centred), so the bottom bar shows (D-M9-20).
     width = min(source.size[0], round(source.size[0] * height / source.size[1]))
     left = (PHONE[0] - width) // 2
-    card(image, source, (left, 320, left + width, PHONE[1]), 44, outline)
+    card(image, source, (left, 320, left + width, PHONE[1]), 44, outline, bezel=12)
     return image
 
 
@@ -353,7 +383,7 @@ def tablet_image(entry: dict, colours) -> Image.Image:
     screen = golden(entry["light"])  # 1280 x 800 dp at density 1: pasted 1:1, not scaled
     width, height = screen.size[0], min(screen.size[1], TABLET[1] - 190)
     left = (TABLET[0] - width) // 2
-    card(image, screen, (left, 190, left + width, 190 + height), 28, colours["brand"], closed=True)
+    card(image, screen, (left, 190, left + width, 190 + height), 28, colours["brand_dark"], closed=True, bezel=10)
     return image
 
 
@@ -386,7 +416,7 @@ def build(listing: dict) -> Dict[str, Tuple[bytes, Tuple[int, int]]]:
     colours = {key: hex_colour(value) for key, value in listing["colours"].items()}
     files: Dict[str, Tuple[bytes, Tuple[int, int]]] = {}
     files["images/icon.png"] = (png_bytes(icon()), ICON)
-    files["images/feature_graphic.png"] = (png_bytes(feature_graphic(colours)), FEATURE)
+    files["images/feature_graphic.png"] = (png_bytes(feature_graphic(colours, listing)), FEATURE)
     if not 2 <= len(listing["phone"]) <= 8 or not 1 <= len(listing["tablet"]) <= 8:
         raise ComposeError("Play takes 2 to 8 phone screenshots and up to 8 tablet screenshots")
     for entry in listing["phone"]:

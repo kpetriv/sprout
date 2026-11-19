@@ -61,6 +61,17 @@ colours:
   caption_light: "#1E4B33"
   caption_dark: "#C8F2C0"
 
+# The feature graphic (1024 x 500): the mark, the name, this tagline (two lines, each under about 560 px at 27 px),
+# three pills and two phone cards cut by the bottom edge. compose.py fails when a line or the pills would run under the phones.
+feature:
+  tagline:
+    - "Chores, pocket money and screen time"
+    - "for your family, on a ledger you can trust"
+  pills: ["Chores", "Pocket money", "Screen time"]
+  screens:
+    - app/src/test/screenshots/app_shell_kid_sprout.png
+    - feature/games/src/test/screenshots/games_tables_sprout.png
+
 # Phone and tablet shots come from the app shell goldens (M9 §5.3) where they exist, so the listing shows the bottom
 # bar or the rail; the kid's chores, the shop, the game, the time bank and the household data are feature goldens.
 phone:

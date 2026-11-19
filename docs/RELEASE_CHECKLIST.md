@@ -133,7 +133,7 @@ Evidence to paste: "Play app created <date>; Play App Signing on; Cloud project 
 
 - [ ] **Data safety** (App content → Data safety; exempt while the app is only on the internal track, required before closed testing): enter [DATA_SAFETY.md](DATA_SAFETY.md) section by section (Section 1, every row of Section 2, Section 3). Delete account URL: `https://<host>/privacy#how-to-delete-your-account-and-data`. Before submitting, `python3 tools/privacy/inventory.py --check` passes on the commit being released.
 - [ ] **Store listing** (Grow users → Store presence → Store listings; the support e-mail is under Store settings) from [`play/listing`](../play/listing/README.md): title, short and full description (`play/listing/en-GB/*.txt`), app icon (512 × 512), feature graphic (1024 × 500), phone screenshots, 7-inch and 10-inch tablet screenshots, in the upload order of `play/listing/README.md`. Category: Parenting. Contact e-mail: the privacy contact. Website: `https://<host>/privacy` or the repository.
-- [ ] To regenerate the images after a UI change: `python3 tools/store/compose.py` (needs Pillow; see `play/listing/README.md`).
+- [ ] To regenerate the images after a UI change: `python3 tools/store/compose.py` (needs Pillow; see `play/listing/README.md`). To upload the listing without the console: `gh workflow run publish-listing.yml --ref main` and approve the run (D-REL-67; the service account needs "Manage store presence").
 
 Evidence to paste: "Data safety submitted <date> from DATA_SAFETY.md at <commit>; listing uploaded <date>".
 
@@ -226,7 +226,7 @@ gh run download --name sprout-v1.1.0               # the signed AAB and mapping.
 
 - [ ] The versionCode rule is unchanged: it must be higher than that of every build Play already has (1.0.x), which it is when `v1.1.0` is on a later commit of `main` (a rebuild takes `-f version_code=<last + 1>`).
 - [ ] Release notes: paste `play/listing/en-GB/whatsnew.txt` into the release's "Release notes" under `<en-GB>` (at most 500 characters).
-- [ ] Store listing: upload the regenerated phone and tablet screenshots (`play/listing/en-GB/images`, the Morning garden look with the bottom bar) and the updated full description ([play/listing](../play/listing/README.md)).
+- [ ] Store listing: upload the regenerated phone and tablet screenshots (`play/listing/en-GB/images`, the Morning garden look with the bottom bar) and the updated full description ([play/listing](../play/listing/README.md)), by hand or with `publish-listing.yml` (D-REL-67).
 
 Evidence to paste: "v1.1.0 (versionCode <n>) built by release.yml run <id> on <date>; every household device on 1.1.0 before the first Times tables play" → CONTROLS SE-6.
 

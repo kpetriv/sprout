@@ -1,0 +1,86 @@
+# Uploads the store listing in play/listing/ to the Play Console (D-REL-67). Manual only, from main:
+#
+#   gh workflow run publish-listing.yml --ref main
+#
+# The job runs in the `release` environment, like release.yml: only `main` may deploy to it and the owner approves
+# each run, so the Play service account's key never reaches another branch's workflow. It lays play/listing/<locale>/
+# out the way Gradle Play Publisher reads a listing (tools/store/layout_play.py: title, short and full description,
+# icon, feature graphic, phone screenshots, both tablet slots) and runs `:app:publishListing`, which replaces the
+# texts and images of the main store listing in one Play edit. It builds nothing, touches no track and no release,
+# and never changes release notes, the app's category, contact details or declarations: those stay console steps
+# (docs/RELEASE_CHECKLIST.md item 8). The service account needs the "Manage store presence" permission on the app.
+#
+# Secrets (environment `release`): PLAY_SERVICE_ACCOUNT_JSON, and the SPROUT_* release properties the app's build
+# script reads at configuration time (none of them is used by the upload). Secrets reach the Gradle step through
+# `env`, never through `${{ }}` in a script.
+name: Publish store listing
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-listing
+  cancel-in-progress: false
+
+jobs:
+  listing:
+    name: Upload play/listing to the Play Console
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: release
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Check this is main
+        run: |
+          if [[ "$GITHUB_REF" != "refs/heads/main" ]]; then
+            echo "::error::Publish the listing from main only (ref: $GITHUB_REF)."
+            exit 1
+          fi
+
+      - name: Lay the listing out for Gradle Play Publisher
+        run: |
+          python3 tools/store/layout_play.py
+          {
+            echo "### Store listing from \`$(git rev-parse --short HEAD)\`"
+            find app/src/main/play/listings -type f | sort | sed 's|^| - |'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c # v6.4.1
+        with:
+          cache-disabled: true
+
+      - name: Publish the listing
+        env:
+          ANDROID_PUBLISHER_CREDENTIALS: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON }}
+          SPROUT_FUNCTIONS_BASE_URL: ${{ secrets.SPROUT_FUNCTIONS_BASE_URL }}
+          SPROUT_GOOGLE_SERVER_CLIENT_ID: ${{ secrets.SPROUT_GOOGLE_SERVER_CLIENT_ID }}
+          SPROUT_PRIVACY_URL: ${{ secrets.SPROUT_PRIVACY_URL }}
+        run: |
+          if [[ -z "$ANDROID_PUBLISHER_CREDENTIALS" ]]; then
+            echo "::error::PLAY_SERVICE_ACCOUNT_JSON is not set in the release environment (RELEASE_CHECKLIST item 9)."
+            exit 1
+          fi
+          ./gradlew :app:publishListing \
+            "-Psprout.functionsBaseUrl=$SPROUT_FUNCTIONS_BASE_URL" \
+            "-Psprout.googleServerClientId=$SPROUT_GOOGLE_SERVER_CLIENT_ID" \
+            "-Psprout.privacyUrl=$SPROUT_PRIVACY_URL" \
+            --no-daemon --no-build-cache --no-configuration-cache
+
+      - name: Remove the generated layout
+        if: always()
+        run: rm -rf app/src/main/play
