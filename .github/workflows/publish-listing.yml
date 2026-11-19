@@ -5,7 +5,7 @@
 # The job runs in the `release` environment, like release.yml: only `main` may deploy to it and the owner approves
 # each run, so the Play service account's key never reaches another branch's workflow. It lays play/listing/<locale>/
 # out the way Gradle Play Publisher reads a listing (tools/store/layout_play.py: title, short and full description,
-# icon, feature graphic, phone screenshots, both tablet slots) and runs `:app:publishListing`, which replaces the
+# icon, feature graphic, phone screenshots, both tablet slots) and runs `:app:publishReleaseListing`, which replaces the
 # texts and images of the main store listing in one Play edit. It builds no bundle, touches no track and no release,
 # and never changes release notes, the app's category, contact details or declarations: those stay console steps
 # (docs/RELEASE_CHECKLIST.md item 8). The service account needs the "Manage store presence" permission on the app.
@@ -80,7 +80,10 @@ jobs:
           # release build (D-M8-3). Nothing built here is shipped (no bundle is made or uploaded), so the guard's
           # waiver is passed on the command line; release.yml still refuses the waiver in a committed
           # gradle.properties, and the bundle build never sets it.
-          ./gradlew :app:publishListing \
+          # publishReleaseListing, not the aggregate publishListing: that one fans out to every release-like variant
+          # (release, nonMinifiedRelease for the baseline profile, benchmark), which then race each other on the same
+          # Play edit with 503 "backendError" answers (run 44554973764). One variant, one edit.
+          ./gradlew :app:publishReleaseListing \
             "-Psprout.functionsBaseUrl=$SPROUT_FUNCTIONS_BASE_URL" \
             "-Psprout.googleServerClientId=$SPROUT_GOOGLE_SERVER_CLIENT_ID" \
             "-Psprout.privacyUrl=$SPROUT_PRIVACY_URL" \

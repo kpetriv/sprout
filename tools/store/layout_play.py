@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Lays play/listing/<locale>/ out the way Gradle Play Publisher reads a store listing, so `:app:publishListing`
+"""Lays play/listing/<locale>/ out the way Gradle Play Publisher reads a store listing, so `:app:publishReleaseListing`
 can upload it (D-REL-67). Standard library only: it copies and checks, it renders nothing.
 
     python3 tools/store/layout_play.py            # writes app/src/main/play/listings/<locale>/ (gitignored)
