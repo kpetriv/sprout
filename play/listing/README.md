@@ -20,7 +20,7 @@ Edit the text and the choice of screens in `listing.yaml`, never the files here.
 gh workflow run publish-listing.yml --ref main
 ```
 
-and approve the run in GitHub (it uses the `release` environment, so the owner approves it like a release). It lays this folder out for Gradle Play Publisher with `tools/store/layout_play.py` and runs `:app:publishListing`, which replaces the title, the descriptions, the icon, the feature graphic, the phone screenshots and both tablet slots in one Play edit. It needs the service account to have "Manage store presence" on the app (Play Console → Users and permissions). Release notes, category, contact details and the declarations are not part of a listing upload and stay console steps.
+and approve the run in GitHub (it uses the `release` environment, so the owner approves it like a release). It lays this folder out for Gradle Play Publisher with `tools/store/layout_play.py` and runs `:app:publishReleaseListing`, which replaces the title, the descriptions, the icon, the feature graphic, the phone screenshots and both tablet slots in one Play edit. It needs the service account to have "Manage store presence" on the app (Play Console → Users and permissions). Release notes, category, contact details and the declarations are not part of a listing upload and stay console steps.
 
 **By hand**, in this order (Play Console → Grow users → Store presence → Main store listing, English (United Kingdom) – en-GB):
 
@@ -58,4 +58,4 @@ and approve the run in GitHub (it uses the `release` environment, so the owner a
 
 `compose.py` fails when the launcher foreground uses anything but plain filled paths (groups, fill types, alpha or strokes are not drawn), `--check` also when a committed PNG is not produced by `listing.yaml`, and either fails when a text is over Play's limit, an image has alpha, is over 8 MB or outside 320 to 3,840 px or 2:1, there are more than 8 screenshots of a type, or the images together pass 3 MB.
 
-The layout here differs from Gradle Play Publisher's (`listings/<locale>/graphics/...`); `tools/store/layout_play.py` converts it on demand into the gitignored `app/src/main/play/`, which only `publish-listing.yml` (or a local `:app:publishListing`) uses.
+The layout here differs from Gradle Play Publisher's (`listings/<locale>/graphics/...`); `tools/store/layout_play.py` converts it on demand into the gitignored `app/src/main/play/`, which only `publish-listing.yml` (or a local `:app:publishReleaseListing`) uses.
